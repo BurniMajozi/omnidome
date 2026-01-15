@@ -1,0 +1,13 @@
+{
+  "brand_name": "FibreHub Portal",
+  "primary_color": "#e31b23",
+  "secondary_color": "#1a1a1a",
+  "accent_color": "#22d3ee",
+  "logo_url": "/assets/logo.png",
+  "font_family": "Outfit, sans-serif",
+  "hero": {
+    "title": "Ultrafast Prepaid Fibre",
+    "subtitle": "Get blazing-fast fibre while controlling your spend.",
+    "bg_gradient": "linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%)"
+  }
+}

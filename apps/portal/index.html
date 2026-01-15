@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fiber Portal | Powered by FibreHub</title>
+    <link rel="stylesheet" href="portal.css">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body class="dark-theme">
+    <div class="glow-overlay"></div>
+
+    <nav class="portal-nav">
+        <div class="container flex-row">
+            <a href="#" class="brand-logo" id="portal-logo">
+                <div class="logo-placeholder">F</div>
+                <span id="brand-name">FibreHub Portal</span>
+            </a>
+            <div class="nav-links">
+                <a href="#coverage">Coverage</a>
+                <a href="#packages">Packages</a>
+                <a href="#how-it-works">How It Works</a>
+                <a href="#help">Get Help</a>
+            </div>
+            <div class="nav-actions">
+                <a href="../web/dashboard.html" class="btn btn-outline small">Operator Login</a>
+                <a href="#signup" class="btn btn-primary small">Client Login</a>
+            </div>
+        </div>
+    </nav>
+
+    <main>
+        <section id="hero" class="hero-section">
+            <div class="container text-center">
+                <h1 id="hero-title" class="reveal-text">Ultrafast <span class="gradient-text">Prepaid Fibre.</span></h1>
+                <p id="hero-subtitle" class="reveal-text">It's the best of both worlds - get blazing-fast Fibre while
+                    controlling your spend.</p>
+
+                <div class="search-container reveal-text">
+                    <div class="address-input-wrapper">
+                        <i class="fas fa-map-marker-alt"></i>
+                        <input type="text" id="address-search" placeholder="What's your street address?">
+                        <button class="location-btn"><i class="fas fa-crosshairs"></i> Use my location</button>
+                    </div>
+                    <div class="hero-btns">
+                        <button class="btn btn-outline" id="browse-packages-btn">BROWSE PACKAGES</button>
+                        <button class="btn btn-primary" id="check-coverage-btn">CHECK COVERAGE</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="packages" class="packages-section hidden">
+            <div class="container">
+                <div class="section-header text-center">
+                    <h2>Choose a <span class="gradient-text">Package</span></h2>
+                    <p>Select the speed that fits your lifestyle.</p>
+                </div>
+                <div class="package-tabs">
+                    <button class="tab-btn active" data-type="monthly">Monthly</button>
+                    <button class="tab-btn" data-type="prepaid">Prepaid</button>
+                    <button class="tab-btn" data-type="providers">Providers</button>
+                </div>
+                <div class="packages-grid" id="packages-container">
+                    <!-- Dynamic packages load here -->
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="portal-footer">
+        <div class="container">
+            <div class="footer-bottom flex-row">
+                <p>&copy; 2026 <span id="footer-brand-name">FibreHub Portal</span>. All rights reserved.</p>
+                <div class="footer-links">
+                    <a href="#">Privacy</a>
+                    <a href="#">Terms</a>
+                </div>
+            </div>
+        </div>
+    </footer>
+
+    <script src="portal.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,131 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_DB=coreconnect
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=coreconnect_secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/master_schema.sql:/docker-entrypoint-initdb.d/init.sql
+
+  crm-service:
+    build:
+      context: .
+      dockerfile: services/crm/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+    ports:
+      - "8001:8001"
+    depends_on:
+      - db
+
+  sales-service:
+    build:
+      context: .
+      dockerfile: services/sales/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+    ports:
+      - "8002:8002"
+    depends_on:
+      - db
+
+  billing-service:
+    build:
+      context: .
+      dockerfile: services/billing/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - PAYSTACK_SECRET_KEY=sk_test_mock_key
+    ports:
+      - "8003:8003"
+    depends_on:
+      - db
+
+  rica-service:
+    build:
+      context: .
+      dockerfile: services/rica/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - SMILE_ID_PARTNER_ID=your_partner_id
+      - SMILE_ID_API_KEY=your_api_key
+    ports:
+      - "8004:8004"
+    depends_on:
+      - db
+
+  network-service:
+    build:
+      context: .
+      dockerfile: services/network/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+    ports:
+      - "8005:8005"
+    depends_on:
+      - db
+
+  iot-service:
+    build:
+      context: .
+      dockerfile: services/iot/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+    ports:
+      - "8006:8006"
+    depends_on:
+      - db
+
+  call-center-service:
+    build:
+      context: .
+      dockerfile: services/call_center/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+    ports:
+      - "8011:8011"
+    depends_on:
+      - db
+
+  retention-service:
+    build:
+      context: .
+      dockerfile: services/retention/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - ML_MODEL_PATH=/app/models/churn_model.pkl
+    ports:
+      - "8012:8012"
+    depends_on:
+      - db
+
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./apps/web:/usr/share/nginx/html
+    depends_on:
+      - crm-service
+      - sales-service
+      - billing-service
+      - rica-service
+      - network-service
+
+  portal:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - .:/usr/share/nginx/html
+      - ./apps/portal:/usr/share/nginx/html/portal
+    # Note: We mount root so portal can fetch theme from ../brand_guidelines
+
+volumes:
+  postgres_data:
