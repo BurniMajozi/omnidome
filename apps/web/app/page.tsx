@@ -48,6 +48,7 @@ import { AnimatedBeamMultipleOutputDemo } from "@/components/demo/animated-beam-
 import { OrbitingCirclesDemo, OrbitingCirclesDemo2 } from "@/components/demo/orbiting-circles-demo"
 import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
 import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
+import { AnimatedStats } from "@/components/demo/animated-stats"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -202,17 +203,21 @@ const resourceItems = {
     featured: [
         { icon: Sparkles, title: "Why OmniDome", description: "See what makes us different", href: "/resources/why-omnidome" },
         { icon: BookOpen, title: "Blog", description: "Latest insights and updates", href: "#" },
-        { icon: FileText, title: "Documentation", description: "Technical guides and API docs", href: "#" },
     ],
     services: [
-        { icon: Rocket, title: "Onboarding", description: "Get up and running quickly", href: "/resources/services", price: "From R15,000" },
-        { icon: GraduationCap, title: "Customer Training", description: "Master every module", href: "/resources/services", price: "From R8,000" },
-        { icon: Zap, title: "Migration", description: "Seamless data transfer", href: "/resources/services", price: "From R12,000" },
+        { icon: Rocket, title: "Onboarding", description: "Get up and running quickly", href: "/resources/services" },
+        { icon: GraduationCap, title: "Customer Training", description: "Master every module", href: "/resources/services" },
+        { icon: Zap, title: "Migration", description: "Seamless data transfer", href: "/resources/services" },
     ],
     partners: [
-        { icon: Handshake, title: "Reseller Program", description: "Earn up to 35% commission", href: "/resources/partners", price: "R5,000/year" },
-        { icon: Building2, title: "Solutions Partner", description: "Implementation & consulting", href: "/resources/partners", price: "R15,000/year" },
-        { icon: Zap, title: "Integration Partner", description: "Build apps and integrations", href: "/resources/partners", price: "R8,000/year" },
+        { icon: Handshake, title: "Reseller Program", description: "Earn up to 35% commission", href: "/resources/partners" },
+        { icon: Building2, title: "Solutions Partner", description: "Implementation & consulting", href: "/resources/partners" },
+        { icon: Zap, title: "Integration Partner", description: "Build apps and integrations", href: "/resources/partners" },
+    ],
+    support: [
+        { icon: FileText, title: "Documentation", description: "Technical guides and API docs", href: "/docs" },
+        { icon: Rocket, title: "Developer Portal", description: "APIs, SDKs and developer tools", href: "/developers" },
+        { icon: HelpCircle, title: "Support Center", description: "Get help from our team", href: "/support" },
     ]
 }
 
@@ -549,14 +554,6 @@ export default function LandingPage() {
                 ref={canvasRef}
                 className="fixed inset-0 z-0 pointer-events-none"
             />
-            {/* Top Bar */}
-            <div className="relative z-10 bg-muted/50 backdrop-blur-md border-b border-border py-2 px-4 text-xs text-center sm:text-right">
-                <div className="max-w-7xl mx-auto flex justify-center sm:justify-end gap-6">
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Documentation</a>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Developer Portal</a>
-                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Support</a>
-                </div>
-            </div>
 
             {/* Navigation */}
             <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
@@ -704,7 +701,7 @@ export default function LandingPage() {
                                         resourceMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
-                                            <div className="grid grid-cols-3 gap-12">
+                                            <div className="grid grid-cols-4 gap-10">
                                                 {/* Featured Links */}
                                                 <div>
                                                     <h3 className="text-xs font-bold text-primary uppercase tracking-[2px] mb-4">
@@ -755,8 +752,8 @@ export default function LandingPage() {
                                                                     <p className="text-xs text-muted-foreground">
                                                                         {item.description}
                                                                     </p>
-                                                                    <span className="text-xs font-medium text-indigo-400 font-bold mt-1 inline-block">
-                                                                        {item.price}
+                                                                    <span className="text-xs font-medium text-indigo-400 mt-1 inline-flex items-center gap-1 group-hover:gap-2 transition-all">
+                                                                        Learn more <ArrowRight className="h-3 w-3" />
                                                                     </span>
                                                                 </div>
                                                             </Link>
@@ -786,9 +783,37 @@ export default function LandingPage() {
                                                                     <p className="text-xs text-muted-foreground">
                                                                         {item.description}
                                                                     </p>
-                                                                    <span className="text-xs font-medium text-indigo-400 font-bold mt-1 inline-block">
-                                                                        {item.price}
+                                                                    <span className="text-xs font-medium text-indigo-400 mt-1 inline-flex items-center gap-1 group-hover:gap-2 transition-all">
+                                                                        Learn more <ArrowRight className="h-3 w-3" />
                                                                     </span>
+                                                                </div>
+                                                            </Link>
+                                                        ))}
+                                                    </div>
+                                                </div>
+
+                                                {/* Support */}
+                                                <div>
+                                                    <h3 className="text-xs font-semibold text-indigo-400 uppercase tracking-[2px] font-bold">
+                                                        Support
+                                                    </h3>
+                                                    <div className="space-y-4">
+                                                        {resourceItems.support.map(item => (
+                                                            <Link
+                                                                key={item.title}
+                                                                href={item.href}
+                                                                className="flex items-start gap-3 group"
+                                                            >
+                                                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-secondary group-hover:bg-indigo-500/10">
+                                                                    <item.icon className="h-5 w-5 text-muted-foreground group-hover:text-indigo-400" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-medium text-sm group-hover:text-indigo-400 transition-colors">
+                                                                        {item.title}
+                                                                    </div>
+                                                                    <p className="text-xs text-muted-foreground">
+                                                                        {item.description}
+                                                                    </p>
                                                                 </div>
                                                             </Link>
                                                         ))}
@@ -950,24 +975,7 @@ export default function LandingPage() {
                     </div>
 
                     {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-12 max-w-5xl mx-auto border-t border-border pt-16">
-                        <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-indigo-500 transition-colors">13</div>
-                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Native Modules</div>
-                        </div>
-                        <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-blue-500 transition-colors">87%</div>
-                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Churn Prediction</div>
-                        </div>
-                        <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-cyan-500 transition-colors">2.4x</div>
-                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Sales Velocity</div>
-                        </div>
-                        <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-indigo-500 transition-colors">100%</div>
-                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">SA Compliant</div>
-                        </div>
-                    </div>
+                    <AnimatedStats />
 
                     {/* Bento Grid Section */}
                     <div className="mt-24 max-w-7xl mx-auto">
@@ -1008,7 +1016,7 @@ export default function LandingPage() {
                                 }
                                 Icon={FileTextIcon}
                                 description="Centralized document management with RICA compliance tracking."
-                                href="#"
+                                href="/products/crm"
                                 cta="Learn more"
                             />
                             <BentoCard
@@ -1019,7 +1027,7 @@ export default function LandingPage() {
                                 }
                                 Icon={BellIcon}
                                 description="Instant notifications for payments, support tickets, and network events."
-                                href="#"
+                                href="/products/overview"
                                 cta="Learn more"
                             />
                             <BentoCard
@@ -1030,7 +1038,7 @@ export default function LandingPage() {
                                 }
                                 Icon={Share2Icon}
                                 description="Connect all your modules - CRM, Billing, Network, Support - in one hub."
-                                href="#"
+                                href="/products/overview"
                                 cta="Learn more"
                             />
                             <BentoCard
@@ -1045,10 +1053,16 @@ export default function LandingPage() {
                                 }
                                 Icon={CalendarIcon}
                                 description="Schedule installations, maintenance, and follow-ups effortlessly."
-                                href="#"
+                                href="/products/support"
                                 cta="Learn more"
                             />
                         </BentoGrid>
+
+                        {/* Real-Time Activity Feed */}
+                        <div className="mt-12 relative h-[300px] w-full max-w-2xl mx-auto rounded-2xl border border-border bg-card/50 overflow-hidden">
+                            <AnimatedListDemo className="h-full" />
+                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-card"></div>
+                        </div>
                     </div>
 
                     {/* Features Marquee */}
@@ -1137,7 +1151,7 @@ export default function LandingPage() {
                                 }
                                 Icon={BellIcon}
                                 description="Track all customer interactions and system events in real-time."
-                                href="#"
+                                href="/products/overview"
                                 cta="View activity"
                             />
                             <BentoCard
@@ -1148,7 +1162,7 @@ export default function LandingPage() {
                                 }
                                 Icon={Orbit}
                                 description="All your ISP modules orbiting around a central command center."
-                                href="#"
+                                href="/products/overview"
                                 cta="Explore modules"
                             />
                             <BentoCard
@@ -1159,7 +1173,7 @@ export default function LandingPage() {
                                 }
                                 Icon={TrendingUp}
                                 description="Track subscriber growth, revenue metrics, and business performance."
-                                href="#"
+                                href="/products/sales"
                                 cta="View analytics"
                             />
                             <BentoCard
@@ -1170,7 +1184,7 @@ export default function LandingPage() {
                                 }
                                 Icon={Orbit}
                                 description="Seamless integration between all your operational systems."
-                                href="#"
+                                href="/products/network"
                                 cta="Learn more"
                             />
                         </BentoGrid>
