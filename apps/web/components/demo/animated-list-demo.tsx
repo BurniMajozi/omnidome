@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import { AnimatedList } from "@/components/ui/animated-list"
+import { EmojiPointer } from "@/components/ui/pointer"
 
 interface Item {
   name: string
@@ -58,6 +59,7 @@ const Notification = ({ name, description, icon, color, time }: Item) => {
         "hover:bg-slate-800 transition-colors"
       )}
     >
+      <EmojiPointer emoji={icon} />
       <div className="flex flex-row items-center gap-3">
         <div
           className="flex size-10 items-center justify-center rounded-2xl"

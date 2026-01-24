@@ -50,6 +50,11 @@ import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
 import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { AnimatedStats } from "@/components/demo/animated-stats"
 import { ShineBorder } from "@/components/ui/shine-border"
+import { Pointer, EmojiPointer, HeartPointer } from "@/components/ui/pointer"
+import { motion } from "framer-motion"
+
+// Module emojis for pointer
+const moduleEmojis = ["🚀", "💬", "📊", "📞", "📢", "🛡️", "👥", "💰", "📦", "🌐", "❤️", "🎯", "⚡"]
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -220,6 +225,142 @@ const resourceItems = {
         { icon: Rocket, title: "Developer Portal", description: "APIs, SDKs and developer tools", href: "/developers" },
         { icon: HelpCircle, title: "Support Center", description: "Get help from our team", href: "/support" },
     ]
+}
+
+// AI Features Showcase data
+const aiFeatures = [
+    {
+        id: 0,
+        title: "Agentic AI Product Management",
+        image: "/agentic-ai-product-management.png",
+    },
+    {
+        id: 1,
+        title: "Predict Churn with AI",
+        image: "/predict-churn-with-ai.png",
+    },
+    {
+        id: 2,
+        title: "Unified Communication",
+        image: "/unified-communication.png",
+    },
+    {
+        id: 3,
+        title: "Unified Sales",
+        image: "/unified-sales.png",
+    },
+]
+
+// AI Features Showcase Component
+function AIFeaturesShowcase() {
+    const [activeIndex, setActiveIndex] = useState(0)
+    const [progress, setProgress] = useState(0)
+    const intervalDuration = 5000 // 5 seconds per feature
+    
+    // Simple timer that cycles through all 4 features
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setActiveIndex((prev) => (prev + 1) % 4)
+            setProgress(0)
+        }, intervalDuration)
+        
+        return () => clearInterval(timer)
+    }, [])
+    
+    // Progress bar animation
+    useEffect(() => {
+        const progressTimer = setInterval(() => {
+            setProgress((prev) => Math.min(prev + 1, 100))
+        }, intervalDuration / 100)
+        
+        return () => clearInterval(progressTimer)
+    }, [activeIndex])
+    
+    const handleTabClick = (index: number) => {
+        setActiveIndex(index)
+        setProgress(0)
+    }
+    
+    const currentFeature = aiFeatures[activeIndex]
+    
+    return (
+        <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-background to-muted/30">
+            <div className="mx-auto max-w-7xl">
+                <div className="text-center mb-6">
+                    <span className="text-sm font-medium text-primary tracking-widest uppercase">
+                        Add value to every engagement
+                    </span>
+                </div>
+                <div className="text-center mb-12">
+                    <h2 className="text-4xl sm:text-5xl font-black mb-4 text-foreground">
+                        Your AI-Powered <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-cyan-500">ISP Assistant</span>
+                    </h2>
+                </div>
+                
+                {/* Feature Tabs */}
+                <div className="flex flex-wrap justify-center gap-4 mb-10">
+                    {aiFeatures.map((feature, index) => (
+                        <button
+                            key={feature.id}
+                            onClick={() => handleTabClick(index)}
+                            className={cn(
+                                "relative px-6 py-3 text-sm font-bold transition-all rounded-lg",
+                                activeIndex === index
+                                    ? "text-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            )}
+                        >
+                            {feature.title}
+                            {/* Progress bar under active tab */}
+                            <div className="absolute bottom-0 left-0 right-0 h-1 bg-muted rounded-full overflow-hidden">
+                                {activeIndex === index && (
+                                    <div
+                                        className="h-full bg-gradient-to-r from-red-500 via-orange-500 to-red-500 transition-all duration-50"
+                                        style={{ width: `${progress}%` }}
+                                    />
+                                )}
+                            </div>
+                        </button>
+                    ))}
+                </div>
+                
+                {/* Feature Image */}
+                <div className="relative max-w-6xl mx-auto">
+                    <div className="absolute -inset-4 bg-gradient-to-r from-indigo-500/20 via-purple-500/20 to-cyan-500/20 blur-3xl opacity-40 -z-10" />
+                    <div className="rounded-2xl border border-border bg-card/80 backdrop-blur-xl overflow-hidden shadow-2xl shadow-indigo-500/10">
+                        <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/50">
+                            <div className="flex gap-1.5">
+                                <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                                <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                                <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                            </div>
+                            <div className="flex-1 text-center">
+                                <span className="text-xs text-muted-foreground font-medium">
+                                    {currentFeature.title}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="relative bg-slate-900/50">
+                            {/* Show current image */}
+                            <img
+                                src={currentFeature.image}
+                                alt={currentFeature.title}
+                                className="w-full h-auto block"
+                                onError={(e) => {
+                                    console.error('Image failed to load:', currentFeature.image)
+                                }}
+                            />
+                        </div>
+                    </div>
+                </div>
+                
+                {/* Debug: Show current index */}
+                <div className="text-center mt-4 text-sm text-muted-foreground">
+                    Showing: {activeIndex + 1} of 4 - {currentFeature.title}
+                </div>
+            </div>
+        </section>
+    )
 }
 
 export default function LandingPage() {
@@ -1142,7 +1283,7 @@ export default function LandingPage() {
                         </BentoGrid>
 
                         {/* Real-Time Activity Feed */}
-                        <div className="mt-12 relative h-[300px] w-full max-w-2xl mx-auto rounded-2xl border border-border bg-card/50 overflow-hidden">
+                        <div className="mt-6 relative h-[300px] w-full max-w-2xl mx-auto rounded-2xl border border-border bg-card/50 overflow-hidden">
                             <AnimatedListDemo className="h-full" />
                             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/4 bg-gradient-to-t from-card"></div>
                         </div>
@@ -1151,7 +1292,8 @@ export default function LandingPage() {
                     {/* Features Marquee */}
                     <div className="mt-24 relative flex w-full flex-col items-center justify-center overflow-hidden">
                         <Marquee pauseOnHover className="[--duration:40s]">
-                            <Link href="/resources/why-omnidome#ai-insights" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#ai-insights" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="🧠" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-400 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(79,70,229,0.3)]">
                                     <Brain className="h-6 w-6 text-white" />
                                 </div>
@@ -1161,7 +1303,8 @@ export default function LandingPage() {
                                 </p>
                             </Link>
 
-                            <Link href="/resources/why-omnidome#real-time" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-cyan-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#real-time" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-cyan-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="⚡" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
                                     <Zap className="h-6 w-6 text-white" />
                                 </div>
@@ -1171,7 +1314,8 @@ export default function LandingPage() {
                                 </p>
                             </Link>
 
-                            <Link href="/resources/why-omnidome#analytics" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-purple-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#analytics" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-purple-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="📊" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(139,92,246,0.3)]">
                                     <BarChart3 className="h-6 w-6 text-white" />
                                 </div>
@@ -1181,7 +1325,8 @@ export default function LandingPage() {
                                 </p>
                             </Link>
 
-                            <Link href="/resources/why-omnidome#retention" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-rose-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#retention" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-rose-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="❤️" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-pink-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(244,63,94,0.3)]">
                                     <HeartHandshake className="h-6 w-6 text-white" />
                                 </div>
@@ -1191,7 +1336,8 @@ export default function LandingPage() {
                                 </p>
                             </Link>
 
-                            <Link href="/resources/why-omnidome#compliance" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-amber-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#compliance" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-amber-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="🛡️" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(245,158,11,0.3)]">
                                     <Shield className="h-6 w-6 text-white" />
                                 </div>
@@ -1201,7 +1347,8 @@ export default function LandingPage() {
                                 </p>
                             </Link>
 
-                            <Link href="/resources/why-omnidome#portal" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-blue-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                            <Link href="/resources/why-omnidome#portal" className="relative mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-blue-500/50 hover:scale-[1.02] transition-all cursor-pointer block overflow-hidden">
+                                <EmojiPointer emoji="🌍" />
                                 <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(99,102,241,0.3)]">
                                     <Globe className="h-6 w-6 text-white" />
                                 </div>
@@ -1286,12 +1433,13 @@ export default function LandingPage() {
                     </div>
 
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                        {modules.slice(0, 8).map((module) => (
+                        {modules.slice(0, 8).map((module, index) => (
                             <Link
                                 key={module.id}
                                 href={`/products/${module.slug}`}
-                                className="group rounded-2xl border border-border bg-card p-6 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all"
+                                className="group relative rounded-2xl border border-border bg-card p-6 hover:border-emerald-500/50 hover:shadow-lg hover:shadow-emerald-500/5 transition-all overflow-hidden"
                             >
+                                <EmojiPointer emoji={moduleEmojis[index % moduleEmojis.length]} />
                                 <div className={cn(
                                     "w-12 h-12 rounded-xl bg-gradient-to-br flex items-center justify-center mb-4",
                                     module.color
@@ -1318,6 +1466,9 @@ export default function LandingPage() {
                     </div>
                 </div>
             </section>
+
+            {/* AI Features Showcase */}
+            <AIFeaturesShowcase />
 
             {/* CTA Section */}
             <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-background via-muted to-primary/10 border-y border-border relative overflow-hidden">
