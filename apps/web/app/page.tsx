@@ -49,13 +49,14 @@ import { OrbitingCirclesDemo, OrbitingCirclesDemo2 } from "@/components/demo/orb
 import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
 import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { AnimatedStats } from "@/components/demo/animated-stats"
+import { ShineBorder } from "@/components/ui/shine-border"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
     {
         id: "communication",
         icon: MessageSquare,
-        name: "Communication Hub",
+        name: "Communication Dome",
         description: "Team collaboration, internal messaging, and unified communications.",
         category: "Core",
         color: "from-blue-600 via-indigo-500 to-violet-500",
@@ -64,7 +65,7 @@ const modules = [
     {
         id: "sales",
         icon: DollarSign,
-        name: "Sales Hub",
+        name: "Sales Dome",
         description: "Deal pipeline, revenue tracking, quote generation.",
         category: "Revenue",
         color: "from-emerald-500 via-teal-400 to-cyan-500",
@@ -73,7 +74,7 @@ const modules = [
     {
         id: "crm",
         icon: Users,
-        name: "CRM Hub",
+        name: "CRM Dome",
         description: "Customer relationship management and journey analytics.",
         category: "Customer",
         color: "from-indigo-600 via-violet-500 to-purple-500",
@@ -82,7 +83,7 @@ const modules = [
     {
         id: "service",
         icon: Headset,
-        name: "Service Hub",
+        name: "Service Dome",
         description: "Ticket management, SLA tracking, knowledge base.",
         category: "Customer",
         color: "from-orange-500 via-amber-400 to-yellow-500",
@@ -91,7 +92,7 @@ const modules = [
     {
         id: "retention",
         icon: HeartHandshake,
-        name: "Retention Hub",
+        name: "Retention Dome",
         description: "AI-powered churn prediction and CLV analysis.",
         category: "Analytics",
         color: "from-rose-500 via-pink-500 to-fuchsia-500",
@@ -100,7 +101,7 @@ const modules = [
     {
         id: "network",
         icon: Wifi,
-        name: "Network Ops Hub",
+        name: "Network Dome",
         description: "Real-time monitoring, outage alerts, capacity planning.",
         category: "Operations",
         color: "from-cyan-500 via-blue-500 to-indigo-500",
@@ -109,7 +110,7 @@ const modules = [
     {
         id: "call-center",
         icon: Phone,
-        name: "Call Center Hub",
+        name: "Call Center Dome",
         description: "Inbound/outbound call management and agent performance.",
         category: "Customer",
         color: "from-blue-600 via-indigo-600 to-violet-600",
@@ -118,7 +119,7 @@ const modules = [
     {
         id: "marketing",
         icon: Megaphone,
-        name: "Marketing Hub",
+        name: "Marketing Dome",
         description: "Campaign management, email marketing, analytics.",
         category: "Revenue",
         color: "from-fuchsia-600 via-purple-600 to-indigo-600",
@@ -127,7 +128,7 @@ const modules = [
     {
         id: "compliance",
         icon: ShieldCheck,
-        name: "Compliance Hub",
+        name: "Compliance Dome",
         description: "RICA verification, POPIA compliance, audit trails.",
         category: "Operations",
         color: "from-slate-400 via-slate-500 to-slate-600",
@@ -136,7 +137,7 @@ const modules = [
     {
         id: "talent",
         icon: UserCog,
-        name: "Talent Hub",
+        name: "Talent Dome",
         description: "HR management, recruitment, performance reviews.",
         category: "Operations",
         color: "from-yellow-500 via-amber-500 to-orange-500",
@@ -145,7 +146,7 @@ const modules = [
     {
         id: "billing",
         icon: Receipt,
-        name: "Billing Hub",
+        name: "Billing Dome",
         description: "Invoice management, payment processing, collections.",
         category: "Revenue",
         color: "from-teal-500 via-emerald-500 to-green-500",
@@ -154,7 +155,7 @@ const modules = [
     {
         id: "products",
         icon: Package,
-        name: "Product Hub",
+        name: "Product Dome",
         description: "Product catalog, pricing management, bundling.",
         category: "Operations",
         color: "from-violet-600 via-purple-600 to-fuchsia-600",
@@ -163,7 +164,7 @@ const modules = [
     {
         id: "portal",
         icon: Globe,
-        name: "Portal Hub",
+        name: "Portal Dome",
         description: "Customer self-service portal and white-label configurations.",
         category: "Core",
         color: "from-sky-400 via-blue-500 to-indigo-600",
@@ -226,8 +227,51 @@ export default function LandingPage() {
     const [productMenuOpen, setProductMenuOpen] = useState(false)
     const [solutionMenuOpen, setSolutionMenuOpen] = useState(false)
     const [resourceMenuOpen, setResourceMenuOpen] = useState(false)
+    const [isScrolled, setIsScrolled] = useState(false)
     const { resolvedTheme } = useTheme()
     const [mounted, setMounted] = useState(false)
+    
+    // Scroll detection
+    useEffect(() => {
+        const handleScroll = () => {
+            setIsScrolled(window.scrollY > 50)
+        }
+        // Check initial scroll position
+        handleScroll()
+        window.addEventListener('scroll', handleScroll, { passive: true })
+        return () => window.removeEventListener('scroll', handleScroll)
+    }, [])
+    
+    // Hover delay refs
+    const productTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const solutionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const resourceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+    const hoverDelay = 150 // milliseconds
+    
+    const handleProductEnter = () => {
+        if (productTimeoutRef.current) clearTimeout(productTimeoutRef.current)
+        productTimeoutRef.current = setTimeout(() => setProductMenuOpen(true), hoverDelay)
+    }
+    const handleProductLeave = () => {
+        if (productTimeoutRef.current) clearTimeout(productTimeoutRef.current)
+        setProductMenuOpen(false)
+    }
+    const handleSolutionEnter = () => {
+        if (solutionTimeoutRef.current) clearTimeout(solutionTimeoutRef.current)
+        solutionTimeoutRef.current = setTimeout(() => setSolutionMenuOpen(true), hoverDelay)
+    }
+    const handleSolutionLeave = () => {
+        if (solutionTimeoutRef.current) clearTimeout(solutionTimeoutRef.current)
+        setSolutionMenuOpen(false)
+    }
+    const handleResourceEnter = () => {
+        if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
+        resourceTimeoutRef.current = setTimeout(() => setResourceMenuOpen(true), hoverDelay)
+    }
+    const handleResourceLeave = () => {
+        if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
+        setResourceMenuOpen(false)
+    }
     
     useEffect(() => {
         setMounted(true)
@@ -556,29 +600,42 @@ export default function LandingPage() {
             />
 
             {/* Navigation */}
-            <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+            <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl transition-all duration-300">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                     <div className="flex h-auto items-center justify-between py-3">
                         <div className="flex items-center gap-10">
                             <Link href="/" className="flex items-center gap-3 group">
-                                <img src="/logo-new.svg" alt="OmniDome" className="h-12 w-12 transition-all group-hover:scale-110" />
+                                <img src="/logo-new.svg" alt="OmniDome" className={cn(
+                                    "transition-all duration-300 group-hover:scale-110",
+                                    isScrolled ? "h-10 w-10" : "h-12 w-12"
+                                )} />
                             </Link>
 
-                            {/* Desktop Nav */}
-                            <div className="hidden lg:flex items-center gap-1">
+                            {/* Desktop Nav - Hidden when scrolled */}
+                            <div className={cn(
+                                "hidden lg:flex items-center gap-1 transition-all duration-300",
+                                isScrolled ? "opacity-0 pointer-events-none max-w-0 overflow-hidden" : "opacity-100 max-w-none"
+                            )}>
                                 {/* Product - Mega Menu */}
                                 <div
                                     className="relative"
-                                    onMouseEnter={() => setProductMenuOpen(true)}
-                                    onMouseLeave={() => setProductMenuOpen(false)}
+                                    onMouseEnter={handleProductEnter}
+                                    onMouseLeave={handleProductLeave}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5">
-                                        Product <ChevronDown className={cn("h-4 w-4 transition-transform", productMenuOpen && "rotate-180")} />
-                                    </button>
+                                    <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
+                                        <button className={cn(
+                                            "text-sm font-medium transition-all px-4 py-2 rounded-lg",
+                                            productMenuOpen 
+                                                ? "text-foreground bg-primary/10" 
+                                                : "text-muted-foreground hover:text-foreground"
+                                        )}>
+                                            Product
+                                        </button>
+                                    </ShineBorder>
 
                                     {/* Product Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border border-border rounded-b-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         productMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
@@ -611,11 +668,13 @@ export default function LandingPage() {
                                                 <div className="text-sm text-muted-foreground">
                                                     <span className="font-semibold text-foreground">13 integrated modules</span> designed for ISP operations
                                                 </div>
-                                                <Link href="/pricing">
-                                                    <Button size="sm" className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
-                                                        View Pricing <ArrowRight className="ml-2 h-4 w-4" />
-                                                    </Button>
-                                                </Link>
+                                                <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
+                                                    <Link href="/pricing">
+                                                        <Button size="sm" className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
+                                                            View Pricing <ArrowRight className="ml-2 h-4 w-4" />
+                                                        </Button>
+                                                    </Link>
+                                                </ShineBorder>
                                             </div>
                                         </div>
                                     </div>
@@ -624,16 +683,23 @@ export default function LandingPage() {
                                 {/* Solution - Mega Menu */}
                                 <div
                                     className="relative"
-                                    onMouseEnter={() => setSolutionMenuOpen(true)}
-                                    onMouseLeave={() => setSolutionMenuOpen(false)}
+                                    onMouseEnter={handleSolutionEnter}
+                                    onMouseLeave={handleSolutionLeave}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5">
-                                        Solution <ChevronDown className={cn("h-4 w-4 transition-transform", solutionMenuOpen && "rotate-180")} />
-                                    </button>
+                                    <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
+                                        <button className={cn(
+                                            "text-sm font-medium transition-all px-4 py-2 rounded-lg",
+                                            solutionMenuOpen 
+                                                ? "text-foreground bg-primary/10" 
+                                                : "text-muted-foreground hover:text-foreground"
+                                        )}>
+                                            Solution
+                                        </button>
+                                    </ShineBorder>
 
                                     {/* Solution Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border border-border rounded-b-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         solutionMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
@@ -681,23 +747,32 @@ export default function LandingPage() {
                                 </div>
 
                                 {/* Price */}
-                                <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors px-4 py-5">
-                                    Price
-                                </Link>
+                                <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
+                                    <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-2 rounded-lg block">
+                                        Price
+                                    </Link>
+                                </ShineBorder>
 
                                 {/* Resources - Mega Menu */}
                                 <div
                                     className="relative"
-                                    onMouseEnter={() => setResourceMenuOpen(true)}
-                                    onMouseLeave={() => setResourceMenuOpen(false)}
+                                    onMouseEnter={handleResourceEnter}
+                                    onMouseLeave={handleResourceLeave}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5 font-bold">
-                                        Resources <ChevronDown className={cn("h-4 w-4 transition-transform", resourceMenuOpen && "rotate-180")} />
-                                    </button>
+                                    <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
+                                        <button className={cn(
+                                            "text-sm font-medium transition-all px-4 py-2 rounded-lg",
+                                            resourceMenuOpen 
+                                                ? "text-foreground bg-primary/10" 
+                                                : "text-muted-foreground hover:text-foreground"
+                                        )}>
+                                            Resources
+                                        </button>
+                                    </ShineBorder>
 
                                     {/* Resources Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border border-border rounded-b-2xl shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         resourceMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
@@ -828,14 +903,18 @@ export default function LandingPage() {
 
                         <div className="flex items-center gap-4">
                             <ThemeToggle className="hidden md:flex" />
-                            <Link href="/dashboard" className="hidden sm:block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors">
-                                Log in
-                            </Link>
-                            <Link href="/dashboard">
-                                <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
-                                    Get Started
-                                </Button>
-                            </Link>
+                            <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3} className="hidden sm:block">
+                                <Link href="/dashboard" className="block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">
+                                    Log in
+                                </Link>
+                            </ShineBorder>
+                            <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
+                                <Link href="/dashboard">
+                                    <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
+                                        Get Started
+                                    </Button>
+                                </Link>
+                            </ShineBorder>
                             <button className="lg:hidden p-2 text-muted-foreground transition-colors hover:text-foreground" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} title="Toggle menu">
                                 {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
                             </button>
@@ -938,17 +1017,21 @@ export default function LandingPage() {
                     </p>
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-16">
-                        <Link href="/dashboard">
-                            <Button size="lg" className="h-16 px-10 text-xl font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_40px_rgba(79,70,229,0.4)] transition-all duration-300 group overflow-hidden relative active:scale-95">
-                                <span className="relative z-10 flex items-center gap-3">
-                                    Start Your Free Trial <ArrowRight className="h-6 w-6 group-hover:translate-x-1.5 transition-transform" />
-                                </span>
-                                <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                        <ShineBorder borderRadius={12} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
+                            <Link href="/dashboard">
+                                <Button size="lg" className="h-16 px-10 text-xl font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_40px_rgba(79,70,229,0.4)] transition-all duration-300 group overflow-hidden relative active:scale-95">
+                                    <span className="relative z-10 flex items-center gap-3">
+                                        Start Your Free Trial <ArrowRight className="h-6 w-6 group-hover:translate-x-1.5 transition-transform" />
+                                    </span>
+                                    <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </Button>
+                            </Link>
+                        </ShineBorder>
+                        <ShineBorder borderRadius={12} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
+                            <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-border bg-muted/50 hover:bg-muted text-foreground backdrop-blur-md transition-all active:scale-95">
+                                Schedule a Demo
                             </Button>
-                        </Link>
-                        <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-border bg-muted/50 hover:bg-muted text-foreground backdrop-blur-md transition-all active:scale-95">
-                            Schedule a Demo
-                        </Button>
+                        </ShineBorder>
                     </div>
 
                     {/* Dashboard Preview */}
@@ -1262,9 +1345,10 @@ export default function LandingPage() {
             </section>
 
             {/* Footer */}
-            <footer className="border-t border-border py-12 px-4 sm:px-6 lg:px-8">
+            <footer className="border-t border-border py-16 px-4 sm:px-6 lg:px-8">
                 <div className="mx-auto max-w-7xl">
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-8 mb-12">
+                    <div className="grid grid-cols-2 md:grid-cols-6 gap-8 mb-12">
+                        {/* Brand */}
                         <div className="col-span-2">
                             <div className="flex items-center gap-3 mb-4">
                                 <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
@@ -1272,45 +1356,93 @@ export default function LandingPage() {
                                   <span className="font-bold text-foreground text-lg">OmniDome</span>
                                 </div>
                             </div>
-                            <p className="text-sm text-muted-foreground max-w-xs">
+                            <p className="text-sm text-muted-foreground max-w-xs mb-6">
                                 The complete ISP operating system for South African service providers.
                             </p>
+                            <div className="flex gap-4">
+                                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M24 4.557c-.883.392-1.832.656-2.828.775 1.017-.609 1.798-1.574 2.165-2.724-.951.564-2.005.974-3.127 1.195-.897-.957-2.178-1.555-3.594-1.555-3.179 0-5.515 2.966-4.797 6.045-4.091-.205-7.719-2.165-10.148-5.144-1.29 2.213-.669 5.108 1.523 6.574-.806-.026-1.566-.247-2.229-.616-.054 2.281 1.581 4.415 3.949 4.89-.693.188-1.452.232-2.224.084.626 1.956 2.444 3.379 4.6 3.419-2.07 1.623-4.678 2.348-7.29 2.04 2.179 1.397 4.768 2.212 7.548 2.212 9.142 0 14.307-7.721 13.995-14.646.962-.695 1.797-1.562 2.457-2.549z"/></svg>
+                                </a>
+                                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M19 0h-14c-2.761 0-5 2.239-5 5v14c0 2.761 2.239 5 5 5h14c2.762 0 5-2.239 5-5v-14c0-2.761-2.238-5-5-5zm-11 19h-3v-11h3v11zm-1.5-12.268c-.966 0-1.75-.79-1.75-1.764s.784-1.764 1.75-1.764 1.75.79 1.75 1.764-.783 1.764-1.75 1.764zm13.5 12.268h-3v-5.604c0-3.368-4-3.113-4 0v5.604h-3v-11h3v1.765c1.396-2.586 7-2.777 7 2.476v6.759z"/></svg>
+                                </a>
+                                <a href="#" className="text-muted-foreground hover:text-foreground transition-colors">
+                                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                                </a>
+                            </div>
                         </div>
+
+                        {/* Products */}
                         <div>
-                            <h4 className="font-semibold mb-4">Product</h4>
+                            <h4 className="font-semibold mb-4 text-foreground">Products</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
-                                <li><Link href="/products/sales" className="hover:text-foreground">Sales Hub</Link></li>
-                                <li><Link href="/products/crm" className="hover:text-foreground">CRM Hub</Link></li>
-                                <li><Link href="/products/network" className="hover:text-foreground">Network Ops</Link></li>
-                                <li><Link href="/pricing" className="hover:text-foreground">Pricing</Link></li>
+                                {modules.map(mod => (
+                                    <li key={mod.id}>
+                                        <Link href={`/products/${mod.slug}`} className="hover:text-foreground transition-colors">
+                                            {mod.name.replace(' Dome', '')}
+                                        </Link>
+                                    </li>
+                                ))}
+                                <li><Link href="/pricing" className="hover:text-foreground transition-colors font-medium text-primary">View Pricing</Link></li>
                             </ul>
                         </div>
+
+                        {/* Solutions */}
                         <div>
-                            <h4 className="font-semibold mb-4">Resources</h4>
+                            <h4 className="font-semibold mb-4 text-foreground">Solutions</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
-                                <li><Link href="/resources/why-omnidome" className="hover:text-foreground">Why OmniDome</Link></li>
-                                <li><Link href="/resources/services" className="hover:text-foreground">Services</Link></li>
-                                <li><Link href="/resources/partners" className="hover:text-foreground">Partners</Link></li>
-                                <li><a href="#" className="hover:text-foreground">Documentation</a></li>
+                                {Object.entries(solutionsByCategory).flatMap(([category, solutions]) => 
+                                    solutions.map(sol => (
+                                        <li key={sol.slug}>
+                                            <Link href={`/solutions/${sol.slug}`} className="hover:text-foreground transition-colors">
+                                                {sol.title}
+                                            </Link>
+                                        </li>
+                                    ))
+                                )}
                             </ul>
                         </div>
+
+                        {/* Resources */}
                         <div>
-                            <h4 className="font-semibold mb-4">Company</h4>
+                            <h4 className="font-semibold mb-4 text-foreground">Resources</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
-                                <li><a href="#" className="hover:text-foreground">About</a></li>
-                                <li><a href="#" className="hover:text-foreground">Careers</a></li>
-                                <li><a href="#" className="hover:text-foreground">Contact</a></li>
-                                <li><a href="#" className="hover:text-foreground">Legal</a></li>
+                                <li><Link href="/resources/why-omnidome" className="hover:text-foreground transition-colors">Why OmniDome</Link></li>
+                                <li><Link href="#" className="hover:text-foreground transition-colors">Blog</Link></li>
+                                <li><Link href="/resources/services" className="hover:text-foreground transition-colors">Services</Link></li>
+                                <li><Link href="/resources/partners" className="hover:text-foreground transition-colors">Partners</Link></li>
+                                <li><Link href="/docs" className="hover:text-foreground transition-colors">Documentation</Link></li>
+                                <li><Link href="/developers" className="hover:text-foreground transition-colors">Developer Portal</Link></li>
+                                <li><Link href="/support" className="hover:text-foreground transition-colors">Support Center</Link></li>
+                            </ul>
+                        </div>
+
+                        {/* Company */}
+                        <div>
+                            <h4 className="font-semibold mb-4 text-foreground">Company</h4>
+                            <ul className="space-y-2 text-sm text-muted-foreground">
+                                <li><a href="#" className="hover:text-foreground transition-colors">About Us</a></li>
+                                <li><a href="#" className="hover:text-foreground transition-colors">Careers</a></li>
+                                <li><a href="#" className="hover:text-foreground transition-colors">Contact</a></li>
+                                <li><a href="#" className="hover:text-foreground transition-colors">Press</a></li>
+                            </ul>
+                            <h4 className="font-semibold mb-4 mt-6 text-foreground">Legal</h4>
+                            <ul className="space-y-2 text-sm text-muted-foreground">
+                                <li><a href="#" className="hover:text-foreground transition-colors">Privacy Policy</a></li>
+                                <li><a href="#" className="hover:text-foreground transition-colors">Terms of Service</a></li>
+                                <li><a href="#" className="hover:text-foreground transition-colors">POPIA Compliance</a></li>
                             </ul>
                         </div>
                     </div>
                     <div className="border-t border-border pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
                         <p className="text-sm text-muted-foreground">
-                            © 2026 OmniDome. All rights reserved.
+                            © 2026 OmniDome. All rights reserved. Built for South African ISPs.
                         </p>
-                        <div className="flex gap-6 text-sm text-muted-foreground">
-                            <a href="#" className="hover:text-foreground">Privacy Policy</a>
-                            <a href="#" className="hover:text-foreground">Terms of Service</a>
+                        <div className="flex items-center gap-6 text-sm text-muted-foreground">
+                            <span className="flex items-center gap-2">
+                                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+                                All systems operational
+                            </span>
                         </div>
                     </div>
                 </div>

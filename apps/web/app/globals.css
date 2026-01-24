@@ -175,3 +175,19 @@
 .animate-orbit {
   animation: orbit calc(var(--duration) * 1s) linear infinite;
 }
+
+@keyframes shine-border {
+  0% {
+    background-position: 0% 0%;
+  }
+  50% {
+    background-position: 100% 100%;
+  }
+  100% {
+    background-position: 0% 0%;
+  }
+}
+
+.animate-shine-border {
+  animation: shine-border var(--duration) infinite linear;
+}
