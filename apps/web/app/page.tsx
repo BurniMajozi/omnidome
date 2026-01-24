@@ -208,7 +208,7 @@ const solutionsByCategory: Record<string, { title: string; description: string; 
 const resourceItems = {
     featured: [
         { icon: Sparkles, title: "Why OmniDome", description: "See what makes us different", href: "/resources/why-omnidome" },
-        { icon: BookOpen, title: "Blog", description: "Latest insights and updates", href: "#" },
+        { icon: BookOpen, title: "Blog", description: "Latest insights and updates", href: "/blog" },
     ],
     services: [
         { icon: Rocket, title: "Onboarding", description: "Get up and running quickly", href: "/resources/services" },
@@ -887,13 +887,6 @@ export default function LandingPage() {
                                     </div>
                                 </div>
 
-                                {/* Price */}
-                                <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
-                                    <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-2 rounded-lg block">
-                                        Price
-                                    </Link>
-                                </ShineBorder>
-
                                 {/* Resources - Mega Menu */}
                                 <div
                                     className="relative"
@@ -1043,6 +1036,12 @@ export default function LandingPage() {
                         </div>
 
                         <div className="flex items-center gap-4">
+                            {/* Price - Always visible */}
+                            <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3} className="hidden lg:block">
+                                <Link href="/pricing" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-2 rounded-lg block">
+                                    Price
+                                </Link>
+                            </ShineBorder>
                             <ThemeToggle className="hidden md:flex" />
                             <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3} className="hidden sm:block">
                                 <Link href="/dashboard" className="block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">
@@ -1559,7 +1558,7 @@ export default function LandingPage() {
                             <h4 className="font-semibold mb-4 text-foreground">Resources</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
                                 <li><Link href="/resources/why-omnidome" className="hover:text-foreground transition-colors">Why OmniDome</Link></li>
-                                <li><Link href="#" className="hover:text-foreground transition-colors">Blog</Link></li>
+                                <li><Link href="/blog" className="hover:text-foreground transition-colors">Blog</Link></li>
                                 <li><Link href="/resources/services" className="hover:text-foreground transition-colors">Services</Link></li>
                                 <li><Link href="/resources/partners" className="hover:text-foreground transition-colors">Partners</Link></li>
                                 <li><Link href="/docs" className="hover:text-foreground transition-colors">Documentation</Link></li>

@@ -18,6 +18,7 @@ import { CommunicationModule } from "@/components/modules/communication-module"
 import { BillingModule } from "@/components/modules/billing-module"
 import { ProductsModule } from "@/components/modules/products-module"
 import { PortalModule } from "@/components/modules/portal-module"
+import { FlickeringGrid } from "@/components/ui/flickering-grid"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -79,7 +80,19 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-background">
+    <div className="flex h-screen w-full overflow-hidden bg-background relative">
+      {/* Flickering Grid Background */}
+      <div className="fixed top-0 left-0 z-0 w-full h-full [mask-image:linear-gradient(to_bottom,black_0%,transparent_30%)] pointer-events-none opacity-50">
+        <FlickeringGrid
+          className="absolute top-0 left-0 size-full"
+          squareSize={4}
+          gridGap={6}
+          color="#6B7280"
+          maxOpacity={0.1}
+          flickerChance={0.03}
+        />
+      </div>
+
       {/* Sidebar */}
       <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
 

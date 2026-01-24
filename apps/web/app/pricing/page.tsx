@@ -26,6 +26,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
+import { FlickeringGrid } from "@/components/ui/flickering-grid"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -697,7 +698,19 @@ export default function PricingPage() {
     }
 
     return (
-        <div className="min-h-screen bg-background">
+        <div className="min-h-screen bg-background relative">
+            {/* Flickering Grid Background */}
+            <div className="fixed top-0 left-0 z-0 w-full h-[300px] [mask-image:linear-gradient(to_top,transparent_25%,black_95%)] pointer-events-none">
+                <FlickeringGrid
+                    className="absolute top-0 left-0 size-full"
+                    squareSize={4}
+                    gridGap={6}
+                    color="#6B7280"
+                    maxOpacity={0.15}
+                    flickerChance={0.05}
+                />
+            </div>
+
             {/* Top Nav */}
             <nav className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">

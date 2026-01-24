@@ -30,7 +30,7 @@ export function ShineBorder({
       } as React.CSSProperties}
       className={cn(
         "relative rounded-[--border-radius] p-[--border-width]",
-        "before:absolute before:inset-0 before:rounded-[--border-radius]",
+        "before:absolute before:inset-0 before:rounded-[--border-radius] before:pointer-events-none",
         "before:p-[--border-width] before:will-change-[background-position]",
         "before:content-[''] before:![-webkit-mask-composite:xor]",
         "before:[background-image:--background-radial-gradient]",
