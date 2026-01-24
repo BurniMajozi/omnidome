@@ -58,13 +58,13 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
         collapsed ? "w-16" : "w-64",
       )}
     >
-      <div className="flex h-16 items-center justify-between border-b border-border px-4 bg-sidebar/50">
+      <div className="flex h-auto items-center justify-between border-b border-border bg-transparent px-4 py-4">
         {!collapsed && (
-          <div className="flex items-center gap-2.5 group cursor-pointer">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-400 shadow-[0_0_15px_rgba(79,70,229,0.3)] group-hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
-              <Wifi className="h-5 w-5 text-white" />
+          <div className="flex items-center gap-3 group cursor-pointer">
+            <img src="/logo-new.svg" alt="OmniDome Logo" className="h-12 w-12 transition-all group-hover:scale-110" />
+            <div className="flex flex-col">
+              <span className="font-bold text-xl tracking-tight text-white">OmniDome</span>
             </div>
-            <span className="font-bold text-lg tracking-tight text-foreground">OmniDome</span>
           </div>
         )}
         <Button

@@ -34,7 +34,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const b = parseInt(theme.primary_color.slice(5, 7), 16);
         document.documentElement.style.setProperty('--primary-rgb', `${r}, ${g}, ${b}`);
 
-        document.getElementById('brand-name').textContent = theme.brand_name;
         document.getElementById('footer-brand-name').textContent = theme.brand_name;
         document.getElementById('hero-title').innerHTML = theme.hero.title.replace("Fibre", '<span class="gradient-text">Fibre</span>');
         document.getElementById('hero-subtitle').textContent = theme.hero.subtitle;

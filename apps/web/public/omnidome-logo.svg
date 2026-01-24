@@ -1,0 +1,47 @@
+<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+  <!-- Background -->
+  <defs>
+    <linearGradient id="sphereGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1e40af;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#f97316;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ea580c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Globe Sphere -->
+  <circle cx="30" cy="50" r="28" fill="url(#sphereGrad)" opacity="0.9"/>
+  
+  <!-- Globe Wireframe -->
+  <circle cx="30" cy="50" r="28" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.4"/>
+  
+  <!-- Horizontal bands -->
+  <ellipse cx="30" cy="35" rx="28" ry="8" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  <ellipse cx="30" cy="50" rx="28" ry="8" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  <ellipse cx="30" cy="65" rx="28" ry="8" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  
+  <!-- Vertical meridians -->
+  <path d="M 30 22 Q 35 50 30 78" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  <path d="M 30 22 Q 25 50 30 78" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  <path d="M 20 50 Q 30 45 40 50" fill="none" stroke="#ffffff" stroke-width="1" opacity="0.3"/>
+  
+  <!-- Inner globe detail -->
+  <circle cx="30" cy="50" r="15" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.5"/>
+  
+  <!-- Curved line accent (orange) -->
+  <path d="M 60 45 Q 85 40 105 50" fill="none" stroke="#f97316" stroke-width="3" stroke-linecap="round" opacity="0.8"/>
+  
+  <!-- OmniDome Text -->
+  <text x="115" y="65" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="url(#textGrad)" letter-spacing="1">
+    OmniDome
+  </text>
+  
+  <!-- Optional tagline (smaller) -->
+  <text x="115" y="78" font-family="Arial, sans-serif" font-size="8" fill="#94a3b8" opacity="0.7" letter-spacing="2">
+    ISP PLATFORM
+  </text>
+</svg>

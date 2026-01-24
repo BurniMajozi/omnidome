@@ -111,9 +111,10 @@ export default function PartnersPage() {
             {/* Nav */}
             <nav className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                    <div className="flex h-16 items-center justify-between">
-                        <Link href="/" className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-emerald-500 transition-colors">
-                            <ArrowLeft className="h-4 w-4" /> Back to Home
+                    <div className="flex h-auto items-center justify-between py-3">
+                        <Link href="/" className="flex items-center gap-3 group hover:opacity-80 transition-opacity">
+                            <img src="/logo.png" alt="OmniDome" className="h-8 w-8 object-cover rounded-lg shadow-[0_0_12px_rgba(79,70,229,0.3)]" />
+                            <span className="text-sm font-semibold">OmniDome</span>
                         </Link>
                         <div className="flex items-center gap-4">
                             <Link href="/dashboard">
@@ -262,10 +263,7 @@ export default function PartnersPage() {
             <footer className="border-t border-border py-12 px-4">
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500">
-                            <Wifi className="h-4 w-4 text-white" />
-                        </div>
-                        <span className="text-lg font-bold">OmniDome</span>
+                        <img src="/omnidome-logo.svg" alt="OmniDome" className="h-8 w-auto" />
                     </div>
                     <p className="text-sm text-muted-foreground">© 2026 OmniDome. All rights reserved.</p>
                 </div>

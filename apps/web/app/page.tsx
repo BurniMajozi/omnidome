@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import Link from "next/link"
 import {
     DollarSign,
@@ -210,11 +210,316 @@ export default function LandingPage() {
     const [productMenuOpen, setProductMenuOpen] = useState(false)
     const [solutionMenuOpen, setSolutionMenuOpen] = useState(false)
     const [resourceMenuOpen, setResourceMenuOpen] = useState(false)
+    
+    // Interactive galactic dome pattern
+    const canvasRef = useRef<HTMLCanvasElement>(null)
+    const mouseRef = useRef({ x: 0, y: 0 })
+    const starsRef = useRef<{ 
+        x: number; y: number; baseX: number; baseY: number; 
+        size: number; length: number; angle: number;
+        opacity: number; twinkleSpeed: number; twinklePhase: number;
+        orbitAngle: number; orbitRadius: number; orbitSpeed: number;
+        color: string; connectionIndex: number;
+    }[]>([])
+    const timeRef = useRef(0)
+    
+    useEffect(() => {
+        const canvas = canvasRef.current
+        if (!canvas) return
+        
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        
+        const colors = [
+            '79, 70, 229',    // indigo-600
+            '99, 102, 241',   // indigo
+            '129, 140, 248',  // indigo-400
+            '139, 92, 246',   // violet
+            '59, 130, 246',   // blue
+            '100, 116, 139',  // slate
+        ]
+        
+        const resizeCanvas = () => {
+            canvas.width = window.innerWidth
+            canvas.height = window.innerHeight
+            initStars()
+        }
+        
+        const initStars = () => {
+            starsRef.current = []
+            const centerX = canvas.width / 2
+            const centerY = canvas.height * 0.65
+            const domeWidth = canvas.width * 1.2
+            const domeHeight = canvas.height * 0.9
+            
+            // Create full-screen dome galaxy pattern
+            for (let i = 0; i < 800; i++) {
+                // Dome arc from left to right (PI to 2*PI is bottom half, 0 to PI is top half/dome)
+                const angle = Math.random() * Math.PI
+                const radiusFactor = Math.pow(Math.random(), 0.5)
+                
+                const baseX = centerX + Math.cos(angle) * radiusFactor * domeWidth * 0.5
+                const baseY = centerY - Math.sin(angle) * radiusFactor * domeHeight * 0.6
+                
+                // Elongated streak angle pointing toward center
+                const streakAngle = Math.atan2(centerY - baseY, centerX - baseX) + (Math.random() - 0.5) * 0.5
+                
+                starsRef.current.push({
+                    x: baseX,
+                    y: baseY,
+                    baseX,
+                    baseY,
+                    size: 0.8 + Math.random() * 1.2,
+                    length: 4 + Math.random() * 10,
+                    angle: streakAngle,
+                    opacity: 0.15 + Math.random() * 0.25,
+                    twinkleSpeed: 0.01 + Math.random() * 0.02,
+                    twinklePhase: Math.random() * Math.PI * 2,
+                    orbitAngle: Math.random() * Math.PI * 2,
+                    orbitRadius: 1 + Math.random() * 4,
+                    orbitSpeed: 0.002 + Math.random() * 0.006,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    connectionIndex: Math.random() > 0.6 ? Math.floor(Math.random() * 800) : -1
+                })
+            }
+            
+            // Add brighter accent points
+            for (let i = 0; i < 20; i++) {
+                const angle = Math.random() * Math.PI
+                const radiusFactor = Math.random() * 0.7
+                const baseX = centerX + Math.cos(angle) * radiusFactor * domeWidth * 0.4
+                const baseY = centerY - Math.sin(angle) * radiusFactor * domeHeight * 0.5
+                
+                starsRef.current.push({
+                    x: baseX,
+                    y: baseY,
+                    baseX,
+                    baseY,
+                    size: 2 + Math.random() * 1.5,
+                    length: 0,
+                    angle: 0,
+                    opacity: 0.35 + Math.random() * 0.25,
+                    twinkleSpeed: 0.015 + Math.random() * 0.02,
+                    twinklePhase: Math.random() * Math.PI * 2,
+                    orbitAngle: Math.random() * Math.PI * 2,
+                    orbitRadius: 2 + Math.random() * 3,
+                    orbitSpeed: 0.004 + Math.random() * 0.006,
+                    color: '129, 140, 248',
+                    connectionIndex: -1
+                })
+            }
+        }
+        
+        const animate = () => {
+            if (!ctx || !canvas) return
+            
+            timeRef.current += 1
+            ctx.clearRect(0, 0, canvas.width, canvas.height)
+            
+            const mouseX = mouseRef.current.x
+            const mouseY = mouseRef.current.y
+            const interactionRadius = 150
+            
+            // First pass: draw connection lines
+            ctx.lineWidth = 0.8
+            starsRef.current.forEach((star, index) => {
+                if (star.connectionIndex >= 0 && star.connectionIndex < starsRef.current.length && star.connectionIndex !== index) {
+                    const target = starsRef.current[star.connectionIndex]
+                    const dist = Math.sqrt(Math.pow(star.x - target.x, 2) + Math.pow(star.y - target.y, 2))
+                    
+                    if (dist < 250) {
+                        const lineOpacity = (1 - dist / 250) * 0.15
+                        ctx.beginPath()
+                        ctx.moveTo(star.x, star.y)
+                        ctx.lineTo(target.x, target.y)
+                        ctx.strokeStyle = `rgba(99, 102, 241, ${lineOpacity})`
+                        ctx.stroke()
+                    }
+                }
+            })
+            
+            // Second pass: draw stars
+            starsRef.current.forEach(star => {
+                // Orbital movement around base position
+                star.orbitAngle += star.orbitSpeed
+                const orbitX = Math.cos(star.orbitAngle) * star.orbitRadius
+                const orbitY = Math.sin(star.orbitAngle) * star.orbitRadius * 0.5
+                
+                // Calculate target position with orbit
+                let targetX = star.baseX + orbitX
+                let targetY = star.baseY + orbitY
+                
+                // Mouse interaction - push stars away
+                const dx = mouseX - targetX
+                const dy = mouseY - targetY
+                const distance = Math.sqrt(dx * dx + dy * dy)
+                
+                if (distance < interactionRadius && distance > 0) {
+                    const force = (interactionRadius - distance) / interactionRadius
+                    const pushAngle = Math.atan2(dy, dx)
+                    targetX -= Math.cos(pushAngle) * force * 50
+                    targetY -= Math.sin(pushAngle) * force * 50
+                }
+                
+                // Smooth movement to target
+                star.x += (targetX - star.x) * 0.06
+                star.y += (targetY - star.y) * 0.06
+                
+                // Twinkle effect
+                const twinkle = Math.sin(timeRef.current * star.twinkleSpeed + star.twinklePhase)
+                const twinkleOpacity = star.opacity * (0.7 + twinkle * 0.3)
+                
+                // Glow boost near mouse
+                let glowBoost = 0
+                if (distance < interactionRadius * 2) {
+                    glowBoost = ((interactionRadius * 2 - distance) / (interactionRadius * 2)) * 0.3
+                }
+                
+                const finalOpacity = Math.min(0.8, twinkleOpacity + glowBoost)
+                
+                // Draw elongated streak or dot
+                if (star.length > 0) {
+                    // Draw as elongated streak
+                    const endX = star.x + Math.cos(star.angle) * star.length
+                    const endY = star.y + Math.sin(star.angle) * star.length
+                    
+                    const gradient = ctx.createLinearGradient(star.x, star.y, endX, endY)
+                    gradient.addColorStop(0, `rgba(${star.color}, ${finalOpacity})`)
+                    gradient.addColorStop(1, `rgba(${star.color}, 0)`)
+                    
+                    ctx.beginPath()
+                    ctx.moveTo(star.x, star.y)
+                    ctx.lineTo(endX, endY)
+                    ctx.strokeStyle = gradient
+                    ctx.lineWidth = star.size
+                    ctx.lineCap = 'round'
+                    ctx.stroke()
+                } else {
+                    // Draw as glowing dot
+                    const gradient = ctx.createRadialGradient(star.x, star.y, 0, star.x, star.y, star.size * 5)
+                    gradient.addColorStop(0, `rgba(${star.color}, ${finalOpacity})`)
+                    gradient.addColorStop(0.4, `rgba(${star.color}, ${finalOpacity * 0.4})`)
+                    gradient.addColorStop(1, `rgba(${star.color}, 0)`)
+                    ctx.beginPath()
+                    ctx.arc(star.x, star.y, star.size * 5, 0, Math.PI * 2)
+                    ctx.fillStyle = gradient
+                    ctx.fill()
+                }
+            })
+            
+            requestAnimationFrame(animate)
+        }
+        
+        const handleMouseMove = (e: MouseEvent) => {
+            mouseRef.current = { x: e.clientX, y: e.clientY }
+        }
+        
+        resizeCanvas()
+        window.addEventListener('resize', resizeCanvas)
+        window.addEventListener('mousemove', handleMouseMove)
+        animate()
+        
+        return () => {
+            window.removeEventListener('resize', resizeCanvas)
+            window.removeEventListener('mousemove', handleMouseMove)
+        }
+    }, [])
+    
+    // Typewriter effect state
+    const [typedText1, setTypedText1] = useState("")
+    const [typedText2, setTypedText2] = useState("")
+    const [showCursor1, setShowCursor1] = useState(true)
+    const [showCursor2, setShowCursor2] = useState(false)
+    const [currentWord, setCurrentWord] = useState("")
+    const [displayedWord, setDisplayedWord] = useState("")
+    const [isTypingComplete, setIsTypingComplete] = useState(false)
+    const [showRotatingCursor, setShowRotatingCursor] = useState(false)
+    
+    const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention"]
+    const baseText = "Unify Your Entire "
+    const fullText2 = "On One Powerful Platform"
+    
+    useEffect(() => {
+        let index = 0
+        const fullText1 = baseText + "ISP"
+        const typeInterval1 = setInterval(() => {
+            if (index < fullText1.length) {
+                setTypedText1(fullText1.slice(0, index + 1))
+                index++
+            } else {
+                clearInterval(typeInterval1)
+                setShowCursor1(false)
+                setShowCursor2(true)
+                // Start typing line 2
+                let index2 = 0
+                const typeInterval2 = setInterval(() => {
+                    if (index2 < fullText2.length) {
+                        setTypedText2(fullText2.slice(0, index2 + 1))
+                        index2++
+                    } else {
+                        clearInterval(typeInterval2)
+                        setShowCursor2(false)
+                        setIsTypingComplete(true)
+                    }
+                }, 80)
+            }
+        }, 80)
+        
+        return () => clearInterval(typeInterval1)
+    }, [])
+    
+    // Word rotation effect with typing animation after initial typing is complete
+    useEffect(() => {
+        if (!isTypingComplete) return
+        
+        // Set initial word when typing completes
+        setDisplayedWord("ISP")
+        setShowRotatingCursor(false)
+        
+        let wordIndex = 0
+        let currentDisplayedWord = "ISP"
+        
+        const rotateAndType = () => {
+            wordIndex = (wordIndex + 1) % rotatingWords.length
+            const newWord = rotatingWords[wordIndex]
+            setShowRotatingCursor(true)
+            
+            // Delete current word first
+            let deleteIndex = currentDisplayedWord.length
+            const deleteInterval = setInterval(() => {
+                if (deleteIndex > 0) {
+                    deleteIndex--
+                    setDisplayedWord(currentDisplayedWord.slice(0, deleteIndex))
+                } else {
+                    clearInterval(deleteInterval)
+                    // Now type the new word
+                    let typeIndex = 0
+                    const typeInterval = setInterval(() => {
+                        if (typeIndex < newWord.length) {
+                            typeIndex++
+                            setDisplayedWord(newWord.slice(0, typeIndex))
+                        } else {
+                            clearInterval(typeInterval)
+                            currentDisplayedWord = newWord
+                            setShowRotatingCursor(false)
+                        }
+                    }, 80)
+                }
+            }, 50)
+        }
+        
+        const rotateInterval = setInterval(rotateAndType, 3000)
+        
+        return () => clearInterval(rotateInterval)
+    }, [isTypingComplete])
 
     return (
         <div className="min-h-screen bg-[#020617] text-slate-100 selection:bg-indigo-500/30 overflow-x-hidden">
-            {/* Grid Pattern Background */}
-            <div className="fixed inset-0 z-0 pointer-events-none opacity-20 grid-pattern" />
+            {/* Interactive Dome Dot Pattern Background */}
+            <canvas
+                ref={canvasRef}
+                className="fixed inset-0 z-0 pointer-events-none"
+            />
             {/* Top Bar */}
             <div className="relative z-10 bg-slate-900/50 backdrop-blur-md border-b border-slate-800/50 py-2 px-4 text-xs text-center sm:text-right">
                 <div className="max-w-7xl mx-auto flex justify-center sm:justify-end gap-6">
@@ -227,15 +532,10 @@ export default function LandingPage() {
             {/* Navigation */}
             <nav className="sticky top-0 z-50 border-b border-slate-800/50 bg-[#020617]/80 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                    <div className="flex h-16 items-center justify-between">
+                    <div className="flex h-auto items-center justify-between py-3">
                         <div className="flex items-center gap-10">
-                            <Link href="/" className="flex items-center gap-2 group">
-                                <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-400 shadow-[0_0_20px_rgba(79,70,229,0.4)] group-hover:shadow-[0_0_30px_rgba(79,70,229,0.6)] transition-all duration-300">
-                                    <Wifi className="h-5 w-5 text-white" />
-                                </div>
-                                <span className="text-xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
-                                    OmniDome
-                                </span>
+                            <Link href="/" className="flex items-center gap-3 group">
+                                <img src="/logo-new.svg" alt="OmniDome" className="h-12 w-12 transition-all group-hover:scale-110" />
                             </Link>
 
                             {/* Desktop Nav */}
@@ -509,16 +809,68 @@ export default function LandingPage() {
                 <div className="absolute bottom-[-10%] left-[-10%] w-[600px] h-[600px] bg-blue-600/10 blur-[130px] rounded-full pointer-events-none" />
 
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 text-center relative z-10">
-                    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-black tracking-[2px] uppercase mb-10 overflow-hidden group">
-                        <Sparkles className="h-3.5 w-3.5 animate-bounce" />
-                        <span>Next-Gen ISP Operating System</span>
+                    <style>{`
+                        @keyframes shimmer {
+                            0% {
+                                background-position: -1000px 0;
+                            }
+                            100% {
+                                background-position: 1000px 0;
+                            }
+                        }
+                        .shimmer-text {
+                            background: linear-gradient(90deg, #7d87ff, #a4b3ff, #7d87ff);
+                            background-size: 1000px 100%;
+                            -webkit-background-clip: text;
+                            -webkit-text-fill-color: transparent;
+                            background-clip: text;
+                            animation: shimmer 3s infinite;
+                        }
+                        @keyframes blink {
+                            0%, 50% { opacity: 1; }
+                            51%, 100% { opacity: 0; }
+                        }
+                        .cursor-blink {
+                            animation: blink 1s step-end infinite;
+                        }
+                        @keyframes fadeInUp {
+                            0% { opacity: 0; transform: translateY(10px); }
+                            100% { opacity: 1; transform: translateY(0); }
+                        }
+                        .rotating-word {
+                            display: inline-block;
+                            animation: fadeInUp 0.5s ease-out;
+                            background: linear-gradient(90deg, #7d87ff, #54a2ff, #00d2ef);
+                            -webkit-background-clip: text;
+                            -webkit-text-fill-color: transparent;
+                            background-clip: text;
+                        }
+                    `}</style>
+                    <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-xs font-black tracking-[2px] uppercase mb-10 group">
+                        <Sparkles className="h-3.5 w-3.5 animate-bounce text-indigo-400" />
+                        <span className="shimmer-text">Next-Gen ISP Operating System</span>
                         <div className="absolute inset-x-0 bottom-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500 to-transparent" />
                     </div>
 
                     <h1 className="text-5xl lg:text-8xl font-black tracking-tight text-white mb-8 leading-[1]">
-                        Unify Your Entire ISP <br />
-                        <span className="bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 animate-gradient-x">
-                            On One Powerful Platform
+                        <span className="inline-block">
+                            {isTypingComplete ? (
+                                <>
+                                    {baseText}
+                                    <span className="bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">{displayedWord}</span>
+                                    {showRotatingCursor && <span className="cursor-blink text-cyan-400">|</span>}
+                                </>
+                            ) : (
+                                <>
+                                    {typedText1}
+                                    {showCursor1 && <span className="cursor-blink text-indigo-400">|</span>}
+                                </>
+                            )}
+                        </span>
+                        <br />
+                        <span className="inline-block bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400">
+                            {typedText2}
+                            {showCursor2 && <span className="cursor-blink text-cyan-400">|</span>}
                         </span>
                     </h1>
 
@@ -526,7 +878,7 @@ export default function LandingPage() {
                         Stop juggling disconnected tools. Manage sales, fiber networks, billing, and support with an integrated OS built specifically for the South African ISP market.
                     </p>
 
-                    <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-24">
+                    <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-16">
                         <Link href="/dashboard">
                             <Button size="lg" className="h-16 px-10 text-xl font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_40px_rgba(79,70,229,0.4)] transition-all duration-300 group overflow-hidden relative active:scale-95">
                                 <span className="relative z-10 flex items-center gap-3">
@@ -538,6 +890,29 @@ export default function LandingPage() {
                         <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-slate-700 bg-slate-900/50 hover:bg-slate-800 text-white backdrop-blur-md transition-all active:scale-95">
                             Schedule a Demo
                         </Button>
+                    </div>
+
+                    {/* Dashboard Preview */}
+                    <div className="relative max-w-6xl mx-auto mb-24">
+                        <div className="absolute inset-0 bg-gradient-to-t from-[#020617] via-transparent to-transparent z-10 pointer-events-none" />
+                        <div className="absolute -inset-4 bg-gradient-to-r from-indigo-500/20 via-blue-500/20 to-cyan-500/20 blur-3xl opacity-50 -z-10" />
+                        <div className="rounded-2xl border border-slate-700/50 bg-slate-900/80 backdrop-blur-xl overflow-hidden shadow-2xl shadow-indigo-500/10">
+                            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700/50 bg-slate-800/50">
+                                <div className="flex gap-1.5">
+                                    <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                                    <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                                    <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                                </div>
+                                <div className="flex-1 text-center">
+                                    <span className="text-xs text-slate-500 font-medium">OmniDome Dashboard</span>
+                                </div>
+                            </div>
+                            <img 
+                                src="/dashboard-preview.png" 
+                                alt="OmniDome Dashboard Preview" 
+                                className="w-full h-auto"
+                            />
+                        </div>
                     </div>
 
                     {/* Stats */}
@@ -710,11 +1085,11 @@ export default function LandingPage() {
                 <div className="mx-auto max-w-7xl">
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-8 mb-12">
                         <div className="col-span-2">
-                            <div className="flex items-center gap-2 mb-4">
-                                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-blue-500 shadow-[0_0_15px_rgba(79,70,229,0.3)]">
-                                    <Wifi className="h-4 w-4 text-white" />
+                            <div className="flex items-center gap-3 mb-4">
+                                <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
+                                <div>
+                                  <span className="font-bold text-white text-lg">OmniDome</span>
                                 </div>
-                                <span className="text-lg font-bold text-white">OmniDome</span>
                             </div>
                             <p className="text-sm text-muted-foreground max-w-xs">
                                 The complete ISP operating system for South African service providers.

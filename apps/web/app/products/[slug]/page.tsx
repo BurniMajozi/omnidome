@@ -363,10 +363,10 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
             {/* Sticky Nav */}
             <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border bg-background/95 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                    <div className="flex h-16 items-center justify-between">
+                    <div className="flex h-auto items-center justify-between py-3">
                         <div className="flex items-center gap-4">
-                            <Link href="/" className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-emerald-500 transition-colors">
-                                <ArrowLeft className="h-4 w-4" /> Back
+                            <Link href="/" className="flex items-center gap-2 group hover:opacity-80 transition-opacity">
+                                <img src="/logo.png" alt="OmniDome" className="h-8 w-8 object-cover rounded-lg shadow-[0_0_12px_rgba(79,70,229,0.3)]" />
                             </Link>
                             <span className="text-muted-foreground">/</span>
                             <span className="text-sm font-semibold text-foreground">{product.name}</span>
@@ -508,10 +508,7 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
             <footer className="border-t border-border py-12 px-4 sm:px-6 lg:px-8">
                 <div className="mx-auto max-w-7xl flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-2">
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500">
-                            <Wifi className="h-4 w-4 text-white" />
-                        </div>
-                        <span className="text-lg font-bold">OmniDome</span>
+                        <img src="/omnidome-logo.svg" alt="OmniDome" className="h-8 w-auto" />
                     </div>
                     <p className="text-sm text-muted-foreground">
                         © 2026 OmniDome. All rights reserved.

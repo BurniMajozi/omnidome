@@ -92,6 +92,23 @@ h3 {
     font-size: 24px;
 }
 
+.logo-image {
+    transition: transform 0.3s ease;
+}
+
+.logo-rotating {
+    animation: spin 8s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
 .logo-placeholder {
     width: 40px;
     height: 40px;

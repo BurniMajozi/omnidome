@@ -700,12 +700,13 @@ export default function PricingPage() {
             {/* Top Nav */}
             <nav className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-                    <div className="flex h-16 items-center justify-between">
-                        <Link href="/" className="flex items-center gap-2">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-500">
-                                <Wifi className="h-4 w-4 text-white" />
+                    <div className="flex h-auto items-center justify-between py-3">
+                        <Link href="/" className="flex items-center gap-3 group">
+                            <img src="/logo.png" alt="OmniDome" className="h-10 w-10 object-cover rounded-lg shadow-[0_0_15px_rgba(79,70,229,0.3)] group-hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all" />
+                            <div className="flex flex-col">
+                              <span className="font-bold text-white">OmniDome</span>
+                              <span className="text-xs text-indigo-300">ISP OS</span>
                             </div>
-                            <span className="font-bold">OmniDome</span>
                         </Link>
 
                         {/* Audience Toggle */}
