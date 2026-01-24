@@ -37,6 +37,13 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { CalendarIcon, FileTextIcon } from "@radix-ui/react-icons"
+import { BellIcon, Share2Icon } from "lucide-react"
+import { BentoCard, BentoGrid } from "@/components/ui/bento-grid"
+import { Marquee } from "@/components/ui/marquee"
+import { Calendar } from "@/components/ui/calendar"
+import { AnimatedListDemo } from "@/components/demo/animated-list-demo"
+import { AnimatedBeamMultipleOutputDemo } from "@/components/demo/animated-beam-demo"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -933,6 +940,88 @@ export default function LandingPage() {
                             <div className="text-4xl lg:text-5xl font-black text-white mb-2 group-hover:text-indigo-400 transition-colors">100%</div>
                             <div className="text-[10px] text-slate-500 uppercase tracking-[3px] font-black">SA Compliant</div>
                         </div>
+                    </div>
+
+                    {/* Bento Grid Section */}
+                    <div className="mt-24 max-w-7xl mx-auto">
+                        <div className="text-center mb-12">
+                            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">Everything You Need</h2>
+                            <p className="text-lg text-slate-400 max-w-2xl mx-auto">Powerful features designed for South African ISPs</p>
+                        </div>
+                        <BentoGrid className="lg:grid-rows-3">
+                            <BentoCard
+                                name="Customer Records"
+                                className="col-span-3 lg:col-span-1"
+                                background={
+                                    <Marquee
+                                        pauseOnHover
+                                        className="absolute top-14 [mask-image:linear-gradient(to_top,transparent_30%,#000_100%)] [--duration:20s]"
+                                    >
+                                        {[
+                                            { name: "contracts.pdf", body: "Service agreements and SLAs for fibre installations" },
+                                            { name: "rica-docs.pdf", body: "RICA verification documents and ID confirmations" },
+                                            { name: "invoices.xlsx", body: "Monthly billing records and payment history" },
+                                            { name: "network.json", body: "Customer connection details and router configs" },
+                                        ].map((f, idx) => (
+                                            <figure
+                                                key={idx}
+                                                className={cn(
+                                                    "relative w-32 cursor-pointer overflow-hidden rounded-xl border p-4",
+                                                    "border-slate-700/50 bg-slate-800/50 hover:bg-slate-800",
+                                                    "transform-gpu blur-[1px] transition-all duration-300 ease-out hover:blur-none"
+                                                )}
+                                            >
+                                                <div className="flex flex-col">
+                                                    <figcaption className="text-sm font-medium text-white">{f.name}</figcaption>
+                                                </div>
+                                                <blockquote className="mt-2 text-xs text-slate-400">{f.body}</blockquote>
+                                            </figure>
+                                        ))}
+                                    </Marquee>
+                                }
+                                Icon={FileTextIcon}
+                                description="Centralized document management with RICA compliance tracking."
+                                href="#"
+                                cta="Learn more"
+                            />
+                            <BentoCard
+                                name="Real-Time Alerts"
+                                className="col-span-3 lg:col-span-2"
+                                background={
+                                    <AnimatedListDemo className="absolute inset-x-4 top-4 bottom-32 scale-100 border-none transition-all duration-300 ease-out group-hover:scale-[1.02]" />
+                                }
+                                Icon={BellIcon}
+                                description="Instant notifications for payments, support tickets, and network events."
+                                href="#"
+                                cta="Learn more"
+                            />
+                            <BentoCard
+                                name="Unified Integrations"
+                                className="col-span-3 lg:col-span-2"
+                                background={
+                                    <AnimatedBeamMultipleOutputDemo className="absolute inset-0 flex items-center justify-center border-none transition-all duration-300 ease-out group-hover:scale-105" />
+                                }
+                                Icon={Share2Icon}
+                                description="Connect all your modules - CRM, Billing, Network, Support - in one hub."
+                                href="#"
+                                cta="Learn more"
+                            />
+                            <BentoCard
+                                name="Smart Scheduling"
+                                className="col-span-3 lg:col-span-1"
+                                background={
+                                    <Calendar
+                                        mode="single"
+                                        selected={new Date(2026, 0, 24)}
+                                        className="absolute top-6 left-1/2 -translate-x-1/2 origin-top scale-100 rounded-md border border-slate-700 bg-slate-900 transition-all duration-300 ease-out group-hover:scale-105"
+                                    />
+                                }
+                                Icon={CalendarIcon}
+                                description="Schedule installations, maintenance, and follow-ups effortlessly."
+                                href="#"
+                                cta="Learn more"
+                            />
+                        </BentoGrid>
                     </div>
                 </div>
             </section>
