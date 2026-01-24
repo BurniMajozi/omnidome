@@ -25,6 +25,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -702,10 +703,9 @@ export default function PricingPage() {
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                     <div className="flex h-auto items-center justify-between py-3">
                         <Link href="/" className="flex items-center gap-3 group">
-                            <img src="/logo.png" alt="OmniDome" className="h-10 w-10 object-cover rounded-lg shadow-[0_0_15px_rgba(79,70,229,0.3)] group-hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all" />
+                            <img src="/logo-new.svg" alt="OmniDome" className="h-12 w-12 transition-all group-hover:scale-110" />
                             <div className="flex flex-col">
                               <span className="font-bold text-white">OmniDome</span>
-                              <span className="text-xs text-indigo-300">ISP OS</span>
                             </div>
                         </Link>
 
@@ -741,6 +741,7 @@ export default function PricingPage() {
                         </div>
 
                         <div className="flex items-center gap-4">
+                            <ThemeToggleCompact />
                             <Link href="/dashboard">
                                 <Button size="sm" className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
                                     Start free or get a demo

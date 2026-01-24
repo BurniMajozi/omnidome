@@ -27,6 +27,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 // Comprehensive module details with correct content for each
 const moduleDetails: Record<string, any> = {
@@ -356,7 +357,8 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                         <Link href="/" className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-emerald-500 transition-colors">
                             <ArrowLeft className="h-4 w-4" /> Back to Home
                         </Link>
-                        <div className="flex gap-4">
+                        <div className="flex gap-4 items-center">
+                            <ThemeToggleCompact />
                             <Button variant="outline" size="sm">Get a demo</Button>
                             <Link href="/dashboard">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
@@ -484,7 +486,8 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
             <footer className="border-t border-border py-12 px-4">
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-2">
-                        <img src="/omnidome-logo.svg" alt="OmniDome" className="h-8 w-auto" />
+                        <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
+                        <span className="text-sm font-semibold">OmniDome</span>
                     </div>
                     <p className="text-sm text-muted-foreground">© 2026 OmniDome. All rights reserved.</p>
                 </div>

@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
+import { useTheme } from "next-themes"
 import Link from "next/link"
 import {
     DollarSign,
@@ -38,12 +39,15 @@ import {
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { CalendarIcon, FileTextIcon } from "@radix-ui/react-icons"
-import { BellIcon, Share2Icon } from "lucide-react"
+import { BellIcon, Share2Icon, TrendingUp, Orbit } from "lucide-react"
 import { BentoCard, BentoGrid } from "@/components/ui/bento-grid"
 import { Marquee } from "@/components/ui/marquee"
 import { Calendar } from "@/components/ui/calendar"
 import { AnimatedListDemo } from "@/components/demo/animated-list-demo"
 import { AnimatedBeamMultipleOutputDemo } from "@/components/demo/animated-beam-demo"
+import { OrbitingCirclesDemo, OrbitingCirclesDemo2 } from "@/components/demo/orbiting-circles-demo"
+import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
+import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -217,6 +221,12 @@ export default function LandingPage() {
     const [productMenuOpen, setProductMenuOpen] = useState(false)
     const [solutionMenuOpen, setSolutionMenuOpen] = useState(false)
     const [resourceMenuOpen, setResourceMenuOpen] = useState(false)
+    const { resolvedTheme } = useTheme()
+    const [mounted, setMounted] = useState(false)
+    
+    useEffect(() => {
+        setMounted(true)
+    }, [])
     
     // Interactive galactic dome pattern
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -237,14 +247,26 @@ export default function LandingPage() {
         const ctx = canvas.getContext('2d')
         if (!ctx) return
         
-        const colors = [
+        // Use different color intensities based on theme
+        const isDark = resolvedTheme === 'dark'
+        const colors = isDark ? [
             '79, 70, 229',    // indigo-600
             '99, 102, 241',   // indigo
             '129, 140, 248',  // indigo-400
             '139, 92, 246',   // violet
             '59, 130, 246',   // blue
             '100, 116, 139',  // slate
+        ] : [
+            '67, 56, 202',    // indigo-700 (darker for light mode)
+            '79, 70, 229',    // indigo-600
+            '99, 102, 241',   // indigo-500
+            '124, 58, 237',   // violet-600
+            '37, 99, 235',    // blue-600
+            '71, 85, 105',    // slate-600
         ]
+        
+        // Adjust opacity multiplier for light mode
+        const opacityMultiplier = isDark ? 1 : 2.5
         
         const resizeCanvas = () => {
             canvas.width = window.innerWidth
@@ -279,7 +301,7 @@ export default function LandingPage() {
                     size: 0.8 + Math.random() * 1.2,
                     length: 4 + Math.random() * 10,
                     angle: streakAngle,
-                    opacity: 0.15 + Math.random() * 0.25,
+                    opacity: (0.15 + Math.random() * 0.25) * opacityMultiplier,
                     twinkleSpeed: 0.01 + Math.random() * 0.02,
                     twinklePhase: Math.random() * Math.PI * 2,
                     orbitAngle: Math.random() * Math.PI * 2,
@@ -305,7 +327,7 @@ export default function LandingPage() {
                     size: 2 + Math.random() * 1.5,
                     length: 0,
                     angle: 0,
-                    opacity: 0.35 + Math.random() * 0.25,
+                    opacity: (0.35 + Math.random() * 0.25) * opacityMultiplier,
                     twinkleSpeed: 0.015 + Math.random() * 0.02,
                     twinklePhase: Math.random() * Math.PI * 2,
                     orbitAngle: Math.random() * Math.PI * 2,
@@ -430,7 +452,7 @@ export default function LandingPage() {
             window.removeEventListener('resize', resizeCanvas)
             window.removeEventListener('mousemove', handleMouseMove)
         }
-    }, [])
+    }, [resolvedTheme])
     
     // Typewriter effect state
     const [typedText1, setTypedText1] = useState("")
@@ -521,23 +543,23 @@ export default function LandingPage() {
     }, [isTypingComplete])
 
     return (
-        <div className="min-h-screen bg-[#020617] text-slate-100 selection:bg-indigo-500/30 overflow-x-hidden">
+        <div className="min-h-screen bg-background text-foreground selection:bg-indigo-500/30 overflow-x-hidden">
             {/* Interactive Dome Dot Pattern Background */}
             <canvas
                 ref={canvasRef}
                 className="fixed inset-0 z-0 pointer-events-none"
             />
             {/* Top Bar */}
-            <div className="relative z-10 bg-slate-900/50 backdrop-blur-md border-b border-slate-800/50 py-2 px-4 text-xs text-center sm:text-right">
+            <div className="relative z-10 bg-muted/50 backdrop-blur-md border-b border-border py-2 px-4 text-xs text-center sm:text-right">
                 <div className="max-w-7xl mx-auto flex justify-center sm:justify-end gap-6">
-                    <a href="#" className="text-slate-400 hover:text-indigo-400 transition-colors">Documentation</a>
-                    <a href="#" className="text-slate-400 hover:text-indigo-400 transition-colors">Developer Portal</a>
-                    <a href="#" className="text-slate-400 hover:text-indigo-400 transition-colors">Support</a>
+                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Documentation</a>
+                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Developer Portal</a>
+                    <a href="#" className="text-muted-foreground hover:text-primary transition-colors">Support</a>
                 </div>
             </div>
 
             {/* Navigation */}
-            <nav className="sticky top-0 z-50 border-b border-slate-800/50 bg-[#020617]/80 backdrop-blur-xl">
+            <nav className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                     <div className="flex h-auto items-center justify-between py-3">
                         <div className="flex items-center gap-10">
@@ -553,13 +575,13 @@ export default function LandingPage() {
                                     onMouseEnter={() => setProductMenuOpen(true)}
                                     onMouseLeave={() => setProductMenuOpen(false)}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-slate-300 hover:text-white transition-all px-4 py-5">
+                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5">
                                         Product <ChevronDown className={cn("h-4 w-4 transition-transform", productMenuOpen && "rotate-180")} />
                                     </button>
 
                                     {/* Product Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-slate-950/95 backdrop-blur-2xl border-b border-slate-800 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         productMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
@@ -577,10 +599,10 @@ export default function LandingPage() {
                                                             <mod.icon className="h-5.5 w-5.5 text-white" />
                                                         </div>
                                                         <div className="min-w-0">
-                                                            <div className="font-bold text-sm text-slate-100 group-hover:text-indigo-400 transition-colors">
+                                                            <div className="font-bold text-sm text-foreground group-hover:text-primary transition-colors">
                                                                 {mod.name}
                                                             </div>
-                                                            <p className="text-[11px] text-slate-500 line-clamp-2 mt-1 leading-relaxed group-hover:text-slate-400 transition-colors">
+                                                            <p className="text-[11px] text-muted-foreground line-clamp-2 mt-1 leading-relaxed group-hover:text-foreground/70 transition-colors">
                                                                 {mod.description}
                                                             </p>
                                                         </div>
@@ -608,20 +630,20 @@ export default function LandingPage() {
                                     onMouseEnter={() => setSolutionMenuOpen(true)}
                                     onMouseLeave={() => setSolutionMenuOpen(false)}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-slate-300 hover:text-white transition-all px-4 py-5">
+                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5">
                                         Solution <ChevronDown className={cn("h-4 w-4 transition-transform", solutionMenuOpen && "rotate-180")} />
                                     </button>
 
                                     {/* Solution Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-slate-950/95 backdrop-blur-2xl border-b border-slate-800 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         solutionMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
                                             <div className="grid grid-cols-5 gap-8">
                                                 {Object.entries(solutionsByCategory).map(([category, solutions]) => (
                                                     <div key={category}>
-                                                        <h3 className="text-[10px] font-bold text-indigo-400 uppercase tracking-[2px] mb-6">
+                                                        <h3 className="text-[10px] font-bold text-primary uppercase tracking-[2px] mb-6">
                                                             {category}
                                                         </h3>
                                                         <div className="space-y-5">
@@ -638,10 +660,10 @@ export default function LandingPage() {
                                                                         <sol.icon className="h-4.5 w-4.5 text-white" />
                                                                     </div>
                                                                     <div>
-                                                                        <div className="font-bold text-sm text-slate-100 group-hover:text-indigo-400 transition-colors">
+                                                                        <div className="font-bold text-sm text-foreground group-hover:text-primary transition-colors">
                                                                             {sol.title}
                                                                         </div>
-                                                                        <p className="text-[11px] text-slate-500 mt-1 leading-snug group-hover:text-slate-400 transition-colors">
+                                                                        <p className="text-[11px] text-muted-foreground mt-1 leading-snug group-hover:text-foreground/70 transition-colors">
                                                                             {sol.description}
                                                                         </p>
                                                                     </div>
@@ -672,20 +694,20 @@ export default function LandingPage() {
                                     onMouseEnter={() => setResourceMenuOpen(true)}
                                     onMouseLeave={() => setResourceMenuOpen(false)}
                                 >
-                                    <button className="flex items-center gap-1 text-sm font-medium text-slate-300 hover:text-white transition-all px-4 py-5 font-bold">
+                                    <button className="flex items-center gap-1 text-sm font-medium text-muted-foreground hover:text-foreground transition-all px-4 py-5 font-bold">
                                         Resources <ChevronDown className={cn("h-4 w-4 transition-transform", resourceMenuOpen && "rotate-180")} />
                                     </button>
 
                                     {/* Resources Mega Menu */}
                                     <div className={cn(
-                                        "fixed left-0 right-0 bg-slate-950/95 backdrop-blur-2xl border-b border-slate-800 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all duration-300 ease-out mega-menu-top",
+                                        "fixed left-0 right-0 bg-card/95 backdrop-blur-2xl border-b border-border shadow-[0_20px_50px_rgba(0,0,0,0.3)] transition-all duration-300 ease-out mega-menu-top",
                                         resourceMenuOpen ? "opacity-100 translate-y-0 visible" : "opacity-0 -translate-y-2 invisible pointer-events-none"
                                     )}>
                                         <div className="max-w-7xl mx-auto px-8 py-10">
                                             <div className="grid grid-cols-3 gap-12">
                                                 {/* Featured Links */}
                                                 <div>
-                                                    <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-[2px] mb-4">
+                                                    <h3 className="text-xs font-bold text-primary uppercase tracking-[2px] mb-4">
                                                         Featured
                                                     </h3>
                                                     <div className="space-y-4">
@@ -780,15 +802,16 @@ export default function LandingPage() {
                         </div>
 
                         <div className="flex items-center gap-4">
-                            <Link href="/dashboard" className="hidden sm:block text-sm font-bold text-slate-300 hover:text-white transition-colors">
+                            <ThemeToggle className="hidden md:flex" />
+                            <Link href="/dashboard" className="hidden sm:block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors">
                                 Log in
                             </Link>
                             <Link href="/dashboard">
-                                <Button size="sm" className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-6 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
+                                <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
                                     Get Started
                                 </Button>
                             </Link>
-                            <button className="lg:hidden p-2 text-slate-300 transition-colors hover:text-white" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} title="Toggle menu">
+                            <button className="lg:hidden p-2 text-muted-foreground transition-colors hover:text-foreground" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} title="Toggle menu">
                                 {mobileMenuOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
                             </button>
                         </div>
@@ -798,6 +821,10 @@ export default function LandingPage() {
                 {/* Mobile menu */}
                 {mobileMenuOpen && (
                     <div className="lg:hidden border-t border-border bg-card p-6 space-y-4">
+                        <div className="flex items-center justify-between pb-4 border-b border-border">
+                            <span className="text-sm text-muted-foreground">Theme</span>
+                            <ThemeToggle />
+                        </div>
                         <Link href="/pricing" className="block font-medium py-2">Pricing</Link>
                         <Link href="/resources/services" className="block font-medium py-2">Services</Link>
                         <Link href="/resources/partners" className="block font-medium py-2">Partners</Link>
@@ -859,29 +886,29 @@ export default function LandingPage() {
                         <div className="absolute inset-x-0 bottom-0 h-[1px] bg-gradient-to-r from-transparent via-indigo-500 to-transparent" />
                     </div>
 
-                    <h1 className="text-5xl lg:text-8xl font-black tracking-tight text-white mb-8 leading-[1]">
+                    <h1 className="text-5xl lg:text-8xl font-black tracking-tight text-foreground mb-8 leading-[1]">
                         <span className="inline-block">
                             {isTypingComplete ? (
                                 <>
                                     {baseText}
-                                    <span className="bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400 bg-clip-text text-transparent">{displayedWord}</span>
-                                    {showRotatingCursor && <span className="cursor-blink text-cyan-400">|</span>}
+                                    <span className="bg-gradient-to-r from-indigo-500 via-blue-500 to-cyan-500 bg-clip-text text-transparent">{displayedWord}</span>
+                                    {showRotatingCursor && <span className="cursor-blink text-cyan-500">|</span>}
                                 </>
                             ) : (
                                 <>
                                     {typedText1}
-                                    {showCursor1 && <span className="cursor-blink text-indigo-400">|</span>}
+                                    {showCursor1 && <span className="cursor-blink text-indigo-500">|</span>}
                                 </>
                             )}
                         </span>
                         <br />
-                        <span className="inline-block bg-clip-text text-transparent bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400">
+                        <span className="inline-block bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 via-blue-500 to-cyan-500">
                             {typedText2}
-                            {showCursor2 && <span className="cursor-blink text-cyan-400">|</span>}
+                            {showCursor2 && <span className="cursor-blink text-cyan-500">|</span>}
                         </span>
                     </h1>
 
-                    <p className="mx-auto max-w-2xl text-lg lg:text-xl text-slate-400 mb-12 leading-relaxed font-medium">
+                    <p className="mx-auto max-w-2xl text-lg lg:text-xl text-muted-foreground mb-12 leading-relaxed font-medium">
                         Stop juggling disconnected tools. Manage sales, fiber networks, billing, and support with an integrated OS built specifically for the South African ISP market.
                     </p>
 
@@ -894,24 +921,24 @@ export default function LandingPage() {
                                 <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                             </Button>
                         </Link>
-                        <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-slate-700 bg-slate-900/50 hover:bg-slate-800 text-white backdrop-blur-md transition-all active:scale-95">
+                        <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-border bg-muted/50 hover:bg-muted text-foreground backdrop-blur-md transition-all active:scale-95">
                             Schedule a Demo
                         </Button>
                     </div>
 
                     {/* Dashboard Preview */}
                     <div className="relative max-w-6xl mx-auto mb-24">
-                        <div className="absolute inset-0 bg-gradient-to-t from-[#020617] via-transparent to-transparent z-10 pointer-events-none" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent z-10 pointer-events-none" />
                         <div className="absolute -inset-4 bg-gradient-to-r from-indigo-500/20 via-blue-500/20 to-cyan-500/20 blur-3xl opacity-50 -z-10" />
-                        <div className="rounded-2xl border border-slate-700/50 bg-slate-900/80 backdrop-blur-xl overflow-hidden shadow-2xl shadow-indigo-500/10">
-                            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-700/50 bg-slate-800/50">
+                        <div className="rounded-2xl border border-border bg-card/80 backdrop-blur-xl overflow-hidden shadow-2xl shadow-indigo-500/10">
+                            <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/50">
                                 <div className="flex gap-1.5">
                                     <div className="w-3 h-3 rounded-full bg-red-500/80" />
                                     <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
                                     <div className="w-3 h-3 rounded-full bg-green-500/80" />
                                 </div>
                                 <div className="flex-1 text-center">
-                                    <span className="text-xs text-slate-500 font-medium">OmniDome Dashboard</span>
+                                    <span className="text-xs text-muted-foreground font-medium">OmniDome Dashboard</span>
                                 </div>
                             </div>
                             <img 
@@ -923,30 +950,30 @@ export default function LandingPage() {
                     </div>
 
                     {/* Stats */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-12 max-w-5xl mx-auto border-t border-slate-800/50 pt-16">
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-12 max-w-5xl mx-auto border-t border-border pt-16">
                         <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-white mb-2 group-hover:text-indigo-400 transition-colors">13</div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-[3px] font-black">Native Modules</div>
+                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-indigo-500 transition-colors">13</div>
+                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Native Modules</div>
                         </div>
                         <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-white mb-2 group-hover:text-blue-400 transition-colors">87%</div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-[3px] font-black">Churn Prediction</div>
+                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-blue-500 transition-colors">87%</div>
+                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Churn Prediction</div>
                         </div>
                         <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-white mb-2 group-hover:text-cyan-400 transition-colors">2.4x</div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-[3px] font-black">Sales Velocity</div>
+                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-cyan-500 transition-colors">2.4x</div>
+                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">Sales Velocity</div>
                         </div>
                         <div className="group">
-                            <div className="text-4xl lg:text-5xl font-black text-white mb-2 group-hover:text-indigo-400 transition-colors">100%</div>
-                            <div className="text-[10px] text-slate-500 uppercase tracking-[3px] font-black">SA Compliant</div>
+                            <div className="text-4xl lg:text-5xl font-black text-foreground mb-2 group-hover:text-indigo-500 transition-colors">100%</div>
+                            <div className="text-[10px] text-muted-foreground uppercase tracking-[3px] font-black">SA Compliant</div>
                         </div>
                     </div>
 
                     {/* Bento Grid Section */}
                     <div className="mt-24 max-w-7xl mx-auto">
                         <div className="text-center mb-12">
-                            <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">Everything You Need</h2>
-                            <p className="text-lg text-slate-400 max-w-2xl mx-auto">Powerful features designed for South African ISPs</p>
+                            <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Everything You Need</h2>
+                            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Powerful features designed for South African ISPs</p>
                         </div>
                         <BentoGrid className="lg:grid-rows-3">
                             <BentoCard
@@ -967,14 +994,14 @@ export default function LandingPage() {
                                                 key={idx}
                                                 className={cn(
                                                     "relative w-32 cursor-pointer overflow-hidden rounded-xl border p-4",
-                                                    "border-slate-700/50 bg-slate-800/50 hover:bg-slate-800",
+                                                    "border-border bg-muted/50 hover:bg-muted",
                                                     "transform-gpu blur-[1px] transition-all duration-300 ease-out hover:blur-none"
                                                 )}
                                             >
                                                 <div className="flex flex-col">
-                                                    <figcaption className="text-sm font-medium text-white">{f.name}</figcaption>
+                                                    <figcaption className="text-sm font-medium text-foreground">{f.name}</figcaption>
                                                 </div>
-                                                <blockquote className="mt-2 text-xs text-slate-400">{f.body}</blockquote>
+                                                <blockquote className="mt-2 text-xs text-muted-foreground">{f.body}</blockquote>
                                             </figure>
                                         ))}
                                     </Marquee>
@@ -1013,7 +1040,7 @@ export default function LandingPage() {
                                     <Calendar
                                         mode="single"
                                         selected={new Date(2026, 0, 24)}
-                                        className="absolute top-6 left-1/2 -translate-x-1/2 origin-top scale-100 rounded-md border border-slate-700 bg-slate-900 transition-all duration-300 ease-out group-hover:scale-105"
+                                        className="absolute top-6 left-1/2 -translate-x-1/2 origin-top scale-100 rounded-md border border-border bg-card transition-all duration-300 ease-out group-hover:scale-105"
                                     />
                                 }
                                 Icon={CalendarIcon}
@@ -1023,79 +1050,130 @@ export default function LandingPage() {
                             />
                         </BentoGrid>
                     </div>
-                </div>
-            </section>
 
-            {/* Features/Why Section */}
-            <section id="features" className="py-20 px-4 sm:px-6 lg:px-8 bg-card/50">
-                <div className="mx-auto max-w-7xl">
-                    <div className="text-center mb-16">
-                        <h2 className="text-3xl sm:text-4xl font-bold mb-4">Why Choose OmniDome?</h2>
+                    {/* Features Marquee */}
+                    <div className="mt-24 relative flex w-full flex-col items-center justify-center overflow-hidden">
+                        <Marquee pauseOnHover className="[--duration:40s]">
+                            <Link href="/resources/why-omnidome#ai-insights" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-indigo-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-400 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(79,70,229,0.3)]">
+                                    <Brain className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">AI-Powered Insights</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Predictive churn analytics, automated recommendations, and intelligent task creation.
+                                </p>
+                            </Link>
+
+                            <Link href="/resources/why-omnidome#real-time" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-cyan-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(6,182,212,0.3)]">
+                                    <Zap className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">Real-Time Operations</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Monitor network health, customer activity, and business metrics with live dashboards.
+                                </p>
+                            </Link>
+
+                            <Link href="/resources/why-omnidome#analytics" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-purple-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(139,92,246,0.3)]">
+                                    <BarChart3 className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">Unified Analytics</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Cross-module reporting, executive dashboards, and data-driven decision tools.
+                                </p>
+                            </Link>
+
+                            <Link href="/resources/why-omnidome#retention" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-rose-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-pink-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(244,63,94,0.3)]">
+                                    <HeartHandshake className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">Retention Focus</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Proactive churn prevention with AI risk scoring and automated retention campaigns.
+                                </p>
+                            </Link>
+
+                            <Link href="/resources/why-omnidome#compliance" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-amber-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(245,158,11,0.3)]">
+                                    <Shield className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">SA Compliance Ready</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Built-in RICA verification, POPIA compliance, and South African regulatory requirements.
+                                </p>
+                            </Link>
+
+                            <Link href="/resources/why-omnidome#portal" className="mx-4 w-80 rounded-2xl border border-border bg-card/80 p-6 hover:border-blue-500/50 hover:scale-[1.02] transition-all cursor-pointer block">
+                                <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(99,102,241,0.3)]">
+                                    <Globe className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-xl font-semibold mb-2 text-foreground">White-Label Portal</h3>
+                                <p className="text-muted-foreground text-sm">
+                                    Customizable customer portal with your branding for self-service and account management.
+                                </p>
+                            </Link>
+                        </Marquee>
+                        <div className="pointer-events-none absolute inset-y-0 left-0 w-1/4 bg-gradient-to-r from-background"></div>
+                        <div className="pointer-events-none absolute inset-y-0 right-0 w-1/4 bg-gradient-to-l from-background"></div>
+                    </div>
+
+                    {/* Why Choose OmniDome Header */}
+                    <div className="mt-24 text-center mb-12">
+                        <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Why Choose OmniDome?</h2>
                         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
                             Purpose-built for ISPs with everything you need to scale your operations
                         </p>
                     </div>
 
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 via-blue-500 to-cyan-400 shadow-[0_0_15px_rgba(79,70,229,0.2)]">
-                                <Brain className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">AI-Powered Insights</h3>
-                            <p className="text-muted-foreground">
-                                Predictive churn analytics, automated recommendations, and intelligent task creation.
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center mb-4">
-                                <Zap className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">Real-Time Operations</h3>
-                            <p className="text-muted-foreground">
-                                Monitor network health, customer activity, and business metrics with live dashboards.
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center mb-4">
-                                <BarChart3 className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">Unified Analytics</h3>
-                            <p className="text-muted-foreground">
-                                Cross-module reporting, executive dashboards, and data-driven decision tools.
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-rose-500 to-pink-500 flex items-center justify-center mb-4">
-                                <HeartHandshake className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">Retention Focus</h3>
-                            <p className="text-muted-foreground">
-                                Proactive churn prevention with AI risk scoring and automated retention campaigns.
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center mb-4">
-                                <Shield className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">SA Compliance Ready</h3>
-                            <p className="text-muted-foreground">
-                                Built-in RICA verification, POPIA compliance, and South African regulatory requirements.
-                            </p>
-                        </div>
-
-                        <div className="rounded-2xl border border-border bg-card p-6 hover:border-indigo-500/50 hover:shadow-indigo-500/5 transition-all outline-none focus:ring-2 focus:ring-indigo-500/30">
-                            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-500 flex items-center justify-center mb-4">
-                                <Globe className="h-6 w-6 text-white" />
-                            </div>
-                            <h3 className="text-xl font-semibold mb-2">White-Label Portal</h3>
-                            <p className="text-muted-foreground">
-                                Customizable customer portal with your branding for self-service and account management.
-                            </p>
-                        </div>
+                    {/* Second Bento Grid Section */}
+                    <div className="max-w-7xl mx-auto">
+                        <BentoGrid className="lg:grid-rows-2">
+                            <BentoCard
+                                name="Live Activity Feed"
+                                className="col-span-3 lg:col-span-1 lg:row-span-1"
+                                background={
+                                    <AnimatedListDemo className="absolute inset-x-4 top-4 bottom-32 scale-100 border-none transition-all duration-300 ease-out group-hover:scale-[1.02]" />
+                                }
+                                Icon={BellIcon}
+                                description="Track all customer interactions and system events in real-time."
+                                href="#"
+                                cta="View activity"
+                            />
+                            <BentoCard
+                                name="Module Hub"
+                                className="col-span-3 lg:col-span-2 lg:row-span-1"
+                                background={
+                                    <OrbitingCirclesDemo className="absolute inset-0" />
+                                }
+                                Icon={Orbit}
+                                description="All your ISP modules orbiting around a central command center."
+                                href="#"
+                                cta="Explore modules"
+                            />
+                            <BentoCard
+                                name="Business Growth"
+                                className="col-span-3 lg:col-span-2 lg:row-span-1"
+                                background={
+                                    <GrowthGraphDemo className="absolute inset-0" />
+                                }
+                                Icon={TrendingUp}
+                                description="Track subscriber growth, revenue metrics, and business performance."
+                                href="#"
+                                cta="View analytics"
+                            />
+                            <BentoCard
+                                name="Connected Systems"
+                                className="col-span-3 lg:col-span-1 lg:row-span-1"
+                                background={
+                                    <OrbitingCirclesDemo2 className="absolute inset-0" />
+                                }
+                                Icon={Orbit}
+                                description="Seamless integration between all your operational systems."
+                                href="#"
+                                cta="Learn more"
+                            />
+                        </BentoGrid>
                     </div>
                 </div>
             </section>
@@ -1145,24 +1223,24 @@ export default function LandingPage() {
             </section>
 
             {/* CTA Section */}
-            <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-[#020617] via-[#0f172a] to-indigo-950 border-y border-white/5 relative overflow-hidden">
+            <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-background via-muted to-primary/10 border-y border-border relative overflow-hidden">
                 <div className="absolute inset-0 grid-pattern opacity-10" />
                 <div className="mx-auto max-w-4xl text-center relative z-10">
-                    <h2 className="text-4xl sm:text-6xl font-black mb-6 text-white leading-tight">
+                    <h2 className="text-4xl sm:text-6xl font-black mb-6 text-foreground leading-tight">
                         Ready to Transform Your <br />
-                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-400">ISP Operations?</span>
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-500 to-cyan-500">ISP Operations?</span>
                     </h2>
-                    <p className="text-xl text-slate-400 mb-10 max-w-2xl mx-auto">
+                    <p className="text-xl text-muted-foreground mb-10 max-w-2xl mx-auto">
                         Join leading South African ISPs using OmniDome to streamline operations and grow revenue.
                     </p>
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
                         <Link href="/dashboard">
-                            <Button size="lg" className="bg-indigo-600 hover:bg-indigo-500 text-white text-xl font-black h-16 px-10 shadow-[0_0_30px_rgba(79,70,229,0.4)] transition-all">
+                            <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground text-xl font-black h-16 px-10 shadow-[0_0_30px_rgba(79,70,229,0.4)] transition-all">
                                 Start Your Free Trial
                                 <ArrowRight className="ml-3 h-6 w-6" />
                             </Button>
                         </Link>
-                        <Button size="lg" variant="outline" className="border-slate-800 bg-white/5 text-white hover:bg-white/10 text-xl font-bold h-16 px-10 backdrop-blur-md">
+                        <Button size="lg" variant="outline" className="border-border bg-muted/50 text-foreground hover:bg-muted text-xl font-bold h-16 px-10 backdrop-blur-md">
                             Schedule a Demo
                         </Button>
                     </div>
@@ -1177,7 +1255,7 @@ export default function LandingPage() {
                             <div className="flex items-center gap-3 mb-4">
                                 <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
                                 <div>
-                                  <span className="font-bold text-white text-lg">OmniDome</span>
+                                  <span className="font-bold text-foreground text-lg">OmniDome</span>
                                 </div>
                             </div>
                             <p className="text-sm text-muted-foreground max-w-xs">

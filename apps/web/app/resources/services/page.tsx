@@ -4,6 +4,7 @@ import Link from "next/link"
 import { ArrowLeft, ArrowRight, Check, Sparkles, Users, Zap, Shield, Clock, Wifi } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
+import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 const services = [
     {
@@ -137,10 +138,11 @@ export default function ServicesPage() {
                 <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
                     <div className="flex h-auto items-center justify-between py-3">
                         <Link href="/" className="flex items-center gap-3 group hover:opacity-80 transition-opacity">
-                            <img src="/logo.png" alt="OmniDome" className="h-8 w-8 object-cover rounded-lg shadow-[0_0_12px_rgba(79,70,229,0.3)]" />
+                            <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10 transition-all group-hover:scale-110" />
                             <span className="text-sm font-semibold">OmniDome</span>
                         </Link>
                         <div className="flex items-center gap-4">
+                            <ThemeToggleCompact />
                             <Link href="/dashboard">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Request more information
@@ -278,7 +280,8 @@ export default function ServicesPage() {
             <footer className="border-t border-border py-12 px-4">
                 <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-2">
-                        <img src="/omnidome-logo.svg" alt="OmniDome" className="h-8 w-auto" />
+                        <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
+                        <span className="text-sm font-semibold">OmniDome</span>
                     </div>
                     <p className="text-sm text-muted-foreground">© 2026 OmniDome. All rights reserved.</p>
                 </div>

@@ -27,6 +27,7 @@ import {
     ArrowRight
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 // All modules data
 const allModules: Record<string, any> = {
@@ -366,12 +367,13 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                     <div className="flex h-auto items-center justify-between py-3">
                         <div className="flex items-center gap-4">
                             <Link href="/" className="flex items-center gap-2 group hover:opacity-80 transition-opacity">
-                                <img src="/logo.png" alt="OmniDome" className="h-8 w-8 object-cover rounded-lg shadow-[0_0_12px_rgba(79,70,229,0.3)]" />
+                                <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10 transition-all group-hover:scale-110" />
                             </Link>
                             <span className="text-muted-foreground">/</span>
                             <span className="text-sm font-semibold text-foreground">{product.name}</span>
                         </div>
                         <div className="flex items-center gap-4">
+                            <ThemeToggleCompact />
                             <Link href="/dashboard">
                                 <Button variant="outline" size="sm">Sign In</Button>
                             </Link>
@@ -508,7 +510,8 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
             <footer className="border-t border-border py-12 px-4 sm:px-6 lg:px-8">
                 <div className="mx-auto max-w-7xl flex flex-col md:flex-row items-center justify-between gap-8">
                     <div className="flex items-center gap-2">
-                        <img src="/omnidome-logo.svg" alt="OmniDome" className="h-8 w-auto" />
+                        <img src="/logo-new.svg" alt="OmniDome" className="h-10 w-10" />
+                        <span className="text-sm font-semibold">OmniDome</span>
                     </div>
                     <p className="text-sm text-muted-foreground">
                         © 2026 OmniDome. All rights reserved.
