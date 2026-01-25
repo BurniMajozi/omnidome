@@ -44,13 +44,17 @@ import { BentoCard, BentoGrid } from "@/components/ui/bento-grid"
 import { Marquee } from "@/components/ui/marquee"
 import { Calendar } from "@/components/ui/calendar"
 import { AnimatedListDemo } from "@/components/demo/animated-list-demo"
+import { AIChatDemo } from "@/components/demo/ai-chat-demo"
 import { AnimatedBeamMultipleOutputDemo } from "@/components/demo/animated-beam-demo"
 import { OrbitingCirclesDemo, OrbitingCirclesDemo2 } from "@/components/demo/orbiting-circles-demo"
 import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
+import { AIPitchDemo } from "@/components/demo/ai-pitch-demo"
 import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { AnimatedStats } from "@/components/demo/animated-stats"
 import { ShineBorder } from "@/components/ui/shine-border"
 import { Pointer, EmojiPointer, HeartPointer } from "@/components/ui/pointer"
+import { HowItWorks } from "@/components/demo/how-it-works"
+import { TestimonialsMarquee } from "@/components/demo/testimonials-marquee"
 import { motion } from "framer-motion"
 
 // Module emojis for pointer
@@ -231,23 +235,23 @@ const resourceItems = {
 const aiFeatures = [
     {
         id: 0,
-        title: "Agentic AI Product Management",
-        image: "/agentic-ai-product-management.png",
-    },
-    {
-        id: 1,
-        title: "Predict Churn with AI",
-        image: "/predict-churn-with-ai.png",
-    },
-    {
-        id: 2,
         title: "Unified Communication",
         image: "/unified-communication.png",
     },
     {
-        id: 3,
+        id: 1,
         title: "Unified Sales",
         image: "/unified-sales.png",
+    },
+    {
+        id: 2,
+        title: "Predict Churn with AI",
+        image: "/predict-churn-with-ai.png",
+    },
+    {
+        id: 3,
+        title: "Agentic AI Product Management",
+        image: "/agentic-ai-product-management.png",
     },
 ]
 
@@ -1206,10 +1210,10 @@ export default function LandingPage() {
                             <h2 className="text-3xl sm:text-4xl font-bold text-foreground mb-4">Everything You Need</h2>
                             <p className="text-lg text-muted-foreground max-w-2xl mx-auto">Powerful features designed for South African ISPs</p>
                         </div>
-                        <BentoGrid className="lg:grid-rows-3">
+                        <BentoGrid className="lg:grid-rows-4">
                             <BentoCard
                                 name="Customer Records"
-                                className="col-span-3 lg:col-span-1"
+                                className="col-span-3 lg:col-span-1 lg:row-span-2"
                                 background={
                                     <Marquee
                                         pauseOnHover
@@ -1244,7 +1248,7 @@ export default function LandingPage() {
                             />
                             <BentoCard
                                 name="Real-Time Alerts"
-                                className="col-span-3 lg:col-span-2"
+                                className="col-span-3 lg:col-span-2 lg:row-span-2"
                                 background={
                                     <AnimatedListDemo className="absolute inset-x-4 top-4 bottom-32 scale-100 border-none transition-all duration-300 ease-out group-hover:scale-[1.02]" />
                                 }
@@ -1255,7 +1259,7 @@ export default function LandingPage() {
                             />
                             <BentoCard
                                 name="Unified Integrations"
-                                className="col-span-3 lg:col-span-2"
+                                className="col-span-3 lg:col-span-2 lg:row-span-2"
                                 background={
                                     <AnimatedBeamMultipleOutputDemo className="absolute inset-0 flex items-center justify-center border-none transition-all duration-300 ease-out group-hover:scale-105" />
                                 }
@@ -1266,12 +1270,12 @@ export default function LandingPage() {
                             />
                             <BentoCard
                                 name="Smart Scheduling"
-                                className="col-span-3 lg:col-span-1"
+                                className="col-span-3 lg:col-span-1 lg:row-span-2"
                                 background={
                                     <Calendar
                                         mode="single"
                                         selected={new Date(2026, 0, 24)}
-                                        className="absolute top-6 left-1/2 -translate-x-1/2 origin-top scale-100 rounded-md border border-border bg-card transition-all duration-300 ease-out group-hover:scale-105"
+                                        className="absolute top-6 left-1/2 -translate-x-1/2 origin-top scale-110 rounded-md border border-border bg-card transition-all duration-300 ease-out group-hover:scale-[1.15]"
                                     />
                                 }
                                 Icon={CalendarIcon}
@@ -1373,26 +1377,26 @@ export default function LandingPage() {
                     <div className="max-w-7xl mx-auto">
                         <BentoGrid className="lg:grid-rows-2">
                             <BentoCard
-                                name="Live Activity Feed"
+                                name="AI Agent Chat"
                                 className="col-span-3 lg:col-span-1 lg:row-span-1"
                                 background={
-                                    <AnimatedListDemo className="absolute inset-x-4 top-4 bottom-32 scale-100 border-none transition-all duration-300 ease-out group-hover:scale-[1.02]" />
+                                    <AIChatDemo className="absolute inset-0 scale-100 border-none transition-all duration-300 ease-out group-hover:scale-[1.02]" />
                                 }
-                                Icon={BellIcon}
-                                description="Track all customer interactions and system events in real-time."
-                                href="/products/overview"
-                                cta="View activity"
+                                Icon={MessageSquare}
+                                description="Chat with Dome Agent to manage schedules, tasks, and customer queries."
+                                href="/products/communication"
+                                cta="Try AI Chat"
                             />
                             <BentoCard
-                                name="Module Hub"
+                                name="AI Sales Pitch"
                                 className="col-span-3 lg:col-span-2 lg:row-span-1"
                                 background={
-                                    <OrbitingCirclesDemo className="absolute inset-0" />
+                                    <AIPitchDemo className="absolute inset-0" />
                                 }
-                                Icon={Orbit}
-                                description="All your ISP modules orbiting around a central command center."
-                                href="/products/overview"
-                                cta="Explore modules"
+                                Icon={Sparkles}
+                                description="Generate targeted sales pitches for every prospect in minutes with AI."
+                                href="/products/sales"
+                                cta="Generate pitch"
                             />
                             <BentoCard
                                 name="Business Growth"
@@ -1469,6 +1473,9 @@ export default function LandingPage() {
             {/* AI Features Showcase */}
             <AIFeaturesShowcase />
 
+            {/* How It Works */}
+            <HowItWorks />
+
             {/* CTA Section */}
             <section className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-br from-background via-muted to-primary/10 border-y border-border relative overflow-hidden">
                 <div className="absolute inset-0 grid-pattern opacity-10" />
@@ -1493,6 +1500,10 @@ export default function LandingPage() {
                     </div>
                 </div>
             </section>
+
+
+            {/* Testimonials */}
+            <TestimonialsMarquee />
 
             {/* Footer */}
             <footer className="border-t border-border py-16 px-4 sm:px-6 lg:px-8">

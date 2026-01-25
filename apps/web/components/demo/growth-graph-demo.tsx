@@ -1,7 +1,8 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
+import { motion, useMotionValue, useTransform, animate } from "framer-motion"
 
 interface DataPoint {
   label: string
@@ -23,14 +24,68 @@ const data: DataPoint[] = [
   { label: "Dec", value: 100 },
 ]
 
+function NumberTicker({ value }: { value: number }) {
+  const [displayValue, setDisplayValue] = useState(0)
+  
+  useEffect(() => {
+    setDisplayValue(value)
+  }, [value])
+  
+  return (
+    <motion.span
+      key={value}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="text-xs font-bold text-white tabular-nums"
+    >
+      {displayValue.toFixed(0)}%
+    </motion.span>
+  )
+}
+
 export function GrowthGraphDemo({ className }: { className?: string }) {
   const [animated, setAnimated] = useState(false)
+  const [currentIndex, setCurrentIndex] = useState(0)
   const maxValue = Math.max(...data.map((d) => d.value))
+  const minValue = Math.min(...data.map((d) => d.value))
+  
+  // Chart dimensions
+  const chartWidth = 100 // percentage
+  const chartHeight = 100 // percentage
+  const padding = { top: 10, right: 5, bottom: 5, left: 5 }
+  
+  // Calculate points for the line
+  const points = data.map((point, index) => {
+    const x = padding.left + (index / (data.length - 1)) * (chartWidth - padding.left - padding.right)
+    const y = padding.top + ((maxValue - point.value) / (maxValue - minValue + 10)) * (chartHeight - padding.top - padding.bottom)
+    return { x, y, value: point.value, label: point.label }
+  })
+  
+  // Create SVG path
+  const linePath = points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+    .join(' ')
+  
+  // Create area path (for gradient fill)
+  const areaPath = `${linePath} L ${points[points.length - 1].x} ${chartHeight} L ${points[0].x} ${chartHeight} Z`
 
   useEffect(() => {
     const timer = setTimeout(() => setAnimated(true), 100)
     return () => clearTimeout(timer)
   }, [])
+
+  // Animate the ticker along the line
+  useEffect(() => {
+    if (!animated) return
+    
+    const interval = setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % points.length)
+    }, 1500)
+    
+    return () => clearInterval(interval)
+  }, [animated, points.length])
+
+  const currentPoint = points[currentIndex]
 
   return (
     <div className={cn("flex h-full w-full flex-col p-6", className)}>
@@ -47,30 +102,140 @@ export function GrowthGraphDemo({ className }: { className?: string }) {
         </div>
       </div>
 
-      <div className="flex flex-1 items-end gap-2">
-        {data.map((point, index) => {
-          const height = (point.value / maxValue) * 100
-          return (
-            <div
-              key={point.label}
-              className="flex flex-1 flex-col items-center gap-2"
+      <div className="relative flex-1 min-h-[140px]">
+        <svg
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          className="absolute inset-0 h-full w-full"
+        >
+          <defs>
+            <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#818cf8" />
+              <stop offset="50%" stopColor="#6366f1" />
+              <stop offset="100%" stopColor="#10b981" />
+            </linearGradient>
+            <linearGradient id="areaGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#6366f1" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+            </linearGradient>
+            <filter id="glow">
+              <feGaussianBlur stdDeviation="2" result="coloredBlur" />
+              <feMerge>
+                <feMergeNode in="coloredBlur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+          
+          {/* Area fill */}
+          <motion.path
+            d={areaPath}
+            fill="url(#areaGradient)"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: animated ? 1 : 0 }}
+            transition={{ duration: 1, delay: 0.5 }}
+          />
+          
+          {/* Line */}
+          <motion.path
+            d={linePath}
+            fill="none"
+            stroke="url(#lineGradient)"
+            strokeWidth="0.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            filter="url(#glow)"
+            initial={{ pathLength: 0, opacity: 0 }}
+            animate={{ pathLength: animated ? 1 : 0, opacity: animated ? 1 : 0 }}
+            transition={{ duration: 2, ease: "easeOut" }}
+          />
+          
+          {/* Data points */}
+          {points.map((point, index) => (
+            <motion.circle
+              key={index}
+              cx={point.x}
+              cy={point.y}
+              r="1.2"
+              fill={index === currentIndex ? "#10b981" : "#6366f1"}
+              stroke={index === currentIndex ? "#10b981" : "#818cf8"}
+              strokeWidth="0.5"
+              initial={{ opacity: 0, scale: 0 }}
+              animate={{ 
+                opacity: animated ? 1 : 0, 
+                scale: animated ? (index === currentIndex ? 1.5 : 1) : 0 
+              }}
+              transition={{ 
+                duration: 0.3, 
+                delay: animated ? index * 0.1 : 0 
+              }}
+            />
+          ))}
+        </svg>
+        
+        {/* Animated ticker following the line */}
+        {animated && (
+          <motion.div
+            className="absolute flex flex-col items-center pointer-events-none"
+            initial={{ opacity: 0 }}
+            animate={{
+              opacity: 1,
+              left: `${currentPoint.x}%`,
+              top: `${currentPoint.y - 15}%`,
+            }}
+            transition={{
+              duration: 0.5,
+              ease: "easeInOut"
+            }}
+            style={{
+              transform: 'translate(-50%, -100%)'
+            }}
+          >
+            <motion.div
+              className="px-2 py-1 rounded-md bg-emerald-500/20 border border-emerald-500/50 backdrop-blur-sm"
+              initial={{ scale: 0.8 }}
+              animate={{ scale: [0.9, 1.1, 1] }}
+              transition={{ duration: 0.3 }}
             >
-              <div className="relative w-full flex-1 min-h-[120px]">
-                <div
-                  className={cn(
-                    "absolute bottom-0 w-full rounded-t-md bg-gradient-to-t from-indigo-600 to-indigo-400 transition-all duration-1000 ease-out",
-                    animated ? "opacity-100" : "opacity-0"
-                  )}
-                  style={{
-                    height: animated ? `${height}%` : "0%",
-                    transitionDelay: `${index * 50}ms`,
-                  }}
-                />
-              </div>
-              <span className="text-[10px] text-slate-500">{point.label}</span>
-            </div>
-          )
-        })}
+              <NumberTicker value={currentPoint.value} />
+            </motion.div>
+            <motion.div
+              className="w-0.5 h-2 bg-gradient-to-b from-emerald-500 to-transparent"
+              initial={{ scaleY: 0 }}
+              animate={{ scaleY: 1 }}
+              transition={{ duration: 0.2 }}
+            />
+          </motion.div>
+        )}
+        
+        {/* Glowing pulse at current point */}
+        {animated && (
+          <motion.div
+            className="absolute w-4 h-4 rounded-full bg-emerald-500/30 pointer-events-none"
+            animate={{
+              left: `${currentPoint.x}%`,
+              top: `${currentPoint.y}%`,
+              scale: [1, 2, 1],
+              opacity: [0.5, 0, 0.5],
+            }}
+            transition={{
+              left: { duration: 0.5, ease: "easeInOut" },
+              top: { duration: 0.5, ease: "easeInOut" },
+              scale: { duration: 1.5, repeat: Infinity },
+              opacity: { duration: 1.5, repeat: Infinity },
+            }}
+            style={{
+              transform: 'translate(-50%, -50%)'
+            }}
+          />
+        )}
+      </div>
+
+      {/* X-axis labels */}
+      <div className="flex justify-between mt-2 px-1">
+        {data.filter((_, i) => i % 3 === 0 || i === data.length - 1).map((point, index) => (
+          <span key={index} className="text-[10px] text-slate-500">{point.label}</span>
+        ))}
       </div>
 
       <div className="mt-4 flex items-center justify-between border-t border-slate-700/50 pt-4">
