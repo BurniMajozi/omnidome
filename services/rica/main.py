@@ -7,8 +7,20 @@ import logging
 import hashlib
 import hmac
 import os
+from services.common.entitlements import EntitlementGuard
 
 app = FastAPI(title="CoreConnect RICA Service", version="0.1.0")
+guard = EntitlementGuard(module_id="rica")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    guard.ensure_startup()
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
 
 # --- SMILE ID CONFIG ---
 SMILE_ID_PARTNER_ID = os.getenv("SMILE_ID_PARTNER_ID", "mock_partner")

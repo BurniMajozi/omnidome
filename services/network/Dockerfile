@@ -22,12 +22,13 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/common/requirements.txt ./services/common/requirements.txt
+COPY services/network/requirements.txt ./services/network/requirements.txt
+RUN pip install --no-cache-dir -r services/network/requirements.txt
 # RUN playwright install chromium --with-deps
 
 COPY services/network/ ./services/network/
-COPY requirements.txt .
+COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app
 

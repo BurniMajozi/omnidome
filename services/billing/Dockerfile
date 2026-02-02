@@ -2,11 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/common/requirements.txt ./services/common/requirements.txt
+COPY services/billing/requirements.txt ./services/billing/requirements.txt
+RUN pip install --no-cache-dir -r services/billing/requirements.txt
 
 COPY services/billing/ ./services/billing/
-COPY requirements.txt .
+COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app
 

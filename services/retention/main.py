@@ -11,12 +11,24 @@ import uuid
 from datetime import datetime, timedelta
 from enum import Enum
 import random
+from services.common.entitlements import EntitlementGuard
 
 app = FastAPI(
     title="OmniDome Retention Service",
     description="AI-powered churn prediction and customer retention management",
     version="1.0.0"
 )
+guard = EntitlementGuard(module_id="retention")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    guard.ensure_startup()
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
 
 # CORS middleware
 app.add_middleware(

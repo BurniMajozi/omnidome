@@ -1,0 +1,14 @@
+{
+  "payload": {
+    "customer_id": "cust-001",
+    "issued_at": "2026-02-02T00:00:00Z",
+    "expires_at": "2027-02-02T00:00:00Z",
+    "plan": "enterprise",
+    "modules": ["crm", "sales", "billing", "support", "network", "iot", "retention", "call_center"],
+    "limits": {
+      "seats": 250,
+      "tenants": 5
+    }
+  },
+  "signature": "BASE64_SIGNATURE_PLACEHOLDER"
+}

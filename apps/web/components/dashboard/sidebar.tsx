@@ -45,11 +45,15 @@ const navItems = [
 
 interface SidebarProps {
   activeSection: string
+  allowedSections: string[]
   onSectionChange: (section: string) => void
 }
 
-export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
+export function Sidebar({ activeSection, allowedSections, onSectionChange }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
+  const visibleNavItems = navItems.filter((item) =>
+    allowedSections.includes(item.href.replace("#", "")),
+  )
 
   return (
     <aside
@@ -90,7 +94,7 @@ export function Sidebar({ activeSection, onSectionChange }: SidebarProps) {
       )}
 
       <nav className="flex-1 space-y-1.5 overflow-y-auto px-3 py-4 custom-scrollbar">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive = activeSection === item.href.replace("#", "");
           return (
             <button

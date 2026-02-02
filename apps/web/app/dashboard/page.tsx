@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
 import { AITaskChat } from "@/components/chat/ai-task-chat"
@@ -19,6 +19,7 @@ import { BillingModule } from "@/components/modules/billing-module"
 import { ProductsModule } from "@/components/modules/products-module"
 import { PortalModule } from "@/components/modules/portal-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
+import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -40,6 +41,37 @@ const sectionTitles: Record<string, string> = {
 export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
+  const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
+
+  useEffect(() => {
+    let mounted = true
+    fetchEntitlements()
+      .then((data) => {
+        if (mounted) setEntitlements(data)
+      })
+      .catch(() => {
+        if (mounted) setEntitlements(DEFAULT_ENTITLEMENTS)
+      })
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const allowedSections = useMemo(() => {
+    const sections = Object.keys(sectionTitles).filter((section) =>
+      isModuleEnabled(entitlements.modules, moduleBySection[section] || section),
+    )
+    if (!sections.includes("overview")) {
+      sections.unshift("overview")
+    }
+    return sections
+  }, [entitlements.modules])
+
+  useEffect(() => {
+    if (!allowedSections.includes(activeSection)) {
+      setActiveSection("overview")
+    }
+  }, [activeSection, allowedSections])
 
   const renderModule = () => {
     try {
@@ -94,7 +126,11 @@ export default function Dashboard() {
       </div>
 
       {/* Sidebar */}
-      <Sidebar activeSection={activeSection} onSectionChange={setActiveSection} />
+      <Sidebar
+        activeSection={activeSection}
+        allowedSections={allowedSections}
+        onSectionChange={setActiveSection}
+      />
 
       {/* Main Content */}
       <div className="flex flex-1 flex-col overflow-hidden">

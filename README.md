@@ -1,8 +1,8 @@
-# CoreConnect: The Premier ISP Operating System (SA Edition) 🚀🏜️🇿🇦
+﻿# CoreConnect: The Premier ISP Operating System (SA Edition)
 
 CoreConnect is a carrier-grade, microservice-based operations platform designed specifically for South African ISPs. It unifies CRM, Sales, Marketing, Billing, Network provisioning, and FNO automation into a single, high-performance ecosystem.
 
-## 🏗️ Core Connect Modules
+## Core Connect Modules
 
 ### 1. Sales Connect & CRM Connect (`/services/sales`, `/services/crm`)
 *   **Lead Management**: Track and convert prospects through a visual pipeline.
@@ -37,13 +37,13 @@ CoreConnect is a carrier-grade, microservice-based operations platform designed 
 
 ---
 
-## 🛠️ Stack
+## Stack
 *   **Backend**: Python 3.10+ (FastAPI)
 *   **Database**: PostgreSQL with PostGIS (Coverage mapping)
-*   **Frontend**: Vanilla HTML/CSS/JS (Modern Dashboard UI)
+*   **Frontend**: Next.js (apps/web) and static portal (apps/portal)
 *   **Automation**: Playwright (Browser-based FNO adapters)
 
-## 📡 FNO Proactive Intelligence Layer
+## FNO Proactive Intelligence Layer
 Unlike traditional systems, CoreConnect uses a multi-vector listener to track FNO health:
 1. **APIs**: Direct B2B hooks.
 2. **Scrapers**: Real-time keyword monitoring of FNO status pages.

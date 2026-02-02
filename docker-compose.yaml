@@ -3,10 +3,12 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
+    env_file:
+      - .env
     environment:
-      - POSTGRES_DB=coreconnect
-      - POSTGRES_USER=admin
-      - POSTGRES_PASSWORD=coreconnect_secret
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
       - "5432:5432"
     volumes:
@@ -17,106 +19,182 @@ services:
     build:
       context: .
       dockerfile: services/crm/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8001:8001"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   sales-service:
     build:
       context: .
       dockerfile: services/sales/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8002:8002"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   billing-service:
     build:
       context: .
       dockerfile: services/billing/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
-      - PAYSTACK_SECRET_KEY=sk_test_mock_key
+      - DATABASE_URL=${DATABASE_URL}
+      - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8003:8003"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   rica-service:
     build:
       context: .
       dockerfile: services/rica/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
-      - SMILE_ID_PARTNER_ID=your_partner_id
-      - SMILE_ID_API_KEY=your_api_key
+      - DATABASE_URL=${DATABASE_URL}
+      - SMILE_ID_PARTNER_ID=${SMILE_ID_PARTNER_ID}
+      - SMILE_ID_API_KEY=${SMILE_ID_API_KEY}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8004:8004"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   network-service:
     build:
       context: .
       dockerfile: services/network/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8005:8005"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   iot-service:
     build:
       context: .
       dockerfile: services/iot/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8006:8006"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   call-center-service:
     build:
       context: .
       dockerfile: services/call_center/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8011:8011"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   retention-service:
     build:
       context: .
       dockerfile: services/retention/Dockerfile
+    env_file:
+      - .env
     environment:
-      - DATABASE_URL=postgresql://admin:coreconnect_secret@db:5432/coreconnect
-      - ML_MODEL_PATH=/app/models/churn_model.pkl
+      - DATABASE_URL=${DATABASE_URL}
+      - ML_MODEL_PATH=${ML_MODEL_PATH}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8012:8012"
     depends_on:
       - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
   web:
-    image: nginx:alpine
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
     ports:
-      - "80:80"
-    volumes:
-      - ./apps/web:/usr/share/nginx/html
+      - "3000:3000"
     depends_on:
       - crm-service
       - sales-service
       - billing-service
       - rica-service
       - network-service
+      - gateway
 
   portal:
     image: nginx:alpine

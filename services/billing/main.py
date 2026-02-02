@@ -4,8 +4,20 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, date
 import logging
+from services.common.entitlements import EntitlementGuard
 
 app = FastAPI(title="CoreConnect Billing Service", version="0.1.0")
+guard = EntitlementGuard(module_id="billing")
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    guard.ensure_startup()
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
 
 # --- Models ---
 class PlanBase(BaseModel):
