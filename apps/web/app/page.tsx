@@ -42,6 +42,7 @@ import { CalendarIcon, FileTextIcon } from "@radix-ui/react-icons"
 import { BellIcon, Share2Icon, TrendingUp, Orbit } from "lucide-react"
 import { BentoCard, BentoGrid } from "@/components/ui/bento-grid"
 import { Marquee } from "@/components/ui/marquee"
+import { FAQSection } from "@/components/ui/faq-section"
 import { Calendar } from "@/components/ui/calendar"
 import { AnimatedListDemo } from "@/components/demo/animated-list-demo"
 import { AIChatDemo } from "@/components/demo/ai-chat-demo"
@@ -1502,10 +1503,15 @@ export default function LandingPage() {
             </section>
 
 
-            {/* Testimonials */}
-            <TestimonialsMarquee />
 
-            {/* Footer */}
+                        {/* Testimonials */}
+                        <TestimonialsMarquee />
+
+
+                        {/* FAQ Section */}
+                        <FAQSection />
+
+                        {/* Footer */}
             <footer className="border-t border-border py-16 px-4 sm:px-6 lg:px-8">
                 <div className="mx-auto max-w-7xl">
                     <div className="grid grid-cols-2 md:grid-cols-6 gap-8 mb-12">
@@ -1589,9 +1595,9 @@ export default function LandingPage() {
                             </ul>
                             <h4 className="font-semibold mb-4 mt-6 text-foreground">Legal</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
-                                <li><a href="#" className="hover:text-foreground transition-colors">Privacy Policy</a></li>
-                                <li><a href="#" className="hover:text-foreground transition-colors">Terms of Service</a></li>
-                                <li><a href="#" className="hover:text-foreground transition-colors">POPIA Compliance</a></li>
+                                <li><a href="/privacy-policy" className="hover:text-foreground transition-colors">Privacy Policy</a></li>
+                                <li><a href="/terms-of-service" className="hover:text-foreground transition-colors">Terms of Service</a></li>
+                                <li><a href="/popia-compliance" className="hover:text-foreground transition-colors">POPIA Compliance</a></li>
                             </ul>
                         </div>
                     </div>
