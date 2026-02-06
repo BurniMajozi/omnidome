@@ -1,8 +1,8 @@
-﻿# CoreConnect: The Premier ISP Operating System (SA Edition)
+﻿# OmniDome: The Premier ISP Operating System (SA Edition)
 
-CoreConnect is a carrier-grade, microservice-based operations platform designed specifically for South African ISPs. It unifies CRM, Sales, Marketing, Billing, Network provisioning, and FNO automation into a single, high-performance ecosystem.
+OmniDome is a carrier-grade, microservice-based operations platform designed specifically for South African ISPs. It unifies CRM, Sales, Marketing, Billing, Network provisioning, and FNO automation into a single, high-performance ecosystem.
 
-## Core Connect Modules
+## OmniDomet Modules
 
 ### 1. Sales Connect & CRM Connect (`/services/sales`, `/services/crm`)
 *   **Lead Management**: Track and convert prospects through a visual pipeline.
@@ -50,4 +50,4 @@ Unlike traditional systems, CoreConnect uses a multi-vector listener to track FN
 3. **Email Parsers**: Automatically ingests and maps NOC notifications to affected customer IDs.
 
 ---
-Created by Antigravity AI for BurniWorld.
+Created by Benedict for BurniWorld.
