@@ -26,7 +26,7 @@ def _ensure_engine():
 
 
 def _load_access(ctx: AuthContext) -> None:
-    if ctx.access_loaded or not _db_enforced():
+    if getattr(ctx, "access_loaded", False) or not _db_enforced():
         return
     engine = _ensure_engine()
     if engine is None:
@@ -44,7 +44,7 @@ def _load_access(ctx: AuthContext) -> None:
             ),
             {"user_id": str(ctx.user_id), "tenant_id": str(ctx.tenant_id)},
         ).fetchall()
-        ctx.roles.update(row[0] for row in roles)
+        _merge_list(ctx, "roles", [row[0] for row in roles])
 
         permissions = conn.execute(
             text(
@@ -60,11 +60,21 @@ def _load_access(ctx: AuthContext) -> None:
             ),
             {"user_id": str(ctx.user_id), "tenant_id": str(ctx.tenant_id)},
         ).fetchall()
-        ctx.permissions.update(row[0] for row in permissions)
+        _merge_list(ctx, "permissions", [row[0] for row in permissions])
 
     if "platform_admin" in ctx.roles or "platform.admin" in ctx.permissions:
         ctx.is_platform_admin = True
     ctx.access_loaded = True
+
+
+def _merge_list(ctx: AuthContext, field_name: str, values: list[str]) -> None:
+    current = getattr(ctx, field_name, [])
+    existing = set(current)
+    for value in values:
+        if value not in existing:
+            current.append(value)
+            existing.add(value)
+    setattr(ctx, field_name, current)
 
 
 def has_permission(ctx: AuthContext, permission_key: str) -> bool:

@@ -1,11 +1,13 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional
 
+import jwt
 from fastapi import Depends, HTTPException, status
-from jose import JWTError, jwt
 from starlette.requests import Request
+
+from services.common.db import set_tenant_context
 
 
 def _bool_env(key: str, default: bool = False) -> bool:
@@ -15,17 +17,17 @@ def _bool_env(key: str, default: bool = False) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _split_csv(value: Optional[str]) -> Set[str]:
+def _split_csv(value: Optional[str]) -> list[str]:
     if not value:
-        return set()
-    return {item.strip() for item in value.split(",") if item.strip()}
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _parse_uuid(value: Optional[str], field_name: str) -> uuid.UUID:
     if not value:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Missing {field_name}")
     try:
-        return uuid.UUID(value)
+        return uuid.UUID(str(value))
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Invalid {field_name}") from exc
 
@@ -34,13 +36,14 @@ def _parse_uuid(value: Optional[str], field_name: str) -> uuid.UUID:
 class AuthContext:
     user_id: uuid.UUID
     tenant_id: uuid.UUID
-    roles: Set[str] = field(default_factory=set)
-    permissions: Set[str] = field(default_factory=set)
-    modules: Set[str] = field(default_factory=set)
+    roles: list[str] = field(default_factory=list)
+    permissions: list[str] = field(default_factory=list)
+    modules: list[str] = field(default_factory=list)
     is_platform_admin: bool = False
     token_payload: Dict[str, Any] = field(default_factory=dict)
     auth_mode: str = "header"
     act_as_tenant_id: Optional[uuid.UUID] = None
+    rbac_loaded: bool = False
     access_loaded: bool = False
     module_access: Dict[str, bool] = field(default_factory=dict)
 
@@ -48,6 +51,7 @@ class AuthContext:
 def _decode_jwt(token: str) -> Dict[str, Any]:
     verify = _bool_env("AUTH_JWT_VERIFY", True)
     algorithm = os.getenv("AUTH_JWT_ALGORITHM", "HS256")
+    options = {"verify_aud": False}
     if verify:
         key = os.getenv("AUTH_JWT_PUBLIC_KEY") or os.getenv("AUTH_JWT_SECRET")
         if not key:
@@ -56,40 +60,40 @@ def _decode_jwt(token: str) -> Dict[str, Any]:
                 detail="JWT verification key not configured",
             )
         try:
-            return jwt.decode(token, key, algorithms=[algorithm], options={"verify_aud": False})
-        except JWTError as exc:
+            return jwt.decode(token, key, algorithms=[algorithm], options=options)
+        except jwt.PyJWTError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
     try:
-        return jwt.get_unverified_claims(token)
-    except JWTError as exc:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 
-def _roles_from_payload(payload: Dict[str, Any]) -> Set[str]:
+def _roles_from_payload(payload: Dict[str, Any]) -> list[str]:
     raw = payload.get("roles")
     if isinstance(raw, list):
-        return {str(item).strip() for item in raw if str(item).strip()}
+        return [str(item).strip() for item in raw if str(item).strip()]
     if isinstance(raw, str):
         return _split_csv(raw)
-    return set()
+    return []
 
 
-def _permissions_from_payload(payload: Dict[str, Any]) -> Set[str]:
+def _permissions_from_payload(payload: Dict[str, Any]) -> list[str]:
     raw = payload.get("permissions")
     if isinstance(raw, list):
-        return {str(item).strip() for item in raw if str(item).strip()}
+        return [str(item).strip() for item in raw if str(item).strip()]
     if isinstance(raw, str):
         return _split_csv(raw)
-    return set()
+    return []
 
 
-def _modules_from_payload(payload: Dict[str, Any]) -> Set[str]:
+def _modules_from_payload(payload: Dict[str, Any]) -> list[str]:
     raw = payload.get("modules")
     if isinstance(raw, list):
-        return {str(item).strip() for item in raw if str(item).strip()}
+        return [str(item).strip() for item in raw if str(item).strip()]
     if isinstance(raw, str):
         return _split_csv(raw)
-    return set()
+    return []
 
 
 async def get_auth_context(request: Request) -> AuthContext:
@@ -102,9 +106,9 @@ async def get_auth_context(request: Request) -> AuthContext:
 
     user_id: Optional[uuid.UUID] = None
     tenant_id: Optional[uuid.UUID] = None
-    roles: Set[str] = set()
-    permissions: Set[str] = set()
-    modules: Set[str] = set()
+    roles: list[str] = []
+    permissions: list[str] = []
+    modules: list[str] = []
     payload: Dict[str, Any] = {}
 
     if mode == "jwt":
@@ -163,6 +167,7 @@ async def get_auth_context(request: Request) -> AuthContext:
             ctx.act_as_tenant_id = original_tenant_id
         ctx.tenant_id = override_id
 
+    set_tenant_context(ctx.tenant_id)
     request.state.auth = ctx
     return ctx
 
