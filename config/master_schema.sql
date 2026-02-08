@@ -3,6 +3,8 @@
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+-- Enable trigram search for fast ILIKE searches
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- 1. TENANCY & IAM
 CREATE TABLE tenants (
@@ -712,6 +714,28 @@ CREATE INDEX idx_tasks_delegate ON tasks(user_id);
 CREATE INDEX idx_contacts_tenant ON contacts(tenant_id);
 CREATE INDEX idx_services_contact ON services(contact_id);
 CREATE INDEX idx_audit_tenant ON audit_logs(tenant_id);
+
+-- Search acceleration indexes (trigram + lower)
+CREATE INDEX IF NOT EXISTS idx_tenants_name_trgm ON tenants USING gin (lower(name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_tenants_subdomain_trgm ON tenants USING gin (lower(subdomain) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_tenants_org_code_trgm ON tenants USING gin (lower(org_code) gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+
+CREATE INDEX IF NOT EXISTS idx_contacts_first_name_trgm ON contacts USING gin (lower(first_name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_contacts_last_name_trgm ON contacts USING gin (lower(last_name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_contacts_email_trgm ON contacts USING gin (lower(email) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_contacts_phone_trgm ON contacts USING gin (phone gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_leads_first_name_trgm ON leads USING gin (lower(first_name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_leads_last_name_trgm ON leads USING gin (lower(last_name) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_leads_email_trgm ON leads USING gin (lower(email) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_leads_phone_trgm ON leads USING gin (phone gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_tickets_subject_trgm ON tickets USING gin (lower(subject) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_kb_title_trgm ON knowledge_base USING gin (lower(title) gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_products_name_trgm ON products USING gin (lower(name) gin_trgm_ops);
 
 -- 14. MODULES & RBAC SEED DATA
 INSERT INTO modules (key, name, description, is_core)
