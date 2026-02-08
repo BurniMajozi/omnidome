@@ -19,7 +19,7 @@ export default function TermsOfService() {
       <main className="max-w-3xl mx-auto py-20 px-4 sm:px-6 lg:px-8 text-foreground">
         <h1 className="text-4xl font-black mb-6">Terms of Service</h1>
         <p className="mb-6 text-lg text-muted-foreground">Last updated: 25 January 2026</p>
-        <p className="mb-6">These Terms of Service ("Terms") govern your use of the OmniDome platform and services. By accessing or using our services, you agree to be bound by these Terms and all applicable laws of South Africa.</p>
+        <p className="mb-6">These Terms of Service (&quot;Terms&quot;) govern your use of the OmniDome platform and services. By accessing or using our services, you agree to be bound by these Terms and all applicable laws of South Africa.</p>
         <h2 className="text-2xl font-bold mt-10 mb-4">1. Use of Services</h2>
         <ul className="list-disc pl-6 mb-6">
           <li>You must be at least 18 years old to use our services.</li>
@@ -41,7 +41,7 @@ export default function TermsOfService() {
         </ul>
         <h2 className="text-2xl font-bold mt-10 mb-4">5. Disclaimers & Limitation of Liability</h2>
         <ul className="list-disc pl-6 mb-6">
-          <li>Our services are provided "as is" without warranties of any kind.</li>
+          <li>Our services are provided &quot;as is&quot; without warranties of any kind.</li>
           <li>We are not liable for any indirect, incidental, or consequential damages arising from your use of our services.</li>
         </ul>
         <h2 className="text-2xl font-bold mt-10 mb-4">6. Governing Law</h2>

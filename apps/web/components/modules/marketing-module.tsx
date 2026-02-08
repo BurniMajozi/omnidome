@@ -17,8 +17,9 @@ import {
   Cell,
 } from "recharts"
 import { Megaphone, TrendingUp, Target, Eye } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const campaignPerformance = [
+const defaultCampaignPerformance = [
   { month: "Jan", impressions: 45000, clicks: 2800, conversions: 280 },
   { month: "Feb", impressions: 52000, clicks: 3200, conversions: 340 },
   { month: "Mar", impressions: 48000, clicks: 3100, conversions: 310 },
@@ -27,14 +28,14 @@ const campaignPerformance = [
   { month: "Jun", impressions: 72000, clicks: 5200, conversions: 620 },
 ]
 
-const channelData = [
+const defaultChannelData = [
   { name: "Email", value: 32, fill: "#4ade80" },
   { name: "Social Media", value: 28, fill: "#60a5fa" },
   { name: "Search", value: 22, fill: "#a855f7" },
   { name: "Display", value: 18, fill: "#f59e0b" },
 ]
 
-const campaignROI = [
+const defaultCampaignROI = [
   { campaign: "Summer Promo", roi: 3.2 },
   { campaign: "Back to School", roi: 2.8 },
   { campaign: "Holiday Sale", roi: 4.1 },
@@ -43,6 +44,14 @@ const campaignROI = [
 ]
 
 export function MarketingModule() {
+  const { data } = useModuleData("marketing", {
+    campaignPerformance: defaultCampaignPerformance,
+    channelData: defaultChannelData,
+    campaignROI: defaultCampaignROI,
+  })
+
+  const { campaignPerformance, channelData, campaignROI } = data
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}

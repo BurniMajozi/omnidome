@@ -4,7 +4,6 @@ import { ModuleLayout } from "./module-layout"
 import {
     BarChart,
     Bar,
-    LineChart,
     Line,
     XAxis,
     YAxis,
@@ -18,10 +17,11 @@ import {
     AreaChart,
     Area,
 } from "recharts"
-import { UserMinus, TrendingDown, Heart, AlertTriangle, Users, Target, RefreshCw, Shield } from "lucide-react"
+import { TrendingDown, Heart, AlertTriangle, RefreshCw } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
 // Churn trend data over 6 months
-const churnTrendData = [
+const defaultChurnTrendData = [
     { month: "Jul", churnRate: 3.2, predictions: 3.5, retained: 96.8 },
     { month: "Aug", churnRate: 2.9, predictions: 3.1, retained: 97.1 },
     { month: "Sep", churnRate: 3.1, predictions: 2.9, retained: 96.9 },
@@ -31,7 +31,7 @@ const churnTrendData = [
 ]
 
 // Churn risk segments
-const churnRiskSegments = [
+const defaultChurnRiskSegments = [
     { name: "High Risk", value: 847, fill: "#ef4444" },
     { name: "Medium Risk", value: 2134, fill: "#f97316" },
     { name: "Low Risk", value: 8521, fill: "#eab308" },
@@ -39,7 +39,7 @@ const churnRiskSegments = [
 ]
 
 // Churn reasons breakdown
-const churnReasons = [
+const defaultChurnReasons = [
     { reason: "Price Sensitivity", count: 342, percentage: 32 },
     { reason: "Service Issues", count: 267, percentage: 25 },
     { reason: "Competitor Offers", count: 192, percentage: 18 },
@@ -47,8 +47,14 @@ const churnReasons = [
     { reason: "No Longer Needed", count: 128, percentage: 12 },
 ]
 
+type ChurnReasonPayload = {
+    payload: {
+        count: number
+    }
+}
+
 // Customer lifetime value by segment
-const clvBySegment = [
+const defaultClvBySegment = [
     { segment: "Enterprise", clv: 48500, retentionRate: 94.2 },
     { segment: "Business", clv: 24800, retentionRate: 91.5 },
     { segment: "Premium", clv: 12400, retentionRate: 88.7 },
@@ -57,7 +63,7 @@ const clvBySegment = [
 ]
 
 // Retention campaigns performance
-const campaignPerformance = [
+const defaultCampaignPerformance = [
     { campaign: "Win-Back Email", saved: 142, cost: 2840, roi: 312 },
     { campaign: "Loyalty Discount", saved: 89, cost: 8900, roi: 156 },
     { campaign: "Personal Outreach", saved: 67, cost: 3350, roi: 248 },
@@ -66,14 +72,14 @@ const campaignPerformance = [
 
 const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
-const flashcardKPIs = [
+const defaultFlashcardKPIs = [
     {
         id: "1",
         title: "Monthly Churn Rate",
         value: "2.1%",
         change: "-0.3%",
         changeType: "positive" as const,
-        icon: <TrendingDown className="h-5 w-5 text-emerald-400" />,
+        iconKey: "churn",
         backTitle: "Churn Breakdown",
         backDetails: [
             { label: "Voluntary Churn", value: "1.4%" },
@@ -88,7 +94,7 @@ const flashcardKPIs = [
         value: "847",
         change: "-12%",
         changeType: "positive" as const,
-        icon: <AlertTriangle className="h-5 w-5 text-amber-400" />,
+        iconKey: "risk",
         backTitle: "Risk Distribution",
         backDetails: [
             { label: "Critical (90%+)", value: "124" },
@@ -103,7 +109,7 @@ const flashcardKPIs = [
         value: "97.9%",
         change: "+0.3%",
         changeType: "positive" as const,
-        icon: <Heart className="h-5 w-5 text-rose-400" />,
+        iconKey: "retention",
         backTitle: "Retention by Tenure",
         backDetails: [
             { label: "0-6 months", value: "92.4%" },
@@ -118,7 +124,7 @@ const flashcardKPIs = [
         value: "343",
         change: "+28%",
         changeType: "positive" as const,
-        icon: <RefreshCw className="h-5 w-5 text-blue-400" />,
+        iconKey: "saved",
         backTitle: "Save Methods",
         backDetails: [
             { label: "Discount Offers", value: "142" },
@@ -129,7 +135,14 @@ const flashcardKPIs = [
     },
 ]
 
-const activities = [
+const retentionKpiIconMap: Record<string, JSX.Element> = {
+    churn: <TrendingDown className="h-5 w-5 text-emerald-400" />,
+    risk: <AlertTriangle className="h-5 w-5 text-amber-400" />,
+    retention: <Heart className="h-5 w-5 text-rose-400" />,
+    saved: <RefreshCw className="h-5 w-5 text-blue-400" />,
+}
+
+const defaultActivities = [
     {
         id: "1",
         user: "AI System",
@@ -172,7 +185,7 @@ const activities = [
     },
 ]
 
-const issues = [
+const defaultIssues = [
     {
         id: "1",
         title: "124 customers with 90%+ churn probability",
@@ -207,9 +220,9 @@ const issues = [
     },
 ]
 
-const summary = `Retention performance shows strong improvement with the monthly churn rate dropping to 2.1%, the lowest in 18 months. The AI-powered churn prediction model has identified 847 at-risk customers with 87% prediction accuracy. This month, the retention team saved 343 customers, preserving R 2.1M in annual revenue. Key focus areas: 124 customers are in critical risk zone (90%+ churn probability), a service-related churn spike was detected in Cape Town requiring immediate attention, and competitor MTN is running an aggressive promotional campaign that may impact retention in budget segments.`
+const defaultSummary = `Retention performance shows strong improvement with the monthly churn rate dropping to 2.1%, the lowest in 18 months. The AI-powered churn prediction model has identified 847 at-risk customers with 87% prediction accuracy. This month, the retention team saved 343 customers, preserving R 2.1M in annual revenue. Key focus areas: 124 customers are in critical risk zone (90%+ churn probability), a service-related churn spike was detected in Cape Town requiring immediate attention, and competitor MTN is running an aggressive promotional campaign that may impact retention in budget segments.`
 
-const tasks = [
+const defaultTasks = [
     {
         id: "1",
         title: "Contact 124 critical-risk customers",
@@ -244,7 +257,7 @@ const tasks = [
     },
 ]
 
-const aiRecommendations = [
+const defaultAiRecommendations = [
     {
         id: "1",
         title: "Proactive Outreach Required",
@@ -275,7 +288,7 @@ const aiRecommendations = [
     },
 ]
 
-const tableData = [
+const defaultTableData = [
     {
         id: "1",
         account: "ACC-78421",
@@ -333,7 +346,7 @@ const tableData = [
     },
 ]
 
-const tableColumns = [
+const defaultTableColumns = [
     { key: "account", label: "Account" },
     { key: "customer", label: "Customer" },
     { key: "segment", label: "Segment" },
@@ -345,10 +358,46 @@ const tableColumns = [
 ]
 
 export function RetentionModule() {
+    const { data } = useModuleData("retention", {
+        churnTrendData: defaultChurnTrendData,
+        churnRiskSegments: defaultChurnRiskSegments,
+        churnReasons: defaultChurnReasons,
+        clvBySegment: defaultClvBySegment,
+        campaignPerformance: defaultCampaignPerformance,
+        flashcardKPIs: defaultFlashcardKPIs,
+        activities: defaultActivities,
+        issues: defaultIssues,
+        summary: defaultSummary,
+        tasks: defaultTasks,
+        aiRecommendations: defaultAiRecommendations,
+        tableData: defaultTableData,
+        tableColumns: defaultTableColumns,
+    })
+
+    const {
+        churnTrendData,
+        churnRiskSegments,
+        churnReasons,
+        clvBySegment,
+        flashcardKPIs,
+        activities,
+        issues,
+        summary,
+        tasks,
+        aiRecommendations,
+        tableData,
+        tableColumns,
+    } = data
+
+    const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
+        ...kpi,
+        icon: retentionKpiIconMap[kpi.iconKey] ?? null,
+    }))
+
     return (
         <ModuleLayout
             title="Retention"
-            flashcardKPIs={flashcardKPIs}
+            flashcardKPIs={flashcardKPIsWithIcons}
             activities={activities}
             issues={issues}
             summary={summary}
@@ -433,15 +482,18 @@ export function RetentionModule() {
                             <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
                             <XAxis type="number" tick={{ fill: "#737373", fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
                             <YAxis type="category" dataKey="reason" tick={{ fill: "#737373", fontSize: 12 }} width={130} />
-                            <Tooltip
-                                contentStyle={{
-                                    backgroundColor: "#262626",
-                                    border: "1px solid #404040",
-                                    borderRadius: "8px",
-                                    color: "#fff",
-                                }}
-                                formatter={(value: number, name: string, props: any) => [`${props.payload.count} customers (${value}%)`, "Churned"]}
-                            />
+                                <Tooltip
+                                    contentStyle={{
+                                        backgroundColor: "#262626",
+                                        border: "1px solid #404040",
+                                        borderRadius: "8px",
+                                        color: "#fff",
+                                    }}
+                                    formatter={(value: number, name: string, props: ChurnReasonPayload) => {
+                                        const label = name === "percentage" ? "Churned" : name
+                                        return [`${props.payload.count} customers (${value}%)`, label]
+                                    }}
+                                />
                             <Bar dataKey="percentage" fill="#f97316" name="Percentage" />
                         </BarChart>
                     </ResponsiveContainer>

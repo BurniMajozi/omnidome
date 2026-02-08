@@ -1,10 +1,10 @@
 "use client"
 
-import { useRef, useEffect, useState } from "react"
-import { motion, AnimatePresence } from "framer-motion"
+import { useRef } from "react"
+import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { AnimatedBeam } from "@/components/ui/animated-beam"
-import { FileText, BarChart3, Check, ArrowRight } from "lucide-react"
+import { FileText, Check } from "lucide-react"
 
 // Animated Bar Graph Component
 function AnimatedBarGraph({ className }: { className?: string }) {
@@ -383,7 +383,7 @@ export function HowItWorks({ className }: { className?: string }) {
               <h3 className="text-xl font-bold mb-6 text-foreground">Strategize</h3>
               <StrategizeVisual className="mb-6" />
               <p className="text-sm text-muted-foreground">
-                Connect the dots between your specific solution and the prospect's needs
+                Connect the dots between your specific solution and the prospect&apos;s needs
               </p>
             </div>
           </motion.div>

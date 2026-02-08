@@ -20,13 +20,13 @@ export default function PrivacyPolicy() {
       <main className="max-w-3xl mx-auto py-20 px-4 sm:px-6 lg:px-8 text-foreground">
         <h1 className="text-4xl font-black mb-6">Privacy Policy</h1>
         <p className="mb-6 text-lg text-muted-foreground">Last updated: 25 January 2026</p>
-        <p className="mb-6">This Privacy Policy describes how OmniDome ("we", "us", or "our") collects, uses, discloses, and protects your information when you use our products and services in South Africa. We are committed to safeguarding your privacy and ensuring that your personal information is protected in accordance with the Protection of Personal Information Act (POPIA) and other applicable South African laws.</p>
+        <p className="mb-6">This Privacy Policy describes how OmniDome (&quot;we&quot;, &quot;us&quot;, or &quot;our&quot;) collects, uses, discloses, and protects your information when you use our products and services in South Africa. We are committed to safeguarding your privacy and ensuring that your personal information is protected in accordance with the Protection of Personal Information Act (POPIA) and other applicable South African laws.</p>
 
       <h2 className="text-2xl font-bold mt-10 mb-4">1. Information We Collect</h2>
       <ul className="list-disc pl-6 mb-6">
         <li><b>Personal Information:</b> Name, contact details, company information, and other identifiers you provide when registering or using our services.</li>
         <li><b>Usage Data:</b> Information about how you interact with our platform, including log data, device information, and IP address.</li>
-        <li><b>Cookies & Tracking:</b> We use cookies and similar technologies to enhance your experience and analyze usage.</li>
+        <li><b>Cookies &amp; Tracking:</b> We use cookies and similar technologies to enhance your experience and analyze usage.</li>
       </ul>
 
       <h2 className="text-2xl font-bold mt-10 mb-4">2. How We Use Your Information</h2>
@@ -58,7 +58,7 @@ export default function PrivacyPolicy() {
       <h2 className="text-2xl font-bold mt-10 mb-4">6. International Data Transfers</h2>
       <p className="mb-6">If we transfer your personal information outside South Africa, we will ensure adequate protection in line with POPIA and other applicable laws.</p>
 
-      <h2 className="text-2xl font-bold mt-10 mb-4">7. Children's Privacy</h2>
+      <h2 className="text-2xl font-bold mt-10 mb-4">7. Children&apos;s Privacy</h2>
       <p className="mb-6">Our services are not intended for children under 18. We do not knowingly collect personal information from children.</p>
 
       <h2 className="text-2xl font-bold mt-10 mb-4">8. Changes to This Policy</h2>

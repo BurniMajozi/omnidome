@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { ArrowLeft, Clock, Calendar, Tag } from "lucide-react";
+import { ArrowLeft, Clock, Calendar } from "lucide-react";
 import { FlickeringGrid } from "@/components/ui/flickering-grid";
 
 // Blog posts data - matches the data in the blog listing page

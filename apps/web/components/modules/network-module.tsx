@@ -16,8 +16,9 @@ import {
   Bar,
 } from "recharts"
 import { Wifi, Activity, AlertTriangle, Zap } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const networkMetrics = [
+const defaultNetworkMetrics = [
   { time: "00:00", bandwidth: 65, latency: 2.1 },
   { time: "04:00", bandwidth: 52, latency: 1.8 },
   { time: "08:00", bandwidth: 78, latency: 2.4 },
@@ -27,7 +28,7 @@ const networkMetrics = [
   { time: "24:00", bandwidth: 70, latency: 2.3 },
 ]
 
-const nodeStatus = [
+const defaultNodeStatus = [
   { node: "North Zone", status: 287, utilization: 72 },
   { node: "South Zone", status: 264, utilization: 68 },
   { node: "East Zone", status: 298, utilization: 75 },
@@ -36,6 +37,13 @@ const nodeStatus = [
 ]
 
 export function NetworkModule() {
+  const { data } = useModuleData("network", {
+    networkMetrics: defaultNetworkMetrics,
+    nodeStatus: defaultNodeStatus,
+  })
+
+  const { networkMetrics, nodeStatus } = data
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}

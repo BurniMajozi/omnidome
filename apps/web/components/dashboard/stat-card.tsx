@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
 import { type LucideIcon, TrendingUp, TrendingDown } from "lucide-react"
+import { useIsClient } from "@/lib/use-is-client"
 
 interface StatCardProps {
   title: string
@@ -21,13 +21,9 @@ export function StatCard({
   description,
   isCurrency = false,
 }: StatCardProps) {
-  const [mounted, setMounted] = useState(false)
+  const isClient = useIsClient()
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  const displayValue = !mounted
+  const displayValue = !isClient
     ? (isCurrency ? "R --" : value)
     : isCurrency
       ? `R ${Number.parseFloat(value.replace(/[^0-9.]/g, "")).toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`

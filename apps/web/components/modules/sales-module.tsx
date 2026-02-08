@@ -13,11 +13,11 @@ import {
   FunnelChart,
   Funnel,
   LabelList,
-  Cell,
 } from "recharts"
 import { DollarSign, TrendingUp, Target, Users } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const salesData = [
+const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
   { month: "Feb", revenue: 520000, deals: 15 },
   { month: "Mar", revenue: 480000, deals: 14 },
@@ -26,13 +26,13 @@ const salesData = [
   { month: "Jun", revenue: 720000, deals: 21 },
 ]
 
-const pipelineData = [
+const defaultPipelineData = [
   { name: "Prospecting", value: 45, fill: "#4ade80" },
   { name: "Negotiation", value: 35, fill: "#60a5fa" },
   { name: "Closed Won", value: 20, fill: "#a855f7" },
 ]
 
-const topProducts = [
+const defaultTopProducts = [
   { name: "Business Fiber", value: 42 },
   { name: "Home Broadband", value: 28 },
   { name: "VoIP Bundle", value: 18 },
@@ -41,14 +41,14 @@ const topProducts = [
 
 const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
-const flashcardKPIs = [
+const defaultFlashcardKPIs = [
   {
     id: "1",
     title: "Monthly Revenue",
     value: formatCurrency(2840000),
     change: "+18.5%",
     changeType: "positive" as const,
-    icon: <DollarSign className="h-5 w-5 text-emerald-400" />,
+    iconKey: "revenue",
     backTitle: "Revenue Breakdown",
     backDetails: [
       { label: "New Business", value: formatCurrency(1420000) },
@@ -63,7 +63,7 @@ const flashcardKPIs = [
     value: "47",
     change: "+12.2%",
     changeType: "positive" as const,
-    icon: <Target className="h-5 w-5 text-blue-400" />,
+    iconKey: "deals",
     backTitle: "Deal Analysis",
     backDetails: [
       { label: "Won", value: "32" },
@@ -78,7 +78,7 @@ const flashcardKPIs = [
     value: formatCurrency(18000000),
     change: "+8.3%",
     changeType: "positive" as const,
-    icon: <TrendingUp className="h-5 w-5 text-amber-400" />,
+    iconKey: "pipeline",
     backTitle: "Pipeline Stages",
     backDetails: [
       { label: "Prospecting", value: formatCurrency(8100000) },
@@ -93,7 +93,7 @@ const flashcardKPIs = [
     value: formatCurrency(384000),
     change: "+5.1%",
     changeType: "positive" as const,
-    icon: <Users className="h-5 w-5 text-purple-400" />,
+    iconKey: "avgDeal",
     backTitle: "Deal Size Distribution",
     backDetails: [
       { label: "Enterprise", value: formatCurrency(850000) },
@@ -104,7 +104,14 @@ const flashcardKPIs = [
   },
 ]
 
-const activities = [
+const salesKpiIconMap: Record<string, JSX.Element> = {
+  revenue: <DollarSign className="h-5 w-5 text-emerald-400" />,
+  deals: <Target className="h-5 w-5 text-blue-400" />,
+  pipeline: <TrendingUp className="h-5 w-5 text-amber-400" />,
+  avgDeal: <Users className="h-5 w-5 text-purple-400" />,
+}
+
+const defaultActivities = [
   {
     id: "1",
     user: "John Smith",
@@ -147,7 +154,7 @@ const activities = [
   },
 ]
 
-const issues = [
+const defaultIssues = [
   {
     id: "1",
     title: "Quote approval delayed for MTN deal",
@@ -182,9 +189,9 @@ const issues = [
   },
 ]
 
-const summary = `This month's sales performance shows strong growth with R2.84M in revenue, an 18.5% increase from last month. The team closed 47 deals with an average deal size of R384K. The pipeline is healthy at R18M with 45% of opportunities in late stages. Key wins include contracts with Telkom SA and Dimension Data. Focus areas for next month include improving conversion rates in the negotiation stage and expanding enterprise segment penetration.`
+const defaultSummary = `This month's sales performance shows strong growth with R2.84M in revenue, an 18.5% increase from last month. The team closed 47 deals with an average deal size of R384K. The pipeline is healthy at R18M with 45% of opportunities in late stages. Key wins include contracts with Telkom SA and Dimension Data. Focus areas for next month include improving conversion rates in the negotiation stage and expanding enterprise segment penetration.`
 
-const tasks = [
+const defaultTasks = [
   {
     id: "1",
     title: "Follow up on MTN proposal",
@@ -219,7 +226,7 @@ const tasks = [
   },
 ]
 
-const aiRecommendations = [
+const defaultAiRecommendations = [
   {
     id: "1",
     title: "Prioritize Vodacom Deal",
@@ -250,7 +257,7 @@ const aiRecommendations = [
   },
 ]
 
-const tableData = [
+const defaultTableData = [
   {
     id: "1",
     deal: "Telkom SA - Fiber Upgrade",
@@ -298,7 +305,7 @@ const tableData = [
   },
 ]
 
-const tableColumns = [
+const defaultTableColumns = [
   { key: "deal", label: "Deal Name" },
   { key: "value", label: "Value" },
   { key: "stage", label: "Stage" },
@@ -308,10 +315,43 @@ const tableColumns = [
 ]
 
 export function SalesModule() {
+  const { data } = useModuleData("sales", {
+    salesData: defaultSalesData,
+    pipelineData: defaultPipelineData,
+    topProducts: defaultTopProducts,
+    flashcardKPIs: defaultFlashcardKPIs,
+    activities: defaultActivities,
+    issues: defaultIssues,
+    summary: defaultSummary,
+    tasks: defaultTasks,
+    aiRecommendations: defaultAiRecommendations,
+    tableData: defaultTableData,
+    tableColumns: defaultTableColumns,
+  })
+
+  const {
+    salesData,
+    pipelineData,
+    topProducts,
+    flashcardKPIs,
+    activities,
+    issues,
+    summary,
+    tasks,
+    aiRecommendations,
+    tableData,
+    tableColumns,
+  } = data
+
+  const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
+    ...kpi,
+    icon: salesKpiIconMap[kpi.iconKey] ?? null,
+  }))
+
   return (
     <ModuleLayout
       title="Sales"
-      flashcardKPIs={flashcardKPIs}
+      flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
       summary={summary}

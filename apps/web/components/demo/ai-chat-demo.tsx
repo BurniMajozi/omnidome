@@ -3,7 +3,6 @@
 import { cn } from "@/lib/utils"
 import { useEffect, useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import Image from "next/image"
 
 interface Message {
   id: number
@@ -132,32 +131,30 @@ export function AIChatDemo({ className }: { className?: string }) {
 
   useEffect(() => {
     if (currentIndex >= conversation.length) {
-      // Reset after showing all messages
       const resetTimer = setTimeout(() => {
         setVisibleMessages([])
         setCurrentIndex(0)
+        setIsTyping(false)
       }, 4000)
       return () => clearTimeout(resetTimer)
     }
 
     const nextMessage = conversation[currentIndex]
-    
-    // Show typing indicator for AI messages
-    if (nextMessage.sender === "ai") {
-      setIsTyping(true)
-      const typingTimer = setTimeout(() => {
-        setIsTyping(false)
-        setVisibleMessages(prev => [...prev, nextMessage])
-        setCurrentIndex(prev => prev + 1)
-      }, 1500)
-      return () => clearTimeout(typingTimer)
-    } else {
-      // User messages appear faster
-      const timer = setTimeout(() => {
-        setVisibleMessages(prev => [...prev, nextMessage])
-        setCurrentIndex(prev => prev + 1)
-      }, 1000)
-      return () => clearTimeout(timer)
+    const typingTimer = setTimeout(() => {
+      if (nextMessage.sender === "ai") {
+        setIsTyping(true)
+      }
+    }, 0)
+
+    const messageTimer = setTimeout(() => {
+      setIsTyping(false)
+      setVisibleMessages(prev => [...prev, nextMessage])
+      setCurrentIndex(prev => prev + 1)
+    }, nextMessage.sender === "ai" ? 1500 : 1000)
+
+    return () => {
+      clearTimeout(typingTimer)
+      clearTimeout(messageTimer)
     }
   }, [currentIndex])
 

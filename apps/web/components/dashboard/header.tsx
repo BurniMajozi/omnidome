@@ -1,10 +1,11 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React from "react"
 import { Bell, Search, Plus, Sun, Moon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useTheme } from "next-themes"
+import { useIsClient } from "@/lib/use-is-client"
 
 interface HeaderProps {
   title: string
@@ -12,13 +13,8 @@ interface HeaderProps {
 }
 
 export function Header({ title, onNewTask }: HeaderProps) {
-  const { theme, setTheme, resolvedTheme } = useTheme()
-  const [mounted, setMounted] = useState(false)
-
-  // Avoid hydration mismatch by waiting for component to mount
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const { setTheme, resolvedTheme } = useTheme()
+  const isClient = useIsClient()
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -37,7 +33,7 @@ export function Header({ title, onNewTask }: HeaderProps) {
           className="text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           title="Toggle theme"
         >
-          {!mounted ? (
+          {!isClient ? (
             <div className="h-5 w-5 animate-pulse rounded-full bg-muted" />
           ) : resolvedTheme === "dark" ? (
             <Sun className="h-5 w-5 transition-all text-amber-400" />

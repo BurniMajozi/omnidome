@@ -3,13 +3,9 @@
 import { use } from "react"
 import Link from "next/link"
 import {
-    ArrowLeft,
     Check,
     PlayCircle,
     Sparkles,
-    Zap,
-    BarChart3,
-    Target,
     Users,
     Wifi,
     LayoutDashboard,
@@ -24,14 +20,46 @@ import {
     Package,
     Globe,
     HeartHandshake,
-    ArrowRight
+    ArrowRight,
+    type LucideIcon
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 
+type ModuleColor =
+    | "emerald"
+    | "blue"
+    | "green"
+    | "purple"
+    | "orange"
+    | "rose"
+    | "cyan"
+    | "indigo"
+    | "fuchsia"
+    | "slate"
+    | "amber"
+    | "teal"
+    | "sky"
+
+type ModuleFeature = {
+    title: string
+    description: string
+    capabilities: string[]
+}
+
+type ModuleData = {
+    name: string
+    icon: LucideIcon
+    tagline: string
+    description: string
+    heroImage: string
+    color: ModuleColor
+    features: ModuleFeature[]
+}
+
 // All modules data
-const allModules: Record<string, any> = {
+const allModules: Record<string, ModuleData> = {
     "overview": {
         name: "Dashboard Overview",
         icon: LayoutDashboard,
@@ -339,7 +367,7 @@ const allModules: Record<string, any> = {
     }
 }
 
-const colorClasses: Record<string, string> = {
+const colorClasses: Record<ModuleColor, string> = {
     emerald: "from-emerald-500 to-teal-500",
     blue: "from-blue-500 to-cyan-500",
     green: "from-green-500 to-emerald-500",
@@ -387,10 +415,10 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         </div>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button variant="outline" size="sm">Sign In</Button>
                             </Link>
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Get Started Free
                                 </Button>
@@ -421,12 +449,12 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         </p>
 
                         <div className="flex flex-col sm:flex-row gap-4">
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="lg" className={`bg-gradient-to-r ${colorClasses[product.color]} text-white text-lg px-8`}>
                                     Get a demo
                                 </Button>
                             </Link>
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="lg" variant="outline" className="text-lg px-8">
                                     Get started free
                                 </Button>
@@ -464,7 +492,7 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                     </div>
 
                     <div className="space-y-24">
-                        {product.features.map((feature: any, idx: number) => (
+                        {product.features.map((feature, idx) => (
                             <div key={idx} className={`grid lg:grid-cols-2 gap-16 items-center ${idx % 2 === 1 ? 'lg:flex-row-reverse' : ''}`}>
                                 <div className={idx % 2 === 1 ? 'lg:order-last' : ''}>
                                     <div className="rounded-2xl bg-gradient-to-br from-card to-background border border-border p-8 aspect-video flex items-center justify-center">
@@ -506,7 +534,7 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         Start your 14-day free trial today. No credit card required.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/dashboard">
+                        <Link href="/auth">
                             <Button size="lg" className={`bg-gradient-to-r ${colorClasses[product.color]} text-white text-lg px-10`}>
                                 Start Free Trial
                                 <ArrowRight className="ml-2 h-5 w-5" />
@@ -534,3 +562,4 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
         </div>
     )
 }
+

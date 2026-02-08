@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -40,8 +40,10 @@ import {
   Bar,
 } from "recharts"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { useModuleData } from "@/lib/module-data"
+import { useIsClient } from "@/lib/use-is-client"
 
-const subscriptionTrend = [
+const defaultSubscriptionTrend = [
   { month: "Jul", fibre: 8500, lte: 3200, voip: 1800, tv: 2400 },
   { month: "Aug", fibre: 9100, lte: 3400, voip: 1950, tv: 2600 },
   { month: "Sep", fibre: 9800, lte: 3550, voip: 2100, tv: 2850 },
@@ -50,14 +52,14 @@ const subscriptionTrend = [
   { month: "Dec", fibre: 12000, lte: 4100, voip: 2550, tv: 3600 },
 ]
 
-const productMixData = [
+const defaultProductMixData = [
   { name: "Fibre", value: 54, color: "#10b981" },
   { name: "LTE", value: 18, color: "#3b82f6" },
   { name: "VoIP", value: 12, color: "#f59e0b" },
   { name: "TV", value: 16, color: "#8b5cf6" },
 ]
 
-const products = [
+const defaultProducts = [
   { id: 1, name: "Fibre 50Mbps", category: "Fibre", price: 699, subscribers: 4250, status: "active", mrr: 2970750 },
   { id: 2, name: "Fibre 100Mbps", category: "Fibre", price: 899, subscribers: 3850, status: "active", mrr: 3461150 },
   { id: 3, name: "Fibre 200Mbps", category: "Fibre", price: 1199, subscribers: 2100, status: "active", mrr: 2517900 },
@@ -68,7 +70,7 @@ const products = [
   { id: 8, name: "Fibre 500Mbps", category: "Fibre", price: 1599, status: "draft", subscribers: 0, mrr: 0 },
 ]
 
-const bundles = [
+const defaultBundles = [
   {
     id: 1,
     name: "Home Essential",
@@ -108,13 +110,18 @@ const formatCurrency = (value: number) => {
 }
 
 export function ProductsModule() {
+  const { data } = useModuleData("products", {
+    subscriptionTrend: defaultSubscriptionTrend,
+    productMixData: defaultProductMixData,
+    products: defaultProducts,
+    bundles: defaultBundles,
+  })
+
+  const { subscriptionTrend, productMixData, products, bundles } = data
+
   const [activeTab, setActiveTab] = useState("overview")
   const [searchTerm, setSearchTerm] = useState("")
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const isClient = useIsClient()
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
@@ -158,7 +165,7 @@ export function ProductsModule() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Total Subscribers</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{!mounted ? "--" : totalSubscribers.toLocaleString()}</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{!isClient ? "--" : totalSubscribers.toLocaleString()}</p>
                 <div className="mt-1 flex items-center gap-1 text-emerald-400">
                   <TrendingUp className="h-3 w-3" />
                   <span className="text-xs">+842 this month</span>
@@ -176,7 +183,7 @@ export function ProductsModule() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Monthly Recurring Revenue</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{!mounted ? "R --" : formatCurrency(totalMRR)}</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{!isClient ? "R --" : formatCurrency(totalMRR)}</p>
                 <div className="mt-1 flex items-center gap-1 text-emerald-400">
                   <TrendingUp className="h-3 w-3" />
                   <span className="text-xs">+5.2% growth</span>
@@ -196,7 +203,7 @@ export function ProductsModule() {
                 <p className="text-sm text-muted-foreground">Active Bundles</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">{bundles.length}</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {!mounted ? "--" : bundles.reduce((s, b) => s + b.subscribers, 0).toLocaleString()} subscribers
+                  {!isClient ? "--" : bundles.reduce((s, b) => s + b.subscribers, 0).toLocaleString()} subscribers
                 </p>
               </div>
               <div className="rounded-lg bg-purple-500/20 p-2">
@@ -369,9 +376,9 @@ export function ProductsModule() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-sm text-muted-foreground">{product.category}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!mounted ? "R --" : formatCurrency(product.price)}/mo</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!mounted ? "--" : product.subscribers.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!mounted ? "R --" : formatCurrency(product.mrr)}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "R --" : formatCurrency(product.price)}/mo</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "--" : product.subscribers.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "R --" : formatCurrency(product.mrr)}</td>
                         <td className="px-4 py-3">
                           <Badge
                             className={
@@ -437,11 +444,11 @@ export function ProductsModule() {
                   </div>
                   <div className="mt-4 flex items-center justify-between">
                     <div>
-                      <p className="text-2xl font-bold text-foreground">{!mounted ? "R --" : formatCurrency(bundle.price)}</p>
+                      <p className="text-2xl font-bold text-foreground">{!isClient ? "R --" : formatCurrency(bundle.price)}</p>
                       <p className="text-xs text-muted-foreground">per month</p>
                     </div>
                     <div className="text-right">
-                      <p className="font-semibold text-foreground">{!mounted ? "--" : bundle.subscribers.toLocaleString()}</p>
+                      <p className="font-semibold text-foreground">{!isClient ? "--" : bundle.subscribers.toLocaleString()}</p>
                       <p className="text-xs text-muted-foreground">subscribers</p>
                     </div>
                   </div>

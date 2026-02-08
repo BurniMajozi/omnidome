@@ -18,12 +18,13 @@ import {
   Ticket,
   Activity,
 } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const modules = [
+const defaultModuleCards = [
   {
     title: "Sales",
     description: "Track deals, manage pipeline and forecast revenue",
-    icon: DollarSign,
+    iconKey: "sales",
     stats: [
       { label: "Monthly Revenue", value: "$284K" },
       { label: "New Deals", value: "47" },
@@ -33,7 +34,7 @@ const modules = [
   {
     title: "CRM",
     description: "Manage customer relationships and interactions",
-    icon: Users,
+    iconKey: "crm",
     stats: [
       { label: "Total Customers", value: "12,847" },
       { label: "Active Leads", value: "342" },
@@ -43,7 +44,7 @@ const modules = [
   {
     title: "Service",
     description: "Handle support tickets and service requests",
-    icon: Headset,
+    iconKey: "service",
     stats: [
       { label: "Open Tickets", value: "128" },
       { label: "Avg Resolution", value: "4.2h" },
@@ -53,7 +54,7 @@ const modules = [
   {
     title: "Network",
     description: "Monitor infrastructure and network performance",
-    icon: Wifi,
+    iconKey: "network",
     stats: [
       { label: "Uptime", value: "99.97%" },
       { label: "Active Nodes", value: "1,247" },
@@ -63,7 +64,7 @@ const modules = [
   {
     title: "Call Center",
     description: "Manage inbound and outbound call operations",
-    icon: Phone,
+    iconKey: "call-center",
     stats: [
       { label: "Calls Today", value: "1,847" },
       { label: "Avg Wait Time", value: "42s" },
@@ -73,7 +74,7 @@ const modules = [
   {
     title: "Marketing",
     description: "Run campaigns and track marketing performance",
-    icon: Megaphone,
+    iconKey: "marketing",
     stats: [
       { label: "Active Campaigns", value: "12" },
       { label: "Conversion Rate", value: "3.2%" },
@@ -83,7 +84,7 @@ const modules = [
   {
     title: "Compliance",
     description: "Ensure regulatory compliance and data security",
-    icon: ShieldCheck,
+    iconKey: "compliance",
     stats: [
       { label: "Compliance Score", value: "94%" },
       { label: "Open Issues", value: "7" },
@@ -93,7 +94,7 @@ const modules = [
   {
     title: "Talent",
     description: "Manage HR, recruitment and employee performance",
-    icon: UserCog,
+    iconKey: "talent",
     stats: [
       { label: "Total Employees", value: "248" },
       { label: "Open Positions", value: "14" },
@@ -102,43 +103,94 @@ const modules = [
   },
 ]
 
+const defaultDashboardStats = [
+  {
+    id: "revenue",
+    title: "Total Revenue",
+    value: "R22.5M",
+    change: "+12.5%",
+    changeType: "positive" as const,
+    iconKey: "revenue",
+    description: "vs last month",
+  },
+  {
+    id: "subscribers",
+    title: "Active Subscribers",
+    value: "24,847",
+    change: "+8.2%",
+    changeType: "positive" as const,
+    iconKey: "subscribers",
+    description: "vs last month",
+  },
+  {
+    id: "tickets",
+    title: "Open Tickets",
+    value: "128",
+    change: "-24%",
+    changeType: "positive" as const,
+    iconKey: "tickets",
+    description: "vs last week",
+  },
+  {
+    id: "uptime",
+    title: "Network Uptime",
+    value: "99.97%",
+    change: "+0.02%",
+    changeType: "positive" as const,
+    iconKey: "uptime",
+    description: "this month",
+  },
+]
+
+const dashboardStatIconMap = {
+  revenue: TrendingUp,
+  subscribers: Users,
+  tickets: Ticket,
+  uptime: Activity,
+}
+
+const dashboardModuleIconMap = {
+  sales: DollarSign,
+  crm: Users,
+  service: Headset,
+  network: Wifi,
+  "call-center": Phone,
+  marketing: Megaphone,
+  compliance: ShieldCheck,
+  talent: UserCog,
+}
+
 export function DashboardOverview() {
+  const { data } = useModuleData("dashboard", {
+    stats: defaultDashboardStats,
+    modules: defaultModuleCards,
+  })
+
+  const statsWithIcons = data.stats.map((stat) => ({
+    ...stat,
+    icon: dashboardStatIconMap[stat.iconKey as keyof typeof dashboardStatIconMap] ?? TrendingUp,
+  }))
+
+  const modulesWithIcons = data.modules.map((module) => ({
+    ...module,
+    icon: dashboardModuleIconMap[module.iconKey as keyof typeof dashboardModuleIconMap] ?? DollarSign,
+  }))
+
   return (
     <>
       {/* Stats Grid */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          title="Total Revenue"
-          value="R22.5M"
-          change="+12.5%"
-          changeType="positive"
-          icon={TrendingUp}
-          description="vs last month"
-        />
-        <StatCard
-          title="Active Subscribers"
-          value="24,847"
-          change="+8.2%"
-          changeType="positive"
-          icon={Users}
-          description="vs last month"
-        />
-        <StatCard
-          title="Open Tickets"
-          value="128"
-          change="-24%"
-          changeType="positive"
-          icon={Ticket}
-          description="vs last week"
-        />
-        <StatCard
-          title="Network Uptime"
-          value="99.97%"
-          change="+0.02%"
-          changeType="positive"
-          icon={Activity}
-          description="this month"
-        />
+        {statsWithIcons.map((stat) => (
+          <StatCard
+            key={stat.id}
+            title={stat.title}
+            value={stat.value}
+            change={stat.change}
+            changeType={stat.changeType}
+            icon={stat.icon}
+            description={stat.description}
+          />
+        ))}
       </div>
 
       {/* Charts and Activity */}
@@ -158,7 +210,7 @@ export function DashboardOverview() {
       <div className="mb-6">
         <h2 className="mb-4 text-lg font-semibold text-foreground">Platform Modules</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {modules.map((module) => (
+          {modulesWithIcons.map((module) => (
             <ModuleCard key={module.title} {...module} />
           ))}
         </div>

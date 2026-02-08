@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useCallback } from "react"
 import { AnimatePresence, motion, MotionProps } from "framer-motion"
 import { cn } from "@/lib/utils"
 
@@ -42,11 +42,11 @@ export function HyperText({
   const iterationCount = useRef(0)
   const elementRef = useRef<HTMLDivElement>(null)
 
-  const handleAnimationTrigger = () => {
+  const handleAnimationTrigger = useCallback(() => {
     if (isAnimating) return
     iterationCount.current = 0
     setIsAnimating(true)
-  }
+  }, [isAnimating])
 
   useEffect(() => {
     if (!isAnimating) return
@@ -100,7 +100,7 @@ export function HyperText({
     }
 
     return () => observer.disconnect()
-  }, [delay, startOnView])
+  }, [delay, handleAnimationTrigger, startOnView])
 
   return (
     <Component

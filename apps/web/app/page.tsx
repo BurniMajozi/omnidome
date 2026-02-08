@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useTheme } from "next-themes"
 import Link from "next/link"
 import {
@@ -17,13 +17,10 @@ import {
     Package,
     Globe,
     HeartHandshake,
-    Check,
     ArrowRight,
     Sparkles,
     Menu,
     X,
-    ChevronDown,
-    Star,
     Zap,
     Shield,
     BarChart3,
@@ -34,7 +31,8 @@ import {
     Handshake,
     FileText,
     HelpCircle,
-    Rocket
+    Rocket,
+    type LucideIcon
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -47,16 +45,15 @@ import { Calendar } from "@/components/ui/calendar"
 import { AnimatedListDemo } from "@/components/demo/animated-list-demo"
 import { AIChatDemo } from "@/components/demo/ai-chat-demo"
 import { AnimatedBeamMultipleOutputDemo } from "@/components/demo/animated-beam-demo"
-import { OrbitingCirclesDemo, OrbitingCirclesDemo2 } from "@/components/demo/orbiting-circles-demo"
+import { OrbitingCirclesDemo2 } from "@/components/demo/orbiting-circles-demo"
 import { GrowthGraphDemo } from "@/components/demo/growth-graph-demo"
 import { AIPitchDemo } from "@/components/demo/ai-pitch-demo"
-import { ThemeToggle, ThemeToggleCompact } from "@/components/ui/theme-toggle"
+import { ThemeToggle } from "@/components/ui/theme-toggle"
 import { AnimatedStats } from "@/components/demo/animated-stats"
 import { ShineBorder } from "@/components/ui/shine-border"
-import { Pointer, EmojiPointer, HeartPointer } from "@/components/ui/pointer"
+import { EmojiPointer } from "@/components/ui/pointer"
 import { HowItWorks } from "@/components/demo/how-it-works"
 import { TestimonialsMarquee } from "@/components/demo/testimonials-marquee"
-import { motion } from "framer-motion"
 
 // Module emojis for pointer
 const moduleEmojis = ["🚀", "💬", "📊", "📞", "📢", "🛡️", "👥", "💰", "📦", "🌐", "❤️", "🎯", "⚡"]
@@ -182,8 +179,16 @@ const modules = [
     },
 ]
 
+type SolutionItem = {
+    title: string
+    description: string
+    slug: string
+    icon: LucideIcon
+    color: string
+}
+
 // Solutions grouped by category with colors
-const solutionsByCategory: Record<string, { title: string; description: string; slug: string; icon: any; color: string }[]> = {
+const solutionsByCategory: Record<string, SolutionItem[]> = {
     Core: [
         { title: "Unified Communications", description: "Bring all team communications into one platform", slug: "communication", icon: MessageSquare, color: "from-blue-500 to-cyan-500" },
         { title: "Self-Service Portal", description: "White-label customer portal with your branding", slug: "portal", icon: Globe, color: "from-sky-500 to-blue-500" },
@@ -255,6 +260,8 @@ const aiFeatures = [
         image: "/agentic-ai-product-management.png",
     },
 ]
+
+const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention"]
 
 // AI Features Showcase Component
 function AIFeaturesShowcase() {
@@ -351,8 +358,8 @@ function AIFeaturesShowcase() {
                                 src={currentFeature.image}
                                 alt={currentFeature.title}
                                 className="w-full h-auto block"
-                                onError={(e) => {
-                                    console.error('Image failed to load:', currentFeature.image)
+                                onError={() => {
+                                    console.error("Image failed to load:", currentFeature.image)
                                 }}
                             />
                         </div>
@@ -375,7 +382,6 @@ export default function LandingPage() {
     const [resourceMenuOpen, setResourceMenuOpen] = useState(false)
     const [isScrolled, setIsScrolled] = useState(false)
     const { resolvedTheme } = useTheme()
-    const [mounted, setMounted] = useState(false)
     
     // Scroll detection
     useEffect(() => {
@@ -418,10 +424,6 @@ export default function LandingPage() {
         if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
         setResourceMenuOpen(false)
     }
-    
-    useEffect(() => {
-        setMounted(true)
-    }, [])
     
     // Interactive galactic dome pattern
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -654,12 +656,10 @@ export default function LandingPage() {
     const [typedText2, setTypedText2] = useState("")
     const [showCursor1, setShowCursor1] = useState(true)
     const [showCursor2, setShowCursor2] = useState(false)
-    const [currentWord, setCurrentWord] = useState("")
     const [displayedWord, setDisplayedWord] = useState("")
     const [isTypingComplete, setIsTypingComplete] = useState(false)
     const [showRotatingCursor, setShowRotatingCursor] = useState(false)
     
-    const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention"]
     const baseText = "Unify Your Entire "
     const fullText2 = "On One Powerful Platform"
     
@@ -1049,12 +1049,12 @@ export default function LandingPage() {
                             </ShineBorder>
                             <ThemeToggle className="hidden md:flex" />
                             <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3} className="hidden sm:block">
-                                <Link href="/dashboard" className="block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">
+                                <Link href="/auth" className="block text-sm font-bold text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5">
                                     Log in
                                 </Link>
                             </ShineBorder>
                             <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
-                                <Link href="/dashboard">
+                                <Link href="/auth">
                                     <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground font-bold px-6 shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_25px_rgba(79,70,229,0.5)] transition-all">
                                         Get Started
                                     </Button>
@@ -1078,7 +1078,7 @@ export default function LandingPage() {
                         <Link href="/resources/services" className="block font-medium py-2">Services</Link>
                         <Link href="/resources/partners" className="block font-medium py-2">Partners</Link>
                         <div className="border-t border-border pt-4 mt-4">
-                            <Link href="/dashboard" className="block text-center mb-4 font-medium">Sign In</Link>
+                            <Link href="/auth" className="block text-center mb-4 font-medium">Sign In</Link>
                             <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 shadow-[0_0_25px_rgba(79,70,229,0.3)] hover:shadow-[0_0_35px_rgba(79,70,229,0.5)] transition-all">Get Started</Button>
                         </div>
                     </div>
@@ -1163,7 +1163,7 @@ export default function LandingPage() {
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-16">
                         <ShineBorder borderRadius={12} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="lg" className="h-16 px-10 text-xl font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_40px_rgba(79,70,229,0.4)] transition-all duration-300 group overflow-hidden relative active:scale-95">
                                     <span className="relative z-10 flex items-center gap-3">
                                         Start Your Free Trial <ArrowRight className="h-6 w-6 group-hover:translate-x-1.5 transition-transform" />
@@ -1489,7 +1489,7 @@ export default function LandingPage() {
                         Join leading South African ISPs using OmniDome to streamline operations and grow revenue.
                     </p>
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
-                        <Link href="/dashboard">
+                        <Link href="/auth">
                             <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground text-xl font-black h-16 px-10 shadow-[0_0_30px_rgba(79,70,229,0.4)] transition-all">
                                 Start Your Free Trial
                                 <ArrowRight className="ml-3 h-6 w-6" />
@@ -1558,7 +1558,7 @@ export default function LandingPage() {
                         <div>
                             <h4 className="font-semibold mb-4 text-foreground">Solutions</h4>
                             <ul className="space-y-2 text-sm text-muted-foreground">
-                                {Object.entries(solutionsByCategory).flatMap(([category, solutions]) => 
+                                {Object.entries(solutionsByCategory).flatMap(([, solutions]) => 
                                     solutions.map(sol => (
                                         <li key={sol.slug}>
                                             <Link href={`/solutions/${sol.slug}`} className="hover:text-foreground transition-colors">

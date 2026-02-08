@@ -16,8 +16,9 @@ import {
   Cell,
 } from "recharts"
 import { ShieldCheck, AlertTriangle, CheckCircle, Zap } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const complianceScore = [
+const defaultComplianceScore = [
   { month: "Jan", score: 88 },
   { month: "Feb", score: 90 },
   { month: "Mar", score: 91 },
@@ -26,14 +27,14 @@ const complianceScore = [
   { month: "Jun", score: 94 },
 ]
 
-const riskAssessment = [
+const defaultRiskAssessment = [
   { name: "Critical", value: 1, fill: "#ef4444" },
   { name: "High", value: 3, fill: "#f97316" },
   { name: "Medium", value: 6, fill: "#eab308" },
   { name: "Low", value: 15, fill: "#4ade80" },
 ]
 
-const complianceFramework = [
+const defaultComplianceFramework = [
   { framework: "GDPR", compliance: 95 },
   { framework: "CCPA", compliance: 92 },
   { framework: "HIPAA", compliance: 89 },
@@ -42,6 +43,14 @@ const complianceFramework = [
 ]
 
 export function ComplianceModule() {
+  const { data } = useModuleData("compliance", {
+    complianceScore: defaultComplianceScore,
+    riskAssessment: defaultRiskAssessment,
+    complianceFramework: defaultComplianceFramework,
+  })
+
+  const { complianceScore, riskAssessment, complianceFramework } = data
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}

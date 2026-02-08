@@ -17,8 +17,9 @@ import {
   Cell,
 } from "recharts"
 import { Headset, Clock, CheckCircle, AlertCircle } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const ticketTrend = [
+const defaultTicketTrend = [
   { day: "Mon", open: 28, resolved: 32 },
   { day: "Tue", open: 35, resolved: 28 },
   { day: "Wed", open: 42, resolved: 35 },
@@ -28,28 +29,28 @@ const ticketTrend = [
   { day: "Sun", open: 12, resolved: 14 },
 ]
 
-const ticketsByPriority = [
+const defaultTicketsByPriority = [
   { name: "Critical", value: 8, fill: "#ef4444" },
   { name: "High", value: 32, fill: "#f97316" },
   { name: "Medium", value: 52, fill: "#eab308" },
   { name: "Low", value: 36, fill: "#4ade80" },
 ]
 
-const resolutionTime = [
+const defaultResolutionTime = [
   { priority: "Critical", time: 1.2 },
   { priority: "High", time: 2.8 },
   { priority: "Medium", time: 4.5 },
   { priority: "Low", time: 8.3 },
 ]
 
-const flashcardKPIs = [
+const defaultFlashcardKPIs = [
   {
     id: "1",
     title: "Open Tickets",
     value: "128",
     change: "-24%",
     changeType: "positive" as const,
-    icon: <AlertCircle className="h-5 w-5 text-amber-400" />,
+    iconKey: "open",
     backTitle: "Ticket Breakdown",
     backDetails: [
       { label: "Critical", value: "8" },
@@ -64,7 +65,7 @@ const flashcardKPIs = [
     value: "4.2h",
     change: "-15%",
     changeType: "positive" as const,
-    icon: <Clock className="h-5 w-5 text-blue-400" />,
+    iconKey: "resolution",
     backTitle: "Resolution by Priority",
     backDetails: [
       { label: "Critical", value: "1.2h" },
@@ -79,7 +80,7 @@ const flashcardKPIs = [
     value: "4.6/5",
     change: "+0.3",
     changeType: "positive" as const,
-    icon: <CheckCircle className="h-5 w-5 text-emerald-400" />,
+    iconKey: "csat",
     backTitle: "Satisfaction Breakdown",
     backDetails: [
       { label: "5 Stars", value: "68%" },
@@ -94,7 +95,7 @@ const flashcardKPIs = [
     value: "98.5%",
     change: "+1.2%",
     changeType: "positive" as const,
-    icon: <Headset className="h-5 w-5 text-purple-400" />,
+    iconKey: "sla",
     backTitle: "SLA by Category",
     backDetails: [
       { label: "Response Time", value: "99.2%" },
@@ -105,7 +106,14 @@ const flashcardKPIs = [
   },
 ]
 
-const activities = [
+const serviceKpiIconMap: Record<string, JSX.Element> = {
+  open: <AlertCircle className="h-5 w-5 text-amber-400" />,
+  resolution: <Clock className="h-5 w-5 text-blue-400" />,
+  csat: <CheckCircle className="h-5 w-5 text-emerald-400" />,
+  sla: <Headset className="h-5 w-5 text-purple-400" />,
+}
+
+const defaultActivities = [
   {
     id: "1",
     user: "Tech Support",
@@ -148,7 +156,7 @@ const activities = [
   },
 ]
 
-const issues = [
+const defaultIssues = [
   {
     id: "1",
     title: "Network outage in Johannesburg North",
@@ -183,9 +191,9 @@ const issues = [
   },
 ]
 
-const summary = `Service desk performance is strong with 128 open tickets, down 24% from last week. Average resolution time improved to 4.2 hours, a 15% reduction. CSAT score reached 4.6/5, our highest in 12 months. SLA compliance is at 98.5% with only 2 breaches this month. The team resolved 212 tickets this week, with the network outage in Johannesburg North being the most significant ongoing issue. Focus areas include reducing critical ticket volume and maintaining the improved resolution times.`
+const defaultSummary = `Service desk performance is strong with 128 open tickets, down 24% from last week. Average resolution time improved to 4.2 hours, a 15% reduction. CSAT score reached 4.6/5, our highest in 12 months. SLA compliance is at 98.5% with only 2 breaches this month. The team resolved 212 tickets this week, with the network outage in Johannesburg North being the most significant ongoing issue. Focus areas include reducing critical ticket volume and maintaining the improved resolution times.`
 
-const tasks = [
+const defaultTasks = [
   {
     id: "1",
     title: "Resolve Johannesburg network outage",
@@ -220,7 +228,7 @@ const tasks = [
   },
 ]
 
-const aiRecommendations = [
+const defaultAiRecommendations = [
   {
     id: "1",
     title: "Pattern Detected",
@@ -251,7 +259,7 @@ const aiRecommendations = [
   },
 ]
 
-const tableData = [
+const defaultTableData = [
   {
     id: "1",
     ticket: "TKT-4521",
@@ -304,7 +312,7 @@ const tableData = [
   },
 ]
 
-const tableColumns = [
+const defaultTableColumns = [
   { key: "ticket", label: "Ticket ID" },
   { key: "customer", label: "Customer" },
   { key: "issue", label: "Issue" },
@@ -315,10 +323,43 @@ const tableColumns = [
 ]
 
 export function ServiceModule() {
+  const { data } = useModuleData("service", {
+    ticketTrend: defaultTicketTrend,
+    ticketsByPriority: defaultTicketsByPriority,
+    resolutionTime: defaultResolutionTime,
+    flashcardKPIs: defaultFlashcardKPIs,
+    activities: defaultActivities,
+    issues: defaultIssues,
+    summary: defaultSummary,
+    tasks: defaultTasks,
+    aiRecommendations: defaultAiRecommendations,
+    tableData: defaultTableData,
+    tableColumns: defaultTableColumns,
+  })
+
+  const {
+    ticketTrend,
+    ticketsByPriority,
+    resolutionTime,
+    flashcardKPIs,
+    activities,
+    issues,
+    summary,
+    tasks,
+    aiRecommendations,
+    tableData,
+    tableColumns,
+  } = data
+
+  const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
+    ...kpi,
+    icon: serviceKpiIconMap[kpi.iconKey] ?? null,
+  }))
+
   return (
     <ModuleLayout
       title="Service"
-      flashcardKPIs={flashcardKPIs}
+      flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
       summary={summary}

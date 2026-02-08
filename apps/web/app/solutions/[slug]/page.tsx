@@ -6,10 +6,6 @@ import {
     ArrowLeft,
     Check,
     PlayCircle,
-    Sparkles,
-    Zap,
-    BarChart3,
-    Target,
     Users,
     ShieldCheck,
     Wifi,
@@ -23,15 +19,32 @@ import {
     Globe,
     UserCog,
     Headset,
-    ArrowRight
+    type LucideIcon
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 
+type MainPoint = {
+    title: string
+    description: string
+    features: string[]
+    image: string
+}
+
+type ModuleDetail = {
+    name: string
+    icon: LucideIcon
+    color: string
+    title: string
+    description: string
+    heroImage: string
+    mainPoints: MainPoint[]
+}
+
 // Comprehensive module details with correct content for each
-const moduleDetails: Record<string, any> = {
+const moduleDetails: Record<string, ModuleDetail> = {
     "communication": {
         name: "Communication Hub",
         icon: MessageSquare,
@@ -347,7 +360,6 @@ const moduleDetails: Record<string, any> = {
 export default function SolutionPage({ params }: { params: Promise<{ slug: string }> }) {
     const { slug } = use(params)
     const detail = moduleDetails[slug] || moduleDetails["marketing"]
-    const IconComponent = detail.icon || Megaphone
 
     return (
         <div className="min-h-screen bg-background text-foreground relative">
@@ -373,7 +385,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                         <div className="flex gap-4 items-center">
                             <ThemeToggleCompact />
                             <Button variant="outline" size="sm">Get a demo</Button>
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Get started free
                                 </Button>
@@ -404,7 +416,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                             <Button size="lg" className={cn("bg-gradient-to-r text-white", detail.color)}>
                                 Get a demo
                             </Button>
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="lg" variant="outline">
                                     Get started free
                                 </Button>
@@ -438,7 +450,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                         ISP management is evolving as competition grows. Businesses need new ways to break through with experiences that generate high-quality conversions.
                     </p>
                     <ol className="text-left max-w-xl mx-auto space-y-4">
-                        {detail.mainPoints.map((point: any, idx: number) => (
+                        {detail.mainPoints.map((point, idx) => (
                             <li key={idx} className="flex gap-4 items-start">
                                 <span className="font-bold text-emerald-500 text-xl">{idx + 1}.</span>
                                 <span className="text-lg font-medium">{point.title}</span>
@@ -449,7 +461,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
             </section>
 
             {/* Main Points alternating */}
-            {detail.mainPoints.map((point: any, idx: number) => (
+            {detail.mainPoints.map((point, idx) => (
                 <section key={idx} className={cn("py-20 px-4 sm:px-6 lg:px-8", idx % 2 === 1 ? "bg-card/50" : "")}>
                     <div className="max-w-7xl mx-auto grid lg:grid-cols-2 gap-16 items-center">
                         <div className={idx % 2 === 1 ? "lg:order-last" : ""}>
@@ -486,7 +498,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                         <Button size="lg" className="bg-white text-emerald-600 hover:bg-white/90 font-semibold">
                             Get a demo
                         </Button>
-                        <Link href="/dashboard">
+                        <Link href="/auth">
                             <Button size="lg" variant="outline" className="border-white text-white hover:bg-white/10">
                                 Get started free
                             </Button>
@@ -508,3 +520,4 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
         </div>
     )
 }
+

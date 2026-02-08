@@ -15,8 +15,9 @@ import {
   Cell,
 } from "recharts"
 import { UserCog, TrendingUp, Users, Target } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const employeeGrowth = [
+const defaultEmployeeGrowth = [
   { month: "Jan", employees: 215, hired: 8, separated: 2 },
   { month: "Feb", employees: 220, hired: 6, separated: 1 },
   { month: "Mar", employees: 225, hired: 7, separated: 2 },
@@ -25,7 +26,7 @@ const employeeGrowth = [
   { month: "Jun", employees: 248, hired: 12, separated: 4 },
 ]
 
-const departmentStaff = [
+const defaultDepartmentStaff = [
   { department: "Sales", count: 48 },
   { department: "Service", count: 52 },
   { department: "Network", count: 38 },
@@ -34,7 +35,7 @@ const departmentStaff = [
   { department: "Admin", count: 70 },
 ]
 
-const turnoverData = [
+const defaultTurnoverData = [
   { name: "Sales", value: 8, fill: "#ef4444" },
   { name: "Service", value: 5, fill: "#f97316" },
   { name: "Network", value: 3, fill: "#eab308" },
@@ -42,6 +43,14 @@ const turnoverData = [
 ]
 
 export function TalentModule() {
+  const { data } = useModuleData("talent", {
+    employeeGrowth: defaultEmployeeGrowth,
+    departmentStaff: defaultDepartmentStaff,
+    turnoverData: defaultTurnoverData,
+  })
+
+  const { employeeGrowth, departmentStaff, turnoverData } = data
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}

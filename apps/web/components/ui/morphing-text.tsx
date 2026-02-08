@@ -25,7 +25,7 @@ export function MorphingText({
   const morphRef = useRef(0)
   const cooldownRef = useRef(cooldownTime)
   const frameRef = useRef<number>()
-  const lastTimeRef = useRef(Date.now())
+  const lastTimeRef = useRef<number | null>(null)
 
   const setStyles = useCallback((fraction: number) => {
     const text1 = text1Ref.current
@@ -71,7 +71,8 @@ export function MorphingText({
 
     const animate = () => {
       const now = Date.now()
-      const dt = (now - lastTimeRef.current) / 1000
+      const lastTime = lastTimeRef.current ?? now
+      const dt = (now - lastTime) / 1000
       lastTimeRef.current = now
 
       cooldownRef.current -= dt
@@ -100,6 +101,7 @@ export function MorphingText({
       frameRef.current = requestAnimationFrame(animate)
     }
 
+    lastTimeRef.current = Date.now()
     frameRef.current = requestAnimationFrame(animate)
 
     return () => {

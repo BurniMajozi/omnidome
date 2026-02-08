@@ -26,6 +26,7 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
   const [inputValue, setInputValue] = useState("")
   const [interactionMode, setInteractionMode] = useState<"type" | "voice" | "converse" | null>(null)
   const [isRecording, setIsRecording] = useState(false)
+  const [isSending, setIsSending] = useState(false)
   const [attachments, setAttachments] = useState<File[]>([])
   const [linkInput, setLinkInput] = useState("")
   const [showLinkInput, setShowLinkInput] = useState(false)
@@ -52,13 +53,29 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
     }
   }, [isOpen])
 
+  const buildAttachmentSummary = (files: Array<{ name: string; type?: string }>) => {
+    if (!files.length) return ""
+    const lines = files.map((file) => `- ${file.name} (${file.type || "unknown"})`)
+    return `\n\nAttachments:\n${lines.join("\n")}`
+  }
+
+  const toOllamaMessages = (chat: Message[]) =>
+    chat.map((message) => ({
+      role: message.role,
+      content:
+        message.role === "user"
+          ? `${message.content}${buildAttachmentSummary(message.attachments?.map((a) => ({ name: a.name, type: a.type })) || [])}`
+          : message.content,
+    }))
+
   const handleSendMessage = async () => {
     if (!inputValue.trim() && attachments.length === 0) return
 
+    const messageText = inputValue
     const newMessage: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: inputValue,
+      content: messageText,
       type: interactionMode === "voice" ? "voice" : "text",
       attachments: attachments.map((file) => ({
         type: file.type,
@@ -66,20 +83,47 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
       })),
     }
 
-    setMessages((prev) => [...prev, newMessage])
+    const outgoingMessages = [...messages, newMessage]
+    setMessages(outgoingMessages)
     setInputValue("")
     setAttachments([])
 
-    // Simulate AI response
-    setTimeout(() => {
+    setIsSending(true)
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          system:
+            "You are a helpful AI assistant that creates and refines tasks for a network operations team. Ask clarifying questions when needed.",
+          messages: toOllamaMessages(outgoingMessages),
+        }),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(errorText || "AI request failed")
+      }
+
+      const data = await response.json()
       const aiMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `I'll help you create a task based on: "${inputValue}". This task will be processed and added to your dashboard.`,
+        content: data?.message || "I couldn't generate a response. Please try again.",
         type: "text",
       }
       setMessages((prev) => [...prev, aiMessage])
-    }, 500)
+    } catch {
+      const aiMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: "I hit an error reaching the local model. Please try again or check the server logs.",
+        type: "text",
+      }
+      setMessages((prev) => [...prev, aiMessage])
+    } finally {
+      setIsSending(false)
+    }
   }
 
   const handleStartRecording = async () => {
@@ -131,7 +175,7 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
   }
 
   const removeAttachment = (index: number) => {
-    setAttachments((prev) => prev.filter((_, i) => i !== index))
+    setAttachments((prev) => prev.filter((item, i) => i !== index && item))
   }
 
   if (!isOpen) return null
@@ -157,7 +201,7 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
       {/* Interaction Mode Selection */}
       {!interactionMode && messages.length === 0 && (
         <div className="flex flex-col gap-3 p-4">
-          <p className="text-sm text-muted-foreground">Choose how you'd like to create a task:</p>
+          <p className="text-sm text-muted-foreground">Choose how you&apos;d like to create a task:</p>
           <Button onClick={() => setInteractionMode("type")} className="justify-start gap-2" variant="outline">
             <MessageCircle className="h-4 w-4" />
             Type your task
@@ -272,7 +316,7 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
               />
               <Button
                 onClick={handleSendMessage}
-                disabled={!inputValue.trim() && attachments.length === 0}
+                disabled={isSending || (!inputValue.trim() && attachments.length === 0)}
                 size="icon"
                 className="shrink-0"
               >

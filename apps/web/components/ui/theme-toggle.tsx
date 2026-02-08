@@ -4,17 +4,13 @@ import * as React from "react"
 import { Moon, Sun } from "lucide-react"
 import { useTheme } from "next-themes"
 import { cn } from "@/lib/utils"
+import { useIsClient } from "@/lib/use-is-client"
 
 export function ThemeToggle({ className }: { className?: string }) {
     const { resolvedTheme, setTheme } = useTheme()
-    const [mounted, setMounted] = React.useState(false)
+    const isClient = useIsClient()
 
-    // Avoid hydration mismatch
-    React.useEffect(() => {
-        setMounted(true)
-    }, [])
-
-    if (!mounted) {
+    if (!isClient) {
         return (
             <div className={cn("flex items-center gap-1 p-1 rounded-full bg-muted/50 border border-border", className)}>
                 <div className="w-8 h-8" />
@@ -56,17 +52,13 @@ export function ThemeToggle({ className }: { className?: string }) {
 // Compact version for tight spaces
 export function ThemeToggleCompact({ className }: { className?: string }) {
     const { resolvedTheme, setTheme } = useTheme()
-    const [mounted, setMounted] = React.useState(false)
-
-    React.useEffect(() => {
-        setMounted(true)
-    }, [])
+    const isClient = useIsClient()
 
     const toggleTheme = () => {
         setTheme(resolvedTheme === "dark" ? "light" : "dark")
     }
 
-    if (!mounted) {
+    if (!isClient) {
         return <div className={cn("w-9 h-9 rounded-full bg-slate-800/50 border border-slate-700/50", className)} />
     }
 

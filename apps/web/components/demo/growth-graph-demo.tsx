@@ -1,8 +1,8 @@
 "use client"
 
 import { cn } from "@/lib/utils"
-import { useEffect, useState, useRef } from "react"
-import { motion, useMotionValue, useTransform, animate } from "framer-motion"
+import { useEffect, useState } from "react"
+import { motion } from "framer-motion"
 
 interface DataPoint {
   label: string
@@ -25,12 +25,6 @@ const data: DataPoint[] = [
 ]
 
 function NumberTicker({ value }: { value: number }) {
-  const [displayValue, setDisplayValue] = useState(0)
-  
-  useEffect(() => {
-    setDisplayValue(value)
-  }, [value])
-  
   return (
     <motion.span
       key={value}
@@ -38,7 +32,7 @@ function NumberTicker({ value }: { value: number }) {
       animate={{ opacity: 1, y: 0 }}
       className="text-xs font-bold text-white tabular-nums"
     >
-      {displayValue.toFixed(0)}%
+      {value.toFixed(0)}%
     </motion.span>
   )
 }
@@ -233,7 +227,7 @@ export function GrowthGraphDemo({ className }: { className?: string }) {
 
       {/* X-axis labels */}
       <div className="flex justify-between mt-2 px-1">
-        {data.filter((_, i) => i % 3 === 0 || i === data.length - 1).map((point, index) => (
+        {data.filter((point, i) => i % 3 === 0 || i === data.length - 1).map((point, index) => (
           <span key={index} className="text-[10px] text-slate-500">{point.label}</span>
         ))}
       </div>

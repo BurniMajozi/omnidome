@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -23,6 +23,7 @@ import {
   CheckCircle,
 } from "lucide-react"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { useIsClient } from "@/lib/use-is-client"
 
 interface FlashcardKPI {
   id: string
@@ -41,11 +42,7 @@ interface FlashcardKPI {
 
 function FlipCard({ kpi }: { kpi: FlashcardKPI }) {
   const [isFlipped, setIsFlipped] = useState(false)
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const isClient = useIsClient()
 
   return (
     <div className="h-40 cursor-pointer" onClick={() => setIsFlipped(!isFlipped)}>
@@ -75,7 +72,7 @@ function FlipCard({ kpi }: { kpi: FlashcardKPI }) {
             </div>
             <div>
               <p className="text-sm text-muted-foreground">{kpi.title}</p>
-              <p className="text-2xl font-bold text-foreground">{!mounted ? "--" : kpi.value}</p>
+              <p className="text-2xl font-bold text-foreground">{!isClient ? "--" : kpi.value}</p>
             </div>
             <p className="text-xs text-muted-foreground">Click to see details</p>
           </div>
@@ -90,7 +87,7 @@ function FlipCard({ kpi }: { kpi: FlashcardKPI }) {
                 {kpi.backDetails.map((detail, idx) => (
                   <div key={idx} className="flex justify-between text-sm">
                     <span className="text-muted-foreground">{detail.label}</span>
-                    <span className="font-medium text-foreground">{!mounted ? "--" : detail.value}</span>
+                    <span className="font-medium text-foreground">{!isClient ? "--" : detail.value}</span>
                   </div>
                 ))}
               </div>
@@ -169,11 +166,6 @@ export function ModuleLayout({
   tableColumns,
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
-  const [mounted, setMounted] = useState(false)
-
-  useEffect(() => {
-    setMounted(true)
-  }, [])
 
   const getSeverityBadge = (severity: string) => {
     switch (severity) {

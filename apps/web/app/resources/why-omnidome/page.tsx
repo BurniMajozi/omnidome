@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowLeft, ArrowRight, Check, Users, Zap, Shield, BarChart3, Globe, Brain, HeartHandshake, Wifi, Play } from "lucide-react"
+import { ArrowRight, Check, Zap, Shield, BarChart3, Globe, Brain, HeartHandshake, Play } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
@@ -79,7 +79,7 @@ export default function WhyOmniDomePage() {
                         </Link>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Start Free Trial
                                 </Button>
@@ -134,7 +134,7 @@ export default function WhyOmniDomePage() {
                     <div className="text-center mb-16">
                         <h2 className="text-3xl sm:text-4xl font-bold mb-4">Built Different. Built Better.</h2>
                         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-                            Here's what sets OmniDome apart from generic CRM and network tools.
+                            Here&apos;s what sets OmniDome apart from generic CRM and network tools.
                         </p>
                     </div>
 
@@ -216,7 +216,7 @@ export default function WhyOmniDomePage() {
                     <div className="grid md:grid-cols-3 gap-8">
                         {testimonials.map((testimonial, idx) => (
                             <div key={idx} className="border border-border rounded-2xl bg-card p-8">
-                                <p className="text-lg mb-6 italic">"{testimonial.quote}"</p>
+                                <p className="text-lg mb-6 italic">&ldquo;{testimonial.quote}&rdquo;</p>
                                 <div className="flex items-center gap-4">
                                     <img src={testimonial.avatar} alt={testimonial.author} className="w-12 h-12 rounded-full" />
                                     <div>
@@ -236,7 +236,7 @@ export default function WhyOmniDomePage() {
                     <h2 className="text-3xl sm:text-4xl font-bold mb-6">Ready to Transform Your ISP?</h2>
                     <p className="text-xl mb-10 opacity-90">Start your 14-day free trial today. No credit card required.</p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/dashboard">
+                        <Link href="/auth">
                             <Button size="lg" className="bg-white text-emerald-600 hover:bg-white/90 text-lg px-8 font-semibold">
                                 Start Free Trial
                                 <ArrowRight className="ml-2 h-5 w-5" />

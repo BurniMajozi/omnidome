@@ -16,8 +16,9 @@ import {
   Bar,
 } from "recharts"
 import { Users, UserCheck, UserPlus, TrendingUp } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const customerData = [
+const defaultCustomerData = [
   { month: "Jan", customers: 10200, churn: 45 },
   { month: "Feb", customers: 10850, churn: 38 },
   { month: "Mar", customers: 11200, churn: 42 },
@@ -26,7 +27,7 @@ const customerData = [
   { month: "Jun", customers: 12847, churn: 28 },
 ]
 
-const leadData = [
+const defaultLeadData = [
   { week: "Week 1", leads: 85, converted: 12 },
   { week: "Week 2", leads: 92, converted: 16 },
   { week: "Week 3", leads: 78, converted: 11 },
@@ -35,14 +36,14 @@ const leadData = [
 
 const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
-const flashcardKPIs = [
+const defaultFlashcardKPIs = [
   {
     id: "1",
     title: "Total Customers",
     value: "12,847",
     change: "+5.2%",
     changeType: "positive" as const,
-    icon: <Users className="h-5 w-5 text-emerald-400" />,
+    iconKey: "customers",
     backTitle: "Customer Segments",
     backDetails: [
       { label: "Enterprise", value: "1,245" },
@@ -57,7 +58,7 @@ const flashcardKPIs = [
     value: "342",
     change: "+14.8%",
     changeType: "positive" as const,
-    icon: <UserPlus className="h-5 w-5 text-blue-400" />,
+    iconKey: "leads",
     backTitle: "Lead Sources",
     backDetails: [
       { label: "Website", value: "142" },
@@ -72,7 +73,7 @@ const flashcardKPIs = [
     value: "15.7%",
     change: "+2.3%",
     changeType: "positive" as const,
-    icon: <UserCheck className="h-5 w-5 text-amber-400" />,
+    iconKey: "conversion",
     backTitle: "Conversion by Channel",
     backDetails: [
       { label: "Direct Sales", value: "24.5%" },
@@ -87,7 +88,7 @@ const flashcardKPIs = [
     value: formatCurrency(42500),
     change: "+8.9%",
     changeType: "positive" as const,
-    icon: <TrendingUp className="h-5 w-5 text-purple-400" />,
+    iconKey: "clv",
     backTitle: "CLV by Segment",
     backDetails: [
       { label: "Enterprise", value: formatCurrency(185000) },
@@ -98,7 +99,14 @@ const flashcardKPIs = [
   },
 ]
 
-const activities = [
+const crmKpiIconMap: Record<string, JSX.Element> = {
+  customers: <Users className="h-5 w-5 text-emerald-400" />,
+  leads: <UserPlus className="h-5 w-5 text-blue-400" />,
+  conversion: <UserCheck className="h-5 w-5 text-amber-400" />,
+  clv: <TrendingUp className="h-5 w-5 text-purple-400" />,
+}
+
+const defaultActivities = [
   {
     id: "1",
     user: "Emily Davis",
@@ -141,7 +149,7 @@ const activities = [
   },
 ]
 
-const issues = [
+const defaultIssues = [
   {
     id: "1",
     title: "Duplicate customer records detected",
@@ -176,9 +184,9 @@ const issues = [
   },
 ]
 
-const summary = `Customer base has grown to 12,847 with a healthy 5.2% increase this month. The churn rate has decreased to 2.1%, our lowest in 6 months. Lead generation is strong with 342 active leads and a 15.7% conversion rate. The enterprise segment shows the highest growth potential with 15% faster acquisition. Customer satisfaction scores remain high at 4.6/5, with residential customers showing the most improvement. Focus areas include reducing duplicate records and improving email deliverability.`
+const defaultSummary = `Customer base has grown to 12,847 with a healthy 5.2% increase this month. The churn rate has decreased to 2.1%, our lowest in 6 months. Lead generation is strong with 342 active leads and a 15.7% conversion rate. The enterprise segment shows the highest growth potential with 15% faster acquisition. Customer satisfaction scores remain high at 4.6/5, with residential customers showing the most improvement. Focus areas include reducing duplicate records and improving email deliverability.`
 
-const tasks = [
+const defaultTasks = [
   {
     id: "1",
     title: "Clean up duplicate records",
@@ -213,7 +221,7 @@ const tasks = [
   },
 ]
 
-const aiRecommendations = [
+const defaultAiRecommendations = [
   {
     id: "1",
     title: "High Churn Risk Alert",
@@ -244,7 +252,7 @@ const aiRecommendations = [
   },
 ]
 
-const tableData = [
+const defaultTableData = [
   {
     id: "1",
     customer: "Telkom SA",
@@ -292,7 +300,7 @@ const tableData = [
   },
 ]
 
-const tableColumns = [
+const defaultTableColumns = [
   { key: "customer", label: "Customer Name" },
   { key: "type", label: "Type" },
   { key: "status", label: "Status" },
@@ -302,10 +310,41 @@ const tableColumns = [
 ]
 
 export function CrmModule() {
+  const { data } = useModuleData("crm", {
+    customerData: defaultCustomerData,
+    leadData: defaultLeadData,
+    flashcardKPIs: defaultFlashcardKPIs,
+    activities: defaultActivities,
+    issues: defaultIssues,
+    summary: defaultSummary,
+    tasks: defaultTasks,
+    aiRecommendations: defaultAiRecommendations,
+    tableData: defaultTableData,
+    tableColumns: defaultTableColumns,
+  })
+
+  const {
+    customerData,
+    leadData,
+    flashcardKPIs,
+    activities,
+    issues,
+    summary,
+    tasks,
+    aiRecommendations,
+    tableData,
+    tableColumns,
+  } = data
+
+  const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
+    ...kpi,
+    icon: crmKpiIconMap[kpi.iconKey] ?? null,
+  }))
+
   return (
     <ModuleLayout
       title="CRM"
-      flashcardKPIs={flashcardKPIs}
+      flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
       summary={summary}

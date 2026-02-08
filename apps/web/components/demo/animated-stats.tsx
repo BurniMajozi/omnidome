@@ -31,16 +31,21 @@ export function AnimatedStats() {
 
   // Reset animation when coming into view
   useEffect(() => {
-    if (isInView) {
+    if (!isInView) return
+
+    const startTimer = setTimeout(() => {
       setPhase("initial")
       setTickerKey(prev => prev + 1)
-      
-      // After first ticker completes (~1.5s), start morphing
-      const morphTimer = setTimeout(() => {
-        setPhase("morphing")
-      }, 1500)
-      
-      return () => clearTimeout(morphTimer)
+    }, 0)
+
+    // After first ticker completes (~1.5s), start morphing
+    const morphTimer = setTimeout(() => {
+      setPhase("morphing")
+    }, 1500)
+
+    return () => {
+      clearTimeout(startTimer)
+      clearTimeout(morphTimer)
     }
   }, [isInView])
 

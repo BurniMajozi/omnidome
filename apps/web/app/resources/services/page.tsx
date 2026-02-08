@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowLeft, ArrowRight, Check, Sparkles, Users, Zap, Shield, Clock, Wifi } from "lucide-react"
+import { Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
@@ -143,7 +143,7 @@ export default function ServicesPage() {
                         </Link>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Request more information
                                 </Button>

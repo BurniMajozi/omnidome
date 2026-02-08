@@ -34,9 +34,7 @@ export function Marquee({
         className
       )}
     >
-      {Array(repeat)
-        .fill(0)
-        .map((_, i) => (
+      {[...Array(repeat).keys()].map((i) => (
           <div
             key={i}
             className={cn("flex shrink-0 justify-around [gap:var(--gap)]", {

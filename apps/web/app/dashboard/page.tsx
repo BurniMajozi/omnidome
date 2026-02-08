@@ -20,6 +20,7 @@ import { ProductsModule } from "@/components/modules/products-module"
 import { PortalModule } from "@/components/modules/portal-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
+import { supabase } from "@/lib/supabase/client"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -42,6 +43,32 @@ export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
+
+  useEffect(() => {
+    let cancelled = false
+
+    const ensureAuthenticated = async () => {
+      const { data, error } = await supabase.auth.getSession()
+      if (cancelled) return
+
+      if (error || !data.session) {
+        router.replace("/auth")
+      }
+    }
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.replace("/auth")
+      }
+    })
+
+    ensureAuthenticated()
+
+    return () => {
+      cancelled = true
+      subscription.unsubscribe()
+    }
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -67,15 +94,11 @@ export default function Dashboard() {
     return sections
   }, [entitlements.modules])
 
-  useEffect(() => {
-    if (!allowedSections.includes(activeSection)) {
-      setActiveSection("overview")
-    }
-  }, [activeSection, allowedSections])
+  const resolvedSection = allowedSections.includes(activeSection) ? activeSection : "overview"
 
   const renderModule = () => {
     try {
-      switch (activeSection) {
+      switch (resolvedSection) {
         case "communication":
           return <CommunicationModule />
         case "sales":
@@ -127,14 +150,14 @@ export default function Dashboard() {
 
       {/* Sidebar */}
       <Sidebar
-        activeSection={activeSection}
+        activeSection={resolvedSection}
         allowedSections={allowedSections}
         onSectionChange={setActiveSection}
       />
 
       {/* Main Content */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header title={sectionTitles[activeSection] || "Dashboard"} onNewTask={() => setChatOpen(true)} />
+        <Header title={sectionTitles[resolvedSection] || "Dashboard"} onNewTask={() => setChatOpen(true)} />
         <main className="flex-1 overflow-y-auto p-6">{renderModule()}</main>
       </div>
 

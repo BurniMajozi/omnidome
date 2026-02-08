@@ -1,9 +1,8 @@
 "use client"
 
 import Link from "next/link"
-import { ArrowLeft, ArrowRight, Check, Users, Building2, Zap, Globe, Award, Wifi, Star } from "lucide-react"
+import { ArrowRight, Check, Building2, Zap, Globe, Award, Star } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 
 const partnerPrograms = [
@@ -119,7 +118,7 @@ export default function PartnersPage() {
                         </Link>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                                     Apply to Partner Program
                                 </Button>

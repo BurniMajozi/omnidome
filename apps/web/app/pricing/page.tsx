@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useCallback } from "react"
 import Link from "next/link"
 import {
     DollarSign,
@@ -17,16 +17,13 @@ import {
     Globe,
     HeartHandshake,
     Check,
-    ArrowLeft,
-    ChevronDown,
-    Sparkles,
-    ArrowRight,
     X
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
+import { useIsClient } from "@/lib/use-is-client"
 
 // All 13 modules (excluding Dashboard Overview)
 const modules = [
@@ -239,11 +236,7 @@ export default function PricingPage() {
     const [customerCounts, setCustomerCounts] = useState<Record<string, number>>({})
     const [activeView, setActiveView] = useState<ViewType>("customer-platform")
     const [audienceTab, setAudienceTab] = useState<"business" | "individual">("business")
-    const [mounted, setMounted] = useState(false)
-
-    useEffect(() => {
-        setMounted(true)
-    }, [])
+    const isClient = useIsClient()
 
     const toggleModule = (id: string, tier: TierType) => {
         setSelectedModules(prev => ({
@@ -260,16 +253,16 @@ export default function PricingPage() {
         })
     }
 
-    const getPrice = (module: typeof modules[0], tier: TierType) => {
+    const getPrice = useCallback((module: typeof modules[0], tier: TierType) => {
         const price = tier === "starter" ? module.starterPrice
             : tier === "professional" ? module.professionalPrice
                 : module.enterprisePrice
         return billingPeriod === "annually" ? Math.round(price * 0.8) : price
-    }
+    }, [billingPeriod])
 
     const selectedProducts = useMemo(() => {
         return Object.entries(selectedModules)
-            .filter(([_, tier]) => tier !== null)
+            .filter(([, tier]) => tier !== null)
             .map(([id, tier]) => {
                 const mod = modules.find(m => m.id === id)!
                 return { ...mod, selectedTier: tier! }
@@ -280,16 +273,7 @@ export default function PricingPage() {
         return selectedProducts.reduce((acc, prod) => {
             return acc + getPrice(prod, prod.selectedTier)
         }, 0)
-    }, [selectedProducts, billingPeriod])
-
-    const sidebarItems = [
-        { id: "customer-platform", label: "Customer Platform", type: "platform" },
-        { id: "create-bundle", label: "Create a Bundle", type: "platform" },
-        { id: "individual", label: "Individual & Start-Up", type: "platform" },
-        ...modules.map(m => ({ id: m.id, label: m.name, type: "product" })),
-        { id: "api-access", label: "API Access", type: "enhancement" },
-        { id: "premium-support", label: "Premium Support", type: "enhancement" }
-    ]
+    }, [selectedProducts, getPrice])
 
     const renderMainContent = () => {
         switch (activeView) {
@@ -313,10 +297,10 @@ export default function PricingPage() {
                                     <div className="mb-4">
                                         <span className="text-xs text-muted-foreground">Starts at</span>
                                         <div className="flex items-baseline gap-1">
-                                            <span className="text-3xl font-bold">R{!mounted ? "--" : (billingPeriod === "annually" ? bundle.annualPrice.toLocaleString() : bundle.basePrice.toLocaleString())}</span>
+                                            <span className="text-3xl font-bold">R{!isClient ? "--" : (billingPeriod === "annually" ? bundle.annualPrice.toLocaleString() : bundle.basePrice.toLocaleString())}</span>
                                             <span className="text-muted-foreground">/mo</span>
                                         </div>
-                                        {billingPeriod === "annually" && mounted && (
+                                        {billingPeriod === "annually" && isClient && (
                                             <span className="text-xs text-muted-foreground line-through">R{bundle.basePrice.toLocaleString()}/mo</span>
                                         )}
                                     </div>
@@ -351,7 +335,7 @@ export default function PricingPage() {
                                         Talk to Sales
                                     </Button>
 
-                                    <p className="text-xs text-muted-foreground mb-6">{!mounted ? "--" : bundle.credits.toLocaleString()} OmniDome Credits</p>
+                                    <p className="text-xs text-muted-foreground mb-6">{!isClient ? "--" : bundle.credits.toLocaleString()} OmniDome Credits</p>
 
                                     <div className="text-sm text-muted-foreground mb-4">
                                         {key === "professional" ? "Starter" : "Professional"} Customer Platform, plus:
@@ -452,7 +436,7 @@ export default function PricingPage() {
                                                 </div>
                                             </div>
                                             <p className="text-xs text-muted-foreground mt-2">
-                                                Includes {!mounted ? "--" : mod.customers.toLocaleString()} customers. Additional customers sold in increments of 1,000 from R50/month.
+                                                Includes {!isClient ? "--" : mod.customers.toLocaleString()} customers. Additional customers sold in increments of 1,000 from R50/month.
                                             </p>
                                         </div>
                                     )}
@@ -517,7 +501,7 @@ export default function PricingPage() {
                                         <div className="flex justify-between items-center mb-4">
                                             <span className="font-semibold">Estimated Total</span>
                                             <div className="text-right">
-                                                <div className="text-2xl font-bold">R{!mounted ? "0" : totalMonthly.toLocaleString()}</div>
+                                                <div className="text-2xl font-bold">R{!isClient ? "0" : totalMonthly.toLocaleString()}</div>
                                                 <div className="text-xs text-muted-foreground">/month</div>
                                             </div>
                                         </div>
@@ -561,7 +545,7 @@ export default function PricingPage() {
                                     <div className="mb-6">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-4xl font-bold">
-                                                {plan.basePrice === 0 ? "Free" : `R${!mounted ? "--" : plan.basePrice.toLocaleString()}`}
+                                                {plan.basePrice === 0 ? "Free" : `R${!isClient ? "--" : plan.basePrice.toLocaleString()}`}
                                             </span>
                                             {plan.basePrice > 0 && <span className="text-muted-foreground">/mo</span>}
                                         </div>
@@ -755,7 +739,7 @@ export default function PricingPage() {
 
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/dashboard">
+                            <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
                                     Start free or get a demo
                                 </Button>

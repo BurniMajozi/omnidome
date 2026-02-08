@@ -15,8 +15,9 @@ import {
   Cell,
 } from "recharts"
 import { Phone, Users, Clock, TrendingUp } from "lucide-react"
+import { useModuleData } from "@/lib/module-data"
 
-const callData = [
+const defaultCallData = [
   { hour: "08:00", inbound: 45, outbound: 32 },
   { hour: "10:00", inbound: 52, outbound: 38 },
   { hour: "12:00", inbound: 68, outbound: 42 },
@@ -25,7 +26,7 @@ const callData = [
   { hour: "18:00", inbound: 42, outbound: 28 },
 ]
 
-const agentPerformance = [
+const defaultAgentPerformance = [
   { name: "Agent A", calls: 124, satisfaction: 4.8 },
   { name: "Agent B", calls: 118, satisfaction: 4.6 },
   { name: "Agent C", calls: 135, satisfaction: 4.7 },
@@ -33,7 +34,7 @@ const agentPerformance = [
   { name: "Agent E", calls: 128, satisfaction: 4.9 },
 ]
 
-const callType = [
+const defaultCallType = [
   { name: "Support", value: 52, fill: "#4ade80" },
   { name: "Sales", value: 28, fill: "#60a5fa" },
   { name: "Billing", value: 15, fill: "#f59e0b" },
@@ -41,6 +42,14 @@ const callType = [
 ]
 
 export function CallCenterModule() {
+  const { data } = useModuleData("call-center", {
+    callData: defaultCallData,
+    agentPerformance: defaultAgentPerformance,
+    callType: defaultCallType,
+  })
+
+  const { callData, agentPerformance, callType } = data
+
   return (
     <div className="space-y-6">
       {/* KPI Cards */}

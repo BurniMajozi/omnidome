@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -32,8 +32,10 @@ import {
 } from "lucide-react"
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { useModuleData } from "@/lib/module-data"
+import { useIsClient } from "@/lib/use-is-client"
 
-const visitorData = [
+const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
   { day: "Tue", website: 2100, customerPortal: 1650, fieldApp: 480, techApp: 340 },
   { day: "Wed", website: 2800, customerPortal: 2100, fieldApp: 520, techApp: 380 },
@@ -43,7 +45,7 @@ const visitorData = [
   { day: "Sun", website: 1500, customerPortal: 1100, fieldApp: 220, techApp: 120 },
 ]
 
-const landingPages = [
+const defaultLandingPages = [
   {
     id: 1,
     name: "Fibre Promo Q1",
@@ -66,21 +68,21 @@ const landingPages = [
   { id: 4, name: "Referral Program", url: "/refer", status: "published", views: 5640, conversions: 89, rate: "1.6%" },
 ]
 
-const aiAgents = [
+const defaultAiAgents = [
   { id: 1, name: "Customer Support Bot", status: "active", conversations: 4250, resolution: "78%", avgTime: "2.3 min" },
   { id: 2, name: "Sales Assistant", status: "active", conversations: 1820, resolution: "65%", avgTime: "4.1 min" },
   { id: 3, name: "Technical Help Bot", status: "active", conversations: 2340, resolution: "82%", avgTime: "3.5 min" },
   { id: 4, name: "Billing Inquiries", status: "paused", conversations: 890, resolution: "71%", avgTime: "2.8 min" },
 ]
 
-const fieldSalesStats = {
+const defaultFieldSalesStats = {
   activeAgents: 45,
   visitsToday: 128,
   leadsGenerated: 34,
   dealsWon: 12,
 }
 
-const technicianStats = {
+const defaultTechnicianStats = {
   activeTechs: 38,
   jobsCompleted: 86,
   avgJobTime: "42 min",
@@ -88,12 +90,18 @@ const technicianStats = {
 }
 
 export function PortalModule() {
-  const [activeTab, setActiveTab] = useState("overview")
-  const [mounted, setMounted] = useState(false)
+  const { data } = useModuleData("portal", {
+    visitorData: defaultVisitorData,
+    landingPages: defaultLandingPages,
+    aiAgents: defaultAiAgents,
+    fieldSalesStats: defaultFieldSalesStats,
+    technicianStats: defaultTechnicianStats,
+  })
 
-  useEffect(() => {
-    setMounted(true)
-  }, [])
+  const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats } = data
+
+  const [activeTab, setActiveTab] = useState("overview")
+  const isClient = useIsClient()
 
   return (
     <div className="space-y-6">
@@ -356,7 +364,7 @@ export function PortalModule() {
                   </div>
                   <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                     <div>
-                      <p className="text-lg font-semibold text-foreground">{!mounted ? "--" : agent.conversations.toLocaleString()}</p>
+                      <p className="text-lg font-semibold text-foreground">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
                       <p className="text-xs text-muted-foreground">Conversations</p>
                     </div>
                     <div>
@@ -419,7 +427,7 @@ export function PortalModule() {
                             {page.status}
                           </Badge>
                         </td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!mounted ? "--" : page.views.toLocaleString()}</td>
+                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "--" : page.views.toLocaleString()}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{page.conversions}</td>
                         <td className="px-4 py-3 text-sm text-foreground">{page.rate}</td>
                         <td className="px-4 py-3">
@@ -525,7 +533,7 @@ export function PortalModule() {
 
             <Card className="border-border bg-card">
               <CardHeader>
-                <CardTitle className="text-base">Today's Stats</CardTitle>
+                <CardTitle className="text-base">Today&apos;s Stats</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
@@ -590,7 +598,7 @@ export function PortalModule() {
 
             <Card className="border-border bg-card">
               <CardHeader>
-                <CardTitle className="text-base">Today's Stats</CardTitle>
+                <CardTitle className="text-base">Today&apos;s Stats</CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
