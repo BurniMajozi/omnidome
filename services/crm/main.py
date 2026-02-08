@@ -1,77 +1,74 @@
-from fastapi import FastAPI, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel
-from typing import List, Optional
-import uuid
-from datetime import datetime
-from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+"""OmniDome CRM Service — Customer 360, Segmentation, Leads.
 
-app = FastAPI(title="CoreConnect CRM Service", version="0.1.0")
+Port: 8001
+"""
+
+import logging
+import os
+
+from fastapi import FastAPI
+from starlette.requests import Request
+
+from services.common.entitlements import EntitlementGuard
+from services.crm.database import init_tables
+from services.crm.routes.customers import router as customers_router
+from services.crm.routes.leads import router as leads_router
+from services.crm.routes.notes_tags import router as notes_tags_router
+from services.crm.routes.segments import router as segments_router
+
+logger = logging.getLogger("crm")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
+
+# ---------------------------------------------------------------------------
+# App & guard setup
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="OmniDome CRM Service",
+    version="1.0.0",
+    description="Customer 360, segmentation, lead tracking for South African ISPs",
+)
+
 guard = EntitlementGuard(module_id="crm")
 
 
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
+    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+        init_tables()
+        logger.info("CRM tables ensured")
 
 
 @app.middleware("http")
-async def entitlement_middleware(request, call_next):
+async def entitlement_middleware(request: Request, call_next):
     return await guard.middleware(request, call_next)
 
-# --- Models ---
-class ContactBase(BaseModel):
-    first_name: str
-    last_name: str
-    email: str
-    phone: Optional[str] = None
-    physical_address: Optional[str] = None
 
-class ContactCreate(ContactBase):
-    pass
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
 
-class Contact(ContactBase):
-    id: uuid.UUID
-    tenant_id: uuid.UUID
-    rica_verified: bool
-    created_at: datetime
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "crm"}
 
-    class Config:
-        orm_mode = True
 
-# --- Routes ---
-@app.get("/")
-async def root():
-    return {"message": "CoreConnect CRM Service is active"}
+# ---------------------------------------------------------------------------
+# Include routers
+# ---------------------------------------------------------------------------
 
-@app.get("/contacts", response_model=List[Contact])
-async def list_contacts(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    # Mock data for initial foundation
-    return [
-        {
-            "id": uuid.uuid4(),
-            "tenant_id": tenant_id,
-            "first_name": "John",
-            "last_name": "Doe",
-            "email": "john.doe@example.co.za",
-            "phone": "0123456789",
-            "rica_verified": True,
-            "created_at": datetime.now()
-        }
-    ]
+app.include_router(customers_router)
+app.include_router(leads_router)
+app.include_router(notes_tags_router)
+app.include_router(segments_router)
 
-@app.post("/contacts", response_model=Contact, status_code=status.HTTP_201_CREATED)
-async def create_contact(contact: ContactCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    # Mock creation for initial foundation
-    return {
-        "id": uuid.uuid4(),
-        "tenant_id": tenant_id,
-        **contact.dict(),
-        "rica_verified": False,
-        "created_at": datetime.now()
-    }
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8001)
