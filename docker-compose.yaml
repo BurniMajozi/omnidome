@@ -15,7 +15,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./config/master_schema.sql:/docker-entrypoint-initdb.d/init.sql
 
-  crm-service:
+  crm:
     build:
       context: .
       dockerfile: services/crm/Dockerfile
@@ -33,7 +33,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  sales-service:
+  sales:
     build:
       context: .
       dockerfile: services/sales/Dockerfile
@@ -51,7 +51,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  billing-service:
+  billing:
     build:
       context: .
       dockerfile: services/billing/Dockerfile
@@ -70,7 +70,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  rica-service:
+  rica:
     build:
       context: .
       dockerfile: services/rica/Dockerfile
@@ -90,7 +90,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  network-service:
+  network:
     build:
       context: .
       dockerfile: services/network/Dockerfile
@@ -108,7 +108,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  iot-service:
+  iot:
     build:
       context: .
       dockerfile: services/iot/Dockerfile
@@ -126,7 +126,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  call-center-service:
+  call_center:
     build:
       context: .
       dockerfile: services/call_center/Dockerfile
@@ -138,13 +138,13 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8011:8011"
+      - "8007:8007"
     depends_on:
       - db
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  retention-service:
+  retention:
     build:
       context: .
       dockerfile: services/retention/Dockerfile
@@ -163,7 +163,7 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
-  admin-service:
+  admin:
     build:
       context: .
       dockerfile: services/admin/Dockerfile
@@ -191,6 +191,7 @@ services:
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
     ports:
       - "8000:8000"
     volumes:
@@ -207,11 +208,11 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - crm-service
-      - sales-service
-      - billing-service
-      - rica-service
-      - network-service
+      - crm
+      - sales
+      - billing
+      - rica
+      - network
       - gateway
 
   portal:

@@ -11,10 +11,14 @@ CREATE TABLE tenants (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name TEXT NOT NULL,
     subdomain TEXT UNIQUE NOT NULL,
+    domain TEXT UNIQUE,
     org_code TEXT UNIQUE, -- External organisation identifier (optional but recommended)
     tier TEXT DEFAULT 'FREE', -- FREE, STARTER, PROFESSIONAL, ENTERPRISE
     vat_number TEXT,
     status TEXT DEFAULT 'ACTIVE', -- ACTIVE, SUSPENDED, CLOSED
+    active BOOLEAN DEFAULT TRUE,
+    settings JSONB DEFAULT '{}'::jsonb,
+    branding JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -181,10 +185,18 @@ CREATE TABLE deals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     contact_id UUID REFERENCES contacts(id),
+    lead_id UUID REFERENCES leads(id),
+    agent_id UUID REFERENCES users(id),
     stage_id UUID REFERENCES deal_stages(id),
+    package_id UUID,
     name TEXT NOT NULL,
     amount DECIMAL(12, 2),
+    value_zar DECIMAL(12, 2),
+    status TEXT DEFAULT 'OPEN', -- OPEN, WON, LOST
     close_date DATE,
+    closed_at TIMESTAMP WITH TIME ZONE,
+    close_reason TEXT,
+    notes TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -199,6 +211,51 @@ CREATE TABLE tasks (
     due_date TIMESTAMP WITH TIME ZONE,
     status TEXT DEFAULT 'TODO', -- TODO, IN_PROGRESS, DONE
     priority TEXT DEFAULT 'MEDIUM' -- LOW, MEDIUM, HIGH
+);
+
+-- 5b. QUOTES & COMMISSIONS
+CREATE TABLE quotes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    deal_id UUID REFERENCES deals(id) ON DELETE SET NULL,
+    customer_id UUID REFERENCES contacts(id),
+    lead_id UUID REFERENCES leads(id),
+    agent_id UUID REFERENCES users(id),
+    package_id UUID,
+    items JSONB,
+    total_monthly DECIMAL(12, 2) DEFAULT 0.00,
+    total_once_off DECIMAL(12, 2) DEFAULT 0.00,
+    term_months INTEGER DEFAULT 12,
+    valid_until DATE,
+    status TEXT DEFAULT 'DRAFT', -- DRAFT, SENT, ACCEPTED, EXPIRED, CANCELLED
+    terms TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP WITH TIME ZONE,
+    accepted_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE commissions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    deal_id UUID REFERENCES deals(id) ON DELETE CASCADE,
+    agent_id UUID REFERENCES users(id),
+    amount_zar DECIMAL(12, 2) NOT NULL,
+    rate_percent DECIMAL(5, 2),
+    status TEXT DEFAULT 'PENDING', -- PENDING, APPROVED, PAID, CLAWBACK
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE sales_targets (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    agent_id UUID REFERENCES users(id),
+    team_id UUID,
+    period_type TEXT NOT NULL, -- MONTHLY, QUARTERLY
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    target_value_zar DECIMAL(12, 2) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 6. BILLING & SUBSCRIPTIONS
@@ -281,6 +338,17 @@ CREATE TABLE rica_verifications (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE fno_portals (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    fno_name TEXT NOT NULL, -- Openserve, Vumatel, etc.
+    portal_url TEXT,
+    username TEXT,
+    password_encrypted TEXT,
+    meta JSONB, -- For specific automation fields
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE nas (
     id SERIAL PRIMARY KEY,
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
@@ -297,7 +365,7 @@ CREATE TABLE radius_accounts (
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     contact_id UUID REFERENCES contacts(id),
     subscription_id UUID REFERENCES subscriptions(id),
-    device_id UUID REFERENCES iot_devices(id), -- Link to specific ONT/Router hardware
+    device_id UUID, -- Link to specific ONT/Router hardware (FK added via ALTER below)
     username TEXT UNIQUE NOT NULL, -- PPPoE/IPOE Username
     password TEXT NOT NULL,
     static_ip INET,
@@ -399,17 +467,6 @@ CREATE TABLE radpostauth (
 );
 CREATE INDEX idx_radpostauth_tenant_username ON radpostauth(tenant_id, username);
 
-CREATE TABLE fno_portals (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    fno_name TEXT NOT NULL, -- Openserve, Vumatel, etc.
-    portal_url TEXT,
-    username TEXT,
-    password_encrypted TEXT,
-    meta JSONB, -- For specific automation fields
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE automation_jobs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
@@ -458,7 +515,7 @@ CREATE TABLE fiber_health_alerts (
     issue_type TEXT, -- SIGNAL_DEGRADATION, POWER_LOSS, MAC_FLAPPING
     current_value TEXT,
     is_proactive BOOLEAN DEFAULT TRUE,
-    ticket_id UUID REFERENCES tickets(id),
+    ticket_id UUID, -- Link to support ticket (FK added via ALTER below)
     status TEXT DEFAULT 'OPEN', -- OPEN, ACKNOWLEDGED, RESOLVED
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -482,7 +539,7 @@ CREATE TABLE product_categories (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE products (
+CREATE TABLE inventory_products (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     category_id UUID REFERENCES product_categories(id),
@@ -522,7 +579,7 @@ CREATE TABLE shipments (
 CREATE TABLE shipment_items (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     shipment_id UUID REFERENCES shipments(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id),
+    product_id UUID REFERENCES inventory_products(id),
     quantity INTEGER NOT NULL,
     cost_price DECIMAL(12,2) -- Capturing landed cost if different from base cost
 );
@@ -531,7 +588,7 @@ CREATE TABLE inventory_levels (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     warehouse_id UUID REFERENCES warehouses(id),
-    product_id UUID REFERENCES products(id),
+    product_id UUID REFERENCES inventory_products(id),
     soh INTEGER NOT NULL DEFAULT 0, -- Stock On Hand
     sit INTEGER NOT NULL DEFAULT 0, -- Stock In Transit
     allocated INTEGER NOT NULL DEFAULT 0, -- Reserved for orders
@@ -544,7 +601,7 @@ CREATE TABLE inventory_levels (
 CREATE TABLE stock_movements (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id),
+    product_id UUID REFERENCES inventory_products(id),
     from_warehouse_id UUID REFERENCES warehouses(id),
     to_warehouse_id UUID REFERENCES warehouses(id),
     quantity INTEGER NOT NULL,
@@ -556,7 +613,7 @@ CREATE TABLE stock_movements (
 CREATE TABLE sales_planning (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id),
+    product_id UUID REFERENCES inventory_products(id),
     target_month DATE NOT NULL,
     forecast_units INTEGER NOT NULL DEFAULT 0,
     actual_units INTEGER NOT NULL DEFAULT 0,
@@ -567,7 +624,7 @@ CREATE TABLE sales_planning (
 CREATE TABLE tickets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    customer_id UUID REFERENCES accounts(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES contacts(id) ON DELETE CASCADE,
     subject TEXT NOT NULL,
     description TEXT,
     priority TEXT DEFAULT 'NORMAL', -- LOW, NORMAL, HIGH, URGENT
@@ -709,7 +766,15 @@ CREATE TABLE audit_logs (
 
 -- Indexes for Sales performance
 CREATE INDEX idx_leads_tenant ON leads(tenant_id);
+CREATE INDEX idx_deals_tenant ON deals(tenant_id);
 CREATE INDEX idx_deals_stage ON deals(stage_id);
+CREATE INDEX idx_deals_agent ON deals(agent_id);
+CREATE INDEX idx_deals_closed_at ON deals(closed_at);
+CREATE INDEX idx_quotes_tenant ON quotes(tenant_id);
+CREATE INDEX idx_quotes_status ON quotes(status);
+CREATE INDEX idx_commissions_agent ON commissions(agent_id);
+CREATE INDEX idx_commissions_status ON commissions(status);
+CREATE INDEX idx_targets_agent ON sales_targets(agent_id);
 CREATE INDEX idx_tasks_delegate ON tasks(user_id);
 CREATE INDEX idx_contacts_tenant ON contacts(tenant_id);
 CREATE INDEX idx_services_contact ON services(contact_id);
@@ -721,6 +786,8 @@ CREATE INDEX IF NOT EXISTS idx_tenants_subdomain_trgm ON tenants USING gin (lowe
 CREATE INDEX IF NOT EXISTS idx_tenants_org_code_trgm ON tenants USING gin (lower(org_code) gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+CREATE INDEX IF NOT EXISTS idx_users_email_trgm ON users USING gin (lower(email) gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_users_full_name_trgm ON users USING gin (lower(full_name) gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_contacts_first_name_trgm ON contacts USING gin (lower(first_name) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_contacts_last_name_trgm ON contacts USING gin (lower(last_name) gin_trgm_ops);
@@ -863,3 +930,7 @@ BEGIN
     END IF;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Deferred Foreign Keys (resolving forward references)
+ALTER TABLE radius_accounts ADD CONSTRAINT fk_radius_device FOREIGN KEY (device_id) REFERENCES iot_devices(id);
+ALTER TABLE fiber_health_alerts ADD CONSTRAINT fk_alert_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id);
