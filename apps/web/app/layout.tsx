@@ -1,11 +1,19 @@
 import type React from "react"
 import type { Metadata } from "next"
-import { Geist, Geist_Mono } from "next/font/google"
+import localFont from "next/font/local"
 import { Analytics } from "@vercel/analytics/next"
 import "./globals.css"
 
-const geist = Geist({ subsets: ["latin"], variable: "--font-geist" })
-const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" })
+const geist = localFont({
+  src: "../public/fonts/GeistVF.woff2",
+  variable: "--font-geist",
+  display: "swap",
+})
+const geistMono = localFont({
+  src: "../public/fonts/GeistMonoVF.woff2",
+  variable: "--font-geist-mono",
+  display: "swap",
+})
 
 export const metadata: Metadata = {
   title: "OmniDome | The Complete ISP Operating System",

@@ -2,8 +2,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Corporate proxy TLS interception workaround
+ENV NODE_TLS_REJECT_UNAUTHORIZED=0
+
 COPY apps/web/package.json apps/web/package-lock.json ./
-RUN npm ci
+RUN npm config set strict-ssl false && npm ci --legacy-peer-deps
 
 COPY apps/web/ ./
 

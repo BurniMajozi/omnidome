@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { supabase } from "@/lib/supabase/client"
+import { getAuthRedirectUrl } from "@/lib/supabase/redirect"
 import type { Provider } from "@supabase/supabase-js"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -11,10 +12,17 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-const oauthProviders: { id: Provider; label: string }[] = [
+const allProviders: { id: Provider; label: string }[] = [
   { id: "google", label: "Continue with Google" },
   { id: "github", label: "Continue with GitHub" },
 ]
+
+const enabledProviders = (process.env.NEXT_PUBLIC_SUPABASE_OAUTH_PROVIDERS ?? "google,github")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean)
+
+const oauthProviders = allProviders.filter((provider) => enabledProviders.includes(provider.id))
 
 export default function AuthPage() {
   const router = useRouter()
@@ -53,7 +61,7 @@ export default function AuthPage() {
     const { error: signInError } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
       },
     })
 
@@ -87,7 +95,7 @@ export default function AuthPage() {
         email,
         password,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
         },
       })
 
@@ -128,7 +136,7 @@ export default function AuthPage() {
     setNotice(null)
 
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/auth/reset`,
+      redirectTo: getAuthRedirectUrl("/auth/reset"),
     })
 
     if (resetError) {
@@ -149,7 +157,7 @@ export default function AuthPage() {
     const { error: signInError } = await supabase.auth.signInWithOAuth({
       provider,
       options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
+        redirectTo: getAuthRedirectUrl("/auth/callback"),
       },
     })
 
