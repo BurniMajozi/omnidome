@@ -10,6 +10,8 @@ from fastapi import HTTPException, status
 from starlette.requests import Request
 from starlette.responses import Response
 
+from services.common.access import has_permission, module_enabled, permission_for_request
+from services.common.auth import get_auth_context
 
 def _load_public_key(raw: str) -> Ed25519PublicKey:
     if raw.startswith("-----BEGIN"):
@@ -46,12 +48,17 @@ class LicenseState:
 
 
 class EntitlementGuard:
-    def __init__(self, module_id: Optional[str] = None):
+    def __init__(self, module_id: Optional[str] = None, public_paths: Optional[Iterable[str]] = None):
         self.module_id = module_id or os.getenv("MODULE_ID", "")
         self.enforcement = os.getenv("LICENSE_ENFORCEMENT", "strict").lower()
         self.license_path = os.getenv("LICENSE_PATH")
         self.public_key = os.getenv("LICENSE_PUBLIC_KEY")
         self._state: Optional[LicenseState] = None
+        self.public_paths = {"/health", "/docs", "/openapi.json"}
+        if public_paths:
+            self.public_paths.update(public_paths)
+        self.enforce_modules = os.getenv("AUTH_ENFORCE_MODULES", "true").lower() == "true"
+        self.enforce_rbac = os.getenv("AUTH_ENFORCE_RBAC", "true").lower() == "true"
 
     def _verify(self) -> LicenseState:
         blob = _load_license_blob(self.license_path)
@@ -91,7 +98,9 @@ class EntitlementGuard:
 
     def is_entitled(self) -> bool:
         state = self._ensure_state()
-        if not state.valid and self.enforcement != "warn":
+        if not state.valid:
+            if self.enforcement == "warn":
+                return True
             return False
         if not self.module_id:
             return True
@@ -106,8 +115,25 @@ class EntitlementGuard:
 
     async def middleware(self, request: Request, call_next) -> Response:
         path = request.url.path
-        if path in {"/health", "/docs", "/openapi.json"}:
+        if path in self.public_paths or request.method.upper() == "OPTIONS":
             return await call_next(request)
         if not self.is_entitled():
             return Response("Module not licensed", status_code=status.HTTP_403_FORBIDDEN)
+        if not self.module_id:
+            return await call_next(request)
+        if not (self.enforce_modules or self.enforce_rbac):
+            return await call_next(request)
+        try:
+            ctx = await get_auth_context(request)
+        except HTTPException as exc:
+            return Response(str(exc.detail), status_code=exc.status_code)
+        try:
+            if self.enforce_modules and not module_enabled(ctx, self.module_id):
+                return Response("Module not enabled for tenant", status_code=status.HTTP_403_FORBIDDEN)
+            if self.enforce_rbac:
+                permission = permission_for_request(self.module_id, request.method)
+                if permission and not has_permission(ctx, permission):
+                    return Response("Insufficient permissions", status_code=status.HTTP_403_FORBIDDEN)
+        except HTTPException as exc:
+            return Response(str(exc.detail), status_code=exc.status_code)
         return await call_next(request)
