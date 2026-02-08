@@ -105,4 +105,4 @@ async def get_hub_intelligence(tenant_id: uuid.UUID = Depends(get_current_tenant
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8011) # Unique port for this service
+    uvicorn.run(app, host="0.0.0.0", port=8007)

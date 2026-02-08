@@ -1,4 +1,4 @@
 ﻿-r ../common/requirements.txt
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
-smile-id-core==1.2.3
+smile-id-core==3.0.1

@@ -102,4 +102,4 @@ async def broadcast_alert(title: str, message: str, fno_id: Optional[uuid.UUID] 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8009)
+    uvicorn.run(app, host="0.0.0.0", port=8008)
