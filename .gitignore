@@ -9,7 +9,10 @@ ENV/
 
 # Environment & secrets
 .env
+.env.local
+.env*.local
 licenses/license.json
+build.log
 
 # Node
 node_modules/
