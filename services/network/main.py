@@ -1,109 +1,78 @@
-from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-import uuid
-from datetime import datetime
-import logging
-from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+"""CoreConnect Network Service — Module 8 (port 8005).
 
-app = FastAPI(title="CoreConnect Network Service", version="0.1.0")
+Manages fibre network services, RADIUS subscriber authentication,
+FNO integrations (Vumatel, Openserve, MetroFibre, Frogfoot, Octotel),
+multi-provider coverage checks, and service lifecycle operations.
+"""
+
+import logging
+import os
+
+from fastapi import FastAPI
+
+from services.common.entitlements import EntitlementGuard
+from services.network.database import init_tables
+
+# Route modules
+from services.network.routes.radius import router as radius_router
+from services.network.routes.fno import router as fno_router
+from services.network.routes.services import router as services_router
+from services.network.routes.coverage import router as coverage_router
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [network] %(name)s — %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# App + Entitlement guard
+# ---------------------------------------------------------------------------
+
+app = FastAPI(
+    title="CoreConnect Network Service",
+    version="1.0.0",
+    description="Fibre network management, RADIUS, FNO automation & coverage",
+)
+
 guard = EntitlementGuard(module_id="network")
 
 
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
+    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+        logger.info("Auto-creating network tables …")
+        init_tables()
 
 
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
 
-# --- Models ---
-class RadiusAccountCreate(BaseModel):
-    contact_id: uuid.UUID
-    subscription_id: uuid.UUID
-    username: str
-    password: str
-    profile_name: str
-    framing_protocol: str = "PPP" # PPP, IPOE
 
-class RadiusProfileCreate(BaseModel):
-    name: str # e.g. "50M_UNCAPPED"
-    download_speed: str # e.g. "50M"
-    upload_speed: str # e.g. "50M"
-    mikrotik_rate_limit: Optional[str] = None # e.g. "50M/50M"
+# ---------------------------------------------------------------------------
+# Register routers
+# ---------------------------------------------------------------------------
 
-class AutomationJobCreate(BaseModel):
-    job_type: str # FNO_AVAILABILITY, FNO_ORDER
-    fno_name: str
-    payload: Dict
+app.include_router(services_router)
+app.include_router(radius_router)
+app.include_router(fno_router)
+app.include_router(coverage_router)
 
-from .adapters.factory import FNOFactory
 
-# --- RADIUS Logic ---
-@app.post("/radius/profiles", status_code=status.HTTP_201_CREATED)
-async def create_profile(profile: RadiusProfileCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    """Configure speed profiles in radgroupreply"""
-    logging.info(f"Configuring RADIUS Profile: {profile.name} with rate limit {profile.mikrotik_rate_limit}")
-    # In reality, this would insert into radgroupreply:
-    # INSERT INTO radgroupreply (groupname, attribute, op, value) VALUES (profile.name, 'Mikrotik-Rate-Limit', '=', profile.mikrotik_rate_limit)
-    return {"status": "CONFIGURED", "profile": profile.name}
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
 
-@app.post("/radius/accounts", status_code=status.HTTP_201_CREATED)
-async def create_radius_account(acc: RadiusAccountCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    """Provision a new RADIUS account in radcheck/radusergroup"""
-    logging.info(f"Provisioning RADIUS Account: {acc.username}")
-    # 1. Insert into radcheck (Cleartext-Password)
-    # 2. Insert into radusergroup (Link to speed profile)
-    return {
-        "id": uuid.uuid4(),
-        "username": acc.username,
-        "status": "ACTIVE",
-        "created_at": datetime.now()
-    }
+@app.get("/health")
+async def health():
+    return {"service": "network", "status": "healthy"}
 
-@app.get("/radius/sessions")
-async def get_active_sessions(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    """Query radacct for live sessions"""
-    return [
-        {
-            "username": "thabo@CoreConnect.net",
-            "nas_ip": "154.22.8.5",
-            "uptime": "14h 22m",
-            "input_octets": 4523000,
-            "output_octets": 12500000
-        }
-    ]
 
-# --- FNO Automation Routes ---
-@app.post("/automation/jobs", status_code=status.HTTP_202_ACCEPTED)
-async def start_automation_job(job: AutomationJobCreate, background_tasks: BackgroundTasks, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    """Trigger a fluid FNO interaction (API or Browser)"""
-    fno_configs = {
-        "Vumatel": {"api_key": "vuma_secret_123", "base_url": "https://api.vumatel.co.za"},
-        "Openserve": {"portal_url": "https://portal.openserve.co.za", "credentials": {"user": "admin", "pass": "secret"}}
-    }
-    
-    config = fno_configs.get(job.fno_name, {})
-    adapter = FNOFactory.get_adapter(job.fno_name, config)
-    
-    job_id = uuid.uuid4()
-    logging.info(f"Dispatched {job.job_type} for {job.fno_name} via {type(adapter).__name__}")
-    
-    if job.job_type == "FNO_AVAILABILITY":
-        background_tasks.add_task(adapter.check_availability, job.payload.get("address"))
-    
-    return {
-        "id": job_id,
-        "status": "PROCESSING",
-        "created_at": datetime.now()
-    }
-
-@app.get("/automation/jobs/{job_id}")
-async def get_job_status(job_id: uuid.UUID):
-    return {"id": job_id, "status": "IN_PROGRESS", "progress": "Logging into Openserve Portal..."}
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
