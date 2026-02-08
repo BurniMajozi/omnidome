@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect AI Analytics Service", version="0.1.0")
 guard = EntitlementGuard(module_id="analytics")
@@ -25,10 +26,6 @@ class ExecutiveInsight(BaseModel):
     trends: List[str]
     recommendations: List[str]
     generated_at: datetime
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

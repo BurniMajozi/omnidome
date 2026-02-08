@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect Call Center Service", version="0.1.0")
 guard = EntitlementGuard(module_id="call_center")
@@ -43,10 +44,6 @@ class CallSession(BaseModel):
     end_time: Optional[datetime]
     sentiment_score: float # 0.0 to 1.0
     duration_seconds: int
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

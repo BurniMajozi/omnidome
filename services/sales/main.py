@@ -4,6 +4,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, date
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect Sales Service", version="0.1.0")
 guard = EntitlementGuard(module_id="sales")
@@ -57,10 +58,6 @@ class Deal(DealBase):
 
     class Config:
         orm_mode = True
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

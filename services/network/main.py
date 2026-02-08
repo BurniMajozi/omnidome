@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect Network Service", version="0.1.0")
 guard = EntitlementGuard(module_id="network")
@@ -38,10 +39,6 @@ class AutomationJobCreate(BaseModel):
     job_type: str # FNO_AVAILABILITY, FNO_ORDER
     fno_name: str
     payload: Dict
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 from .adapters.factory import FNOFactory
 

@@ -5,6 +5,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect CRM Service", version="0.1.0")
 guard = EntitlementGuard(module_id="crm")
@@ -38,12 +39,6 @@ class Contact(ContactBase):
 
     class Config:
         orm_mode = True
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    # In a real scenario, this would extract the tenant_id from the JWT
-    # For foundation stage, we use a placeholder
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

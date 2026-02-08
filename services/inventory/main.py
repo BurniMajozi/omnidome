@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, date
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect Inventory Service", version="0.1.0")
 guard = EntitlementGuard(module_id="inventory")
@@ -56,10 +57,6 @@ class SalesPlan(BaseModel):
     product_id: uuid.UUID
     target_month: date
     forecast_units: int
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

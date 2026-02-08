@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from enum import Enum
 import random
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(
     title="OmniDome Retention Service",
@@ -161,10 +162,6 @@ def generate_mock_predictions(count: int = 50) -> List[ChurnPrediction]:
         ))
     
     return sorted(predictions, key=lambda x: x.risk_score, reverse=True)
-
-# --- Tenant Context (Stub) ---
-async def get_current_tenant_id() -> uuid.UUID:
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Routes ---
 @app.get("/")

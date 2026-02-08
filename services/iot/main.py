@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect IoT Service", version="0.1.0")
 guard = EntitlementGuard(module_id="iot")
@@ -40,10 +41,6 @@ class CommandRequest(BaseModel):
     device_id: uuid.UUID
     command_type: str # REBOOT, TOGGLE_POWER
     payload: Optional[Dict] = {}
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 class SignalTelemetry(BaseModel):
     device_id: uuid.UUID

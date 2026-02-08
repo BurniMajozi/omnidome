@@ -8,9 +8,10 @@ import hashlib
 import hmac
 import os
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect RICA Service", version="0.1.0")
-guard = EntitlementGuard(module_id="rica")
+guard = EntitlementGuard(module_id="rica", public_paths={"/callback"})
 
 
 @app.on_event("startup")
@@ -42,10 +43,6 @@ class VerificationResult(BaseModel):
     status: str
     result_code: Optional[str]
     result_message: Optional[str]
-
-# --- IAM Middleware (Stub) ---
-async def get_current_tenant_id():
-    return uuid.UUID("00000000-0000-0000-0000-000000000000")
 
 # --- Utils ---
 def generate_smile_id_signature(timestamp: str):
