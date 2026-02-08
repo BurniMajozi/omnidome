@@ -1,13 +1,26 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
-.env
-.venv
+.venv/
 env/
 venv/
 ENV/
+
+# Environment & secrets
+.env
+licenses/license.json
+
+# Node
+node_modules/
+.next/
+out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / tooling
+.cline/
 *.zip
 *.hiv
-node_modules/
-.DS_Store
-licenses/license.json

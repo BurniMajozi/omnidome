@@ -1,53 +1,162 @@
-﻿# OmniDome: The Premier ISP Operating System (SA Edition)
+﻿# OmniDome — ISP Operating System
 
-OmniDome is a carrier-grade, microservice-based operations platform designed specifically for South African ISPs. It unifies CRM, Sales, Marketing, Billing, Network provisioning, and FNO automation into a single, high-performance ecosystem.
+OmniDome is a carrier-grade, microservice-based operations platform designed for South African ISPs. It unifies CRM, Sales, Billing, Network provisioning, Retention analytics, Support, and more into a single ecosystem backed by a multi-tenant RBAC framework.
 
-## OmniDomet Modules
+---
 
-### 1. Sales Connect & CRM Connect (`/services/sales`, `/services/crm`)
-*   **Lead Management**: Track and convert prospects through a visual pipeline.
-*   **Coverage Qualification**: Integrated maps for all major service providers.
-*   **Subscriber 360**: Full CRM with RICA verification status.
+## Architecture
 
-### 2. Marketing Connect (`/services/marketing`)
-*   **AI Content Studio**: Automated content generation for social and email.
-*   **Campaign Management**: Multi-channel lead nurturing.
+```
+apps/
+  portal/        – Lightweight static customer-facing portal
+  web/           – Next.js dashboard & marketing site (shadcn/ui)
+services/
+  admin/         – Platform & org admin (tenants, roles, modules)
+  analytics/     – AI-powered executive insights
+  billing/       – Invoicing, payments, collections
+  call_center/   – Inbound/outbound calls, sentiment AI
+  common/        – Shared auth, RBAC, entitlements, DB
+  crm/           – Customer 360, lead management
+  gateway/       – API gateway / BFF
+  hr/            – Employee management, performance tracking
+  inventory/     – Stock & supply chain management
+  iot/           – Device telemetry, hardware control
+  network/       – RADIUS, FNO adapters, provisioning
+  retention/     – Churn prediction, retention campaigns
+  rica/          – RICA identity verification (Smile ID)
+  sales/         – Pipeline, deals, quoting
+  support/       – Ticketing, SLA tracking, knowledge base
+config/          – Master SQL schema
+docs/            – Module licensing, Supabase schema & seeds
+brand_guidelines/– Logo & default theme
+licenses/        – License artifact (license.example.json)
+docker-compose.yaml
+```
 
-### 3. Billing Connect (`/services/billing`)
-*   **Automated Invoicing**: Generation of invoices in ZAR.
-*   **Paystack Integration**: Built-in logic for SA's leading payment gateway.
-*   **Auto-Suspension**: Logic-based service control based on payment status.
+---
 
-### 4. Network Connect & IoT Connect (`/services/network`, `/services/iot`)
-*   **RADIUS Management**: Full FreeRADIUS SQL integration with real-time monitoring.
-*   **Hardware Control**: Proactive performance monitoring for CPEs and ONTs.
-*   **FNO Master Portal**: Seamless activations for Vumatel, Openserve, Frogfoot, etc.
+## Modules
 
-### 5. Support Connect (`/services/support`)
-*   **Rapid Ticketing**: SLA-driven ticket management.
-*   **Remote Diagnosis**: One-click ONT health checks and diagnostics.
+| Module | Service | Port | Description |
+|--------|---------|------|-------------|
+| CRM | `/services/crm` | 8001 | Customer 360, segmentation, lead tracking |
+| Sales | `/services/sales` | 8002 | Pipeline management, quoting, commission |
+| Billing | `/services/billing` | 8003 | Invoicing (ZAR), Paystack, auto-suspend |
+| RICA | `/services/rica` | 8004 | Identity verification via Smile ID |
+| Network | `/services/network` | 8005 | RADIUS, FNO adapters (Vumatel, Openserve, etc.) |
+| IoT | `/services/iot` | 8006 | Device telemetry, CPE health monitoring |
+| Call Center | `/services/call_center` | 8007 | Sentiment AI, agent whisperer |
+| Support | `/services/support` | 8008 | SLA-driven ticketing, remote diagnostics |
+| HR | `/services/hr` | 8009 | Performance tracking, staff sentiment |
+| Inventory | `/services/inventory` | 8010 | Stock management, sales planning |
+| Analytics | `/services/analytics` | 8011 | Executive insights, AI recommendations |
+| Retention | `/services/retention` | 8012 | Churn prediction, campaign ROI |
+| Admin | `/services/admin` | 8013 | Tenant management, RBAC, module entitlements |
+| Gateway | `/services/gateway` | 8000 | API gateway / BFF for all services |
 
-### 6. Call Center Connect (`/services/call_center`)
-*   **Sentiment AI**: Real-time analysis of agent-customer interactions.
-*   **Agent Whisperer**: AI-driven prompts during live calls.
+---
 
-### 7. Talent Connect (`/services/staff`)
-*   **Performance Tracking**: Individual and team KPI monitoring.
-*   **Staff Sentiment**: AI-driven morale and burnout analysis.
+## Auth & RBAC
+
+All services share a common auth & RBAC layer (`services/common/`):
+
+- **AuthContext** — Extracted from JWT or development headers (`X-User-Id`, `X-Tenant-Id`, `X-Roles`).
+- **Multi-tenant** — Every request is scoped to a tenant; platform admins can impersonate via `X-Org-Id`.
+- **RBAC** — Roles and permissions are stored in Postgres and enforced per-request by the `EntitlementGuard` middleware.
+- **Module entitlements** — Each service verifies its module is enabled for the tenant before processing.
+- **License enforcement** — Signed Ed25519 license files control which modules are available (see `docs/module-licensing.md`).
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH_MODE` | `header` (dev) or `jwt` (production) |
+| `AUTH_DB_ENFORCE` | Enable DB-backed RBAC lookups |
+| `AUTH_ENFORCE_MODULES` | Enforce per-tenant module access |
+| `AUTH_ENFORCE_RBAC` | Enforce per-request permission checks |
+| `LICENSE_ENFORCEMENT` | `strict` or `warn` |
+
+See `.env.example` for the full list.
+
+---
+
+## Frontend
+
+### Dashboard (`apps/web`)
+
+Next.js 14+ app with App Router, shadcn/ui components, and Supabase for real-time data.
+
+- **Dashboard modules** — Sales, CRM, Service, Network, Call Center, Marketing, Compliance, Talent, Retention, Billing, Products, Portal.
+- **AI Chat** — Ollama-backed assistant available across all modules.
+- **Communication Hub** — Slack-style messaging with channels, threads, tasks, approvals, scheduling, and escalations.
+- **Auth** — Supabase Auth with magic link, password, Google, and GitHub sign-in.
+
+### Customer Portal (`apps/portal`)
+
+Lightweight static HTML/CSS/JS portal for end-customer self-service.
+
+---
+
+## Supabase Integration
+
+The communication module and dashboard data use Supabase Postgres.
+
+1. Copy `.env.example` → `.env` and fill in your Supabase credentials.
+2. Run `docs/supabase/schema.sql` in the Supabase SQL editor.
+3. Seed dashboard data with `docs/supabase/seed_module_data.sql`.
+4. Optionally apply `docs/supabase/retention.sql` for demo cleanup cron.
+5. Hit `/api/supabase/health` to confirm connectivity.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Docker & Docker Compose
+- Node.js 18+ and pnpm/npm (for the web app)
+- Python 3.10+ (for direct service development)
+- A Supabase project (free tier works)
+- Ollama running locally (optional, for AI chat)
+
+### Quick Start
+
+```bash
+# Clone
+git clone https://github.com/BurniMajozi/omnidome.git
+cd omnidome
+
+# Configure
+cp .env.example .env
+# Edit .env with your credentials
+
+# Start all services
+docker compose up --build -d
+
+# Start the web frontend (dev)
+cd apps/web
+npm install
+npm run dev
+```
+
+The dashboard will be available at `http://localhost:3000` and the gateway at `http://localhost:8000`.
 
 ---
 
 ## Stack
-*   **Backend**: Python 3.10+ (FastAPI)
-*   **Database**: PostgreSQL with PostGIS (Coverage mapping)
-*   **Frontend**: Next.js (apps/web) and static portal (apps/portal)
-*   **Automation**: Playwright (Browser-based FNO adapters)
 
-## FNO Proactive Intelligence Layer
-Unlike traditional systems, CoreConnect uses a multi-vector listener to track FNO health:
-1. **APIs**: Direct B2B hooks.
-2. **Scrapers**: Real-time keyword monitoring of FNO status pages.
-3. **Email Parsers**: Automatically ingests and maps NOC notifications to affected customer IDs.
+| Layer | Technology |
+|-------|------------|
+| Backend | Python 3.11, FastAPI, SQLAlchemy |
+| Database | PostgreSQL 15, Supabase |
+| Frontend | Next.js 14, React 19, Tailwind CSS, shadcn/ui |
+| AI | Ollama (local LLM), churn ML models |
+| Auth | Supabase Auth, JWT, header-based dev mode |
+| Infra | Docker Compose, per-service Dockerfiles |
 
 ---
-Created by Benedict for BurniWorld.
+
+## License
+
+Proprietary — Antigravity AI for BurniWorld.
+

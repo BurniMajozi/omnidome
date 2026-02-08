@@ -163,6 +163,24 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  admin-service:
+    build:
+      context: .
+      dockerfile: services/admin/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8013:8013"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
   gateway:
     build:
       context: .
