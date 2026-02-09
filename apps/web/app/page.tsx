@@ -21,6 +21,7 @@ import {
     Sparkles,
     Menu,
     X,
+    ChevronDown,
     Zap,
     Shield,
     BarChart3,
@@ -32,6 +33,8 @@ import {
     FileText,
     HelpCircle,
     Rocket,
+    Boxes,
+    Radio,
     type LucideIcon
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -56,9 +59,9 @@ import { HowItWorks } from "@/components/demo/how-it-works"
 import { TestimonialsMarquee } from "@/components/demo/testimonials-marquee"
 
 // Module emojis for pointer
-const moduleEmojis = ["🚀", "💬", "📊", "📞", "📢", "🛡️", "👥", "💰", "📦", "🌐", "❤️", "🎯", "⚡"]
+const moduleEmojis = ["🚀", "💬", "📊", "📞", "📢", "🛡️", "👥", "💰", "📦", "🌐", "❤️", "🎯", "⚡", "📈", "🏭", "📡"]
 
-// All 13 modules (excluding Dashboard Overview)
+// All modules (excluding Dashboard Overview)
 const modules = [
     {
         id: "communication",
@@ -177,6 +180,33 @@ const modules = [
         color: "from-sky-400 via-blue-500 to-indigo-600",
         slug: "portal"
     },
+    {
+        id: "analytics",
+        icon: BarChart3,
+        name: "Analytics Dome",
+        description: "AI-powered executive insights, revenue analytics, and cross-module intelligence.",
+        category: "Analytics",
+        color: "from-indigo-500 via-blue-500 to-cyan-400",
+        slug: "analytics"
+    },
+    {
+        id: "inventory",
+        icon: Boxes,
+        name: "Inventory Dome",
+        description: "Stock management, warehouse tracking, supply chain, and auto-replenishment.",
+        category: "Operations",
+        color: "from-amber-500 via-orange-400 to-red-500",
+        slug: "inventory"
+    },
+    {
+        id: "iot",
+        icon: Radio,
+        name: "IoT Dome",
+        description: "Device telemetry, signal monitoring, proactive maintenance, and remote commands.",
+        category: "Operations",
+        color: "from-green-500 via-emerald-400 to-teal-500",
+        slug: "iot"
+    },
 ]
 
 type SolutionItem = {
@@ -208,9 +238,12 @@ const solutionsByCategory: Record<string, SolutionItem[]> = {
         { title: "SA Compliance", description: "RICA and POPIA compliance built-in", slug: "compliance", icon: ShieldCheck, color: "from-slate-500 to-zinc-500" },
         { title: "Team Management", description: "HR, recruitment, and performance tracking", slug: "talent", icon: UserCog, color: "from-amber-500 to-yellow-500" },
         { title: "Product Catalog", description: "Manage packages, pricing, and bundles", slug: "products", icon: Package, color: "from-purple-500 to-indigo-500" },
+        { title: "Inventory & Stock", description: "Warehouse management and auto-replenishment", slug: "inventory", icon: Boxes, color: "from-amber-500 to-orange-500" },
+        { title: "IoT & Devices", description: "Real-time device telemetry and proactive maintenance", slug: "iot", icon: Radio, color: "from-green-500 to-teal-500" },
     ],
     Analytics: [
         { title: "Churn Prevention", description: "87% accurate AI prediction to stop churn", slug: "retention", icon: HeartHandshake, color: "from-rose-500 to-pink-500" },
+        { title: "AI Analytics", description: "Executive insights and cross-module intelligence", slug: "analytics", icon: BarChart3, color: "from-indigo-500 to-cyan-500" },
     ]
 }
 
@@ -261,7 +294,7 @@ const aiFeatures = [
     },
 ]
 
-const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention"]
+const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention", "Analytics", "Inventory", "IoT"]
 
 // AI Features Showcase Component
 function AIFeaturesShowcase() {
@@ -377,6 +410,9 @@ function AIFeaturesShowcase() {
 
 export default function LandingPage() {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+    const [mobileProductOpen, setMobileProductOpen] = useState(false)
+    const [mobileSolutionOpen, setMobileSolutionOpen] = useState(false)
+    const [mobileResourceOpen, setMobileResourceOpen] = useState(false)
     const [productMenuOpen, setProductMenuOpen] = useState(false)
     const [solutionMenuOpen, setSolutionMenuOpen] = useState(false)
     const [resourceMenuOpen, setResourceMenuOpen] = useState(false)
@@ -393,6 +429,14 @@ export default function LandingPage() {
         window.addEventListener('scroll', handleScroll, { passive: true })
         return () => window.removeEventListener('scroll', handleScroll)
     }, [])
+
+    useEffect(() => {
+        if (!mobileMenuOpen) {
+            setMobileProductOpen(false)
+            setMobileSolutionOpen(false)
+            setMobileResourceOpen(false)
+        }
+    }, [mobileMenuOpen])
     
     // Hover delay refs
     const productTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -812,7 +856,7 @@ export default function LandingPage() {
 
                                             <div className="mt-8 pt-6 border-t border-border flex items-center justify-between">
                                                 <div className="text-sm text-muted-foreground">
-                                                    <span className="font-semibold text-foreground">13 integrated modules</span> designed for ISP operations
+                                                    <span className="font-semibold text-foreground">{modules.length} integrated modules</span> designed for ISP operations
                                                 </div>
                                                 <ShineBorder borderRadius={8} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
                                                     <Link href="/pricing">
@@ -1069,15 +1113,131 @@ export default function LandingPage() {
 
                 {/* Mobile menu */}
                 {mobileMenuOpen && (
-                    <div className="lg:hidden border-t border-border bg-card p-6 space-y-4">
+                    <div className="lg:hidden border-t border-border bg-card p-6 space-y-5">
                         <div className="flex items-center justify-between pb-4 border-b border-border">
                             <span className="text-sm text-muted-foreground">Theme</span>
                             <ThemeToggle />
                         </div>
-                        <Link href="/pricing" className="block font-medium py-2">Pricing</Link>
-                        <Link href="/resources/services" className="block font-medium py-2">Services</Link>
-                        <Link href="/resources/partners" className="block font-medium py-2">Partners</Link>
-                        <div className="border-t border-border pt-4 mt-4">
+
+                        <div className="space-y-3">
+                            <button
+                                className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground"
+                                onClick={() => setMobileProductOpen((prev) => !prev)}
+                            >
+                                Product
+                                <ChevronDown className={cn("h-4 w-4 transition-transform", mobileProductOpen && "rotate-180")} />
+                            </button>
+                            {mobileProductOpen && (
+                                <div className="grid gap-2 pl-2">
+                                    {modules.map((mod) => (
+                                        <Link
+                                            key={mod.id}
+                                            href={`/products/${mod.slug}`}
+                                            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                        >
+                                            {mod.name}
+                                        </Link>
+                                    ))}
+                                    <Link href="/pricing" className="text-sm font-semibold text-primary hover:text-primary/80 transition-colors">
+                                        View Pricing
+                                    </Link>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="space-y-3">
+                            <button
+                                className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground"
+                                onClick={() => setMobileSolutionOpen((prev) => !prev)}
+                            >
+                                Solutions
+                                <ChevronDown className={cn("h-4 w-4 transition-transform", mobileSolutionOpen && "rotate-180")} />
+                            </button>
+                            {mobileSolutionOpen && (
+                                <div className="space-y-3 pl-2">
+                                    {Object.entries(solutionsByCategory).map(([category, solutions]) => (
+                                        <div key={category} className="space-y-2">
+                                            <div className="text-[11px] font-semibold uppercase tracking-[1.5px] text-muted-foreground">
+                                                {category}
+                                            </div>
+                                            {solutions.map((solution) => (
+                                                <Link
+                                                    key={solution.slug}
+                                                    href={`/solutions/${solution.slug}`}
+                                                    className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                                >
+                                                    {solution.title}
+                                                </Link>
+                                            ))}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="space-y-3">
+                            <button
+                                className="flex w-full items-center justify-between rounded-lg border border-border px-3 py-2 text-sm font-semibold text-foreground"
+                                onClick={() => setMobileResourceOpen((prev) => !prev)}
+                            >
+                                Resources
+                                <ChevronDown className={cn("h-4 w-4 transition-transform", mobileResourceOpen && "rotate-180")} />
+                            </button>
+                            {mobileResourceOpen && (
+                                <div className="space-y-3 pl-2">
+                                    <div className="space-y-2">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[1.5px] text-muted-foreground">Featured</div>
+                                        {resourceItems.featured.map((item) => (
+                                            <Link
+                                                key={item.title}
+                                                href={item.href}
+                                                className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                {item.title}
+                                            </Link>
+                                        ))}
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[1.5px] text-muted-foreground">Services</div>
+                                        {resourceItems.services.map((item) => (
+                                            <Link
+                                                key={item.title}
+                                                href={item.href}
+                                                className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                {item.title}
+                                            </Link>
+                                        ))}
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[1.5px] text-muted-foreground">Partners</div>
+                                        {resourceItems.partners.map((item) => (
+                                            <Link
+                                                key={item.title}
+                                                href={item.href}
+                                                className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                {item.title}
+                                            </Link>
+                                        ))}
+                                    </div>
+                                    <div className="space-y-2">
+                                        <div className="text-[11px] font-semibold uppercase tracking-[1.5px] text-muted-foreground">Support</div>
+                                        {resourceItems.support.map((item) => (
+                                            <Link
+                                                key={item.title}
+                                                href={item.href}
+                                                className="block text-sm text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                {item.title}
+                                            </Link>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="border-t border-border pt-4 mt-2">
                             <Link href="/auth" className="block text-center mb-4 font-medium">Sign In</Link>
                             <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 shadow-[0_0_25px_rgba(79,70,229,0.3)] hover:shadow-[0_0_35px_rgba(79,70,229,0.5)] transition-all">Get Started</Button>
                         </div>
@@ -1432,12 +1592,12 @@ export default function LandingPage() {
                     <div className="text-center mb-12">
                         <h2 className="text-3xl sm:text-4xl font-bold mb-4">Platform Modules</h2>
                         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-                            13 integrated modules designed to cover every aspect of ISP operations
+                            {modules.length} integrated modules designed to cover every aspect of ISP operations
                         </p>
                     </div>
 
                     <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                        {modules.slice(0, 8).map((module, index) => (
+                        {modules.map((module, index) => (
                             <Link
                                 key={module.id}
                                 href={`/products/${module.slug}`}
