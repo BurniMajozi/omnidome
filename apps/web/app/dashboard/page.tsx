@@ -18,6 +18,9 @@ import { CommunicationModule } from "@/components/modules/communication-module"
 import { BillingModule } from "@/components/modules/billing-module"
 import { ProductsModule } from "@/components/modules/products-module"
 import { PortalModule } from "@/components/modules/portal-module"
+import { AnalyticsModule } from "@/components/modules/analytics-module"
+import { InventoryModule } from "@/components/modules/inventory-module"
+import { IoTModule } from "@/components/modules/iot-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
 import { supabase } from "@/lib/supabase/client"
@@ -37,11 +40,15 @@ const sectionTitles: Record<string, string> = {
   billing: "Billing & Collection",
   products: "Product Management",
   portal: "Portal Management",
+  analytics: "Analytics & AI Insights",
+  inventory: "Inventory & Stock Management",
+  iot: "IoT & Device Management",
 }
 
 export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
 
   useEffect(() => {
@@ -125,6 +132,12 @@ export default function Dashboard() {
           return <ProductsModule />
         case "portal":
           return <PortalModule />
+        case "analytics":
+          return <AnalyticsModule />
+        case "inventory":
+          return <InventoryModule />
+        case "iot":
+          return <IoTModule />
         default:
           return <DashboardOverview />
       }
@@ -136,6 +149,15 @@ export default function Dashboard() {
 
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background relative">
+      {/* Mobile sidebar backdrop */}
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close sidebar"
+          className="fixed inset-0 z-30 bg-black/40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       {/* Flickering Grid Background */}
       <div className="fixed top-0 left-0 z-0 w-full h-full [mask-image:linear-gradient(to_bottom,black_0%,transparent_30%)] pointer-events-none opacity-50">
         <FlickeringGrid
@@ -153,12 +175,18 @@ export default function Dashboard() {
         activeSection={resolvedSection}
         allowedSections={allowedSections}
         onSectionChange={setActiveSection}
+        mobileOpen={sidebarOpen}
+        onMobileClose={() => setSidebarOpen(false)}
       />
 
       {/* Main Content */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <Header title={sectionTitles[resolvedSection] || "Dashboard"} onNewTask={() => setChatOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-6">{renderModule()}</main>
+        <Header
+          title={sectionTitles[resolvedSection] || "Dashboard"}
+          onNewTask={() => setChatOpen(true)}
+          onMenuToggle={() => setSidebarOpen((prev) => !prev)}
+        />
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderModule()}</main>
       </div>
 
       {/* Chat Sidebar */}

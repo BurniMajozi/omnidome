@@ -19,6 +19,9 @@ import {
     Globe,
     UserCog,
     Headset,
+    BarChart3,
+    Boxes,
+    Radio,
     type LucideIcon
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -351,6 +354,90 @@ const moduleDetails: Record<string, ModuleDetail> = {
                 title: "Fully white-label with your branding.",
                 description: "Custom domain, colors, logo, and theme. Your customers see your brand, not ours.",
                 features: ["Custom Domain", "Brand Colors", "Theme Editor"],
+                image: "https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=2070&auto=format&fit=crop"
+            }
+        ]
+    },
+    "analytics": {
+        name: "Analytics Hub",
+        icon: BarChart3,
+        color: "from-indigo-500 to-cyan-500",
+        title: "AI-Powered Intelligence Across Your Entire Business",
+        description: "Executive summaries, revenue analytics, usage-to-billing sync, and cross-module AI insights.",
+        heroImage: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=2070&auto=format&fit=crop",
+        mainPoints: [
+            {
+                title: "Get AI-generated executive summaries on demand.",
+                description: "Our AI engine analyzes data across every module to deliver actionable insights. Know your revenue trends, churn risks, and growth opportunities at a glance.",
+                features: ["Executive Dashboard", "Revenue Analytics", "Trend Detection"],
+                image: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=2426&auto=format&fit=crop"
+            },
+            {
+                title: "Sync usage data to billing for perfect accuracy.",
+                description: "Automatically correlate RADIUS usage with subscription plans. Detect orphaned accounts and billing variances before they impact revenue.",
+                features: ["Usage-Billing Sync", "Variance Detection", "Orphaned Account Alerts"],
+                image: "https://images.unsplash.com/photo-1551434678-e076c223a692?q=80&w=2070&auto=format&fit=crop"
+            },
+            {
+                title: "Turn data into proactive business decisions.",
+                description: "From upsell opportunities to proactive maintenance, our AI identifies the actions that matter most and prioritizes them by impact.",
+                features: ["Upsell Signals", "Churn Predictions", "Anomaly Detection"],
+                image: "https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=2070&auto=format&fit=crop"
+            }
+        ]
+    },
+    "inventory": {
+        name: "Inventory Hub",
+        icon: Boxes,
+        color: "from-amber-500 to-orange-500",
+        title: "Master Your Supply Chain & Stock Management",
+        description: "Multi-warehouse inventory control, global shipment tracking, auto-replenishment, and sell-through analytics.",
+        heroImage: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=2070&auto=format&fit=crop",
+        mainPoints: [
+            {
+                title: "Track stock across multiple warehouses in real-time.",
+                description: "Monitor stock levels, reservations, and movements across your entire warehouse network. Get instant visibility into what's available and where.",
+                features: ["Multi-Warehouse", "Real-Time SOH", "Stock Reservations"],
+                image: "https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=2070&auto=format&fit=crop"
+            },
+            {
+                title: "Never run out of stock with auto-replenishment.",
+                description: "Set minimum thresholds for every SKU. When stock falls below the line, purchase orders are generated automatically and sent to procurement.",
+                features: ["Threshold Alerts", "Auto-PO Generation", "Vendor Management"],
+                image: "https://images.unsplash.com/photo-1551434678-e076c223a692?q=80&w=2070&auto=format&fit=crop"
+            },
+            {
+                title: "Track global shipments from factory to warehouse.",
+                description: "Monitor international shipments with ETA tracking, customs status, and automated receiving workflows.",
+                features: ["Global Tracking", "ETA Monitoring", "Customs Management"],
+                image: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=2070&auto=format&fit=crop"
+            }
+        ]
+    },
+    "iot": {
+        name: "IoT Hub",
+        icon: Radio,
+        color: "from-green-500 to-teal-500",
+        title: "Proactive Device Management & Fiber Signal Intelligence",
+        description: "Real-time device telemetry, fiber signal monitoring, proactive maintenance, and remote command execution.",
+        heroImage: "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?q=80&w=2034&auto=format&fit=crop",
+        mainPoints: [
+            {
+                title: "Monitor every ONT, router, and smart device in real-time.",
+                description: "Ingest telemetry from thousands of devices simultaneously. Track signal strength, temperature, and device health from a single dashboard.",
+                features: ["Real-Time Telemetry", "Signal Monitoring", "Device Health"],
+                image: "https://images.unsplash.com/photo-1551434678-e076c223a692?q=80&w=2070&auto=format&fit=crop"
+            },
+            {
+                title: "Detect fiber signal degradation before customers complain.",
+                description: "AI analyzes RX power trends to identify degrading connections. When thresholds are breached, maintenance tickets are auto-created and dispatched.",
+                features: ["Proactive Alerts", "Auto-Ticketing", "Threshold Engine"],
+                image: "https://images.unsplash.com/photo-1551288049-bebda4e38f71?q=80&w=2070&auto=format&fit=crop"
+            },
+            {
+                title: "Execute remote commands to reduce truck rolls.",
+                description: "Reboot devices, run diagnostics, and toggle power remotely. Save time and money by resolving issues without dispatching a technician.",
+                features: ["Remote Reboot", "Remote Diagnostics", "Power Management"],
                 image: "https://images.unsplash.com/photo-1553877522-43269d4ea984?q=80&w=2070&auto=format&fit=crop"
             }
         ]

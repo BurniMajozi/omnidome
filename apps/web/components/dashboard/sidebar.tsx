@@ -14,6 +14,7 @@ import {
   UserCog,
   ChevronLeft,
   ChevronRight,
+  X,
   Search,
   Settings,
   MessageSquare,
@@ -21,6 +22,9 @@ import {
   Package,
   Globe,
   HeartHandshake,
+  BarChart3,
+  Boxes,
+  Radio,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -40,16 +44,28 @@ const navItems = [
   { icon: Receipt, label: "Billing & Collection", href: "#billing" },
   { icon: Package, label: "Product Management", href: "#products" },
   { icon: Globe, label: "Portal Management", href: "#portal" },
+  { icon: BarChart3, label: "Analytics & AI", href: "#analytics" },
+  { icon: Boxes, label: "Inventory & Stock", href: "#inventory" },
+  { icon: Radio, label: "IoT & Devices", href: "#iot" },
 ]
 
 interface SidebarProps {
   activeSection: string
   allowedSections: string[]
   onSectionChange: (section: string) => void
+  mobileOpen: boolean
+  onMobileClose: () => void
 }
 
-export function Sidebar({ activeSection, allowedSections, onSectionChange }: SidebarProps) {
+export function Sidebar({
+  activeSection,
+  allowedSections,
+  onSectionChange,
+  mobileOpen,
+  onMobileClose,
+}: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
+  const isCollapsed = collapsed && !mobileOpen
   const visibleNavItems = navItems.filter((item) =>
     allowedSections.includes(item.href.replace("#", "")),
   )
@@ -57,12 +73,14 @@ export function Sidebar({ activeSection, allowedSections, onSectionChange }: Sid
   return (
     <aside
       className={cn(
-        "flex h-screen flex-shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-300",
-        collapsed ? "w-16" : "w-64",
+        "fixed inset-y-0 left-0 z-40 flex h-screen flex-shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-300 md:static md:z-auto md:translate-x-0",
+        mobileOpen ? "translate-x-0" : "-translate-x-full",
+        collapsed ? "md:w-16" : "md:w-64",
+        "w-72",
       )}
     >
       <div className="flex h-auto items-center justify-between border-b border-border bg-transparent px-4 py-4">
-        {!collapsed && (
+        {!isCollapsed && (
           <div className="flex items-center gap-3 group cursor-pointer">
             <img src="/logo-new.svg" alt="OmniDome Logo" className="h-12 w-12 transition-all group-hover:scale-110" />
             <div className="flex flex-col">
@@ -70,17 +88,29 @@ export function Sidebar({ activeSection, allowedSections, onSectionChange }: Sid
             </div>
           </div>
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => setCollapsed(!collapsed)}
-          className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary"
-        >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onMobileClose}
+            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary md:hidden"
+            title="Close sidebar"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setCollapsed(!collapsed)}
+            className="hidden h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary md:inline-flex"
+            title="Collapse sidebar"
+          >
+            {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
 
-      {!collapsed && (
+      {!isCollapsed && (
         <div className="p-4">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
@@ -98,7 +128,10 @@ export function Sidebar({ activeSection, allowedSections, onSectionChange }: Sid
           return (
             <button
               key={item.label}
-              onClick={() => onSectionChange(item.href.replace("#", ""))}
+              onClick={() => {
+                onSectionChange(item.href.replace("#", ""))
+                onMobileClose()
+              }}
               className={cn(
                 "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition-all duration-200 outline-none",
                 isActive
@@ -112,8 +145,8 @@ export function Sidebar({ activeSection, allowedSections, onSectionChange }: Sid
               )}>
                 <item.icon className="h-4.5 w-4.5 shrink-0" />
               </div>
-              {!collapsed && <span className="tracking-tight">{item.label}</span>}
-              {isActive && !collapsed && (
+              {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
+              {isActive && !isCollapsed && (
                 <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_10px_rgba(var(--primary),1)]" />
               )}
             </button>
@@ -122,18 +155,18 @@ export function Sidebar({ activeSection, allowedSections, onSectionChange }: Sid
       </nav>
 
       <div className="border-t border-border p-4">
-        <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
+        <div className={cn("flex items-center gap-3", isCollapsed && "justify-center")}>
           <Avatar className="h-9 w-9">
             <AvatarImage src="/diverse-avatars.png" />
             <AvatarFallback>JD</AvatarFallback>
           </Avatar>
-          {!collapsed && (
+          {!isCollapsed && (
             <div className="flex-1 overflow-hidden">
               <p className="truncate text-sm font-medium text-foreground">John Doe</p>
               <p className="truncate text-xs text-muted-foreground">Admin</p>
             </div>
           )}
-          {!collapsed && (
+          {!isCollapsed && (
             <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
               <Settings className="h-4 w-4" />
             </Button>
