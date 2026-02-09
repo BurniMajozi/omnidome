@@ -14,12 +14,12 @@ const data = [
 
 export function QuickStats() {
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-foreground">Network Traffic</h3>
-        <span className="text-sm text-muted-foreground">Last 7 days</span>
+    <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
+      <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <h3 className="text-base font-semibold text-foreground sm:text-lg">Network Traffic</h3>
+        <span className="text-xs text-muted-foreground sm:text-sm">Last 7 days</span>
       </div>
-      <div className="h-48">
+      <div className="h-40 sm:h-48">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data}>
             <defs>

@@ -30,20 +30,20 @@ export function StatCard({
       : value
 
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
+    <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
       <div className="flex items-start justify-between">
         <div className="space-y-1">
-          <p className="text-sm font-medium text-muted-foreground">{title}</p>
-          <p className="text-2xl font-bold text-foreground">{displayValue}</p>
+          <p className="text-xs font-medium text-muted-foreground sm:text-sm">{title}</p>
+          <p className="text-xl font-bold text-foreground sm:text-2xl">{displayValue}</p>
         </div>
-        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-          <Icon className="h-5 w-5 text-primary" />
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 sm:h-10 sm:w-10">
+          <Icon className="h-4.5 w-4.5 text-primary sm:h-5 sm:w-5" />
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2">
         <div
           className={cn(
-            "flex items-center gap-1 text-xs font-medium",
+            "flex items-center gap-1 text-[11px] font-medium sm:text-xs",
             changeType === "positive" && "text-primary",
             changeType === "negative" && "text-destructive",
             changeType === "neutral" && "text-muted-foreground",

@@ -385,23 +385,23 @@ export function BillingModule() {
         <TabsContent value="invoices" className="mt-4">
           <Card className="border-border bg-card">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="text-base">Recent Invoices</CardTitle>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative w-full sm:w-64">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       placeholder="Search invoices..."
-                      className="h-9 w-64 bg-secondary pl-9"
+                      className="h-9 w-full bg-secondary pl-9"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                     />
                   </div>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
                     <Filter className="mr-2 h-4 w-4" />
                     Filter
                   </Button>
-                  <Button size="sm" className="bg-primary">
+                  <Button size="sm" className="w-full bg-primary sm:w-auto">
                     <Download className="mr-2 h-4 w-4" />
                     Export
                   </Button>
@@ -409,8 +409,8 @@ export function BillingModule() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="rounded-lg border border-border">
-                <table className="w-full">
+              <div className="rounded-lg border border-border overflow-x-auto">
+                <table className="w-full min-w-[720px]">
                   <thead>
                     <tr className="border-b border-border bg-secondary/50">
                       <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Invoice ID</th>
@@ -457,9 +457,9 @@ export function BillingModule() {
         <TabsContent value="collections" className="mt-4">
           <Card className="border-border bg-card">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="text-base">Collections Queue</CardTitle>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Badge className="bg-red-500/20 text-red-400">5 Urgent</Badge>
                   <Badge className="bg-amber-500/20 text-amber-400">12 Follow-up</Badge>
                 </div>
@@ -470,7 +470,7 @@ export function BillingModule() {
                 {collections.map((item) => (
                   <div
                     key={item.id}
-                    className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4"
+                    className="flex flex-col gap-4 rounded-lg border border-border bg-secondary/30 p-4 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div className="flex items-center gap-4">
                       <div>
@@ -478,16 +478,16 @@ export function BillingModule() {
                         <p className="text-sm text-muted-foreground">{item.phone}</p>
                       </div>
                     </div>
-                    <div className="text-center">
+                    <div className="text-left sm:text-center">
                       <p className="font-semibold text-foreground">{!isClient ? "R --" : formatCurrency(item.amount)}</p>
                       <p className="text-xs text-red-400">{item.daysPastDue} days overdue</p>
                     </div>
-                    <div className="text-center">
+                    <div className="text-left sm:text-center">
                       <p className="text-sm text-muted-foreground">Last Contact</p>
                       <p className="text-sm text-foreground">{item.lastContact}</p>
                     </div>
                     <div>{getCollectionStatus(item.status)}</div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline" size="icon" className="h-8 w-8 bg-transparent">
                         <Phone className="h-4 w-4" />
                       </Button>

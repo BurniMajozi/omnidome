@@ -333,19 +333,19 @@ export function ProductsModule() {
         <TabsContent value="products" className="mt-4">
           <Card className="border-border bg-card">
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="text-base">Product Catalog</CardTitle>
-                <div className="flex items-center gap-2">
-                  <div className="relative">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <div className="relative w-full sm:w-64">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       placeholder="Search products..."
-                      className="h-9 w-64 bg-secondary pl-9"
+                      className="h-9 w-full bg-secondary pl-9"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
                     />
                   </div>
-                  <Button variant="outline" size="sm">
+                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
                     <Filter className="mr-2 h-4 w-4" />
                     Filter
                   </Button>
@@ -353,8 +353,8 @@ export function ProductsModule() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="rounded-lg border border-border">
-                <table className="w-full">
+              <div className="rounded-lg border border-border overflow-x-auto">
+                <table className="w-full min-w-[720px]">
                   <thead>
                     <tr className="border-b border-border bg-secondary/50">
                       <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Product</th>

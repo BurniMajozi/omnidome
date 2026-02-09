@@ -259,29 +259,29 @@ export function ModuleLayout({
           <Card className="border-border bg-card">
             <CardHeader className="pb-2">
               <Tabs value={activeInfoTab} onValueChange={setActiveInfoTab}>
-                <TabsList className="bg-secondary">
-                  <TabsTrigger value="activity" className="gap-2">
-                    <Clock className="h-4 w-4" />
+                <TabsList className="bg-secondary h-auto w-full grid grid-cols-2 gap-2 p-2 sm:w-fit sm:inline-flex sm:flex-nowrap sm:gap-0 sm:p-[3px]">
+                  <TabsTrigger value="activity" className="w-full justify-center gap-2 px-3 py-2 text-xs sm:text-sm">
+                    <Clock className="h-4 w-4 hidden sm:inline" />
                     Last Activity
                   </TabsTrigger>
-                  <TabsTrigger value="issues" className="gap-2">
-                    <AlertCircle className="h-4 w-4" />
+                  <TabsTrigger value="issues" className="w-full justify-center gap-2 px-3 py-2 text-xs sm:text-sm">
+                    <AlertCircle className="h-4 w-4 hidden sm:inline" />
                     Issues
                     {issues.filter((i) => i.status === "open").length > 0 && (
-                      <Badge className="ml-1 bg-red-500/20 text-red-400">
+                      <Badge className="ml-1 hidden sm:inline-flex bg-red-500/20 text-red-400">
                         {issues.filter((i) => i.status === "open").length}
                       </Badge>
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="summary" className="gap-2">
-                    <FileText className="h-4 w-4" />
+                  <TabsTrigger value="summary" className="w-full justify-center gap-2 px-3 py-2 text-xs sm:text-sm">
+                    <FileText className="h-4 w-4 hidden sm:inline" />
                     Summary
                   </TabsTrigger>
-                  <TabsTrigger value="tasks" className="gap-2">
-                    <CheckSquare className="h-4 w-4" />
+                  <TabsTrigger value="tasks" className="w-full justify-center gap-2 px-3 py-2 text-xs sm:text-sm">
+                    <CheckSquare className="h-4 w-4 hidden sm:inline" />
                     Tasks
                     {tasks.filter((t) => t.status !== "done").length > 0 && (
-                      <Badge className="ml-1 bg-amber-500/20 text-amber-400">
+                      <Badge className="ml-1 hidden sm:inline-flex bg-amber-500/20 text-amber-400">
                         {tasks.filter((t) => t.status !== "done").length}
                       </Badge>
                     )}
@@ -293,7 +293,7 @@ export function ModuleLayout({
                     {activities.map((activity) => (
                       <div
                         key={activity.id}
-                        className="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3"
+                        className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center"
                       >
                         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/20">
                           <span className="text-xs font-medium text-primary">
@@ -321,9 +321,9 @@ export function ModuleLayout({
                     {issues.map((issue) => (
                       <div
                         key={issue.id}
-                        className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3"
+                        className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center sm:justify-between"
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-start gap-3">
                           {issue.severity === "critical" ? (
                             <AlertTriangle className="h-5 w-5 text-red-400" />
                           ) : issue.severity === "high" ? (
@@ -338,7 +338,7 @@ export function ModuleLayout({
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           {getSeverityBadge(issue.severity)}
                           {getStatusBadge(issue.status)}
                         </div>
@@ -358,9 +358,9 @@ export function ModuleLayout({
                     {tasks.map((task) => (
                       <div
                         key={task.id}
-                        className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-3"
+                        className="flex flex-col gap-3 rounded-lg border border-border bg-secondary/30 p-3 sm:flex-row sm:items-center sm:justify-between"
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-start gap-3">
                           {task.status === "done" ? (
                             <CheckCircle className="h-5 w-5 text-emerald-400" />
                           ) : (
@@ -377,7 +377,7 @@ export function ModuleLayout({
                             </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           {getPriorityBadge(task.priority)}
                           {getStatusBadge(task.status)}
                         </div>
@@ -430,18 +430,18 @@ export function ModuleLayout({
       {/* Exportable Table View */}
       <Card className="border-border bg-card">
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <CardTitle className="text-base">Data Table</CardTitle>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" className="w-full sm:w-auto">
                 <Filter className="mr-2 h-4 w-4" />
                 Filter
               </Button>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" className="w-full sm:w-auto">
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Refresh
               </Button>
-              <Button size="sm" className="bg-primary" onClick={handleExport}>
+              <Button size="sm" className="w-full bg-primary sm:w-auto" onClick={handleExport}>
                 <Download className="mr-2 h-4 w-4" />
                 Export CSV
               </Button>
@@ -449,8 +449,45 @@ export function ModuleLayout({
           </div>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <table className="w-full">
+          <div className="md:hidden space-y-3">
+            {tableData.slice(0, 10).map((row) => {
+              const primaryColumn = tableColumns[0]
+              const secondaryColumns = tableColumns.slice(1)
+              return (
+                <div key={row.id} className="rounded-lg border border-border bg-secondary/30 p-3">
+                  {primaryColumn && (
+                    <div className="text-sm font-semibold text-foreground">
+                      {row[primaryColumn.key]}
+                    </div>
+                  )}
+                  <div className="mt-2 space-y-1">
+                    {secondaryColumns.map((col) => (
+                      <div key={col.key} className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{col.label}</span>
+                        <span className="text-foreground">{row[col.key]}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex items-center justify-end">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem>View Details</DropdownMenuItem>
+                        <DropdownMenuItem>Edit</DropdownMenuItem>
+                        <DropdownMenuItem>Delete</DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="hidden overflow-x-auto rounded-lg border border-border md:block">
+            <table className="w-full min-w-[720px]">
               <thead>
                 <tr className="border-b border-border bg-secondary/50">
                   {tableColumns.map((col) => (
@@ -488,7 +525,7 @@ export function ModuleLayout({
               </tbody>
             </table>
           </div>
-          <div className="mt-4 flex items-center justify-between">
+          <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-sm text-muted-foreground">
               Showing 1-{Math.min(10, tableData.length)} of {tableData.length} entries
             </p>

@@ -43,6 +43,7 @@ import {
   Zap,
   Settings,
   MonitorSpeaker,
+  PanelLeft,
   X,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -547,6 +548,7 @@ export function CommunicationModule() {
   const [escalationTitle, setEscalationTitle] = useState("")
   const [escalationSeverity, setEscalationSeverity] = useState<Escalation["severity"]>("medium")
   const [escalationNotes, setEscalationNotes] = useState("")
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -1127,10 +1129,34 @@ export function CommunicationModule() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] gap-0 rounded-xl border border-border bg-card overflow-hidden">
+    <div className="flex min-h-[calc(100vh-8rem)] flex-col gap-0 rounded-xl border border-border bg-card lg:h-[calc(100vh-8rem)] lg:flex-row lg:overflow-hidden">
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close channels"
+          className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
       {/* Sidebar - Channels & DMs */}
-      <div className="w-64 flex-shrink-0 border-r border-border bg-sidebar flex flex-col">
+      <div
+        className={cn(
+          "fixed inset-y-0 left-0 z-50 flex w-72 flex-shrink-0 flex-col border-r border-border bg-sidebar transition-transform duration-300 lg:static lg:z-auto lg:w-64 lg:translate-x-0",
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
+        )}
+      >
         <div className="p-3 border-b border-border">
+          <div className="flex items-center justify-between mb-2 lg:hidden">
+            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-muted-foreground"
+              onClick={() => setMobileSidebarOpen(false)}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input placeholder="Search messages..." className="h-9 bg-secondary pl-9 text-sm" />
@@ -1155,7 +1181,10 @@ export function CommunicationModule() {
                 {channels.map((channel) => (
                   <button
                     key={channel.id}
-                    onClick={() => setSelectedChannel(channel.name)}
+                    onClick={() => {
+                      setSelectedChannel(channel.name)
+                      setMobileSidebarOpen(false)
+                    }}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
                       selectedChannel === channel.name
@@ -1192,6 +1221,7 @@ export function CommunicationModule() {
                 {directMessages.map((dm) => (
                   <button
                     key={dm.id}
+                    onClick={() => setMobileSidebarOpen(false)}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
                   >
                     <div className="relative">
@@ -1232,6 +1262,7 @@ export function CommunicationModule() {
                 {systemMessages.map((msg) => (
                   <button
                     key={msg.id}
+                    onClick={() => setMobileSidebarOpen(false)}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
                       !msg.read
@@ -1327,10 +1358,10 @@ export function CommunicationModule() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex min-h-0 flex-col lg:ml-0">
         {/* Channel Header */}
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2">
               <Hash className="h-5 w-5 text-muted-foreground" />
               <h2 className="font-semibold text-foreground">{selectedChannel}</h2>
@@ -1340,7 +1371,16 @@ export function CommunicationModule() {
               24 members
             </Badge>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 lg:hidden"
+              onClick={() => setMobileSidebarOpen(true)}
+            >
+              <PanelLeft className="h-4 w-4 mr-2" />
+              Channels
+            </Button>
             <Button size="sm" variant="secondary" className="h-8" onClick={() => openPanel("start-chat")}>
               <MessageSquare className="h-4 w-4 mr-2" />
               Start Chat
@@ -1358,6 +1398,24 @@ export function CommunicationModule() {
               <Settings className="h-4 w-4" />
             </Button>
           </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <Server className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="uppercase tracking-wide">Providers</span>
+          </div>
+          <Badge variant="secondary" className="text-xs">
+            Voice: Deepgram
+          </Badge>
+          <Badge variant="secondary" className="text-xs">
+            Email: Unione
+          </Badge>
+          <Badge variant="secondary" className="text-xs">
+            SMS: Twilio
+          </Badge>
+          <Badge variant="secondary" className="text-xs">
+            Chat: Beeper
+          </Badge>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">

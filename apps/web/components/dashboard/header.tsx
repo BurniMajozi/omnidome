@@ -1,7 +1,7 @@
 "use client"
 
 import React from "react"
-import { Bell, Search, Plus, Sun, Moon } from "lucide-react"
+import { Bell, Search, Plus, Sun, Moon, Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useTheme } from "next-themes"
@@ -10,15 +10,29 @@ import { useIsClient } from "@/lib/use-is-client"
 interface HeaderProps {
   title: string
   onNewTask: () => void
+  onMenuToggle?: () => void
 }
 
-export function Header({ title, onNewTask }: HeaderProps) {
+export function Header({ title, onNewTask, onMenuToggle }: HeaderProps) {
   const { setTheme, resolvedTheme } = useTheme()
   const isClient = useIsClient()
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <h1 className="text-xl font-bold tracking-tight text-foreground">{title}</h1>
+    <header className="sticky top-0 z-30 flex min-h-16 items-center justify-between gap-4 border-b border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60 sm:px-6">
+      <div className="flex items-center gap-3">
+        {onMenuToggle && (
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onMenuToggle}
+            className="md:hidden text-muted-foreground hover:text-foreground hover:bg-secondary"
+            title="Toggle sidebar"
+          >
+            <Menu className="h-5 w-5" />
+          </Button>
+        )}
+        <h1 className="text-lg font-bold tracking-tight text-foreground sm:text-xl">{title}</h1>
+      </div>
 
       <div className="flex items-center gap-4">
         <div className="relative hidden md:block">

@@ -181,7 +181,7 @@ export function AITaskChat({ isOpen, onClose }: AITaskChatProps) {
   if (!isOpen) return null
 
   return (
-    <div className="flex h-screen w-80 flex-shrink-0 flex-col border-l border-border bg-card">
+    <div className="fixed inset-y-0 right-0 z-40 flex h-screen w-full flex-shrink-0 flex-col border-l border-border bg-card sm:w-96 md:static md:z-auto md:h-screen md:w-80">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border bg-secondary p-4">
         <div>

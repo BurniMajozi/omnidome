@@ -55,8 +55,32 @@ export function TicketsTable() {
       <div className="border-b border-border p-5">
         <h3 className="text-lg font-semibold text-foreground">Recent Tickets</h3>
       </div>
-      <div className="overflow-x-auto">
-        <table className="w-full">
+      <div className="md:hidden space-y-3 p-4">
+        {tickets.map((ticket) => (
+          <div key={ticket.id} className="rounded-lg border border-border bg-secondary/20 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-foreground">{ticket.subject}</p>
+                <p className="text-xs text-muted-foreground">{ticket.id} • {ticket.customer}</p>
+              </div>
+              <Avatar className="h-7 w-7">
+                <AvatarImage src={`/.jpg?height=28&width=28&query=${ticket.assignee}`} />
+                <AvatarFallback className="text-xs">{ticket.assignee}</AvatarFallback>
+              </Avatar>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Badge variant="secondary" className={priorityColors[ticket.priority as keyof typeof priorityColors]}>
+                {ticket.priority}
+              </Badge>
+              <Badge variant="secondary" className={statusColors[ticket.status as keyof typeof statusColors]}>
+                {ticket.status}
+              </Badge>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="hidden overflow-x-auto md:block">
+        <table className="w-full min-w-[720px]">
           <thead>
             <tr className="border-b border-border text-left">
               <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">ID</th>

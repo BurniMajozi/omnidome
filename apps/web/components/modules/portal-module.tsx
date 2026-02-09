@@ -383,7 +383,7 @@ export function PortalModule() {
         </TabsContent>
 
         <TabsContent value="website" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-lg font-semibold text-foreground">Landing Pages</h3>
             <Button size="sm" className="bg-primary">
               <Plus className="mr-2 h-4 w-4" />
@@ -393,8 +393,8 @@ export function PortalModule() {
 
           <Card className="border-border bg-card">
             <CardContent className="p-0">
-              <div className="rounded-lg border border-border">
-                <table className="w-full">
+              <div className="rounded-lg border border-border overflow-x-auto">
+                <table className="w-full min-w-[720px]">
                   <thead>
                     <tr className="border-b border-border bg-secondary/50">
                       <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Page Name</th>
