@@ -21,6 +21,7 @@ import {
     Sparkles,
     Menu,
     X,
+    Palette,
     ChevronDown,
     Zap,
     Shield,
@@ -130,7 +131,7 @@ const modules = [
         id: "marketing",
         icon: Megaphone,
         name: "Marketing Dome",
-        description: "Campaign management, email marketing, analytics.",
+        description: "Omnichannel digital campaigns, SA radio advertising, airport & billboard OOH, email delivery with 99%+ deliverability, lead scoring, automation, and SightLive™ proprietary post-campaign analytics.",
         category: "Revenue",
         color: "from-fuchsia-600 via-purple-600 to-indigo-600",
         slug: "marketing"
@@ -147,8 +148,8 @@ const modules = [
     {
         id: "talent",
         icon: UserCog,
-        name: "Talent Dome",
-        description: "HR management, recruitment, performance reviews.",
+        name: "Staff Dome",
+        description: "Onboarding, ATS, payroll via Paystack, leave, scheduling, KPIs, surveys, recognition, and attrition insights.",
         category: "Operations",
         color: "from-yellow-500 via-amber-500 to-orange-500",
         slug: "talent"
@@ -161,6 +162,15 @@ const modules = [
         category: "Revenue",
         color: "from-teal-500 via-emerald-500 to-green-500",
         slug: "billing"
+    },
+    {
+        id: "finance",
+        icon: FileText,
+        name: "Finance Dome",
+        description: "Revenue recognition, expense governance, GAAP statements, and scenario planning.",
+        category: "Revenue",
+        color: "from-emerald-500 via-cyan-500 to-blue-500",
+        slug: "finance"
     },
     {
         id: "products",
@@ -209,6 +219,61 @@ const modules = [
     },
 ]
 
+const portalHighlights = [
+    {
+        title: "Custom Guest Sign-In",
+        description: "Create secure, branded sign-in flows for customers, vendors, and partners.",
+        icon: Users,
+        accent: "from-indigo-500 to-blue-500",
+    },
+    {
+        title: "Granular Permissions",
+        description: "Control exactly what each portal user can access with role-based rules.",
+        icon: ShieldCheck,
+        accent: "from-emerald-500 to-teal-500",
+    },
+    {
+        title: "White-Label Experience",
+        description: "Match your brand with custom domains, colors, and portal layouts.",
+        icon: Palette,
+        accent: "from-fuchsia-500 to-purple-500",
+    },
+]
+
+const portalUseCases = [
+    {
+        title: "Client Portals",
+        description: "Share project updates, invoices, and service status in one place.",
+        icon: Building2,
+    },
+    {
+        title: "Vendor Management",
+        description: "Collect documents, SLAs, and delivery milestones from suppliers.",
+        icon: Package,
+    },
+    {
+        title: "Customer Support",
+        description: "Give customers ticket views, FAQs, and real-time updates.",
+        icon: Headset,
+    },
+    {
+        title: "Partner Programs",
+        description: "Enable resellers with assets, dashboards, and deal registration.",
+        icon: Handshake,
+    },
+]
+
+const portalIntegrations = [
+    "Salesforce",
+    "HubSpot",
+    "Zendesk",
+    "Google Drive",
+    "Slack",
+    "Stripe",
+    "Twilio",
+    "Outlook",
+]
+
 type SolutionItem = {
     title: string
     description: string
@@ -225,8 +290,9 @@ const solutionsByCategory: Record<string, SolutionItem[]> = {
     ],
     Revenue: [
         { title: "Accelerate Sales", description: "Close deals faster with AI-powered insights", slug: "sales", icon: DollarSign, color: "from-green-500 to-emerald-500" },
-        { title: "Marketing Automation", description: "Generate and nurture leads at scale", slug: "marketing", icon: Megaphone, color: "from-fuchsia-500 to-pink-500" },
+        { title: "Marketing & Media", description: "Digital campaigns, SA radio advertising, billboard & OOH media, email delivery, and SightLive™ post-campaign analytics", slug: "marketing", icon: Megaphone, color: "from-fuchsia-500 to-pink-500" },
         { title: "Automated Billing", description: "Streamline invoicing and collections", slug: "billing", icon: Receipt, color: "from-teal-500 to-green-500" },
+        { title: "Finance & FP&A", description: "GAAP reporting, revenue recognition, and scenario planning", slug: "finance", icon: FileText, color: "from-emerald-500 to-cyan-500" },
     ],
     Customer: [
         { title: "360° Customer View", description: "Complete visibility into customer relationships", slug: "crm", icon: Users, color: "from-violet-500 to-purple-500" },
@@ -236,7 +302,7 @@ const solutionsByCategory: Record<string, SolutionItem[]> = {
     Operations: [
         { title: "Network Monitoring", description: "Real-time visibility into infrastructure health", slug: "network", icon: Wifi, color: "from-cyan-500 to-blue-500" },
         { title: "SA Compliance", description: "RICA and POPIA compliance built-in", slug: "compliance", icon: ShieldCheck, color: "from-slate-500 to-zinc-500" },
-        { title: "Team Management", description: "HR, recruitment, and performance tracking", slug: "talent", icon: UserCog, color: "from-amber-500 to-yellow-500" },
+        { title: "Staff Dome", description: "Onboarding, org chart, ATS, payroll, leave, scheduling, engagement, and RBAC", slug: "talent", icon: UserCog, color: "from-amber-500 to-yellow-500" },
         { title: "Product Catalog", description: "Manage packages, pricing, and bundles", slug: "products", icon: Package, color: "from-purple-500 to-indigo-500" },
         { title: "Inventory & Stock", description: "Warehouse management and auto-replenishment", slug: "inventory", icon: Boxes, color: "from-amber-500 to-orange-500" },
         { title: "IoT & Devices", description: "Real-time device telemetry and proactive maintenance", slug: "iot", icon: Radio, color: "from-green-500 to-teal-500" },
@@ -294,7 +360,7 @@ const aiFeatures = [
     },
 ]
 
-const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Network", "Support", "Call Center", "Retention", "Analytics", "Inventory", "IoT"]
+const rotatingWords = ["ISP", "Marketing", "Sales", "CRM", "Billing", "Finance", "Network", "Support", "Call Center", "Retention", "Analytics", "Inventory", "IoT"]
 
 // AI Features Showcase Component
 function AIFeaturesShowcase() {
@@ -442,32 +508,41 @@ export default function LandingPage() {
     const productTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const solutionTimeoutRef = useRef<NodeJS.Timeout | null>(null)
     const resourceTimeoutRef = useRef<NodeJS.Timeout | null>(null)
-    const hoverDelay = 150 // milliseconds
+    const hoverOpenDelay = 150 // milliseconds
+    const hoverCloseDelay = 250 // milliseconds
     
     const handleProductEnter = () => {
         if (productTimeoutRef.current) clearTimeout(productTimeoutRef.current)
-        productTimeoutRef.current = setTimeout(() => setProductMenuOpen(true), hoverDelay)
+        productTimeoutRef.current = setTimeout(() => setProductMenuOpen(true), hoverOpenDelay)
     }
     const handleProductLeave = () => {
         if (productTimeoutRef.current) clearTimeout(productTimeoutRef.current)
-        setProductMenuOpen(false)
+        productTimeoutRef.current = setTimeout(() => setProductMenuOpen(false), hoverCloseDelay)
     }
     const handleSolutionEnter = () => {
         if (solutionTimeoutRef.current) clearTimeout(solutionTimeoutRef.current)
-        solutionTimeoutRef.current = setTimeout(() => setSolutionMenuOpen(true), hoverDelay)
+        solutionTimeoutRef.current = setTimeout(() => setSolutionMenuOpen(true), hoverOpenDelay)
     }
     const handleSolutionLeave = () => {
         if (solutionTimeoutRef.current) clearTimeout(solutionTimeoutRef.current)
-        setSolutionMenuOpen(false)
+        solutionTimeoutRef.current = setTimeout(() => setSolutionMenuOpen(false), hoverCloseDelay)
     }
     const handleResourceEnter = () => {
         if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
-        resourceTimeoutRef.current = setTimeout(() => setResourceMenuOpen(true), hoverDelay)
+        resourceTimeoutRef.current = setTimeout(() => setResourceMenuOpen(true), hoverOpenDelay)
     }
     const handleResourceLeave = () => {
         if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
-        setResourceMenuOpen(false)
+        resourceTimeoutRef.current = setTimeout(() => setResourceMenuOpen(false), hoverCloseDelay)
     }
+
+    useEffect(() => {
+        return () => {
+            if (productTimeoutRef.current) clearTimeout(productTimeoutRef.current)
+            if (solutionTimeoutRef.current) clearTimeout(solutionTimeoutRef.current)
+            if (resourceTimeoutRef.current) clearTimeout(resourceTimeoutRef.current)
+        }
+    }, [])
     
     // Interactive galactic dome pattern
     const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -1627,6 +1702,72 @@ export default function LandingPage() {
                                 <ArrowRight className="h-5 w-5" />
                             </Button>
                         </Link>
+                    </div>
+                </div>
+            </section>
+
+            {/* Portal Experience */}
+            <section id="portals" className="py-24 px-4 sm:px-6 lg:px-8 bg-gradient-to-b from-muted/30 via-background to-background">
+                <div className="mx-auto max-w-7xl">
+                    <div className="text-center mb-12">
+                        <span className="text-xs font-semibold tracking-[3px] uppercase text-primary">Portal Experience</span>
+                        <h2 className="text-3xl sm:text-4xl font-bold mt-3 mb-4">
+                            Secure Customer & Partner Portals
+                        </h2>
+                        <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+                            Deliver branded, secure portals so customers, vendors, and partners can self-serve, collaborate, and stay informed.
+                        </p>
+                    </div>
+
+                    <div className="grid gap-6 lg:grid-cols-3">
+                        {portalHighlights.map((highlight) => (
+                            <div key={highlight.title} className="rounded-2xl border border-border bg-card p-6">
+                                <div className={`h-12 w-12 rounded-xl bg-gradient-to-br ${highlight.accent} flex items-center justify-center mb-4 shadow-lg`}>
+                                    <highlight.icon className="h-6 w-6 text-white" />
+                                </div>
+                                <h3 className="text-lg font-semibold text-foreground mb-2">{highlight.title}</h3>
+                                <p className="text-sm text-muted-foreground">{highlight.description}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        {portalUseCases.map((useCase) => (
+                            <div key={useCase.title} className="rounded-2xl border border-border bg-card/80 p-5">
+                                <div className="flex items-center gap-3 mb-3">
+                                    <div className="rounded-lg bg-secondary p-2">
+                                        <useCase.icon className="h-5 w-5 text-muted-foreground" />
+                                    </div>
+                                    <h4 className="font-semibold text-foreground">{useCase.title}</h4>
+                                </div>
+                                <p className="text-sm text-muted-foreground">{useCase.description}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="mt-10 rounded-2xl border border-border bg-card p-6">
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h3 className="text-lg font-semibold text-foreground">Connect Your Stack</h3>
+                                <p className="text-sm text-muted-foreground">Sync portals with your CRM, support, and billing tools.</p>
+                            </div>
+                            <Link href="/products/portal">
+                                <Button variant="outline" className="gap-2">
+                                    Explore Portal Dome
+                                    <ArrowRight className="h-4 w-4" />
+                                </Button>
+                            </Link>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                            {portalIntegrations.map((integration) => (
+                                <span
+                                    key={integration}
+                                    className="rounded-full border border-border bg-secondary/60 px-3 py-1 text-xs font-medium text-foreground"
+                                >
+                                    {integration}
+                                </span>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </section>

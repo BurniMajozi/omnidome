@@ -16,6 +16,7 @@ import { ComplianceModule } from "@/components/modules/compliance-module"
 import { TalentModule } from "@/components/modules/talent-module"
 import { CommunicationModule } from "@/components/modules/communication-module"
 import { BillingModule } from "@/components/modules/billing-module"
+import { FinanceModule } from "@/components/modules/finance-module"
 import { ProductsModule } from "@/components/modules/products-module"
 import { PortalModule } from "@/components/modules/portal-module"
 import { AnalyticsModule } from "@/components/modules/analytics-module"
@@ -36,8 +37,9 @@ const sectionTitles: Record<string, string> = {
   "call-center": "Call Center Operations",
   marketing: "Marketing Hub",
   compliance: "Compliance & Security",
-  talent: "Talent Management",
+  talent: "Staff Dome",
   billing: "Billing & Collection",
+  finance: "Finance & FP&A",
   products: "Product Management",
   portal: "Portal Management",
   analytics: "Analytics & AI Insights",
@@ -49,6 +51,8 @@ export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [retentionTab, setRetentionTab] = useState<string | null>(null)
+  const [portalTab, setPortalTab] = useState<string | null>(null)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
 
   useEffect(() => {
@@ -103,6 +107,11 @@ export default function Dashboard() {
 
   const resolvedSection = allowedSections.includes(activeSection) ? activeSection : "overview"
 
+  useEffect(() => {
+    if (activeSection !== "retention") setRetentionTab(null)
+    if (activeSection !== "portal") setPortalTab(null)
+  }, [activeSection])
+
   const renderModule = () => {
     try {
       switch (resolvedSection) {
@@ -114,8 +123,6 @@ export default function Dashboard() {
           return <CrmModule />
         case "service":
           return <ServiceModule />
-        case "retention":
-          return <RetentionModule />
         case "network":
           return <NetworkModule />
         case "call-center":
@@ -128,16 +135,20 @@ export default function Dashboard() {
           return <TalentModule />
         case "billing":
           return <BillingModule />
+        case "finance":
+          return <FinanceModule />
         case "products":
           return <ProductsModule />
         case "portal":
-          return <PortalModule />
+          return <PortalModule activeTabOverride={portalTab ?? undefined} />
         case "analytics":
           return <AnalyticsModule />
         case "inventory":
           return <InventoryModule />
         case "iot":
           return <IoTModule />
+        case "retention":
+          return <RetentionModule activeTabOverride={retentionTab ?? undefined} />
         default:
           return <DashboardOverview />
       }
@@ -145,6 +156,18 @@ export default function Dashboard() {
       console.log("[v0] Error rendering module:", error)
       return <div className="p-4 text-red-500">Error loading module</div>
     }
+  }
+
+  const handleSubSectionSelect = (section: string, target: string) => {
+    setActiveSection(section)
+    if (section === "retention") {
+      setRetentionTab(target)
+      setPortalTab(null)
+    } else if (section === "portal") {
+      setPortalTab(target)
+      setRetentionTab(null)
+    }
+    setSidebarOpen(false)
   }
 
   return (
@@ -177,6 +200,11 @@ export default function Dashboard() {
         onSectionChange={setActiveSection}
         mobileOpen={sidebarOpen}
         onMobileClose={() => setSidebarOpen(false)}
+        onSubSectionSelect={handleSubSectionSelect}
+        activeSubSections={{
+          retention: retentionTab ?? undefined,
+          portal: portalTab ?? undefined,
+        }}
       />
 
       {/* Main Content */}

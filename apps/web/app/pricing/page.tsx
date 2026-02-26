@@ -13,19 +13,29 @@ import {
     UserCog,
     MessageSquare,
     Receipt,
+    FileText,
     Package,
     Globe,
     HeartHandshake,
     Check,
-    X
+    X,
+    BarChart3,
+    Mail,
+    Zap,
+    HardDrive,
+    Database,
+    ArrowRight,
+    Info,
+    Minus
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { useIsClient } from "@/lib/use-is-client"
 
-// All 13 modules (excluding Dashboard Overview)
+// All 14 modules (excluding Dashboard Overview)
 const modules = [
     {
         id: "communication",
@@ -138,7 +148,7 @@ const modules = [
     {
         id: "talent",
         icon: UserCog,
-        name: "Talent Hub",
+        name: "Staff Dome",
         category: "Operations",
         starterPrice: 149,
         professionalPrice: 449,
@@ -158,6 +168,18 @@ const modules = [
         slug: "billing",
         customers: 1000,
         color: "from-cyan-600 to-indigo-600"
+    },
+    {
+        id: "finance",
+        icon: FileText,
+        name: "Finance & FP&A Hub",
+        category: "Revenue",
+        starterPrice: 299,
+        professionalPrice: 899,
+        enterprisePrice: 2999,
+        slug: "finance",
+        customers: null,
+        color: "from-emerald-500 to-cyan-500"
     },
     {
         id: "products",
@@ -186,7 +208,191 @@ const modules = [
 ]
 
 type TierType = "starter" | "professional" | "enterprise"
-type ViewType = "customer-platform" | "create-bundle" | "individual" | string
+type ViewType = "customer-platform" | "create-bundle" | "individual" | "usage-limits" | string
+
+// ───────────────────── Usage Matrix (Airtable-style feature grid) ─────────────────────
+// Aligned with backend tenant tiers: FREE → STARTER → PROFESSIONAL → ENTERPRISE
+// and tenant_modules entitlement system
+
+interface UsageRow {
+    feature: string
+    tooltip?: string
+    free: string | number | boolean
+    starter: string | number | boolean
+    professional: string | number | boolean
+    enterprise: string | number | boolean
+}
+
+interface UsageCategory {
+    name: string
+    icon: React.ElementType
+    rows: UsageRow[]
+}
+
+const usageMatrix: UsageCategory[] = [
+    {
+        name: "Platform",
+        icon: Database,
+        rows: [
+            { feature: "Sub-tenants", tooltip: "Separate white-label environments", free: 1, starter: 1, professional: 3, enterprise: "Unlimited" },
+            { feature: "User seats", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
+            { feature: "Contacts / Customers", tooltip: "Active CRM contacts per tenant", free: 100, starter: "1,000", professional: "25,000", enterprise: "Unlimited" },
+            { feature: "Records per module", tooltip: "Rows across deals, tickets, etc.", free: "1,000", starter: "10,000", professional: "100,000", enterprise: "Unlimited" },
+            { feature: "Custom fields per module", free: 5, starter: 25, professional: 100, enterprise: "Unlimited" },
+            { feature: "File storage", free: "500 MB", starter: "5 GB", professional: "50 GB", enterprise: "500 GB" },
+            { feature: "Data retention", free: "90 days", starter: "1 year", professional: "3 years", enterprise: "7 years" },
+            { feature: "API access", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "API requests / month", free: "-", starter: "10,000", professional: "250,000", enterprise: "Unlimited" },
+            { feature: "Webhooks", free: false, starter: 5, professional: 50, enterprise: "Unlimited" },
+        ],
+    },
+    {
+        name: "Automations & AI",
+        icon: Zap,
+        rows: [
+            { feature: "Automation runs / month", tooltip: "Workflow triggers across all modules", free: 100, starter: "1,000", professional: "50,000", enterprise: "Unlimited" },
+            { feature: "Active automations", free: 5, starter: 25, professional: 250, enterprise: "Unlimited" },
+            { feature: "AI credits / month", tooltip: "Used for churn prediction, smart suggestions, AI chat", free: 50, starter: 500, professional: "5,000", enterprise: "10,000" },
+            { feature: "Churn prediction (Retention)", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "AI deal scoring (Sales)", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Sentiment analysis (Service)", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Revenue forecasting (Finance)", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Communication & Marketing",
+        icon: Mail,
+        rows: [
+            { feature: "Email sends / month", tooltip: "Transactional + marketing via UniOne", free: "1,000", starter: "6,000", professional: "50,000", enterprise: "Custom" },
+            { feature: "Email templates", free: 5, starter: 25, professional: "200+", enterprise: "Unlimited" },
+            { feature: "Drag-and-drop email builder", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "SMS sends / month", free: 0, starter: 500, professional: "5,000", enterprise: "Custom" },
+            { feature: "Marketing campaigns", free: 2, starter: 10, professional: "Unlimited", enterprise: "Unlimited" },
+            { feature: "Lead scoring", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "A/B testing", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Custom unsubscribe management", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Dedicated IP (email)", free: false, starter: false, professional: "Add-on", enterprise: "Included" },
+            { feature: "SightLive™ post-campaign analytics", tooltip: "Proprietary OOH & radio analytics", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Sales & CRM",
+        icon: DollarSign,
+        rows: [
+            { feature: "Deal pipelines", free: 1, starter: 3, professional: 25, enterprise: "Unlimited" },
+            { feature: "Deal stages per pipeline", free: 5, starter: 10, professional: 50, enterprise: "Unlimited" },
+            { feature: "Quotes / proposals per month", free: 5, starter: 50, professional: "Unlimited", enterprise: "Unlimited" },
+            { feature: "Contact timeline & activity log", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "Customer journey mapping", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Revenue attribution", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Service & Call Center",
+        icon: Headset,
+        rows: [
+            { feature: "Support tickets / month", free: 50, starter: 500, professional: "10,000", enterprise: "Unlimited" },
+            { feature: "SLA policies", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
+            { feature: "Knowledge base articles", free: 10, starter: 50, professional: "Unlimited", enterprise: "Unlimited" },
+            { feature: "Live chat widget", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Call recording & transcription", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "IVR / auto-attendant", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Call center agent seats", free: "-", starter: 3, professional: 15, enterprise: "Unlimited" },
+        ],
+    },
+    {
+        name: "Network & IoT",
+        icon: Wifi,
+        rows: [
+            { feature: "Monitored devices", free: 10, starter: 100, professional: "5,000", enterprise: "Unlimited" },
+            { feature: "Alert rules", free: 3, starter: 25, professional: 250, enterprise: "Unlimited" },
+            { feature: "Outage notifications", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "Capacity planning", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "IoT telemetry retention", free: "7 days", starter: "30 days", professional: "1 year", enterprise: "3 years" },
+            { feature: "Remote device commands", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Billing & Finance",
+        icon: Receipt,
+        rows: [
+            { feature: "Invoices / month", free: 25, starter: 500, professional: "10,000", enterprise: "Unlimited" },
+            { feature: "Payment gateways", tooltip: "Paystack, Stripe, manual", free: 1, starter: 2, professional: 5, enterprise: "Unlimited" },
+            { feature: "Recurring billing automation", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Collections workflows", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Revenue recognition (GAAP)", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Expense governance", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Scenario planning", free: false, starter: false, professional: false, enterprise: true },
+        ],
+    },
+    {
+        name: "Compliance & Operations",
+        icon: ShieldCheck,
+        rows: [
+            { feature: "RICA verifications / month", free: 10, starter: 100, professional: "5,000", enterprise: "Unlimited" },
+            { feature: "POPIA consent tracking", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "Audit trail retention", free: "30 days", starter: "1 year", professional: "5 years", enterprise: "7 years" },
+            { feature: "Product catalog items", free: 10, starter: 100, professional: "1,000", enterprise: "Unlimited" },
+            { feature: "Inventory warehouses", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
+            { feature: "Staff management (HR)", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Payroll integration", tooltip: "Via Paystack", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Portal & Analytics",
+        icon: Globe,
+        rows: [
+            { feature: "Customer self-service portal", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "White-label portal", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Custom domain for portal", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Executive dashboards", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
+            { feature: "Scheduled report exports", free: false, starter: true, professional: true, enterprise: true },
+            { feature: "Cross-module analytics", free: false, starter: false, professional: true, enterprise: true },
+        ],
+    },
+    {
+        name: "Support & Security",
+        icon: ShieldCheck,
+        rows: [
+            { feature: "Support channel", free: "Email", starter: "Email + Chat", professional: "Priority email + chat + phone", enterprise: "Dedicated account manager" },
+            { feature: "Uptime SLA", free: "-", starter: "99.5%", professional: "99.9%", enterprise: "99.99%" },
+            { feature: "SSO (SAML / OAuth)", free: false, starter: false, professional: true, enterprise: true },
+            { feature: "Two-factor authentication", free: true, starter: true, professional: true, enterprise: true },
+            { feature: "IP allowlisting", free: false, starter: false, professional: false, enterprise: true },
+            { feature: "Custom data residency", free: false, starter: false, professional: false, enterprise: true },
+        ],
+    },
+]
+
+// ───────────────────── Email Volume Pricing (UniOne-based, 60% margin) ─────────────────────
+// UniOne base: $4 for 6,000 emails, overage $0.75/1,000
+// Margin: 60% markup → cost × 1.6
+// USD → ZAR: R18.50 (approximate Feb 2026)
+const EMAIL_USD_TO_ZAR = 18.50
+const EMAIL_MARGIN = 1.60 // 60% margin
+const EMAIL_BASE_USD = 4 // $4 base for first 6,000
+const EMAIL_OVERAGE_PER_1000_USD = 0.75
+
+const emailVolumeSteps = [
+    1_000, 3_000, 6_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000, 1_000_000,
+]
+
+function calculateEmailPriceZAR(emailCount: number): number {
+    if (emailCount <= 0) return 0
+    // Up to 6,000: flat base
+    if (emailCount <= 6_000) {
+        const baseCostUSD = EMAIL_BASE_USD
+        return Math.round(baseCostUSD * EMAIL_MARGIN * EMAIL_USD_TO_ZAR)
+    }
+    // Beyond 6,000: base + overage
+    const overageEmails = emailCount - 6_000
+    const overageBlocks = Math.ceil(overageEmails / 1_000)
+    const totalUSD = EMAIL_BASE_USD + overageBlocks * EMAIL_OVERAGE_PER_1000_USD
+    return Math.round(totalUSD * EMAIL_MARGIN * EMAIL_USD_TO_ZAR)
+}
+
+// Dedicated IP add-on: $40/mo + $20 setup (one-time) → with margin & ZAR
+const DEDICATED_IP_MONTHLY_ZAR = Math.round(40 * EMAIL_MARGIN * EMAIL_USD_TO_ZAR)
 
 // Customer Platform bundles
 const customerPlatformBundles = {
@@ -236,7 +442,16 @@ export default function PricingPage() {
     const [customerCounts, setCustomerCounts] = useState<Record<string, number>>({})
     const [activeView, setActiveView] = useState<ViewType>("customer-platform")
     const [audienceTab, setAudienceTab] = useState<"business" | "individual">("business")
+    const [emailVolume, setEmailVolume] = useState(2) // index into emailVolumeSteps (6,000 default)
+    const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({})
     const isClient = useIsClient()
+
+    const toggleCategory = (name: string) => {
+        setExpandedCategories(prev => ({ ...prev, [name]: !prev[name] }))
+    }
+
+    const emailCount = emailVolumeSteps[emailVolume] ?? 6_000
+    const emailPriceZAR = calculateEmailPriceZAR(emailCount)
 
     const toggleModule = (id: string, tier: TierType) => {
         setSelectedModules(prev => ({
@@ -514,6 +729,159 @@ export default function PricingPage() {
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                )
+
+            case "usage-limits":
+                return (
+                    <div>
+                        <div className="text-center mb-12">
+                            <h1 className="text-4xl font-bold mb-4">Usage & Limits</h1>
+                            <p className="text-muted-foreground max-w-2xl mx-auto">
+                                Compare what each tier includes across every module. Aligned with our multi-tenant entitlement system — upgrade anytime.
+                            </p>
+                        </div>
+
+                        {/* Email Volume Calculator — Marketing (UniOne-based) */}
+                        <div className="border border-border rounded-2xl bg-card p-8 mb-12">
+                            <div className="flex items-center gap-3 mb-6">
+                                <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center">
+                                    <Mail className="h-5 w-5 text-white" />
+                                </div>
+                                <div>
+                                    <h2 className="text-xl font-bold">Email Volume Calculator</h2>
+                                    <p className="text-xs text-muted-foreground">Marketing email pricing powered by UniOne delivery infrastructure</p>
+                                </div>
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-8">
+                                <div>
+                                    <label className="text-sm font-medium text-muted-foreground block mb-2">
+                                        How many emails do you need to send monthly?
+                                    </label>
+                                    <Slider
+                                        value={[emailVolume]}
+                                        onValueChange={([v]) => setEmailVolume(v)}
+                                        min={0}
+                                        max={emailVolumeSteps.length - 1}
+                                        step={1}
+                                        className="mb-4"
+                                    />
+                                    <div className="flex justify-between text-xs text-muted-foreground">
+                                        <span>1K</span>
+                                        <span>1M</span>
+                                    </div>
+                                    <div className="mt-4 text-center">
+                                        <span className="text-3xl font-bold">{emailCount.toLocaleString()}</span>
+                                        <span className="text-muted-foreground ml-2">emails / month</span>
+                                    </div>
+                                </div>
+
+                                <div className="border border-border rounded-xl bg-background p-6">
+                                    <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Estimated cost</div>
+                                    <div className="flex items-baseline gap-1 mb-4">
+                                        <span className="text-4xl font-bold">R{isClient ? emailPriceZAR.toLocaleString() : "--"}</span>
+                                        <span className="text-muted-foreground">/month</span>
+                                    </div>
+                                    <ul className="space-y-2 text-sm text-muted-foreground">
+                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> SMTP & Web API included</li>
+                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> SPF, DKIM, DMARC authentication</li>
+                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> Real-time webhooks & analytics</li>
+                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> 200+ email templates</li>
+                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> 99%+ deliverability</li>
+                                    </ul>
+                                    <div className="mt-4 pt-4 border-t border-border">
+                                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                            <Info className="h-3.5 w-3.5" />
+                                            <span>Dedicated IP add-on: R{isClient ? DEDICATED_IP_MONTHLY_ZAR.toLocaleString() : "--"}/mo</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Airtable-style Feature Comparison Grid */}
+                        <div className="border border-border rounded-2xl bg-card overflow-hidden">
+                            {/* Table Header */}
+                            <div className="grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border bg-muted/50 sticky top-16 z-10">
+                                <div className="px-6 py-4 text-sm font-semibold">Feature</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center">Free</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center">Starter</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center text-indigo-400">Professional</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center text-violet-400">Enterprise</div>
+                            </div>
+
+                            {usageMatrix.map((category) => {
+                                const isExpanded = expandedCategories[category.name] !== false // default open
+                                return (
+                                    <div key={category.name}>
+                                        {/* Category Header */}
+                                        <button
+                                            onClick={() => toggleCategory(category.name)}
+                                            className="w-full grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
+                                        >
+                                            <div className="px-6 py-3 flex items-center gap-3 text-left">
+                                                <category.icon className="h-4 w-4 text-primary" />
+                                                <span className="text-sm font-bold">{category.name}</span>
+                                                <ArrowRight className={cn("h-3.5 w-3.5 text-muted-foreground transition-transform", isExpanded && "rotate-90")} />
+                                            </div>
+                                            <div /><div /><div /><div />
+                                        </button>
+
+                                        {/* Category Rows */}
+                                        {isExpanded && category.rows.map((row, rowIdx) => (
+                                            <div
+                                                key={row.feature}
+                                                className={cn(
+                                                    "grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border/50 hover:bg-muted/20 transition-colors",
+                                                    rowIdx % 2 === 0 ? "bg-transparent" : "bg-muted/10"
+                                                )}
+                                            >
+                                                <div className="px-6 py-3 flex items-center gap-2">
+                                                    <span className="text-sm">{row.feature}</span>
+                                                    {row.tooltip && (
+                                                        <span className="group relative">
+                                                            <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                                                            <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 text-xs bg-popover border border-border rounded-lg shadow-lg opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-20">
+                                                                {row.tooltip}
+                                                            </span>
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                {(["free", "starter", "professional", "enterprise"] as const).map(tier => {
+                                                    const val = row[tier]
+                                                    return (
+                                                        <div key={tier} className="px-3 py-3 flex items-center justify-center">
+                                                            {val === true ? (
+                                                                <Check className="h-4 w-4 text-primary" />
+                                                            ) : val === false ? (
+                                                                <Minus className="h-4 w-4 text-muted-foreground/40" />
+                                                            ) : (
+                                                                <span className={cn(
+                                                                    "text-sm font-medium",
+                                                                    val === "Unlimited" ? "text-primary" : "",
+                                                                    val === "-" ? "text-muted-foreground/40" : ""
+                                                                )}>
+                                                                    {typeof val === "number" ? val.toLocaleString() : val}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    )
+                                                })}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )
+                            })}
+                        </div>
+
+                        {/* CTA */}
+                        <div className="text-center mt-12">
+                            <p className="text-muted-foreground mb-4">Need higher limits or a custom plan?</p>
+                            <Button className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
+                                Talk to Sales <ArrowRight className="ml-2 h-4 w-4" />
+                            </Button>
                         </div>
                     </div>
                 )
@@ -796,6 +1164,20 @@ export default function PricingPage() {
                                         )}
                                     >
                                         Individual & Start-Up
+                                    </button>
+                                </li>
+                                <li>
+                                    <button
+                                        onClick={() => setActiveView("usage-limits")}
+                                        className={cn(
+                                            "w-full text-left px-3 py-2 text-sm rounded-lg transition-colors flex items-center gap-2",
+                                            activeView === "usage-limits"
+                                                ? "bg-primary/10 text-primary border-primary/20"
+                                                : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
+                                        )}
+                                    >
+                                        <BarChart3 className="h-4 w-4" />
+                                        Usage & Limits
                                     </button>
                                 </li>
                             </ul>

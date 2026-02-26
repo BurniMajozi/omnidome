@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "next build",
-    "dev": "next dev",
+    "dev": "node scripts/dev-no-fork.js",
+    "dev:next": "next dev",
     "lint": "eslint .",
     "start": "next start"
   },

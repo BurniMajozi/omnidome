@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -15,6 +15,11 @@ import {
   Wrench,
   Users,
   Settings,
+  ShieldCheck,
+  Lock,
+  Handshake,
+  Package,
+  Headset,
   Eye,
   Edit,
   TrendingUp,
@@ -89,19 +94,108 @@ const defaultTechnicianStats = {
   customerRating: 4.7,
 }
 
-export function PortalModule() {
+const defaultRetentionJourneys = [
+  {
+    id: 1,
+    name: "Cancel Save Journey",
+    status: "active",
+    stepCount: 4,
+    conversion: "18%",
+    audience: "High risk • Tenure > 6 months",
+  },
+  {
+    id: 2,
+    name: "Price Sensitivity Journey",
+    status: "active",
+    stepCount: 3,
+    conversion: "14%",
+    audience: "Standard tier • Price sensitive",
+  },
+  {
+    id: 3,
+    name: "Win-back Journey",
+    status: "draft",
+    stepCount: 3,
+    conversion: "-",
+    audience: "Churned < 30 days",
+  },
+]
+
+const portalCapabilities = [
+  {
+    title: "Custom Guest Sign-In",
+    description: "Secure entry points for customers, vendors, and partners without full seats.",
+    icon: Lock,
+    accent: "from-indigo-500 to-blue-500",
+  },
+  {
+    title: "Granular Permissions",
+    description: "Control exactly what each user can see and do with role-based access.",
+    icon: ShieldCheck,
+    accent: "from-emerald-500 to-teal-500",
+  },
+  {
+    title: "White-Label Experience",
+    description: "Match your brand with custom domains, colors, and branded portal pages.",
+    icon: Palette,
+    accent: "from-fuchsia-500 to-purple-500",
+  },
+]
+
+const portalUseCases = [
+  {
+    title: "Client Portals",
+    description: "Share project updates, invoices, and service status in one place.",
+    icon: Layout,
+  },
+  {
+    title: "Vendor Management",
+    description: "Collect documents, SLAs, and delivery milestones from suppliers.",
+    icon: Package,
+  },
+  {
+    title: "Customer Support",
+    description: "Give customers ticket views, FAQs, and real-time status updates.",
+    icon: Headset,
+  },
+  {
+    title: "Partner Programs",
+    description: "Enable resellers with enablement assets, dashboards, and deal reg.",
+    icon: Handshake,
+  },
+]
+
+const portalIntegrations = [
+  "Salesforce",
+  "HubSpot",
+  "Zendesk",
+  "Google Drive",
+  "Slack",
+  "Stripe",
+  "Twilio",
+  "Outlook",
+]
+
+export function PortalModule({ activeTabOverride }: { activeTabOverride?: string }) {
   const { data } = useModuleData("portal", {
     visitorData: defaultVisitorData,
     landingPages: defaultLandingPages,
     aiAgents: defaultAiAgents,
     fieldSalesStats: defaultFieldSalesStats,
     technicianStats: defaultTechnicianStats,
+    retentionJourneys: defaultRetentionJourneys,
   })
 
-  const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats } = data
+  const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats, retentionJourneys } = data
+  const journeysSafe = retentionJourneys ?? defaultRetentionJourneys
 
   const [activeTab, setActiveTab] = useState("overview")
   const isClient = useIsClient()
+
+  useEffect(() => {
+    if (!activeTabOverride) return
+    setActiveTab(activeTabOverride)
+  }, [activeTabOverride])
 
   return (
     <div className="space-y-6">
@@ -186,11 +280,13 @@ export function PortalModule() {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
+          <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
+          <div id="portal-overview" />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Traffic Chart */}
             <Card className="border-border bg-card">
@@ -383,6 +479,7 @@ export function PortalModule() {
         </TabsContent>
 
         <TabsContent value="website" className="mt-4 space-y-4">
+          <div id="portal-landing" />
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="text-lg font-semibold text-foreground">Landing Pages</h3>
             <Button size="sm" className="bg-primary">
@@ -489,6 +586,122 @@ export function PortalModule() {
                 <p className="mt-1 text-sm text-muted-foreground">Optimize for search</p>
               </CardContent>
             </Card>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            {portalCapabilities.map((capability) => (
+              <Card key={capability.title} className="border-border bg-card">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <p className="text-base font-semibold text-foreground">{capability.title}</p>
+                      <p className="mt-2 text-sm text-muted-foreground">{capability.description}</p>
+                    </div>
+                    <div className={`rounded-lg bg-gradient-to-br ${capability.accent} p-2`}>
+                      <capability.icon className="h-5 w-5 text-white" />
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="text-base">Portal Use Cases</CardTitle>
+              <CardDescription>Design experiences for every external audience.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {portalUseCases.map((useCase) => (
+                  <div key={useCase.title} className="rounded-lg border border-border bg-secondary/30 p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-lg bg-secondary p-2">
+                        <useCase.icon className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{useCase.title}</p>
+                        <p className="text-xs text-muted-foreground">{useCase.description}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="text-base">Integrations</CardTitle>
+              <CardDescription>Connect portals to the tools your teams already use.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2">
+                {portalIntegrations.map((integration) => (
+                  <Badge key={integration} variant="secondary" className="bg-secondary text-foreground">
+                    {integration}
+                  </Badge>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="journeys" className="mt-4 space-y-4">
+          <div id="portal-retention-journey" />
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Retention Journeys</h3>
+              <p className="text-sm text-muted-foreground">Configure the cancel and win-back experiences shown in the portal.</p>
+            </div>
+            <Button size="sm" className="bg-primary">
+              <Plus className="mr-2 h-4 w-4" />
+              Create Journey
+            </Button>
+          </div>
+
+          <div className="grid gap-4">
+            {journeysSafe.map((journey) => (
+              <Card key={journey.id} className="border-border bg-card">
+                <CardContent className="p-4 sm:p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="font-semibold text-foreground">{journey.name}</h4>
+                        <Badge
+                          className={
+                            journey.status === "active"
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-amber-500/20 text-amber-400"
+                          }
+                        >
+                          {journey.status}
+                        </Badge>
+                      </div>
+                      <p className="text-sm text-muted-foreground">{journey.audience}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-6 text-sm">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Steps</p>
+                        <p className="font-semibold text-foreground">{journey.stepCount}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Conversion</p>
+                        <p className="font-semibold text-foreground">{journey.conversion}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" className="bg-transparent">
+                          Edit
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         </TabsContent>
 

@@ -12,6 +12,7 @@ import {
   Megaphone,
   ShieldCheck,
   UserCog,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   X,
@@ -19,6 +20,7 @@ import {
   Settings,
   MessageSquare,
   Receipt,
+  FileText,
   Package,
   Globe,
   HeartHandshake,
@@ -30,23 +32,45 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Overview", href: "#overview" },
-  { icon: MessageSquare, label: "Communication", href: "#communication" },
-  { icon: DollarSign, label: "Sales", href: "#sales" },
-  { icon: Users, label: "CRM", href: "#crm" },
-  { icon: Headset, label: "Service", href: "#service" },
-  { icon: HeartHandshake, label: "Retention", href: "#retention" },
-  { icon: Wifi, label: "Network", href: "#network" },
-  { icon: Phone, label: "Call Center", href: "#call-center" },
-  { icon: Megaphone, label: "Marketing", href: "#marketing" },
-  { icon: ShieldCheck, label: "Compliance", href: "#compliance" },
-  { icon: UserCog, label: "Talent", href: "#talent" },
-  { icon: Receipt, label: "Billing & Collection", href: "#billing" },
-  { icon: Package, label: "Product Management", href: "#products" },
-  { icon: Globe, label: "Portal Management", href: "#portal" },
-  { icon: BarChart3, label: "Analytics & AI", href: "#analytics" },
-  { icon: Boxes, label: "Inventory & Stock", href: "#inventory" },
-  { icon: Radio, label: "IoT & Devices", href: "#iot" },
+  { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
+  { icon: MessageSquare, label: "Communication", href: "#communication", section: "communication" },
+  { icon: DollarSign, label: "Sales", href: "#sales", section: "sales" },
+  { icon: Users, label: "CRM", href: "#crm", section: "crm" },
+  { icon: Headset, label: "Service", href: "#service", section: "service" },
+  {
+    icon: HeartHandshake,
+    label: "Retention",
+    href: "#retention",
+    section: "retention",
+    children: [
+      { label: "Overview", target: "overview" },
+      { label: "Journeys", target: "journeys" },
+      { label: "Watchlist", target: "watchlist" },
+      { label: "Events", target: "events" },
+    ],
+  },
+  { icon: Wifi, label: "Network", href: "#network", section: "network" },
+  { icon: Phone, label: "Call Center", href: "#call-center", section: "call-center" },
+  { icon: Megaphone, label: "Marketing", href: "#marketing", section: "marketing" },
+  { icon: ShieldCheck, label: "Compliance", href: "#compliance", section: "compliance" },
+  { icon: UserCog, label: "Talent", href: "#talent", section: "talent" },
+  { icon: Receipt, label: "Billing & Collection", href: "#billing", section: "billing" },
+  { icon: FileText, label: "Finance", href: "#finance", section: "finance" },
+  { icon: Package, label: "Product Management", href: "#products", section: "products" },
+  {
+    icon: Globe,
+    label: "Portal Management",
+    href: "#portal",
+    section: "portal",
+    children: [
+      { label: "Overview", target: "overview" },
+      { label: "Landing Pages", target: "website" },
+      { label: "Retention Journey", target: "journeys" },
+    ],
+  },
+  { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
+  { icon: Boxes, label: "Inventory & Stock", href: "#inventory", section: "inventory" },
+  { icon: Radio, label: "IoT & Devices", href: "#iot", section: "iot" },
 ]
 
 interface SidebarProps {
@@ -55,6 +79,11 @@ interface SidebarProps {
   onSectionChange: (section: string) => void
   mobileOpen: boolean
   onMobileClose: () => void
+  onSubSectionSelect?: (section: string, target: string) => void
+  activeSubSections?: {
+    retention?: string
+    portal?: string
+  }
 }
 
 export function Sidebar({
@@ -63,9 +92,13 @@ export function Sidebar({
   onSectionChange,
   mobileOpen,
   onMobileClose,
+  onSubSectionSelect,
+  activeSubSections,
 }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false)
   const isCollapsed = collapsed && !mobileOpen
+  const [retentionOpen, setRetentionOpen] = useState(true)
+  const [portalOpen, setPortalOpen] = useState(true)
   const visibleNavItems = navItems.filter((item) =>
     allowedSections.includes(item.href.replace("#", "")),
   )
@@ -124,32 +157,89 @@ export function Sidebar({
 
       <nav className="flex-1 space-y-1.5 overflow-y-auto px-3 py-4 custom-scrollbar">
         {visibleNavItems.map((item) => {
-          const isActive = activeSection === item.href.replace("#", "");
+          const section = item.section ?? item.href.replace("#", "")
+          const isActive = activeSection === section
+          const hasChildren = Array.isArray(item.children) && item.children.length > 0
+          const isOpen =
+            section === "retention" ? retentionOpen : section === "portal" ? portalOpen : false
+          const activeChild =
+            section === "retention"
+              ? activeSubSections?.retention
+              : section === "portal"
+                ? activeSubSections?.portal
+                : undefined
           return (
-            <button
-              key={item.label}
-              onClick={() => {
-                onSectionChange(item.href.replace("#", ""))
-                onMobileClose()
-              }}
-              className={cn(
-                "group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition-all duration-200 outline-none",
-                isActive
-                  ? "bg-primary/10 text-primary border border-primary/20"
-                  : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-              )}
-            >
-              <div className={cn(
-                "p-1.5 rounded-lg transition-all",
-                isActive ? "bg-primary text-primary-foreground shadow-[0_0_10px_rgba(var(--primary),0.4)]" : "group-hover:text-primary"
-              )}>
-                <item.icon className="h-4.5 w-4.5 shrink-0" />
+            <div key={item.label} className="space-y-1">
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => {
+                    onSectionChange(section)
+                    if (section === "retention") setRetentionOpen(true)
+                    if (section === "portal") setPortalOpen(true)
+                    onMobileClose()
+                  }}
+                  className={cn(
+                    "group flex flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition-all duration-200 outline-none",
+                    isActive
+                      ? "bg-primary/10 text-primary border border-primary/20"
+                      : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                  )}
+                >
+                  <div className={cn(
+                    "p-1.5 rounded-lg transition-all",
+                    isActive ? "bg-primary text-primary-foreground shadow-[0_0_10px_rgba(var(--primary),0.4)]" : "group-hover:text-primary"
+                  )}>
+                    <item.icon className="h-4.5 w-4.5 shrink-0" />
+                  </div>
+                  {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
+                  {isActive && !isCollapsed && (
+                    <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_10px_rgba(var(--primary),1)]" />
+                  )}
+                </button>
+                {hasChildren && !isCollapsed && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      if (section === "retention") setRetentionOpen((prev) => !prev)
+                      if (section === "portal") setPortalOpen((prev) => !prev)
+                    }}
+                    title="Toggle section"
+                  >
+                    <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
+                  </Button>
+                )}
               </div>
-              {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
-              {isActive && !isCollapsed && (
-                <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_10px_rgba(var(--primary),1)]" />
+              {hasChildren && !isCollapsed && isOpen && (
+                <div className="ml-11 space-y-1">
+                  {item.children?.map((child) => {
+                    const isChildActive = activeChild === child.target
+                    return (
+                      <button
+                        key={child.target}
+                        onClick={() => {
+                          if (onSubSectionSelect) {
+                            onSubSectionSelect(section, child.target)
+                          } else {
+                            onSectionChange(section)
+                          }
+                          onMobileClose()
+                        }}
+                        className={cn(
+                          "flex w-full items-center rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors",
+                          isChildActive
+                            ? "bg-secondary text-foreground"
+                            : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground",
+                        )}
+                      >
+                        {child.label}
+                      </button>
+                    )
+                  })}
+                </div>
               )}
-            </button>
+            </div>
           );
         })}
       </nav>

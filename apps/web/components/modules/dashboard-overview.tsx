@@ -14,6 +14,7 @@ import {
   Megaphone,
   ShieldCheck,
   UserCog,
+  FileText,
   TrendingUp,
   Ticket,
   Activity,
@@ -101,6 +102,16 @@ const defaultModuleCards = [
     ],
     features: ["Recruitment", "Performance reviews", "Training"],
   },
+  {
+    title: "Finance",
+    description: "GAAP reporting, revenue recognition, and FP&A",
+    iconKey: "finance",
+    stats: [
+      { label: "EBITA Margin", value: "38.5%" },
+      { label: "Cash Runway", value: "14 months" },
+    ],
+    features: ["Statements", "Scenario planning", "Expense controls"],
+  },
 ]
 
 const defaultDashboardStats = [
@@ -158,6 +169,7 @@ const dashboardModuleIconMap = {
   marketing: Megaphone,
   compliance: ShieldCheck,
   talent: UserCog,
+  finance: FileText,
 }
 
 export function DashboardOverview() {

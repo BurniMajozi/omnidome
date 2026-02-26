@@ -16,6 +16,7 @@ import {
 } from "recharts"
 import { Phone, Users, Clock, TrendingUp } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
+import { VoiceAIPanel } from "@/components/modules/voice-ai-panel"
 
 const defaultCallData = [
   { hour: "08:00", inbound: 45, outbound: 32 },
@@ -87,6 +88,9 @@ export function CallCenterModule() {
           description="vs last week"
         />
       </div>
+
+      {/* Deepgram Voice AI */}
+      <VoiceAIPanel />
 
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">

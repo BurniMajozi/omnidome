@@ -26,6 +26,7 @@ export const moduleBySection: Record<string, string> = {
   compliance: "compliance",
   talent: "talent",
   billing: "billing",
+  finance: "finance",
   products: "products",
   portal: "portal",
   analytics: "analytics",
