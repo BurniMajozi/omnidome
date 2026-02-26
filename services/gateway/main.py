@@ -22,6 +22,7 @@ SERVICE_ROUTES = {
     "/api/crm": ("crm", os.getenv("CRM_SERVICE_URL", "http://crm:8001")),
     "/api/sales": ("sales", os.getenv("SALES_SERVICE_URL", "http://sales:8002")),
     "/api/billing": ("billing", os.getenv("BILLING_SERVICE_URL", "http://billing:8003")),
+    "/api/finance": ("finance", os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")),
     "/api/rica": ("rica", os.getenv("RICA_SERVICE_URL", "http://rica:8004")),
     "/api/network": ("network", os.getenv("NETWORK_SERVICE_URL", "http://network:8005")),
     "/api/iot": ("iot", os.getenv("IOT_SERVICE_URL", "http://iot:8006")),
