@@ -607,12 +607,12 @@ values (
   $$
   {
     "campaignPerformance": [
-      { "month": "Jan", "impressions": 45000, "clicks": 2800, "conversions": 280 },
-      { "month": "Feb", "impressions": 52000, "clicks": 3200, "conversions": 340 },
-      { "month": "Mar", "impressions": 48000, "clicks": 3100, "conversions": 310 },
-      { "month": "Apr", "impressions": 61000, "clicks": 4100, "conversions": 450 },
-      { "month": "May", "impressions": 58000, "clicks": 3900, "conversions": 420 },
-      { "month": "Jun", "impressions": 72000, "clicks": 5200, "conversions": 620 }
+      { "month": "Jan", "impressions": 45000, "clicks": 2800, "conversions": 280, "emailsSent": 84000 },
+      { "month": "Feb", "impressions": 52000, "clicks": 3200, "conversions": 340, "emailsSent": 91000 },
+      { "month": "Mar", "impressions": 48000, "clicks": 3100, "conversions": 310, "emailsSent": 87000 },
+      { "month": "Apr", "impressions": 61000, "clicks": 4100, "conversions": 450, "emailsSent": 102000 },
+      { "month": "May", "impressions": 58000, "clicks": 3900, "conversions": 420, "emailsSent": 96000 },
+      { "month": "Jun", "impressions": 72000, "clicks": 5200, "conversions": 620, "emailsSent": 118000 }
     ],
     "channelData": [
       { "name": "Email", "value": 32, "fill": "#4ade80" },
@@ -626,6 +626,196 @@ values (
       { "campaign": "Holiday Sale", "roi": 4.1 },
       { "campaign": "Black Friday", "roi": 5.2 },
       { "campaign": "New Year", "roi": 2.4 }
+    ],
+    "emailDelivery": [
+      { "month": "Jan", "delivered": 81200, "opened": 28420, "bounced": 2800 },
+      { "month": "Feb", "delivered": 88300, "opened": 32670, "bounced": 2700 },
+      { "month": "Mar", "delivered": 84100, "opened": 29430, "bounced": 2900 },
+      { "month": "Apr", "delivered": 99200, "opened": 38680, "bounced": 2800 },
+      { "month": "May", "delivered": 93100, "opened": 35780, "bounced": 2900 },
+      { "month": "Jun", "delivered": 115400, "opened": 48470, "bounced": 2600 }
+    ],
+    "leadFunnel": [
+      { "name": "Visitors", "value": 72000, "fill": "#818cf8" },
+      { "name": "Leads", "value": 18400, "fill": "#a78bfa" },
+      { "name": "MQLs", "value": 6200, "fill": "#c084fc" },
+      { "name": "SQLs", "value": 2100, "fill": "#e879f9" },
+      { "name": "Customers", "value": 620, "fill": "#f472b6" }
+    ],
+    "radioStations": [
+      { "station": "Metro FM", "type": "National", "listeners": "4.2M", "spotsBooked": 48, "spend": "R 420,000", "reach": "1.8M", "ctr": "2.1%" },
+      { "station": "Ukhozi FM", "type": "National", "listeners": "7.6M", "spotsBooked": 36, "spend": "R 380,000", "reach": "3.2M", "ctr": "1.8%" },
+      { "station": "Jacaranda FM", "type": "Regional", "listeners": "3.1M", "spotsBooked": 52, "spend": "R 310,000", "reach": "1.4M", "ctr": "2.4%" },
+      { "station": "947", "type": "Regional", "listeners": "1.8M", "spotsBooked": 40, "spend": "R 280,000", "reach": "820K", "ctr": "2.6%" },
+      { "station": "East Coast Radio", "type": "Regional", "listeners": "2.4M", "spotsBooked": 32, "spend": "R 220,000", "reach": "1.1M", "ctr": "2.2%" },
+      { "station": "Kaya FM", "type": "Regional", "listeners": "1.2M", "spotsBooked": 28, "spend": "R 185,000", "reach": "540K", "ctr": "2.8%" },
+      { "station": "KFM", "type": "Regional", "listeners": "1.1M", "spotsBooked": 30, "spend": "R 170,000", "reach": "490K", "ctr": "2.5%" },
+      { "station": "5FM", "type": "National", "listeners": "1.4M", "spotsBooked": 44, "spend": "R 195,000", "reach": "620K", "ctr": "3.1%" },
+      { "station": "Hot 102.7", "type": "Regional", "listeners": "680K", "spotsBooked": 24, "spend": "R 95,000", "reach": "310K", "ctr": "3.4%" },
+      { "station": "Gagasi FM", "type": "Regional", "listeners": "1.9M", "spotsBooked": 20, "spend": "R 140,000", "reach": "860K", "ctr": "2.0%" }
+    ],
+    "radioPerformance": [
+      { "month": "Jan", "spots": 180, "reach": 6800000, "leads": 320 },
+      { "month": "Feb", "spots": 210, "reach": 7200000, "leads": 380 },
+      { "month": "Mar", "spots": 240, "reach": 8100000, "leads": 420 },
+      { "month": "Apr", "spots": 280, "reach": 9400000, "leads": 510 },
+      { "month": "May", "spots": 320, "reach": 10800000, "leads": 560 },
+      { "month": "Jun", "spots": 354, "reach": 12400000, "leads": 610 }
+    ],
+    "radioByType": [
+      { "name": "National", "value": 45, "fill": "#818cf8" },
+      { "name": "Regional", "value": 38, "fill": "#c084fc" },
+      { "name": "Campus", "value": 10, "fill": "#f472b6" },
+      { "name": "Local", "value": 7, "fill": "#4ade80" }
+    ],
+    "billboardSites": [
+      { "id": "BB-001", "site": "OR Tambo Arrivals Hall", "type": "Airport", "format": "LED Wall 6x3m", "location": "Johannesburg", "impressions": "1.2M/mo", "status": "Live", "spend": "R 380,000", "sightliveScore": 92 },
+      { "id": "BB-002", "site": "N1 Buccleuch Interchange", "type": "Digital Billboard", "format": "Digital 12x4m", "location": "Johannesburg", "impressions": "3.8M/mo", "status": "Live", "spend": "R 420,000", "sightliveScore": 88 },
+      { "id": "BB-003", "site": "Cape Town International T2", "type": "Airport", "format": "Lightbox Network", "location": "Cape Town", "impressions": "980K/mo", "status": "Scheduled", "spend": "R 290,000", "sightliveScore": 0 },
+      { "id": "BB-004", "site": "M1 Sandton Off-Ramp", "type": "Digital Billboard", "format": "Digital 10x4m", "location": "Johannesburg", "impressions": "4.1M/mo", "status": "Live", "spend": "R 450,000", "sightliveScore": 91 },
+      { "id": "BB-005", "site": "N2 King Shaka Corridor", "type": "Static Billboard", "format": "Super Sign 18x6m", "location": "Durban", "impressions": "2.6M/mo", "status": "Live", "spend": "R 180,000", "sightliveScore": 76 },
+      { "id": "BB-006", "site": "Rosebank Mall Concourse", "type": "Digital Billboard", "format": "Indoor LED 4x2m", "location": "Johannesburg", "impressions": "1.4M/mo", "status": "Live", "spend": "R 320,000", "sightliveScore": 85 },
+      { "id": "BB-007", "site": "Lanseria Airport Departures", "type": "Airport", "format": "Digital Totem x4", "location": "Johannesburg", "impressions": "520K/mo", "status": "Live", "spend": "R 210,000", "sightliveScore": 82 },
+      { "id": "BB-008", "site": "N3 Durban Highway", "type": "Static Billboard", "format": "Gantry 14x5m", "location": "Durban", "impressions": "3.2M/mo", "status": "Expired", "spend": "R 195,000", "sightliveScore": 71 }
+    ],
+    "billboardByType": [
+      { "name": "Airport", "value": 28, "fill": "#38bdf8" },
+      { "name": "Digital Billboard", "value": 35, "fill": "#a78bfa" },
+      { "name": "Static Billboard", "value": 22, "fill": "#4ade80" },
+      { "name": "Street Pole", "value": 10, "fill": "#fbbf24" },
+      { "name": "Mall", "value": 5, "fill": "#f472b6" }
+    ],
+    "billboardPerformance": [
+      { "month": "Jan", "airport": 2400000, "digital": 8200000, "static_bb": 5100000 },
+      { "month": "Feb", "airport": 2600000, "digital": 8800000, "static_bb": 5400000 },
+      { "month": "Mar", "airport": 2900000, "digital": 9400000, "static_bb": 5600000 },
+      { "month": "Apr", "airport": 3100000, "digital": 10200000, "static_bb": 5900000 },
+      { "month": "May", "airport": 3400000, "digital": 11000000, "static_bb": 6200000 },
+      { "month": "Jun", "airport": 3700000, "digital": 11800000, "static_bb": 6500000 }
+    ],
+    "sightLiveOverview": {
+      "campaignsAnalyzed": 34,
+      "totalImpressions": "34.2M",
+      "verifiedViews": "28.6M",
+      "avgDwellTime": "4.2s",
+      "attentionRate": "62%",
+      "footTrafficLift": "+18%",
+      "brandRecall": "44%"
+    },
+    "sightLiveByMedium": [
+      { "medium": "Airport Screens", "campaigns": 8, "impressions": "3.7M", "dwellTime": "6.2s", "attentionRate": "78%", "footTrafficLift": "+24%", "brandRecall": "52%" },
+      { "medium": "Digital Billboards", "campaigns": 14, "impressions": "11.8M", "dwellTime": "3.1s", "attentionRate": "58%", "footTrafficLift": "+16%", "brandRecall": "41%" },
+      { "medium": "Static Billboards", "campaigns": 8, "impressions": "6.5M", "dwellTime": "2.4s", "attentionRate": "42%", "footTrafficLift": "+12%", "brandRecall": "36%" },
+      { "medium": "Indoor / Mall", "campaigns": 4, "impressions": "1.4M", "dwellTime": "8.8s", "attentionRate": "84%", "footTrafficLift": "+31%", "brandRecall": "58%" }
+    ],
+    "sightLiveRadar": [
+      { "metric": "Dwell Time", "airport": 78, "digital": 55, "static_bb": 40, "indoor": 92 },
+      { "metric": "Attention Rate", "airport": 82, "digital": 62, "static_bb": 45, "indoor": 88 },
+      { "metric": "Foot Traffic", "airport": 70, "digital": 58, "static_bb": 48, "indoor": 85 },
+      { "metric": "Brand Recall", "airport": 72, "digital": 55, "static_bb": 50, "indoor": 80 },
+      { "metric": "Verified Views", "airport": 65, "digital": 75, "static_bb": 60, "indoor": 55 },
+      { "metric": "Engagement", "airport": 80, "digital": 60, "static_bb": 38, "indoor": 90 }
+    ],
+    "sightLiveTrend": [
+      { "month": "Jan", "verifiedViews": 18200000, "attentionRate": 54, "brandRecall": 38 },
+      { "month": "Feb", "verifiedViews": 20400000, "attentionRate": 56, "brandRecall": 39 },
+      { "month": "Mar", "verifiedViews": 22800000, "attentionRate": 58, "brandRecall": 41 },
+      { "month": "Apr", "verifiedViews": 25100000, "attentionRate": 60, "brandRecall": 42 },
+      { "month": "May", "verifiedViews": 27200000, "attentionRate": 61, "brandRecall": 43 },
+      { "month": "Jun", "verifiedViews": 28600000, "attentionRate": 62, "brandRecall": 44 }
+    ],
+    "flashcardKPIs": [
+      {
+        "id": "1", "title": "Active Campaigns", "value": "18", "change": "+5", "changeType": "positive", "iconKey": "campaigns",
+        "backTitle": "Campaign Breakdown",
+        "backDetails": [
+          { "label": "Email Campaigns", "value": "7" },
+          { "label": "Social Campaigns", "value": "5" },
+          { "label": "Paid Ads", "value": "4" },
+          { "label": "Content / SEO", "value": "2" }
+        ],
+        "backInsight": "Email campaigns drive 42% of total conversions"
+      },
+      {
+        "id": "2", "title": "Email Delivery Rate", "value": "99.2%", "change": "+0.4%", "changeType": "positive", "iconKey": "email",
+        "backTitle": "Email Health",
+        "backDetails": [
+          { "label": "Sent This Month", "value": "118,000" },
+          { "label": "Delivered", "value": "115,400" },
+          { "label": "Bounce Rate", "value": "0.8%" },
+          { "label": "Open Rate", "value": "42.0%" }
+        ],
+        "backInsight": "Transactional emails at 99.88% delivery success"
+      },
+      {
+        "id": "3", "title": "Lead Conversion", "value": "3.4%", "change": "+0.6%", "changeType": "positive", "iconKey": "conversion",
+        "backTitle": "Conversion Funnel",
+        "backDetails": [
+          { "label": "Visitors → Leads", "value": "25.6%" },
+          { "label": "Leads → MQL", "value": "33.7%" },
+          { "label": "MQL → SQL", "value": "33.9%" },
+          { "label": "SQL → Customer", "value": "29.5%" }
+        ],
+        "backInsight": "Landing page A/B tests boosted MQL rate by 12%"
+      },
+      {
+        "id": "4", "title": "Marketing ROI", "value": "4.2x", "change": "+0.8x", "changeType": "positive", "iconKey": "roi",
+        "backTitle": "ROI by Channel",
+        "backDetails": [
+          { "label": "Email Marketing", "value": "6.8x" },
+          { "label": "Search / SEO", "value": "4.1x" },
+          { "label": "Social Media", "value": "2.9x" },
+          { "label": "Display Ads", "value": "1.8x" }
+        ],
+        "backInsight": "Email delivers highest ROI; reallocate 15% display → email"
+      }
+    ],
+    "activities": [
+      { "id": "1", "user": "Naledi Moroka", "action": "launched email campaign", "target": "Winter Fibre Promo", "time": "5 minutes ago", "type": "create" },
+      { "id": "2", "user": "Thabo Dlamini", "action": "published social post for", "target": "Speed Upgrade Bundle", "time": "22 minutes ago", "type": "create" },
+      { "id": "3", "user": "Priya Naidoo", "action": "updated A/B test on", "target": "Landing Page v3", "time": "1 hour ago", "type": "update" },
+      { "id": "4", "user": "James van Wyk", "action": "reviewed analytics for", "target": "Back to School Campaign", "time": "2 hours ago", "type": "comment" },
+      { "id": "5", "user": "Aisha Mahlangu", "action": "created audience segment", "target": "High-Value Churning Subs", "time": "3 hours ago", "type": "create" }
+    ],
+    "issues": [
+      { "id": "1", "title": "Email bounce rate spike on Telkom domain", "severity": "high", "status": "open", "assignee": "Naledi Moroka", "time": "30 minutes ago" },
+      { "id": "2", "title": "Google Ads spend exceeded daily cap by 18%", "severity": "medium", "status": "in-progress", "assignee": "Thabo Dlamini", "time": "2 hours ago" },
+      { "id": "3", "title": "Social scheduler failed for 3 queued posts", "severity": "high", "status": "open", "assignee": "Priya Naidoo", "time": "4 hours ago" },
+      { "id": "4", "title": "Landing page load time >4s on mobile", "severity": "medium", "status": "in-progress", "assignee": "James van Wyk", "time": "Yesterday" },
+      { "id": "5", "title": "DKIM alignment failure on promo domain", "severity": "critical", "status": "open", "assignee": "Aisha Mahlangu", "time": "Yesterday" }
+    ],
+    "summary": "This month the Marketing & Media Hub drove 118,000 emails with a 99.2% delivery rate and 42% open rate, 354 radio spots across 10 SA stations reaching 12.4M listeners, and 42 OOH billboard sites generating 34.2M impressions. SightLive™ post-campaign analytics verified 28.6M views with a 62% attention rate and 44% brand recall across all outdoor and indoor media. Email remains the top-performing digital channel at 6.8x ROI, while radio advertising generated 610 new leads. The Winter Fibre Promo campaign alone contributed 2,100 qualified leads. Focus areas for next month include expanding airport advertising to Lanseria and George, launching radio campaigns on campus stations, and improving SightLive™ dwell-time measurement for static billboards.",
+    "tasks": [
+      { "id": "1", "title": "Fix DKIM alignment on promo domain", "priority": "urgent", "status": "todo", "dueDate": "Today", "assignee": "Aisha Mahlangu" },
+      { "id": "2", "title": "Launch Spring Fibre referral campaign", "priority": "high", "status": "in-progress", "dueDate": "Tomorrow", "assignee": "Naledi Moroka" },
+      { "id": "3", "title": "Build email template for abandoned cart flow", "priority": "high", "status": "todo", "dueDate": "This week", "assignee": "James van Wyk" },
+      { "id": "4", "title": "Audit Google Ads budget pacing rules", "priority": "normal", "status": "todo", "dueDate": "This week", "assignee": "Thabo Dlamini" },
+      { "id": "5", "title": "Create audience segment for upsell targets", "priority": "normal", "status": "done", "dueDate": "Completed", "assignee": "Priya Naidoo" }
+    ],
+    "aiRecommendations": [
+      { "id": "1", "title": "Shift Budget to Email", "description": "Email delivers 6.8x ROI vs 1.8x for display. Reallocating 15% of display spend to email could increase monthly conversions by ~90.", "impact": "high", "category": "Budget" },
+      { "id": "2", "title": "Abandoned Cart Automation", "description": "Cart abandonment is at 68%. An automated 3-step email flow (1h → 24h → 72h) is projected to recover 12% of lost orders.", "impact": "high", "category": "Automation" },
+      { "id": "3", "title": "Optimize Send Times", "description": "Open-rate analysis shows peak engagement Tue–Thu 09:00-11:00. Rescheduling bulk sends could lift open rate by 8%.", "impact": "medium", "category": "Email" },
+      { "id": "4", "title": "Dedicated IP Warmup", "description": "Volume growth warrants a dedicated sending IP. Start warmup now to maintain 99%+ deliverability at scale.", "impact": "medium", "category": "Deliverability" },
+      { "id": "5", "title": "Content Calendar Gap", "description": "No campaigns scheduled for the first week of next month. Recommend scheduling a product update email and social series.", "impact": "low", "category": "Planning" }
+    ],
+    "tableData": [
+      { "id": "1", "campaign": "Winter Fibre Promo", "channel": "Email", "status": "Active", "sent": "42,000", "openRate": "44.2%", "ctr": "8.1%", "conversions": "620", "roi": "5.2x" },
+      { "id": "2", "campaign": "Speed Upgrade Bundle", "channel": "Social", "status": "Active", "sent": "—", "openRate": "—", "ctr": "3.4%", "conversions": "310", "roi": "2.9x" },
+      { "id": "3", "campaign": "Back to School", "channel": "Paid Search", "status": "Completed", "sent": "—", "openRate": "—", "ctr": "5.6%", "conversions": "450", "roi": "4.1x" },
+      { "id": "4", "campaign": "Referral Rewards", "channel": "Email", "status": "Active", "sent": "28,000", "openRate": "38.7%", "ctr": "6.9%", "conversions": "280", "roi": "6.1x" },
+      { "id": "5", "campaign": "IoT Smart Home Launch", "channel": "Display", "status": "Scheduled", "sent": "—", "openRate": "—", "ctr": "—", "conversions": "—", "roi": "—" },
+      { "id": "6", "campaign": "Black Friday Early Access", "channel": "Email + Social", "status": "Draft", "sent": "—", "openRate": "—", "ctr": "—", "conversions": "—", "roi": "—" }
+    ],
+    "tableColumns": [
+      { "key": "campaign", "label": "Campaign" },
+      { "key": "channel", "label": "Channel" },
+      { "key": "status", "label": "Status" },
+      { "key": "sent", "label": "Sent" },
+      { "key": "openRate", "label": "Open Rate" },
+      { "key": "ctr", "label": "CTR" },
+      { "key": "conversions", "label": "Conversions" },
+      { "key": "roi", "label": "ROI" }
     ]
   }
   $$::jsonb
@@ -735,6 +925,155 @@ values (
       { "id": 3, "customer": "Fatima Patel", "amount": 4200, "daysPastDue": 68, "lastContact": "2024-01-05", "status": "escalated", "phone": "084 777 9012" },
       { "id": 4, "customer": "Kagiso Mabaso", "amount": 980, "daysPastDue": 21, "lastContact": "2024-01-12", "status": "new", "phone": "085 888 3456" },
       { "id": 5, "customer": "Linda Nkosi", "amount": 3500, "daysPastDue": 95, "lastContact": "2024-01-01", "status": "legal", "phone": "086 999 7890" }
+    ]
+  }
+  $$::jsonb
+)
+on conflict (module_id) do update set data = excluded.data;
+
+insert into module_data (module_id, data)
+values (
+  'finance',
+  $$
+  {
+    "recognitionSeries": [
+      { "period": "Jul", "recognized": 3400000, "deferred": 6200000, "billed": 3900000 },
+      { "period": "Aug", "recognized": 3600000, "deferred": 6100000, "billed": 4100000 },
+      { "period": "Sep", "recognized": 3850000, "deferred": 6000000, "billed": 4300000 },
+      { "period": "Oct", "recognized": 4100000, "deferred": 5850000, "billed": 4550000 },
+      { "period": "Nov", "recognized": 4250000, "deferred": 5700000, "billed": 4700000 },
+      { "period": "Dec", "recognized": 4480000, "deferred": 5520000, "billed": 4980000 }
+    ],
+    "contracts": [
+      { "contract": "ENT-1008", "customer": "Vodacom SA", "method": "Straight-line", "start": "2025-07-01", "end": "2026-06-30", "recognized": 5200000, "deferred": 1400000 },
+      { "contract": "ENT-1014", "customer": "MTN Group", "method": "Milestone", "start": "2025-09-01", "end": "2026-08-31", "recognized": 3200000, "deferred": 1800000 },
+      { "contract": "BUS-2042", "customer": "Dimension Data", "method": "Straight-line", "start": "2025-10-01", "end": "2026-09-30", "recognized": 2100000, "deferred": 900000 },
+      { "contract": "RES-4501", "customer": "Premium Fibre", "method": "Straight-line", "start": "2025-07-01", "end": "2026-06-30", "recognized": 1850000, "deferred": 650000 }
+    ],
+    "receipts": [
+      { "id": "R-101", "vendor": "Hilton Travel", "amount": 18250, "category": "Travel", "status": "processed", "ocrConfidence": 97, "submittedBy": "T. Molefe", "date": "2026-02-02" },
+      { "id": "R-102", "vendor": "Vodacom Roaming", "amount": 6940, "category": "Travel", "status": "flagged", "ocrConfidence": 82, "submittedBy": "S. Dlamini", "date": "2026-02-03" },
+      { "id": "R-103", "vendor": "Office Depot", "amount": 4280, "category": "Office", "status": "processed", "ocrConfidence": 95, "submittedBy": "L. Naidoo", "date": "2026-02-04" }
+    ],
+    "approvals": [
+      { "id": "A-201", "request": "Cape Town field visit", "amount": 12400, "owner": "M. Nkosi", "status": "pending", "policy": "Travel-DOA-2" },
+      { "id": "A-202", "request": "Network spares procurement", "amount": 98000, "owner": "K. Zulu", "status": "approved", "policy": "Capex-DOA-3" },
+      { "id": "A-203", "request": "Executive offsite", "amount": 42000, "owner": "R. Patel", "status": "rejected", "policy": "Travel-DOA-4" }
+    ],
+    "purchaseOrders": [
+      { "id": "PO-3301", "vendor": "FibreTech", "amount": 240000, "status": "review", "approver": "Finance Ops", "dueDate": "2026-02-15" },
+      { "id": "PO-3302", "vendor": "MetroNet", "amount": 87000, "status": "approved", "approver": "CFO", "dueDate": "2026-02-10" },
+      { "id": "PO-3303", "vendor": "SignalCore", "amount": 54000, "status": "draft", "approver": "Ops Lead", "dueDate": "2026-02-20" }
+    ],
+    "assets": [
+      { "id": "AS-18", "asset": "OLT Chassis", "location": "Johannesburg", "status": "active", "cost": 860000, "depreciation": 172000, "remainingLife": "3.5 years" },
+      { "id": "AS-19", "asset": "Vehicle Fleet", "location": "Cape Town", "status": "maintenance", "cost": 420000, "depreciation": 84000, "remainingLife": "2.0 years" },
+      { "id": "AS-20", "asset": "Core Router", "location": "Durban", "status": "active", "cost": 360000, "depreciation": 72000, "remainingLife": "4.0 years" }
+    ],
+    "recurringPayments": [
+      { "id": "RP-1", "vendor": "Tower Lease", "amount": 68000, "frequency": "Monthly", "nextRun": "2026-02-28", "status": "active" },
+      { "id": "RP-2", "vendor": "Transit IP", "amount": 42000, "frequency": "Monthly", "nextRun": "2026-02-26", "status": "active" },
+      { "id": "RP-3", "vendor": "Insurance", "amount": 15500, "frequency": "Quarterly", "nextRun": "2026-03-31", "status": "paused" }
+    ],
+    "journals": [
+      { "id": "J-9001", "date": "2026-02-01", "account": "Accounts Receivable", "description": "January invoicing run", "debit": 3200000, "credit": 0, "source": "Billing" },
+      { "id": "J-9002", "date": "2026-02-01", "account": "Deferred Revenue", "description": "Subscription billing deferral", "debit": 0, "credit": 3200000, "source": "Revenue Recognition" },
+      { "id": "J-9003", "date": "2026-02-03", "account": "Travel Expense", "description": "Field ops travel", "debit": 18500, "credit": 0, "source": "Expense" },
+      { "id": "J-9004", "date": "2026-02-03", "account": "Cash", "description": "Travel reimbursement", "debit": 0, "credit": 18500, "source": "Treasury" },
+      { "id": "J-9005", "date": "2026-02-05", "account": "Network Capex", "description": "OLT chassis purchase", "debit": 860000, "credit": 0, "source": "PO" },
+      { "id": "J-9006", "date": "2026-02-05", "account": "Accounts Payable", "description": "OLT chassis invoice", "debit": 0, "credit": 860000, "source": "PO" }
+    ],
+    "trialBalance": [
+      { "id": "TB-1", "account": "Cash", "debit": 8200000, "credit": 0 },
+      { "id": "TB-2", "account": "Accounts Receivable", "debit": 6400000, "credit": 0 },
+      { "id": "TB-3", "account": "Deferred Revenue", "debit": 0, "credit": 5520000 },
+      { "id": "TB-4", "account": "Network Capex", "debit": 41200000, "credit": 0 },
+      { "id": "TB-5", "account": "Accounts Payable", "debit": 0, "credit": 5400000 },
+      { "id": "TB-6", "account": "Long-Term Debt", "debit": 0, "credit": 18000000 },
+      { "id": "TB-7", "account": "Equity", "debit": 0, "credit": 20000000 },
+      { "id": "TB-8", "account": "Retained Earnings", "debit": 0, "credit": 6880000 }
+    ],
+    "bankItems": [
+      { "id": "B-101", "date": "2026-02-03", "description": "Debit order settlements", "amount": 2450000, "status": "matched", "source": "Billing" },
+      { "id": "B-102", "date": "2026-02-03", "description": "Vendor payment - FibreTech", "amount": -240000, "status": "matched", "source": "AP" },
+      { "id": "B-103", "date": "2026-02-04", "description": "Bank fees", "amount": -8200, "status": "review", "source": "Treasury" },
+      { "id": "B-104", "date": "2026-02-04", "description": "Unidentified deposit", "amount": 65000, "status": "unmatched", "source": "Bank" }
+    ],
+    "auditTrail": [
+      { "id": "AT-1", "user": "Thandi Molefe", "action": "approved", "target": "PO-3302", "time": "45 minutes ago" },
+      { "id": "AT-2", "user": "Finance Bot", "action": "matched", "target": "Bank settlement B-101", "time": "1 hour ago" },
+      { "id": "AT-3", "user": "Sipho Dlamini", "action": "posted", "target": "Journal J-9006", "time": "2 hours ago" },
+      { "id": "AT-4", "user": "Audit Bot", "action": "flagged", "target": "Unidentified deposit B-104", "time": "Today" }
+    ],
+    "balanceSheet": [
+      { "label": "Assets", "amount": 0, "style": "section" },
+      { "label": "Cash", "amount": 8200000, "indent": true },
+      { "label": "Accounts Receivable", "amount": 6400000, "indent": true },
+      { "label": "Network Capex (PP&E)", "amount": 41200000, "indent": true },
+      { "label": "Total Assets", "amount": 55800000, "style": "total" },
+      { "label": "Liabilities", "amount": 0, "style": "section" },
+      { "label": "Accounts Payable", "amount": 5400000, "indent": true },
+      { "label": "Deferred Revenue", "amount": 5520000, "indent": true },
+      { "label": "Long-Term Debt", "amount": 18000000, "indent": true },
+      { "label": "Total Liabilities", "amount": 28920000, "style": "subtotal" },
+      { "label": "Equity", "amount": 0, "style": "section" },
+      { "label": "Equity", "amount": 20000000, "indent": true },
+      { "label": "Retained Earnings", "amount": 6880000, "indent": true },
+      { "label": "Total Equity", "amount": 26880000, "style": "subtotal" },
+      { "label": "Total Liabilities & Equity", "amount": 55800000, "style": "total" }
+    ],
+    "incomeStatement": [
+      { "label": "Revenue", "amount": 48000000, "style": "section" },
+      { "label": "Cost of Service", "amount": -14000000, "indent": true },
+      { "label": "Gross Profit", "amount": 34000000, "style": "subtotal" },
+      { "label": "Operating Expenses", "amount": -16000000, "indent": true },
+      { "label": "EBITA", "amount": 18000000, "style": "subtotal" },
+      { "label": "Depreciation & Amortization", "amount": -6000000, "indent": true },
+      { "label": "EBIT", "amount": 12000000, "style": "subtotal" },
+      { "label": "Interest", "amount": -1800000, "indent": true },
+      { "label": "Taxes", "amount": -2856000, "indent": true },
+      { "label": "Net Income", "amount": 9344000, "style": "total" }
+    ],
+    "cashFlow": [
+      { "label": "Operating Cash Flow", "amount": 15600000, "style": "section" },
+      { "label": "Investing Cash Flow", "amount": -9000000, "style": "section" },
+      { "label": "Financing Cash Flow", "amount": -2100000, "style": "section" },
+      { "label": "Net Change in Cash", "amount": 3600000, "style": "total" }
+    ],
+    "flashcardKPIs": [
+      { "id": "1", "title": "EBITA Margin", "value": "38.5%", "change": "+1.2%", "changeType": "positive", "iconKey": "ebitda", "backTitle": "EBITA Drivers", "backDetails": [ { "label": "Network Opex", "value": "-3.1%" }, { "label": "Scale Impact", "value": "+2.4%" }, { "label": "Price Uplifts", "value": "+1.8%" } ], "backInsight": "Telecom EBITA trending above plan" },
+      { "id": "2", "title": "EBIT", "value": "R 12,000,000", "change": "+0.8%", "changeType": "positive", "iconKey": "ebit", "backTitle": "EBIT Bridge", "backDetails": [ { "label": "EBITA", "value": "R 18,000,000" }, { "label": "D&A", "value": "R -6,000,000" }, { "label": "Net", "value": "R 12,000,000" } ], "backInsight": "Capex depreciation aligns with plan" },
+      { "id": "3", "title": "Free Cash Flow", "value": "R 7,800,000", "change": "-2.6%", "changeType": "negative", "iconKey": "cash", "backTitle": "Cash Flow Detail", "backDetails": [ { "label": "Operating", "value": "R 15,600,000" }, { "label": "Capex", "value": "R -9,000,000" }, { "label": "Financing", "value": "R -2,100,000" } ], "backInsight": "Capex spike from network expansion" },
+      { "id": "4", "title": "DSO", "value": "31 days", "change": "-4 days", "changeType": "positive", "iconKey": "dso", "backTitle": "Receivables Health", "backDetails": [ { "label": "Current", "value": "84%" }, { "label": "30-60", "value": "12%" }, { "label": "60+", "value": "4%" } ], "backInsight": "Collections improved after outreach" }
+    ],
+    "activities": [
+      { "id": "1", "user": "Finance Bot", "action": "posted journal", "target": "J-9006", "time": "10 minutes ago", "type": "create" },
+      { "id": "2", "user": "Thandi Molefe", "action": "approved", "target": "PO-3302", "time": "45 minutes ago", "type": "update" },
+      { "id": "3", "user": "Sipho Dlamini", "action": "closed period", "target": "Jan 2026", "time": "2 hours ago", "type": "update" },
+      { "id": "4", "user": "Audit Bot", "action": "flagged", "target": "Bank item B-104", "time": "Today", "type": "assign" }
+    ],
+    "issues": [
+      { "id": "1", "title": "Bank recon variance of R65,000", "severity": "high", "status": "open", "assignee": "Finance Ops", "time": "Active" },
+      { "id": "2", "title": "Unapproved travel request exceeds policy", "severity": "medium", "status": "in-progress", "assignee": "CFO", "time": "4 hours ago" },
+      { "id": "3", "title": "Deferred revenue schedule mismatch", "severity": "low", "status": "resolved", "assignee": "Revenue Team", "time": "Yesterday" }
+    ],
+    "tasks": [
+      { "id": "1", "title": "Reforecast Q2 revenue", "priority": "urgent", "status": "in-progress", "dueDate": "Today", "assignee": "FP&A" },
+      { "id": "2", "title": "Finalize bank reconciliation", "priority": "high", "status": "todo", "dueDate": "Tomorrow", "assignee": "Treasury" },
+      { "id": "3", "title": "Review PO delegation matrix", "priority": "normal", "status": "todo", "dueDate": "This week", "assignee": "Finance Ops" },
+      { "id": "4", "title": "Close Feb accruals", "priority": "normal", "status": "done", "dueDate": "Completed", "assignee": "Accounting" }
+    ],
+    "aiRecommendations": [
+      { "id": "1", "title": "Adjust capex schedule", "description": "Delay 12% of Q2 network capex to improve free cash flow by R1.4M.", "impact": "high", "category": "Cash" },
+      { "id": "2", "title": "Optimize travel spend", "description": "Apply remote site audit for 9 routes to cut travel expense by 6%.", "impact": "medium", "category": "Opex" },
+      { "id": "3", "title": "Increase enterprise price uplift", "description": "EBITA upside of R2.1M from 1.5% uplift on enterprise contracts.", "impact": "high", "category": "Revenue" }
+    ],
+    "tableData": [
+      { "id": "1", "account": "Cash", "debit": "R 8,200,000", "credit": "R 0", "balance": "R 8,200,000" },
+      { "id": "2", "account": "Accounts Receivable", "debit": "R 6,400,000", "credit": "R 0", "balance": "R 6,400,000" },
+      { "id": "3", "account": "Deferred Revenue", "debit": "R 0", "credit": "R 5,520,000", "balance": "R -5,520,000" },
+      { "id": "4", "account": "Accounts Payable", "debit": "R 0", "credit": "R 5,400,000", "balance": "R -5,400,000" },
+      { "id": "5", "account": "Retained Earnings", "debit": "R 0", "credit": "R 6,880,000", "balance": "R -6,880,000" }
     ]
   }
   $$::jsonb
@@ -887,14 +1226,16 @@ values (
         "features": ["Call routing", "Agent performance", "Call recording"]
       },
       {
-        "title": "Marketing",
-        "description": "Run campaigns and track marketing performance",
+        "title": "Marketing & Media",
+        "description": "Digital campaigns, SA radio advertising, billboard & OOH, email delivery, and SightLive™ post-campaign analytics",
         "iconKey": "marketing",
         "stats": [
-          { "label": "Active Campaigns", "value": "12" },
-          { "label": "Conversion Rate", "value": "3.2%" }
+          { "label": "Active Campaigns", "value": "18" },
+          { "label": "Radio Stations", "value": "10" },
+          { "label": "OOH Sites", "value": "42" },
+          { "label": "SightLive™ Score", "value": "88" }
         ],
-        "features": ["Email campaigns", "Analytics", "A/B testing"]
+        "features": ["Email API & SMTP", "SA Radio Booking", "Airport & Billboard OOH", "SightLive™ Analytics", "Lead Scoring", "Campaign Automation"]
       },
       {
         "title": "Compliance",
@@ -915,6 +1256,16 @@ values (
           { "label": "Open Positions", "value": "14" }
         ],
         "features": ["Recruitment", "Performance reviews", "Training"]
+      },
+      {
+        "title": "Finance",
+        "description": "GAAP reporting, revenue recognition, and FP&A",
+        "iconKey": "finance",
+        "stats": [
+          { "label": "EBITA Margin", "value": "38.5%" },
+          { "label": "Cash Runway", "value": "14 months" }
+        ],
+        "features": ["Statements", "Scenario planning", "Expense controls"]
       }
     ]
   }

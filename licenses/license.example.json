@@ -4,7 +4,7 @@
     "issued_at": "2026-02-02T00:00:00Z",
     "expires_at": "2027-02-02T00:00:00Z",
     "plan": "enterprise",
-    "modules": ["crm", "sales", "billing", "support", "network", "iot", "retention", "call_center"],
+    "modules": ["crm", "sales", "billing", "support", "network", "iot", "retention", "call_center", "marketing"],
     "limits": {
       "seats": 250,
       "tenants": 5

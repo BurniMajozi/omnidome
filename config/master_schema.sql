@@ -811,6 +811,7 @@ VALUES
     ('sales', 'Sales', 'Leads, deals, and pipeline management', TRUE),
     ('support', 'Support', 'Ticketing and customer support', TRUE),
     ('billing', 'Billing', 'Subscriptions, invoicing, and payments', FALSE),
+    ('finance', 'Finance', 'Revenue recognition, FP&A, and financial statements', FALSE),
     ('network', 'Network', 'RADIUS and network operations', FALSE),
     ('iot', 'IoT', 'Device telemetry and management', FALSE),
     ('retention', 'Retention', 'Churn analytics and retention', FALSE),
@@ -818,7 +819,8 @@ VALUES
     ('analytics', 'Analytics', 'Executive summaries and insights', FALSE),
     ('inventory', 'Inventory', 'Stock and warehousing', FALSE),
     ('hr', 'HR', 'Staff and talent management', FALSE),
-    ('rica', 'RICA', 'Compliance and verification', FALSE)
+    ('rica', 'RICA', 'Compliance and verification', FALSE),
+    ('marketing', 'Marketing', 'Campaign management, email delivery, and marketing automation', FALSE)
 ON CONFLICT (key) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -842,6 +844,9 @@ VALUES
     ('billing.read', 'Read billing data'),
     ('billing.write', 'Write billing data'),
     ('billing.admin', 'Administer billing'),
+    ('finance.read', 'Read finance data'),
+    ('finance.write', 'Write finance data'),
+    ('finance.admin', 'Administer finance'),
     ('network.read', 'Read network data'),
     ('network.write', 'Write network data'),
     ('network.admin', 'Administer network'),
@@ -865,7 +870,10 @@ VALUES
     ('hr.admin', 'Administer HR'),
     ('rica.read', 'Read RICA data'),
     ('rica.write', 'Write RICA data'),
-    ('rica.admin', 'Administer RICA')
+    ('rica.admin', 'Administer RICA'),
+    ('marketing.read', 'Read marketing data'),
+    ('marketing.write', 'Write marketing data'),
+    ('marketing.admin', 'Administer marketing')
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO roles (id, tenant_id, name, scope, description, is_system)

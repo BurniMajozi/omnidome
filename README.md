@@ -14,6 +14,7 @@ services/
   admin/         – Platform & org admin (tenants, roles, modules)
   analytics/     – AI-powered executive insights
   billing/       – Invoicing, payments, collections
+  finance/       – GAAP finance, FP&A, scenario planning
   call_center/   – Inbound/outbound calls, sentiment AI
   common/        – Shared auth, RBAC, entitlements, DB
   crm/           – Customer 360, lead management
@@ -42,6 +43,7 @@ docker-compose.yaml
 | CRM | `/services/crm` | 8001 | Customer 360, segmentation, lead tracking |
 | Sales | `/services/sales` | 8002 | Pipeline management, quoting, commission |
 | Billing | `/services/billing` | 8003 | Invoicing (ZAR), Paystack, auto-suspend |
+| Finance | `/services/finance` | 8015 | GAAP statements, revenue recognition, FP&A |
 | RICA | `/services/rica` | 8004 | Identity verification via Smile ID |
 | Network | `/services/network` | 8005 | RADIUS, FNO adapters (Vumatel, Openserve, etc.) |
 | IoT | `/services/iot` | 8006 | Device telemetry, CPE health monitoring |
@@ -86,7 +88,7 @@ See `.env.example` for the full list.
 
 Next.js 14+ app with App Router, shadcn/ui components, and Supabase for real-time data.
 
-- **Dashboard modules** — Sales, CRM, Service, Network, Call Center, Marketing, Compliance, Talent, Retention, Billing, Products, Portal.
+- **Dashboard modules** — Sales, CRM, Service, Network, Call Center, Marketing, Compliance, Talent, Retention, Billing, Finance, Products, Portal.
 - **AI Chat** — Ollama-backed assistant available across all modules.
 - **Communication Hub** — Slack-style messaging with channels, threads, tasks, approvals, scheduling, and escalations.
 - **Auth** — Supabase Auth with magic link, password, Google, and GitHub sign-in.

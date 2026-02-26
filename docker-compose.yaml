@@ -70,6 +70,24 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  finance:
+    build:
+      context: .
+      dockerfile: services/finance/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8015:8015"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
   rica:
     build:
       context: .
@@ -163,6 +181,24 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  marketing:
+    build:
+      context: .
+      dockerfile: services/marketing/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8014:8014"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
   admin:
     build:
       context: .
@@ -211,6 +247,7 @@ services:
       - crm
       - sales
       - billing
+      - finance
       - rica
       - network
       - gateway
