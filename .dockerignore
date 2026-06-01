@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+*.pyc
+__pycache__
+.env.local
+.env.*.local
+apps/web/node_modules
+apps/web/.next
+apps/web/.turbo
+apps/portal/node_modules
+brand_guidelines/
+docs/
+licenses/
+*.md
+!README.md
