@@ -1,1 +1,0 @@
-{"pid":117,"kind":"hermes-gateway","argv":["/opt/hermes/.venv/bin/hermes","gateway","run"],"start_time":3870,"gateway_state":"running","exit_reason":null,"restart_requested":false,"active_agents":0,"platforms":{"telegram":{"state":"connected","error_code":null,"error_message":null,"updated_at":"2026-05-31T18:37:51.722687+00:00"}},"updated_at":"2026-05-31T18:37:51.729976+00:00"}
