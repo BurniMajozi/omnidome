@@ -26,6 +26,7 @@ router = APIRouter(prefix="/customers", tags=["Customers"])
 BILLING_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
 SUPPORT_URL = os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")
 NETWORK_URL = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
+LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ async def get_customer_360(
     headers = _forward_headers(ctx)
     cid = str(customer_id)
 
-    billing_data, support_data, network_data = [], [], []
+    billing_data, support_data, network_data, lifecycle_data = [], [], [], None
     try:
         billing_data = await _fetch_service_data(
             f"{BILLING_URL}/invoices?customer_id={cid}", headers
@@ -193,10 +194,29 @@ async def get_customer_360(
     except Exception:
         pass
 
+    # Fetch lifecycle stage & history (best-effort)
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            current_resp = await client.get(
+                f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/current",
+                headers=headers,
+            )
+            history_resp = await client.get(
+                f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/history",
+                headers=headers,
+            )
+            lifecycle_data = {
+                "current_stage": current_resp.json() if current_resp.status_code == 200 else None,
+                "history": history_resp.json() if history_resp.status_code == 200 else [],
+            }
+    except Exception:
+        lifecycle_data = None
+
     result.billing = billing_data
     result.support = support_data
     result.network = network_data
     result.services = network_data  # alias
+    result.lifecycle_data = lifecycle_data
 
     return result
 

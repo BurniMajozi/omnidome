@@ -39,6 +39,7 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useModuleData } from "@/lib/module-data"
 import { useIsClient } from "@/lib/use-is-client"
+import { CancelFlowModal } from "@/components/modules/cancel-flow-modal"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -190,6 +191,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   const journeysSafe = retentionJourneys ?? defaultRetentionJourneys
 
   const [activeTab, setActiveTab] = useState("overview")
+  const [showCancelModal, setShowCancelModal] = useState(false)
   const isClient = useIsClient()
 
   useEffect(() => {
@@ -703,6 +705,43 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               </Card>
             ))}
           </div>
+
+          {/* Cancel Flow Demo */}
+          <Card className="border-border bg-card border-dashed border-amber-500/30">
+            <CardContent className="p-4 sm:p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h4 className="font-semibold text-foreground">Cancel-to-Save Flow</h4>
+                  <p className="text-sm text-muted-foreground">
+                    When customers click "Cancel Service" in the portal, they'll see retention offers based on journey rules.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
+                  onClick={() => setShowCancelModal(true)}
+                >
+                  Test Cancel Flow
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          {showCancelModal && (
+            <CancelFlowModal
+              customerId="demo-customer-001"
+              customerName="Lerato Mbeki"
+              accountNumber="ACC-78421"
+              onClose={() => setShowCancelModal(false)}
+              onCancelled={() => {
+                setShowCancelModal(false)
+              }}
+              onRetained={() => {
+                setShowCancelModal(false)
+              }}
+            />
+          )}
         </TabsContent>
 
         <TabsContent value="field-sales" className="mt-4 space-y-4">
