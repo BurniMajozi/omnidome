@@ -1,0 +1,59 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.8
+2 info using node@v22.22.3
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/opt/data/workspace/omnidome/apps/web/.npmrc
+5 silly config load:file:/opt/data/home/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm install
+8 verbose argv "install" "--no-audit" "--no-fund" "--legacy-peer-deps"
+9 verbose logfile logs-max:10 dir:/opt/data/home/.npm/_logs/2026-06-01T08_26_17_230Z-
+10 verbose logfile /opt/data/home/.npm/_logs/2026-06-01T08_26_17_230Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly packumentCache heap:521142272 maxSize:130285568 maxEntrySize:65142784
+13 silly logfile done cleaning log files
+14 silly idealTree buildDeps
+15 silly reify moves {}
+16 verbose stack Error: EACCES: permission denied, mkdir '/opt/data/workspace/omnidome/apps/web/node_modules'
+16 verbose stack     at async mkdir (node:internal/fs/promises:858:10)
+16 verbose stack     at async /usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:638:20
+16 verbose stack     at async Promise.allSettled (index 0)
+16 verbose stack     at async [reifyPackages] (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:334:11)
+16 verbose stack     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:149:5)
+16 verbose stack     at async Install.exec (/usr/local/lib/node_modules/npm/lib/commands/install.js:150:5)
+16 verbose stack     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:207:9)
+16 verbose stack     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:74:5)
+17 error code EACCES
+18 error syscall mkdir
+19 error path /opt/data/workspace/omnidome/apps/web/node_modules
+20 error errno -13
+21 error Error: EACCES: permission denied, mkdir '/opt/data/workspace/omnidome/apps/web/node_modules'
+21 error     at async mkdir (node:internal/fs/promises:858:10)
+21 error     at async /usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:638:20
+21 error     at async Promise.allSettled (index 0)
+21 error     at async [reifyPackages] (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:334:11)
+21 error     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:149:5)
+21 error     at async Install.exec (/usr/local/lib/node_modules/npm/lib/commands/install.js:150:5)
+21 error     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:207:9)
+21 error     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:74:5) {
+21 error   errno: -13,
+21 error   code: 'EACCES',
+21 error   syscall: 'mkdir',
+21 error   path: '/opt/data/workspace/omnidome/apps/web/node_modules'
+21 error }
+22 error
+22 error The operation was rejected by your operating system.
+22 error It is likely you do not have the permissions to access this file as the current user
+22 error
+22 error If you believe this might be a permissions issue, please double-check the
+22 error permissions of the file and its containing directories, or try running
+22 error the command again as root/Administrator.
+23 silly unfinished npm timer reify 1780302379529
+24 silly unfinished npm timer reify:createSparse 1780302380195
+25 verbose cwd /opt/data/workspace/omnidome/apps/web
+26 verbose os Linux 6.1.0-49-cloud-amd64
+27 verbose node v22.22.3
+28 verbose npm  v10.9.8
+29 verbose exit -13
+30 verbose code -13
+31 error A complete log of this run can be found in: /opt/data/home/.npm/_logs/2026-06-01T08_26_17_230Z-debug-0.log

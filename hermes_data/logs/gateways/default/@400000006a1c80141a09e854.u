@@ -1,0 +1,110 @@
+2026-05-31 12:55:24.720297278  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 12:55:24.720388958  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 12:55:24.720393717  ├─────────────────────────────────────────────────────────┤
+2026-05-31 12:55:24.720410493  │  Messaging platforms + cron scheduler                    │
+2026-05-31 12:55:24.720568015  │  Press Ctrl+C to stop                                   │
+2026-05-31 12:55:24.720576090  └─────────────────────────────────────────────────────────┘
+2026-05-31 12:55:24.720578201  
+2026-05-31 13:01:17.705410974  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:01:17.705476584  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:01:17.705481444  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:01:17.705497754  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:01:17.705501237  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:01:17.705504964  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:01:17.705518191  
+2026-05-31 13:11:26.023391810  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:11:26.023458536  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:11:26.023464207  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:11:26.023480786  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:11:26.023484216  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:11:26.023488010  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:11:26.023512178  
+2026-05-31 13:18:32.077632615  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:18:32.077701067  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:18:32.077706384  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:18:32.077722830  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:18:32.077726368  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:18:32.077730322  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:18:32.077743963  
+2026-05-31 13:20:40.466763324  🧾 Request debug dump written to: /opt/data/sessions/request_dump_20260531_132024_08bbb750_20260531_132040_455092.json
+2026-05-31 13:20:40.496310570  ⚠️  API call failed (attempt 1/3): APIStatusError [HTTP 402]
+2026-05-31 13:20:40.496316967     🔌 Provider: openrouter  Model: anthropic/claude-opus-4.6
+2026-05-31 13:20:40.496319143     🌐 Endpoint: https://openrouter.ai/api/v1
+2026-05-31 13:20:40.496383291     📝 Error: HTTP 402: This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account
+2026-05-31 13:20:40.496390195     📋 Details: {'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account', 'code': 402, 'metadata': {'provider_name': None, 'previous_errors': [{'code': 4
+2026-05-31 13:20:40.496481284     ⏱️  Elapsed: 2.14s  Context: 2 msgs, ~4,191 tokens
+2026-05-31 13:20:40.496486033  ❌ Non-retryable error (HTTP 402): HTTP 402: This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account
+2026-05-31 13:20:40.496490062  ❌ Non-retryable client error (HTTP 402). Aborting.
+2026-05-31 13:20:40.496527355     🔌 Provider: openrouter  Model: anthropic/claude-opus-4.6
+2026-05-31 13:20:40.496530285     🌐 Endpoint: https://openrouter.ai/api/v1
+2026-05-31 13:20:40.496574644     💡 openrouter reported that billing, credits, or account entitlement is exhausted for anthropic/claude-opus-4.6.
+2026-05-31 13:20:40.496577036     💡 Add credits or update billing with that provider, then retry.
+2026-05-31 13:20:40.496578877     💡 OpenRouter credits: https://openrouter.ai/settings/credits
+2026-05-31 13:20:40.496580790     💡 You can switch providers temporarily with /model <model> --provider <provider>.
+2026-05-31 13:24:30.947334118  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:24:30.947413145  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:24:30.947419010  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:24:30.947436042  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:24:30.947439442  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:24:30.947444075  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:24:30.947457567  
+2026-05-31 13:26:31.999922837  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:26:32.000000121  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:26:32.000005183  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:26:32.000024512  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:26:32.000027769  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:26:32.000031602  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:26:32.000043917  
+2026-05-31 13:27:55.288135753  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:27:55.288203869  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:27:55.288209358  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:27:55.288224986  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:27:55.288228405  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:27:55.288232549  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:27:55.288244739  
+2026-05-31 13:30:39.906773194  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 13:30:39.906842410  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 13:30:39.906847726  ├─────────────────────────────────────────────────────────┤
+2026-05-31 13:30:39.906863931  │  Messaging platforms + cron scheduler                    │
+2026-05-31 13:30:39.906867730  │  Press Ctrl+C to stop                                   │
+2026-05-31 13:30:39.906871724  └─────────────────────────────────────────────────────────┘
+2026-05-31 13:30:39.906884701  
+2026-05-31 14:29:55.005269978  ┌─────────────────────────────────────────────────────────┐
+2026-05-31 14:29:55.005336005  │           ⚕ Hermes Gateway Starting...                 │
+2026-05-31 14:29:55.005341389  ├─────────────────────────────────────────────────────────┤
+2026-05-31 14:29:55.005358471  │  Messaging platforms + cron scheduler                    │
+2026-05-31 14:29:55.005361968  │  Press Ctrl+C to stop                                   │
+2026-05-31 14:29:55.005366154  └─────────────────────────────────────────────────────────┘
+2026-05-31 14:29:55.005379981  
+2026-05-31 14:54:42.120474983  ⚠️  API call failed (attempt 1/3): APIError
+2026-05-31 14:54:42.139130931     🔌 Provider: openrouter  Model: openrouter/owl-alpha
+2026-05-31 14:54:42.139134715     🌐 Endpoint: https://openrouter.ai/api/v1
+2026-05-31 14:54:42.139136524     📝 Error: Provider returned error
+2026-05-31 14:54:42.139138420     ⏱️  Elapsed: 121.88s  Context: 49 msgs, ~16,068 tokens
+2026-05-31 14:54:42.139140011  ⏳ Retrying in 2.6s (attempt 1/3)...
+2026-05-31 14:54:42.139141648  ⚠️  API call failed (attempt 2/3): APIError
+2026-05-31 14:54:42.139143372     🔌 Provider: openrouter  Model: openrouter/owl-alpha
+2026-05-31 14:54:42.139144961     🌐 Endpoint: https://openrouter.ai/api/v1
+2026-05-31 14:54:42.139146410     📝 Error: Provider returned error
+2026-05-31 14:54:42.139148136     ⏱️  Elapsed: 245.49s  Context: 49 msgs, ~16,068 tokens
+2026-05-31 14:54:42.139149666  ⏳ Retrying in 5.9s (attempt 2/3)...
+2026-05-31 14:54:42.139151407  ⚠️  API call failed (attempt 3/3): RateLimitError [HTTP 429]
+2026-05-31 14:54:42.139174414     🔌 Provider: openrouter  Model: openrouter/owl-alpha
+2026-05-31 14:54:42.139176032     🌐 Endpoint: https://openrouter.ai/api/v1
+2026-05-31 14:54:42.139220092     📝 Error: HTTP 429: Provider returned error
+2026-05-31 14:54:42.139225573     📋 Details: {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'openrouter/owl-alpha is temporarily rate-limited upstream. Please retry shortly.', 'provider_name': 'Stealth', 'is_byok': False}}
+2026-05-31 14:54:42.139251745     ⏱️  Elapsed: 258.61s  Context: 49 msgs, ~16,068 tokens
+2026-05-31 14:54:42.139254279  ❌ Rate limited after 3 retries — HTTP 429: Provider returned error
+2026-05-31 14:54:42.139256512     💀 Final error: HTTP 429: Provider returned error
+2026-05-31 14:54:42.139292486  🧾 Request debug dump written to: /opt/data/sessions/request_dump_20260531_132024_08bbb750_20260531_145442_085452.json
+2026-05-31 15:44:58.555903599    💾 Self-improvement review: User profile updated · Skill 'omnidome' created. · Skill 'omnidome' updated.
+2026-05-31 16:20:03.761142363    ✓ [2/3] Fix the CRM service's synchronous databa  (231.1s)
+2026-05-31 16:26:12.716675217    ✗ [1/3] Create the Communication Service for Omn  (600.05s)
+2026-05-31 16:26:12.767118493    ✗ [3/3] Create the agent-orchestrator service fo  (600.05s)
+2026-05-31 16:26:12.840473097  [subagent-2] ⚡ Interrupted during API call.
+2026-05-31 16:26:12.841322791  [subagent-0] ⚡ Interrupted during API call.
+2026-05-31 16:57:51.337240679    💾 Self-improvement review: User profile updated
+2026-05-31 17:07:02.297391194  [subagent-0] ⚡ Interrupted during API call.
+2026-05-31 17:17:04.119894957  [subagent-0] ⚡ Interrupted during API call.
+2026-05-31 17:37:05.230385106    💾 Self-improvement review: User profile updated
+2026-05-31 17:52:56.516174844    💾 Self-improvement review: User profile updated · Memory updated

@@ -1,0 +1,18 @@
+  # ── Lifecycle Service ──────────────────────────────────────────────
+  lifecycle:
+    build:
+      context: .
+      dockerfile: services/lifecycle/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - MODULE_ID=lifecycle
+    ports:
+      - "8018:8018"
+    depends_on:
+      - db
+    volumes:
+      - ./services/lifecycle:/app/services/lifecycle:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped

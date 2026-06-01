@@ -1,0 +1,21 @@
+# Web Analytics Service — Docker Compose additions
+# Append these to the services section of docker-compose.yaml
+
+  # ── Web Analytics Service ──────────────────────────────────────────
+  web_analytics:
+    build:
+      context: .
+      dockerfile: services/web_analytics/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - ANALYTICS_IP_SALT=omnidome-web-analytics-${POSTGRES_DB}
+    ports:
+      - "8016:8016"
+    depends_on:
+      - db
+    volumes:
+      - ./services/web_analytics:/app/services/web_analytics:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped

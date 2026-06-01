@@ -1,0 +1,91 @@
+{
+  "jobs": [
+    {
+      "id": "c37a101b5787",
+      "name": "VM Backup \u2014 Daily",
+      "prompt": "Daily VM backup task. Run:\n```\ncd /tmp/Hermes && git add . && git diff --cached --quiet || git commit -m \"Auto-backup: $(date +%Y-%m-%d)\" && git push origin main\n```\nIf the git push fails, retry once after 30 seconds. Report the result.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 0 * * *",
+        "display": "0 0 * * *"
+      },
+      "schedule_display": "0 0 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-31T20:14:39.979440+00:00",
+      "next_run_at": "2026-06-02T00:00:00+00:00",
+      "last_run_at": "2026-06-01T00:02:37.358466+00:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "origin",
+      "origin": {
+        "platform": "telegram",
+        "chat_id": "8975916657",
+        "chat_name": "Bene Majozi",
+        "thread_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "profile": null
+    },
+    {
+      "id": "ae7134132653",
+      "name": "Daily VM Backup",
+      "prompt": "Daily VM backup to git. Run:\n\n```bash\ncd /tmp/Hermes && \\\ncp -r /opt/data/home/omnidome-patches ./omnidome-patches 2>/dev/null && \\\ncp -r /opt/data/home/Documents/Obsidian\\ Vault \"./Obsidian Vault\" 2>/dev/null && \\\ngit add . && \\\ngit diff --cached --quiet || (git commit -m \"Auto-backup $(date +%Y-%m-%d)\" && git push origin main) || echo \"No changes\"\n```\n\nReport push status.",
+      "skills": [],
+      "skill": null,
+      "model": null,
+      "provider": null,
+      "base_url": null,
+      "script": null,
+      "no_agent": false,
+      "context_from": null,
+      "schedule": {
+        "kind": "cron",
+        "expr": "0 0 * * *",
+        "display": "0 0 * * *"
+      },
+      "schedule_display": "0 0 * * *",
+      "repeat": {
+        "times": null,
+        "completed": 1
+      },
+      "enabled": true,
+      "state": "scheduled",
+      "paused_at": null,
+      "paused_reason": null,
+      "created_at": "2026-05-31T21:06:12.707985+00:00",
+      "next_run_at": "2026-06-02T00:00:00+00:00",
+      "last_run_at": "2026-06-01T00:04:38.413486+00:00",
+      "last_status": "ok",
+      "last_error": null,
+      "last_delivery_error": null,
+      "deliver": "origin",
+      "origin": {
+        "platform": "telegram",
+        "chat_id": "8975916657",
+        "chat_name": "Bene Majozi",
+        "thread_id": null
+      },
+      "enabled_toolsets": null,
+      "workdir": null,
+      "profile": null
+    }
+  ],
+  "updated_at": "2026-06-01T00:04:38.414466+00:00"
+}

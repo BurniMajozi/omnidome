@@ -1,0 +1,771 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.8
+2 info using node@v22.22.3
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/opt/data/home/omnidome-web/.npmrc
+5 silly config load:file:/opt/data/home/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm install
+8 verbose argv "install" "--no-audit" "--no-fund" "--legacy-peer-deps"
+9 verbose logfile logs-max:10 dir:/opt/data/home/.npm/_logs/2026-06-01T08_45_20_409Z-
+10 verbose logfile /opt/data/home/.npm/_logs/2026-06-01T08_45_20_409Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 silly logfile done cleaning log files
+13 silly packumentCache heap:521142272 maxSize:130285568 maxEntrySize:65142784
+14 silly idealTree buildDeps
+15 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/acorn' ]
+16 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/aria-query' ]
+17 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/autoprefixer' ]
+18 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/axe-core' ]
+19 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/axobject-query' ]
+20 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/ajv' ]
+21 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/caniuse-lite' ]
+22 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/csstype' ]
+23 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-array' ]
+24 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-ease' ]
+25 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-format' ]
+26 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-interpolate' ]
+27 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-time-format' ]
+28 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-scale' ]
+29 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/d3-shape' ]
+30 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/date-fns-jalali' ]
+31 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/date-fns' ]
+32 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/dom-helpers' ]
+33 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/embla-carousel' ]
+34 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/enhanced-resolve' ]
+35 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/es-abstract' ]
+36 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/es-iterator-helpers' ]
+37 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/eslint-plugin-jsx-a11y' ]
+38 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/eslint-plugin-import' ]
+39 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/eslint' ]
+40 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/eslint-plugin-react' ]
+41 silly reify mark retired [
+41 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-plugin-react-hooks'
+41 silly reify ]
+42 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/esquery' ]
+43 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/fast-glob' ]
+44 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/framer-motion' ]
+45 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/fraction.js' ]
+46 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/fumadocs-ui' ]
+47 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/fumadocs-mdx' ]
+48 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/fumadocs-core' ]
+49 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/hast-util-to-estree' ]
+50 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/hast-util-to-html' ]
+51 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/image-size' ]
+52 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/jiti' ]
+53 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/js-yaml' ]
+54 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/jsx-ast-utils' ]
+55 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/language-subtag-registry' ]
+56 silly reify mark retired [
+56 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-darwin-arm64'
+56 silly reify ]
+57 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/lightningcss-darwin-x64' ]
+58 silly reify mark retired [
+58 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-android-arm64'
+58 silly reify ]
+59 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/lightningcss-freebsd-x64' ]
+60 silly reify mark retired [
+60 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm64-musl'
+60 silly reify ]
+61 silly reify mark retired [
+61 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm64-gnu'
+61 silly reify ]
+62 silly reify mark retired [
+62 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm-gnueabihf'
+62 silly reify ]
+63 silly reify mark retired [
+63 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-win32-arm64-msvc'
+63 silly reify ]
+64 silly reify mark retired [
+64 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-win32-x64-msvc'
+64 silly reify ]
+65 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/lodash' ]
+66 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/lucide-react' ]
+67 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/mdast-util-to-hast' ]
+68 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/mdast-util-to-markdown' ]
+69 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/micromark' ]
+70 silly reify mark retired [
+70 silly reify   '/opt/data/home/omnidome-web/node_modules/micromark-core-commonmark'
+70 silly reify ]
+71 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/minimist' ]
+72 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/motion-dom' ]
+73 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/next' ]
+74 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/object-inspect' ]
+75 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/oniguruma-parser' ]
+76 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/postcss' ]
+77 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/postcss-selector-parser' ]
+78 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react' ]
+79 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-day-picker' ]
+80 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/property-information' ]
+81 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-dom' ]
+82 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-remove-scroll' ]
+83 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-remove-scroll-bar' ]
+84 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-resizable-panels' ]
+85 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-smooth' ]
+86 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-transition-group' ]
+87 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/react-style-singleton' ]
+88 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/recharts' ]
+89 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/recharts-scale' ]
+90 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/regex' ]
+91 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/resolve' ]
+92 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/semver' ]
+93 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/sharp' ]
+94 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/styled-jsx' ]
+95 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/typescript' ]
+96 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/use-sidecar' ]
+97 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/use-callback-ref' ]
+98 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/uri-js' ]
+99 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/victory-vendor' ]
+100 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/zod' ]
+101 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/compat-data' ]
+102 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/core' ]
+103 silly reify mark retired [
+103 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-compilation-targets'
+103 silly reify ]
+104 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/generator' ]
+105 silly reify mark retired [
+105 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-module-transforms'
+105 silly reify ]
+106 silly reify mark retired [
+106 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-module-imports'
+106 silly reify ]
+107 silly reify mark retired [
+107 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-validator-identifier'
+107 silly reify ]
+108 silly reify mark retired [
+108 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-validator-option'
+108 silly reify ]
+109 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/helpers' ]
+110 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/runtime' ]
+111 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/parser' ]
+112 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/template' ]
+113 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/traverse' ]
+114 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/types' ]
+115 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@beeper/desktop-api' ]
+116 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@emnapi/core' ]
+117 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@date-fns/tz' ]
+118 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@emnapi/runtime' ]
+119 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/aix-ppc64' ]
+120 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@emnapi/wasi-threads' ]
+121 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/android-arm' ]
+122 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/darwin-arm64' ]
+123 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/android-arm64' ]
+124 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/android-x64' ]
+125 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/darwin-x64' ]
+126 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/freebsd-arm64' ]
+127 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/freebsd-x64' ]
+128 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-arm64' ]
+129 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-arm' ]
+130 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-ia32' ]
+131 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-mips64el' ]
+132 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-loong64' ]
+133 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-ppc64' ]
+134 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-s390x' ]
+135 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-riscv64' ]
+136 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-x64' ]
+137 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/netbsd-arm64' ]
+138 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/netbsd-x64' ]
+139 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/openbsd-arm64' ]
+140 silly reify mark retired [
+140 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/openharmony-arm64'
+140 silly reify ]
+141 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/sunos-x64' ]
+142 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/openbsd-x64' ]
+143 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-arm64' ]
+144 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-ia32' ]
+145 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@eslint/config-array' ]
+146 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@eslint/config-helpers' ]
+147 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@eslint/eslintrc' ]
+148 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@eslint/plugin-kit' ]
+149 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@eslint/object-schema' ]
+150 silly reify mark retired [
+150 silly reify   '/opt/data/home/omnidome-web/node_modules/@formatjs/intl-localematcher'
+150 silly reify ]
+151 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@floating-ui/utils' ]
+152 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@hookform/resolvers' ]
+153 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@humanfs/core' ]
+154 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-darwin-arm64' ]
+155 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-darwin-x64' ]
+156 silly reify mark retired [
+156 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-darwin-arm64'
+156 silly reify ]
+157 silly reify mark retired [
+157 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-darwin-x64'
+157 silly reify ]
+158 silly reify mark retired [
+158 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-arm'
+158 silly reify ]
+159 silly reify mark retired [
+159 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-ppc64'
+159 silly reify ]
+160 silly reify mark retired [
+160 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-arm64'
+160 silly reify ]
+161 silly reify mark retired [
+161 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-riscv64'
+161 silly reify ]
+162 silly reify mark retired [
+162 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linuxmusl-arm64'
+162 silly reify ]
+163 silly reify mark retired [
+163 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-x64'
+163 silly reify ]
+164 silly reify mark retired [
+164 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linuxmusl-x64'
+164 silly reify ]
+165 silly reify mark retired [
+165 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-s390x'
+165 silly reify ]
+166 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-arm' ]
+167 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-arm64' ]
+168 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-ppc64' ]
+169 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-riscv64' ]
+170 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-s390x' ]
+171 silly reify mark retired [
+171 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linuxmusl-arm64'
+171 silly reify ]
+172 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-wasm32' ]
+173 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-arm64' ]
+174 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-ia32' ]
+175 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-x64' ]
+176 silly reify mark retired [
+176 silly reify   '/opt/data/home/omnidome-web/node_modules/@jridgewell/trace-mapping'
+176 silly reify ]
+177 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@mdx-js/mdx' ]
+178 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@napi-rs/wasm-runtime' ]
+179 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@next/eslint-plugin-next' ]
+180 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@next/swc-darwin-arm64' ]
+181 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@next/swc-darwin-x64' ]
+182 silly reify mark retired [
+182 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-linux-arm64-gnu'
+182 silly reify ]
+183 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@next/swc-win32-x64-msvc' ]
+184 silly reify mark retired [
+184 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-win32-arm64-msvc'
+184 silly reify ]
+185 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.scandir' ]
+186 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.walk' ]
+187 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.stat' ]
+188 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@orama/orama' ]
+189 silly reify mark retired [
+189 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-accordion'
+189 silly reify ]
+190 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-checkbox' ]
+191 silly reify mark retired [
+191 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-alert-dialog'
+191 silly reify ]
+192 silly reify mark retired [
+192 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-collapsible'
+192 silly reify ]
+193 silly reify mark retired [
+193 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-context-menu'
+193 silly reify ]
+194 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dialog' ]
+195 silly reify mark retired [
+195 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dropdown-menu'
+195 silly reify ]
+196 silly reify mark retired [
+196 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-focus-scope'
+196 silly reify ]
+197 silly reify mark retired [
+197 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-hover-card'
+197 silly reify ]
+198 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-icons' ]
+199 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-menu' ]
+200 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-menubar' ]
+201 silly reify mark retired [
+201 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-navigation-menu'
+201 silly reify ]
+202 silly reify mark retired [
+202 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-scroll-area'
+202 silly reify ]
+203 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-select' ]
+204 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-toast' ]
+205 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-tooltip' ]
+206 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-x64' ]
+207 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@supabase/auth-js' ]
+208 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@supabase/realtime-js' ]
+209 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@swc/helpers' ]
+210 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@supabase/supabase-js' ]
+211 silly reify mark retired [
+211 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-linux-arm64-musl'
+211 silly reify ]
+212 silly reify mark retired [
+212 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-android-arm64'
+212 silly reify ]
+213 silly reify mark retired [
+213 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-darwin-x64'
+213 silly reify ]
+214 silly reify mark retired [
+214 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-darwin-arm64'
+214 silly reify ]
+215 silly reify mark retired [
+215 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-freebsd-x64'
+215 silly reify ]
+216 silly reify mark retired [
+216 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm-gnueabihf'
+216 silly reify ]
+217 silly reify mark retired [
+217 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm64-musl'
+217 silly reify ]
+218 silly reify mark retired [
+218 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm64-gnu'
+218 silly reify ]
+219 silly reify mark retired [
+219 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-win32-arm64-msvc'
+219 silly reify ]
+220 silly reify mark retired [
+220 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-wasm32-wasi'
+220 silly reify ]
+221 silly reify mark retired [
+221 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-win32-x64-msvc'
+221 silly reify ]
+222 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@tybys/wasm-util' ]
+223 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@supabase/functions-js' ]
+224 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@types/react' ]
+225 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@types/node' ]
+226 silly reify mark retired [
+226 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/eslint-plugin'
+226 silly reify ]
+227 silly reify mark retired [
+227 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/scope-manager'
+227 silly reify ]
+228 silly reify mark retired [
+228 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/type-utils'
+228 silly reify ]
+229 silly reify mark retired [
+229 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/typescript-estree'
+229 silly reify ]
+230 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/utils' ]
+231 silly reify mark retired [
+231 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-android-arm-eabi'
+231 silly reify ]
+232 silly reify mark retired [
+232 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-android-arm64'
+232 silly reify ]
+233 silly reify mark retired [
+233 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-darwin-x64'
+233 silly reify ]
+234 silly reify mark retired [
+234 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-darwin-arm64'
+234 silly reify ]
+235 silly reify mark retired [
+235 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-freebsd-x64'
+235 silly reify ]
+236 silly reify mark retired [
+236 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm-gnueabihf'
+236 silly reify ]
+237 silly reify mark retired [
+237 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm-musleabihf'
+237 silly reify ]
+238 silly reify mark retired [
+238 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm64-gnu'
+238 silly reify ]
+239 silly reify mark retired [
+239 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-ppc64-gnu'
+239 silly reify ]
+240 silly reify mark retired [
+240 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-riscv64-gnu'
+240 silly reify ]
+241 silly reify mark retired [
+241 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm64-musl'
+241 silly reify ]
+242 silly reify mark retired [
+242 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-riscv64-musl'
+242 silly reify ]
+243 silly reify mark retired [
+243 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-s390x-gnu'
+243 silly reify ]
+244 silly reify mark retired [
+244 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-x64-msvc'
+244 silly reify ]
+245 silly reify mark retired [
+245 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-wasm32-wasi'
+245 silly reify ]
+246 silly reify mark retired [
+246 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-arm64-msvc'
+246 silly reify ]
+247 silly reify mark retired [
+247 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-ia32-msvc'
+247 silly reify ]
+248 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@vercel/analytics' ]
+249 silly reify mark retired [
+249 silly reify   '/opt/data/home/omnidome-web/node_modules/baseline-browser-mapping',
+249 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/baseline-browser-mapping'
+249 silly reify ]
+250 silly reify mark retired [
+250 silly reify   '/opt/data/home/omnidome-web/node_modules/astring',
+250 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/astring'
+250 silly reify ]
+251 silly reify mark retired [
+251 silly reify   '/opt/data/home/omnidome-web/node_modules/browserslist',
+251 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/browserslist'
+251 silly reify ]
+252 silly reify mark retired [
+252 silly reify   '/opt/data/home/omnidome-web/node_modules/cssesc',
+252 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/cssesc'
+252 silly reify ]
+253 silly reify mark retired [
+253 silly reify   '/opt/data/home/omnidome-web/node_modules/esbuild',
+253 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/esbuild'
+253 silly reify ]
+254 silly reify mark retired [
+254 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-config-next/node_modules/globals'
+254 silly reify ]
+255 silly reify mark retired [
+255 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-module-utils/node_modules/debug'
+255 silly reify ]
+256 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/eslint-scope' ]
+257 silly reify mark retired [
+257 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-import-resolver-node/node_modules/debug'
+257 silly reify ]
+258 silly reify mark retired [
+258 silly reify   '/opt/data/home/omnidome-web/node_modules/jsesc',
+258 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/jsesc'
+258 silly reify ]
+259 silly reify mark retired [
+259 silly reify   '/opt/data/home/omnidome-web/node_modules/json5',
+259 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/json5'
+259 silly reify ]
+260 silly reify mark retired [
+260 silly reify   '/opt/data/home/omnidome-web/node_modules/loose-envify',
+260 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/loose-envify'
+260 silly reify ]
+261 silly reify mark retired [
+261 silly reify   '/opt/data/home/omnidome-web/node_modules/micromatch/node_modules/picomatch'
+261 silly reify ]
+262 silly reify mark retired [
+262 silly reify   '/opt/data/home/omnidome-web/node_modules/minimatch/node_modules/brace-expansion'
+262 silly reify ]
+263 silly reify mark retired [
+263 silly reify   '/opt/data/home/omnidome-web/node_modules/napi-postinstall',
+263 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/napi-postinstall'
+263 silly reify ]
+264 silly reify mark retired [
+264 silly reify   '/opt/data/home/omnidome-web/node_modules/nanoid',
+264 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/nanoid'
+264 silly reify ]
+265 silly reify mark retired [
+265 silly reify   '/opt/data/home/omnidome-web/node_modules/parse-entities/node_modules/@types/unist'
+265 silly reify ]
+266 silly reify mark retired [
+266 silly reify   '/opt/data/home/omnidome-web/node_modules/tsconfig-paths/node_modules/json5'
+266 silly reify ]
+267 silly reify mark retired [
+267 silly reify   '/opt/data/home/omnidome-web/node_modules/update-browserslist-db',
+267 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/update-browserslist-db'
+267 silly reify ]
+268 silly reify mark retired [
+268 silly reify   '/opt/data/home/omnidome-web/node_modules/which',
+268 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/node-which'
+268 silly reify ]
+269 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@babel/helper-globals' ]
+270 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@humanwhocodes/retry' ]
+271 silly reify mark retired [
+271 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint-community/eslint-utils/node_modules/eslint-visitor-keys'
+271 silly reify ]
+272 silly reify mark retired [ '/opt/data/home/omnidome-web/node_modules/@jridgewell/remapping' ]
+273 silly reify mark retired [
+273 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dismissable-layer'
+273 silly reify ]
+274 silly reify mark retired [
+274 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-use-effect-event/node_modules/@radix-ui/react-use-layout-effect'
+274 silly reify ]
+275 silly reify moves {
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/acorn': '/opt/data/home/omnidome-web/node_modules/.acorn-6UZik9Uj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/aria-query': '/opt/data/home/omnidome-web/node_modules/.aria-query-9TyHdwcZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/autoprefixer': '/opt/data/home/omnidome-web/node_modules/.autoprefixer-v9SXvC1N',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/axe-core': '/opt/data/home/omnidome-web/node_modules/.axe-core-88ebgfib',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/axobject-query': '/opt/data/home/omnidome-web/node_modules/.axobject-query-teFSt4DA',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/ajv': '/opt/data/home/omnidome-web/node_modules/.ajv-B0NL9pOa',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/caniuse-lite': '/opt/data/home/omnidome-web/node_modules/.caniuse-lite-o9RdcBkK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/csstype': '/opt/data/home/omnidome-web/node_modules/.csstype-cHYHcPDD',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-array': '/opt/data/home/omnidome-web/node_modules/.d3-array-EoeHqvft',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-ease': '/opt/data/home/omnidome-web/node_modules/.d3-ease-9pB8mXF4',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-format': '/opt/data/home/omnidome-web/node_modules/.d3-format-0rmYs7nB',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-interpolate': '/opt/data/home/omnidome-web/node_modules/.d3-interpolate-Ub8fewtP',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-time-format': '/opt/data/home/omnidome-web/node_modules/.d3-time-format-Xox4BE4c',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-scale': '/opt/data/home/omnidome-web/node_modules/.d3-scale-ZHmeXGSJ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/d3-shape': '/opt/data/home/omnidome-web/node_modules/.d3-shape-fMHbIJnC',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/date-fns-jalali': '/opt/data/home/omnidome-web/node_modules/.date-fns-jalali-n3W7vsFQ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/date-fns': '/opt/data/home/omnidome-web/node_modules/.date-fns-SgABVs8R',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/dom-helpers': '/opt/data/home/omnidome-web/node_modules/.dom-helpers-cUbq16cw',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/embla-carousel': '/opt/data/home/omnidome-web/node_modules/.embla-carousel-2L3yeKyq',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/enhanced-resolve': '/opt/data/home/omnidome-web/node_modules/.enhanced-resolve-ICecaAFy',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/es-abstract': '/opt/data/home/omnidome-web/node_modules/.es-abstract-hPE7ax5C',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/es-iterator-helpers': '/opt/data/home/omnidome-web/node_modules/.es-iterator-helpers-VvcK6WIj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-plugin-jsx-a11y': '/opt/data/home/omnidome-web/node_modules/.eslint-plugin-jsx-a11y-1yNnACTV',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-plugin-import': '/opt/data/home/omnidome-web/node_modules/.eslint-plugin-import-cgJyDdn0',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint': '/opt/data/home/omnidome-web/node_modules/.eslint-91DcdAQF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-plugin-react': '/opt/data/home/omnidome-web/node_modules/.eslint-plugin-react-jLjHZLAj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-plugin-react-hooks': '/opt/data/home/omnidome-web/node_modules/.eslint-plugin-react-hooks-Mrwe5HXK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/esquery': '/opt/data/home/omnidome-web/node_modules/.esquery-nVoliyuT',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/fast-glob': '/opt/data/home/omnidome-web/node_modules/.fast-glob-7YFDcn1X',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/framer-motion': '/opt/data/home/omnidome-web/node_modules/.framer-motion-Vu2DIAw9',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/fraction.js': '/opt/data/home/omnidome-web/node_modules/.fraction.js-72PH7o8n',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/fumadocs-ui': '/opt/data/home/omnidome-web/node_modules/.fumadocs-ui-cQZQ0YBX',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/fumadocs-mdx': '/opt/data/home/omnidome-web/node_modules/.fumadocs-mdx-UBjx2TYz',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/fumadocs-core': '/opt/data/home/omnidome-web/node_modules/.fumadocs-core-Pg2YKaY4',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/hast-util-to-estree': '/opt/data/home/omnidome-web/node_modules/.hast-util-to-estree-KbGOSEp9',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/hast-util-to-html': '/opt/data/home/omnidome-web/node_modules/.hast-util-to-html-OsImu1oi',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/image-size': '/opt/data/home/omnidome-web/node_modules/.image-size-xYajrssZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/jiti': '/opt/data/home/omnidome-web/node_modules/.jiti-MpwbofLt',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/js-yaml': '/opt/data/home/omnidome-web/node_modules/.js-yaml-tnhUO1At',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/jsx-ast-utils': '/opt/data/home/omnidome-web/node_modules/.jsx-ast-utils-y7DHzb6r',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/language-subtag-registry': '/opt/data/home/omnidome-web/node_modules/.language-subtag-registry-G9hdVcRK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/.lightningcss-darwin-arm64-K1Xlupf7',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-darwin-x64': '/opt/data/home/omnidome-web/node_modules/.lightningcss-darwin-x64-U8B1UTSQ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-android-arm64': '/opt/data/home/omnidome-web/node_modules/.lightningcss-android-arm64-gS3NNYjJ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-freebsd-x64': '/opt/data/home/omnidome-web/node_modules/.lightningcss-freebsd-x64-rh9kA83F',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm64-musl': '/opt/data/home/omnidome-web/node_modules/.lightningcss-linux-arm64-musl-6mC17naA',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm64-gnu': '/opt/data/home/omnidome-web/node_modules/.lightningcss-linux-arm64-gnu-x102qVZ5',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-linux-arm-gnueabihf': '/opt/data/home/omnidome-web/node_modules/.lightningcss-linux-arm-gnueabihf-4td1y8Dm',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-win32-arm64-msvc': '/opt/data/home/omnidome-web/node_modules/.lightningcss-win32-arm64-msvc-tzbhmKrN',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lightningcss-win32-x64-msvc': '/opt/data/home/omnidome-web/node_modules/.lightningcss-win32-x64-msvc-emnK1LTg',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lodash': '/opt/data/home/omnidome-web/node_modules/.lodash-AVpQMY1T',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/lucide-react': '/opt/data/home/omnidome-web/node_modules/.lucide-react-149MNDMZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/mdast-util-to-hast': '/opt/data/home/omnidome-web/node_modules/.mdast-util-to-hast-9duD5dmu',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/mdast-util-to-markdown': '/opt/data/home/omnidome-web/node_modules/.mdast-util-to-markdown-kFtFsLnF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/micromark': '/opt/data/home/omnidome-web/node_modules/.micromark-Xayu5ZNF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/micromark-core-commonmark': '/opt/data/home/omnidome-web/node_modules/.micromark-core-commonmark-uHbEecVf',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/minimist': '/opt/data/home/omnidome-web/node_modules/.minimist-IGfYUroP',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/motion-dom': '/opt/data/home/omnidome-web/node_modules/.motion-dom-O4ex9Kjg',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/next': '/opt/data/home/omnidome-web/node_modules/.next-3gFgXRNs',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/object-inspect': '/opt/data/home/omnidome-web/node_modules/.object-inspect-wjmHXABc',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/oniguruma-parser': '/opt/data/home/omnidome-web/node_modules/.oniguruma-parser-pLbjiYBH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/postcss': '/opt/data/home/omnidome-web/node_modules/.postcss-HlN3lwTz',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/postcss-selector-parser': '/opt/data/home/omnidome-web/node_modules/.postcss-selector-parser-JnSoyYgE',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react': '/opt/data/home/omnidome-web/node_modules/.react-GOcCnuTU',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-day-picker': '/opt/data/home/omnidome-web/node_modules/.react-day-picker-6qlc8MgN',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/property-information': '/opt/data/home/omnidome-web/node_modules/.property-information-GQLIAWcp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-dom': '/opt/data/home/omnidome-web/node_modules/.react-dom-TeDPDMaZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-remove-scroll': '/opt/data/home/omnidome-web/node_modules/.react-remove-scroll-O3aQG3Ee',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-remove-scroll-bar': '/opt/data/home/omnidome-web/node_modules/.react-remove-scroll-bar-rJvUlzXx',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-resizable-panels': '/opt/data/home/omnidome-web/node_modules/.react-resizable-panels-Q9kHoGsa',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-smooth': '/opt/data/home/omnidome-web/node_modules/.react-smooth-5nkN3VGn',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-transition-group': '/opt/data/home/omnidome-web/node_modules/.react-transition-group-YT4OERKI',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/react-style-singleton': '/opt/data/home/omnidome-web/node_modules/.react-style-singleton-GYDe3wmw',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/recharts': '/opt/data/home/omnidome-web/node_modules/.recharts-5LVgngi4',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/recharts-scale': '/opt/data/home/omnidome-web/node_modules/.recharts-scale-ayQjYH3Y',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/regex': '/opt/data/home/omnidome-web/node_modules/.regex-w2zJEHcg',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/resolve': '/opt/data/home/omnidome-web/node_modules/.resolve-pcgJBbZl',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/semver': '/opt/data/home/omnidome-web/node_modules/.semver-VWAtCVjO',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/sharp': '/opt/data/home/omnidome-web/node_modules/.sharp-eTCVPMxw',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/styled-jsx': '/opt/data/home/omnidome-web/node_modules/.styled-jsx-wmnhniHr',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/typescript': '/opt/data/home/omnidome-web/node_modules/.typescript-1E6y8gtf',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/use-sidecar': '/opt/data/home/omnidome-web/node_modules/.use-sidecar-dalhRMvm',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/use-callback-ref': '/opt/data/home/omnidome-web/node_modules/.use-callback-ref-moDWyKcH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/uri-js': '/opt/data/home/omnidome-web/node_modules/.uri-js-Bbr4m7zE',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/victory-vendor': '/opt/data/home/omnidome-web/node_modules/.victory-vendor-POvDny26',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/zod': '/opt/data/home/omnidome-web/node_modules/.zod-sp8rlLjk',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/compat-data': '/opt/data/home/omnidome-web/node_modules/@babel/.compat-data-qS44gqBT',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/core': '/opt/data/home/omnidome-web/node_modules/@babel/.core-cyRHFlHN',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-compilation-targets': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-compilation-targets-LktNxMaC',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/generator': '/opt/data/home/omnidome-web/node_modules/@babel/.generator-3NAlFUoI',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-module-transforms': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-module-transforms-qTr0Xp7c',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-module-imports': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-module-imports-wxBuu7ck',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-validator-identifier': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-validator-identifier-mTHeIol3',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-validator-option': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-validator-option-ZVrxpdCQ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helpers': '/opt/data/home/omnidome-web/node_modules/@babel/.helpers-lZ28b90d',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/runtime': '/opt/data/home/omnidome-web/node_modules/@babel/.runtime-pgJf3XUL',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/parser': '/opt/data/home/omnidome-web/node_modules/@babel/.parser-se38qdep',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/template': '/opt/data/home/omnidome-web/node_modules/@babel/.template-OaRx8Dfp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/traverse': '/opt/data/home/omnidome-web/node_modules/@babel/.traverse-MjORef3T',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/types': '/opt/data/home/omnidome-web/node_modules/@babel/.types-2Copf611',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@beeper/desktop-api': '/opt/data/home/omnidome-web/node_modules/@beeper/.desktop-api-2gmATbDT',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@emnapi/core': '/opt/data/home/omnidome-web/node_modules/@emnapi/.core-eWCUtndc',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@date-fns/tz': '/opt/data/home/omnidome-web/node_modules/@date-fns/.tz-eloP9Xlt',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@emnapi/runtime': '/opt/data/home/omnidome-web/node_modules/@emnapi/.runtime-nGWmXyQQ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/aix-ppc64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.aix-ppc64-SZRMgyCd',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@emnapi/wasi-threads': '/opt/data/home/omnidome-web/node_modules/@emnapi/.wasi-threads-J6ZwqWDZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/android-arm': '/opt/data/home/omnidome-web/node_modules/@esbuild/.android-arm-ORuZj0ot',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.darwin-arm64-9hDgJaJW',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/android-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.android-arm64-JZB6PRSE',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/android-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.android-x64-GYRCsLmU',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/darwin-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.darwin-x64-XVAKeX5l',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/freebsd-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.freebsd-arm64-hKEPEGEa',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/freebsd-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.freebsd-x64-YunQYBNn',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-arm64-CqaSSIPP',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-arm': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-arm-jxxIfKi5',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-ia32': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-ia32-0xVmayRe',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-mips64el': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-mips64el-heX9dlIC',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-loong64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-loong64-gvAgTOER',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-ppc64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-ppc64-PtlCBmFd',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-s390x': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-s390x-6o54IXcF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-riscv64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-riscv64-Qf5QZ85m',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/linux-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.linux-x64-PpkjP1b8',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/netbsd-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.netbsd-arm64-BhyT5Wrs',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/netbsd-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.netbsd-x64-QlFmGnQZ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/openbsd-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.openbsd-arm64-e4DlBEbm',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/openharmony-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.openharmony-arm64-h8axAieR',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/sunos-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.sunos-x64-yaL3bmFM',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/openbsd-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.openbsd-x64-kSWgmZmQ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-arm64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.win32-arm64-tfxMa92o',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-ia32': '/opt/data/home/omnidome-web/node_modules/@esbuild/.win32-ia32-LiLzN6rR',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint/config-array': '/opt/data/home/omnidome-web/node_modules/@eslint/.config-array-HUN6xICi',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint/config-helpers': '/opt/data/home/omnidome-web/node_modules/@eslint/.config-helpers-HEzkt3at',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint/eslintrc': '/opt/data/home/omnidome-web/node_modules/@eslint/.eslintrc-vcKb3VYL',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint/plugin-kit': '/opt/data/home/omnidome-web/node_modules/@eslint/.plugin-kit-V712dK4x',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint/object-schema': '/opt/data/home/omnidome-web/node_modules/@eslint/.object-schema-81VrXB5w',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@formatjs/intl-localematcher': '/opt/data/home/omnidome-web/node_modules/@formatjs/.intl-localematcher-t5mQF5AM',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@floating-ui/utils': '/opt/data/home/omnidome-web/node_modules/@floating-ui/.utils-uBFqLhHW',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@hookform/resolvers': '/opt/data/home/omnidome-web/node_modules/@hookform/.resolvers-0QmNYkY2',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@humanfs/core': '/opt/data/home/omnidome-web/node_modules/@humanfs/.core-ImlMD2wb',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-darwin-arm64-9hnoj6M8',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-darwin-x64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-darwin-x64-DzXn2CBx',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-darwin-arm64-aT5DjFhr',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-darwin-x64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-darwin-x64-28AEJgfP',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-arm': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-arm-mIEtsAAp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-ppc64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-ppc64-UMIWsiyl',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-arm64-fnLa0grs',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-riscv64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-riscv64-PvwwLBMy',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linuxmusl-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linuxmusl-arm64-WapdgUa6',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-x64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-x64-xc1Am9LC',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linuxmusl-x64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linuxmusl-x64-GvcmjPR2',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-libvips-linux-s390x': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-libvips-linux-s390x-YHkHinlp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-arm': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linux-arm-p0b274JE',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linux-arm64-9iVFsRFD',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-ppc64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linux-ppc64-zw2COu9U',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-riscv64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linux-riscv64-5NzVTdBR',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linux-s390x': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linux-s390x-ilntozo6',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-linuxmusl-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-linuxmusl-arm64-bkqaQlWu',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-wasm32': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-wasm32-vb3wRpuq',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-arm64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-win32-arm64-ZiXfWw39',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-ia32': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-win32-ia32-nn4ELBD6',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@img/sharp-win32-x64': '/opt/data/home/omnidome-web/node_modules/@img/.sharp-win32-x64-yUs9Zdgc',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@jridgewell/trace-mapping': '/opt/data/home/omnidome-web/node_modules/@jridgewell/.trace-mapping-2itSohFu',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@mdx-js/mdx': '/opt/data/home/omnidome-web/node_modules/@mdx-js/.mdx-8aEHbNNV',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@napi-rs/wasm-runtime': '/opt/data/home/omnidome-web/node_modules/@napi-rs/.wasm-runtime-MG21Mi7g',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/eslint-plugin-next': '/opt/data/home/omnidome-web/node_modules/@next/.eslint-plugin-next-pOQxqu4h',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@next/.swc-darwin-arm64-jqyeVluG',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-darwin-x64': '/opt/data/home/omnidome-web/node_modules/@next/.swc-darwin-x64-4obiryvH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-linux-arm64-gnu': '/opt/data/home/omnidome-web/node_modules/@next/.swc-linux-arm64-gnu-1xdC8mhy',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-win32-x64-msvc': '/opt/data/home/omnidome-web/node_modules/@next/.swc-win32-x64-msvc-6CsO1zud',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-win32-arm64-msvc': '/opt/data/home/omnidome-web/node_modules/@next/.swc-win32-arm64-msvc-xkVgkXm1',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.scandir': '/opt/data/home/omnidome-web/node_modules/@nodelib/.fs.scandir-co0rmQQ8',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.walk': '/opt/data/home/omnidome-web/node_modules/@nodelib/.fs.walk-hKGoX9L2',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@nodelib/fs.stat': '/opt/data/home/omnidome-web/node_modules/@nodelib/.fs.stat-XzXyPuZH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@orama/orama': '/opt/data/home/omnidome-web/node_modules/@orama/.orama-AC6KpBI4',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-accordion': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-accordion-u3bfwPVK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-checkbox': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-checkbox-w0KVAiP4',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-alert-dialog': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-alert-dialog-luhOQva7',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-collapsible': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-collapsible-eC7Gflqv',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-context-menu': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-context-menu-wFKMPcLD',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dialog': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-dialog-gckb1lgB',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dropdown-menu': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-dropdown-menu-015X1q6j',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-focus-scope': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-focus-scope-5ZwccGnS',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-hover-card': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-hover-card-khcFEV6g',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-icons': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-icons-uUeZbpaB',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-menu': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-menu-78Tmq0JF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-menubar': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-menubar-ejggVd6z',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-navigation-menu': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-navigation-menu-yVNUOYq2',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-scroll-area': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-scroll-area-9iPwryBv',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-select': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-select-pMBP27DJ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-toast': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-toast-v746vMPM',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-tooltip': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-tooltip-RbbdiGxC',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@esbuild/win32-x64': '/opt/data/home/omnidome-web/node_modules/@esbuild/.win32-x64-trRwc3Sb',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@supabase/auth-js': '/opt/data/home/omnidome-web/node_modules/@supabase/.auth-js-tihDXvdX',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@supabase/realtime-js': '/opt/data/home/omnidome-web/node_modules/@supabase/.realtime-js-ik4WFz2g',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@swc/helpers': '/opt/data/home/omnidome-web/node_modules/@swc/.helpers-x0K61nYG',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@supabase/supabase-js': '/opt/data/home/omnidome-web/node_modules/@supabase/.supabase-js-xK9XrO8l',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@next/swc-linux-arm64-musl': '/opt/data/home/omnidome-web/node_modules/@next/.swc-linux-arm64-musl-pD0LHawI',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-android-arm64': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-android-arm64-TY2BuLDq',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-darwin-x64': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-darwin-x64-6qNUUh1v',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-darwin-arm64-xi5fQRRK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-freebsd-x64': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-freebsd-x64-RI4DeSfm',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm-gnueabihf': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-linux-arm-gnueabihf-osdnpEp5',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm64-musl': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-linux-arm64-musl-NPfouUSP',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-linux-arm64-gnu': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-linux-arm64-gnu-m071EZmS',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-win32-arm64-msvc': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-win32-arm64-msvc-y0Drr5Yj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-wasm32-wasi': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-wasm32-wasi-LJRxq5FR',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tailwindcss/oxide-win32-x64-msvc': '/opt/data/home/omnidome-web/node_modules/@tailwindcss/.oxide-win32-x64-msvc-altnIDxe',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@tybys/wasm-util': '/opt/data/home/omnidome-web/node_modules/@tybys/.wasm-util-DPKLlMcO',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@supabase/functions-js': '/opt/data/home/omnidome-web/node_modules/@supabase/.functions-js-0vLr8hhx',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@types/react': '/opt/data/home/omnidome-web/node_modules/@types/.react-Y50AVqZp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@types/node': '/opt/data/home/omnidome-web/node_modules/@types/.node-Q9ghztvK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/eslint-plugin': '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/.eslint-plugin-18Nzibt8',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/scope-manager': '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/.scope-manager-Hu0M8UXN',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/type-utils': '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/.type-utils-RJ86fFAw',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/typescript-estree': '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/.typescript-estree-u5jIFxs8',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/utils': '/opt/data/home/omnidome-web/node_modules/@typescript-eslint/.utils-ONzpd4CH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-android-arm-eabi': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-android-arm-eabi-6LfTIpl3',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-android-arm64': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-android-arm64-bD4BjW64',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-darwin-x64': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-darwin-x64-un5W0MTE',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-darwin-arm64': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-darwin-arm64-TR3DQob7',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-freebsd-x64': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-freebsd-x64-QcE5Qvm2',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm-gnueabihf': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-arm-gnueabihf-pQPrg25B',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm-musleabihf': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-arm-musleabihf-pJ0wIeX0',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm64-gnu': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-arm64-gnu-a8KczHzj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-ppc64-gnu': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-ppc64-gnu-nngQri8m',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-riscv64-gnu': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-riscv64-gnu-D3BdM6EW',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-arm64-musl': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-arm64-musl-pC2qIgG7',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-riscv64-musl': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-riscv64-musl-nC6IeA2D',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-linux-s390x-gnu': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-linux-s390x-gnu-7pGnMPIM',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-x64-msvc': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-win32-x64-msvc-hyJkLZB6',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-wasm32-wasi': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-wasm32-wasi-p7gqY13R',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-arm64-msvc': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-win32-arm64-msvc-WPvCTJfO',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@unrs/resolver-binding-win32-ia32-msvc': '/opt/data/home/omnidome-web/node_modules/@unrs/.resolver-binding-win32-ia32-msvc-J7ztwX3R',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@vercel/analytics': '/opt/data/home/omnidome-web/node_modules/@vercel/.analytics-4K3pTOql',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/baseline-browser-mapping': '/opt/data/home/omnidome-web/node_modules/.baseline-browser-mapping-2XgM71RU',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/baseline-browser-mapping': '/opt/data/home/omnidome-web/node_modules/.bin/.baseline-browser-mapping-TFn2tHgj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/astring': '/opt/data/home/omnidome-web/node_modules/.astring-TigbHRJq',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/astring': '/opt/data/home/omnidome-web/node_modules/.bin/.astring-SriPkpDJ',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/browserslist': '/opt/data/home/omnidome-web/node_modules/.browserslist-QFCFZZmR',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/browserslist': '/opt/data/home/omnidome-web/node_modules/.bin/.browserslist-rAj6oXIj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/cssesc': '/opt/data/home/omnidome-web/node_modules/.cssesc-626oolu7',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/cssesc': '/opt/data/home/omnidome-web/node_modules/.bin/.cssesc-srIE2hDd',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/esbuild': '/opt/data/home/omnidome-web/node_modules/.esbuild-OoAsoZfr',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/esbuild': '/opt/data/home/omnidome-web/node_modules/.bin/.esbuild-XQuqpo11',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-config-next/node_modules/globals': '/opt/data/home/omnidome-web/node_modules/eslint-config-next/node_modules/.globals-kvx9qInF',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-module-utils/node_modules/debug': '/opt/data/home/omnidome-web/node_modules/eslint-module-utils/node_modules/.debug-6o5epKDj',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-scope': '/opt/data/home/omnidome-web/node_modules/.eslint-scope-uZ6kpjFt',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/eslint-import-resolver-node/node_modules/debug': '/opt/data/home/omnidome-web/node_modules/eslint-import-resolver-node/node_modules/.debug-VhIrcdDD',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/jsesc': '/opt/data/home/omnidome-web/node_modules/.jsesc-Z6qyoU88',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/jsesc': '/opt/data/home/omnidome-web/node_modules/.bin/.jsesc-UU8YKFyz',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/json5': '/opt/data/home/omnidome-web/node_modules/.json5-CLeqwrX6',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/json5': '/opt/data/home/omnidome-web/node_modules/.bin/.json5-d1LGyJCK',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/loose-envify': '/opt/data/home/omnidome-web/node_modules/.loose-envify-x8fRlZZM',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/loose-envify': '/opt/data/home/omnidome-web/node_modules/.bin/.loose-envify-FA5NhK9d',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/micromatch/node_modules/picomatch': '/opt/data/home/omnidome-web/node_modules/micromatch/node_modules/.picomatch-39EkqQde',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/minimatch/node_modules/brace-expansion': '/opt/data/home/omnidome-web/node_modules/minimatch/node_modules/.brace-expansion-GsbpnGUo',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/napi-postinstall': '/opt/data/home/omnidome-web/node_modules/.napi-postinstall-tpWhjDUg',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/napi-postinstall': '/opt/data/home/omnidome-web/node_modules/.bin/.napi-postinstall-LrGWVog3',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/nanoid': '/opt/data/home/omnidome-web/node_modules/.nanoid-Sw3djqpV',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/nanoid': '/opt/data/home/omnidome-web/node_modules/.bin/.nanoid-zOGk4rCH',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/parse-entities/node_modules/@types/unist': '/opt/data/home/omnidome-web/node_modules/parse-entities/node_modules/@types/.unist-orUx2Ey3',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/tsconfig-paths/node_modules/json5': '/opt/data/home/omnidome-web/node_modules/tsconfig-paths/node_modules/.json5-IRF5Gkhq',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/update-browserslist-db': '/opt/data/home/omnidome-web/node_modules/.update-browserslist-db-3CRv2Naw',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/update-browserslist-db': '/opt/data/home/omnidome-web/node_modules/.bin/.update-browserslist-db-xQup8WjI',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/which': '/opt/data/home/omnidome-web/node_modules/.which-kZo2fy56',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/.bin/node-which': '/opt/data/home/omnidome-web/node_modules/.bin/.node-which-iJYy4sjy',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@babel/helper-globals': '/opt/data/home/omnidome-web/node_modules/@babel/.helper-globals-pnTtjbrp',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@humanwhocodes/retry': '/opt/data/home/omnidome-web/node_modules/@humanwhocodes/.retry-MEIrxhAN',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@eslint-community/eslint-utils/node_modules/eslint-visitor-keys': '/opt/data/home/omnidome-web/node_modules/@eslint-community/eslint-utils/node_modules/.eslint-visitor-keys-lI6QqV2l',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@jridgewell/remapping': '/opt/data/home/omnidome-web/node_modules/@jridgewell/.remapping-BtqDzbQv',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-dismissable-layer': '/opt/data/home/omnidome-web/node_modules/@radix-ui/.react-dismissable-layer-42njcZol',
+275 silly reify   '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-use-effect-event/node_modules/@radix-ui/react-use-layout-effect': '/opt/data/home/omnidome-web/node_modules/@radix-ui/react-use-effect-event/node_modules/@radix-ui/.react-use-layout-effect-mrVGIzXd'
+275 silly reify }
+276 verbose stack Error: ENOTEMPTY: directory not empty, rename '/opt/data/home/omnidome-web/node_modules/acorn' -> '/opt/data/home/omnidome-web/node_modules/.acorn-6UZik9Uj'
+276 verbose stack     at async Object.rename (node:internal/fs/promises:784:10)
+276 verbose stack     at async moveFile (/usr/local/lib/node_modules/npm/node_modules/@npmcli/fs/lib/move-file.js:30:5)
+276 verbose stack     at async Promise.allSettled (index 0)
+276 verbose stack     at async [reifyPackages] (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:334:11)
+276 verbose stack     at async Arborist.reify (/usr/local/lib/node_modules/npm/node_modules/@npmcli/arborist/lib/arborist/reify.js:149:5)
+276 verbose stack     at async Install.exec (/usr/local/lib/node_modules/npm/lib/commands/install.js:150:5)
+276 verbose stack     at async Npm.exec (/usr/local/lib/node_modules/npm/lib/npm.js:207:9)
+276 verbose stack     at async module.exports (/usr/local/lib/node_modules/npm/lib/cli/entry.js:74:5)
+277 error code ENOTEMPTY
+278 error syscall rename
+279 error path /opt/data/home/omnidome-web/node_modules/acorn
+280 error dest /opt/data/home/omnidome-web/node_modules/.acorn-6UZik9Uj
+281 error errno -39
+282 error ENOTEMPTY: directory not empty, rename '/opt/data/home/omnidome-web/node_modules/acorn' -> '/opt/data/home/omnidome-web/node_modules/.acorn-6UZik9Uj'
+283 silly unfinished npm timer reify 1780303522691
+284 silly unfinished npm timer reify:retireShallow 1780303525359
+285 verbose cwd /opt/data/home/omnidome-web
+286 verbose os Linux 6.1.0-49-cloud-amd64
+287 verbose node v22.22.3
+288 verbose npm  v10.9.8
+289 verbose exit -39
+290 verbose code -39
+291 error A complete log of this run can be found in: /opt/data/home/.npm/_logs/2026-06-01T08_45_20_409Z-debug-0.log

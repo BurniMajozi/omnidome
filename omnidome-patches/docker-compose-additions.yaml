@@ -1,0 +1,68 @@
+# OmniDome — Docker Compose Additions
+# Add these services to the existing docker-compose.yaml
+
+  # ── Communication Service ──────────────────────────────────────────
+  communication:
+    build:
+      context: .
+      dockerfile: services/communication/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - MODULE_ID=communication
+    ports:
+      - "8020:8020"
+    depends_on:
+      - db
+    volumes:
+      - ./services/communication:/app/services/communication:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped
+
+  # ── Agent Orchestrator ─────────────────────────────────────────────
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: services/agent-orchestrator/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=redis://redis:6379
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - MODULE_ID=agents
+      - CRM_SERVICE_URL=http://crm:8001
+      - BILLING_SERVICE_URL=http://billing:8003
+      - NETWORK_SERVICE_URL=http://network:8005
+      - RETENTION_SERVICE_URL=http://retention:8012
+      - SUPPORT_SERVICE_URL=http://support:8008
+      - ANALYTICS_SERVICE_URL=http://analytics:8011
+      - SALES_SERVICE_URL=http://sales:8002
+      - FINANCE_SERVICE_URL=http://finance:8015
+      - CALL_CENTER_SERVICE_URL=http://call_center:8007
+      - COMMUNICATION_SERVICE_URL=http://communication:8020
+    ports:
+      - "8021:8021"
+    depends_on:
+      - db
+      - redis
+      - communication
+    volumes:
+      - ./services/agent-orchestrator:/app/services/agent-orchestrator:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+# Add to existing volumes section:
+# volumes:
+#   redis_data:

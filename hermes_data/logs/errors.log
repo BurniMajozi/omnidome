@@ -1,0 +1,967 @@
+2026-05-31 12:55:49,998 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 12:56:04,303 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:56:04,315 WARNING gateway.run: ✗ telegram failed to connect
+2026-05-31 12:56:04,325 WARNING gateway.run: Gateway started with no connected platforms — 1 platform(s) queued for retry: telegram: Telegram startup failed: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:56:04,334 WARNING gateway.run: No adapter could be created for any of the 1 configured platform(s). Check that required dependencies are installed and credentials are set. Gateway will continue for cron job execution.
+2026-05-31 12:56:34,996 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:57:35,645 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:59:36,383 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:03,271 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.12 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:01:03,915 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.12 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:01:19,742 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 13:01:21,431 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:21,442 WARNING gateway.run: ✗ telegram failed to connect
+2026-05-31 13:01:21,448 WARNING gateway.run: Gateway started with no connected platforms — 1 platform(s) queued for retry: telegram: Telegram startup failed: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:21,453 WARNING gateway.run: No adapter could be created for any of the 1 configured platform(s). Check that required dependencies are installed and credentials are set. Gateway will continue for cron job execution.
+2026-05-31 13:01:52,088 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:02:52,794 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:04:53,546 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:08:54,790 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:11:09,610 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:10,246 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:10,249 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:28,232 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 13:18:15,505 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:18:15,547 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:20:40,446 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIStatusError thread=asyncio_0:140425145300672 provider=openrouter base_url=https://openrouter.ai/api/v1 model=anthropic/claude-opus-4.6 summary=HTTP 402: This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account
+2026-05-31 13:20:40,469 ERROR [20260531_132024_08bbb750] agent.conversation_loop: Non-retryable client error: Error code: 402 - {'error': {'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account', 'code': 402, 'metadata': {'provider_name': None, 'previous_errors': [{'code': 402, 'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account'}, {'code': 402, 'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account'}, {'code': 402, 'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account'}, {'code': 402, 'message': 'This request requires more credits, or fewer max_tokens. You requested up to 128000 tokens, but can only afford 1600. To increase, visit https://openrouter.ai/settings/credits and upgrade to a paid account'}]}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 13:24:18,148 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:24:18,197 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,261 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,291 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,294 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,028 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,041 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,044 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:30:33,666 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:30:33,669 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:37:44,545 WARNING agent.title_generator: Title generation failed: Auxiliary title_generation: LLM returned invalid response (type=ChatCompletion): 'ChatCompletion(id=None, choices=None, created=None, model=None, object=None, service_tier=None, system_fingerprint=None,'. Expected object with .choices[0].message — check provider adapter or custom endpoint compatibility.
+2026-05-31 14:24:24,729 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (5.86s): {"output": "", "exit_code": 1, "error": null, "exit_code_meaning": "Some directories were inaccessible (partial results may still be valid)"}
+2026-05-31 14:29:31,817 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 14:29:31,842 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 14:32:49,252 WARNING huggingface_hub.utils._http: Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-05-31 14:33:41,039 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (3.15s): {"output": "/opt/data/workspace/omnidome\n/opt/data/workspace/omnidome.tar.gz", "exit_code": 1, "error": null, "exit_code_meaning": "Some directories were inaccessible (partial results may still be va
+2026-05-31 14:34:45,037 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.34s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/OmniDome/README.md"}
+2026-05-31 14:34:45,040 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.31s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/OmniDome/docker-compose.yaml"}
+2026-05-31 14:34:45,042 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.01s): {"error": "Access denied: /opt/data/workspace/OmniDome/.env is a secret-bearing environment file and cannot be read to prevent credential leakage. If you need to check the file structure, read .env.ex
+2026-05-31 14:34:45,044 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.31s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/OmniDome/requirements.txt"}
+
+[Tool loop warni
+2026-05-31 14:48:12,083 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (4.09s): {"output": "Docker version 26.1.5+dfsg1, build a72d7cd\ndocker: 'compose' is not a docker command.\nSee 'docker --help'", "exit_code": 1, "error": null}
+2026-05-31 14:48:17,431 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (4.21s): {"output": "v22.22.3\n10.9.8", "exit_code": 1, "error": null}
+2026-05-31 14:48:18,934 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.50s): {"output": "Python 3.13.5\n/usr/bin/bash: line 3: pip3: command not found", "exit_code": 127, "error": null}
+
+[Tool loop warning: same_tool_failure_warning; count=3; terminal has failed 3 times this t
+2026-05-31 14:48:20,104 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.17s): {"output": "/usr/bin/bash: line 3: systemctl: command not found", "exit_code": 127, "error": null}
+
+[Tool loop warning: same_tool_failure_warning; count=4; terminal has failed 4 times this turn. This 
+2026-05-31 14:49:50,355 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (2.55s): {"output": "/usr/bin/bash: line 3: pnpm: command not found", "exit_code": 127, "error": null}
+2026-05-31 14:50:23,353 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (11.54s): {"output": "npm error code EACCES\nnpm error syscall mkdir\nnpm error path /usr/local/lib/node_modules/pnpm\nnpm error errno -13\nnpm error Error: EACCES: permission denied, mkdir '/usr/local/lib/node
+2026-05-31 14:52:25,345 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 14:52:25,348 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.591003954918709s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 14:54:28,953 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 14:54:28,954 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 5.92631556919926s (attempt 2/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 14:54:42,079 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 3/3) error_type=RateLimitError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 14:54:42,081 ERROR [20260531_132024_08bbb750] agent.conversation_loop: API call failed after 3 retries. HTTP 429: Provider returned error | provider=openrouter model=openrouter/owl-alpha msgs=49 tokens=~16,068
+2026-05-31 14:57:44,904 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 14:57:44,905 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.8541977305549917s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 14:59:48,357 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 14:59:48,358 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 5.6556739961894955s (attempt 2/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:03:12,745 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 15:03:12,803 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.22166402932062s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:05:15,988 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 15:05:15,989 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 5.25173624156034s (attempt 2/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:08:35,859 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=bg-review:140592827565760 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 15:08:35,860 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.9772555692449543s (attempt 1/3) thread=bg-review:140592827565760 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:10:39,330 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=bg-review:140592827565760 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 15:10:39,331 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 5.151987502039946s (attempt 2/3) thread=bg-review:140592827565760 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:10:51,597 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 3/3) error_type=RateLimitError thread=bg-review:140592827565760 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 15:10:51,598 ERROR [20260531_132024_08bbb750] agent.conversation_loop: API call failed after 3 retries. HTTP 429: Provider returned error | provider=openrouter model=openrouter/owl-alpha msgs=44 tokens=~16,816
+2026-05-31 15:11:13,840 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=RateLimitError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 15:11:13,841 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.368039018820543s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'openrouter/owl-alpha is temporarily rate-limited upstream. Please retry shortly.', 'provider_name': 'Stealth', 'is_byok': False}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 15:11:25,289 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=RateLimitError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 15:11:25,291 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 4.856821580068388s (attempt 2/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'openrouter/owl-alpha is temporarily rate-limited upstream. Please retry shortly.', 'provider_name': 'Stealth', 'is_byok': False}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 15:11:43,461 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=RateLimitError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 15:11:43,462 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.809903177067589s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'openrouter/owl-alpha is temporarily rate-limited upstream. Please retry shortly.', 'provider_name': 'Stealth', 'is_byok': False}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 15:12:02,212 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.18s): {"output": "cat: /opt/data/workspace/omnidome/services/crm/app.py: No such file or directory", "exit_code": 1, "error": null}
+2026-05-31 15:12:03,402 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.13s): {"output": "cat: /opt/data/workspace/omnidome/services/gateway/app.py: No such file or directory", "exit_code": 1, "error": null}
+2026-05-31 15:12:14,033 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=RateLimitError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Provider returned error
+2026-05-31 15:12:14,034 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.6835316931602953s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'openrouter/owl-alpha is temporarily rate-limited upstream. Please retry shortly.', 'provider_name': 'Stealth', 'is_byok': False}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 15:12:41,193 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 15:12:41,194 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.05126060441022s (attempt 1/3) thread=asyncio_1:140594359203520 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 15:17:11,623 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.65s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /opt/data/workspace/omnidome/docs/plans/.hermes-tmp.774: No such file or directory\n", "resolved_path
+2026-05-31 15:18:10,392 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.14s): {"output": "mkdir: cannot create directory ‘/opt/data/workspace/omnidome/docs/plans’: Permission denied", "exit_code": 1, "error": null}
+2026-05-31 15:20:23,997 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.31s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /opt/data/workspace/.hermes-tmp.805: Permission denied\n", "resolved_path": "/opt/data/workspace/omni
+2026-05-31 15:34:33,802 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool session_search returned error (0.00s): {"error": "Background review denied non-whitelisted tool: session_search. Only memory/skill tools are allowed."}
+2026-05-31 15:34:33,889 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool session_search returned error (0.00s): {"error": "Background review denied non-whitelisted tool: session_search. Only memory/skill tools are allowed."}
+2026-05-31 15:36:10,688 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-05-31 15:40:21,315 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 15:41:10,810 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 15:41:44,228 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: same_tool_failure_warning; count=3; skill_manage has failed 3 times this turn. This looks like a loop. Do
+2026-05-31 15:42:34,412 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "new_string is required for 'patch'. Use empty string to delete matched text.", "success": false}
+
+[Tool loop warning: same_tool_failure_warning; count=4; skill_manage has failed 4 times thi
+2026-05-31 16:13:26,245 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (1.02s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/omnidome/apps/web/lib/supabase.ts", "similar_
+2026-05-31 16:13:56,939 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.20s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/omnidome/apps/web/lib/supabase", "similar_fil
+2026-05-31 16:13:56,965 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.02s): {"error": "BLOCKED: You have called read_file on this exact region 3 times and the file has NOT changed. STOP calling read_file for this path — the content from your earlier read_file result in this c
+2026-05-31 16:16:24,210 WARNING [20260531_161611_3902de] agent.tool_executor: Tool read_file returned error (1.06s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/services/crm"}
+2026-05-31 16:16:24,253 WARNING [20260531_161611_3902de] agent.tool_executor: Tool read_file returned error (1.06s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/docs/supabase/schema.sql"}
+2026-05-31 16:16:28,527 WARNING [20260531_161612_e1400d] agent.tool_executor: Tool read_file returned error (0.38s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/main.py"}
+2026-05-31 16:16:28,529 WARNING [20260531_161612_e1400d] agent.tool_executor: Tool read_file returned error (0.40s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/config.py"}
+2026-05-31 16:16:28,530 WARNING [20260531_161612_e1400d] agent.tool_executor: Tool read_file returned error (0.37s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/requirements.txt"}
+
+
+2026-05-31 16:16:28,531 WARNING [20260531_161612_e1400d] agent.tool_executor: Tool read_file returned error (0.43s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/Dockerfile"}
+
+[Tool 
+2026-05-31 16:17:46,137 WARNING [20260531_161611_3902de] agent.tool_executor: Tool search_files returned error (0.37s): {"total_count": 0, "error": "Path not found: /opt/data/workspace/omnidome/services/communication. Similar paths: /opt/data/workspace/omnidome/services/common"}
+2026-05-31 16:17:46,178 WARNING [20260531_161611_3902de] agent.tool_executor: Tool search_files returned error (0.34s): {"total_count": 0, "error": "Path not found: /opt/data/home/omnidome-patches/services/communication"}
+2026-05-31 16:26:12,644 WARNING tools.delegate_tool: Subagent 0 timed out after 600.0s
+2026-05-31 16:26:12,658 WARNING tools.delegate_tool: Subagent 2 timed out after 600.0s
+2026-05-31 16:26:12,674 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool delegate_task returned error (600.92s): {"results": [{"task_index": 0, "status": "timeout", "summary": null, "error": "Subagent timed out after 600.0s with 22 API call(s) completed — likely stuck on a slow API call or unresponsive network r
+2026-05-31 16:29:36,725 WARNING [20260531_162928_6a9582] agent.tool_executor: Tool read_file returned error (0.56s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/auth.py"}
+2026-05-31 16:29:36,795 WARNING [20260531_162928_6a9582] agent.tool_executor: Tool read_file returned error (0.46s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/db.py"}
+2026-05-31 16:30:23,976 WARNING [20260531_162928_6a9582] agent.tool_executor: Tool read_file returned error (0.38s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/communication/routes/esc
+2026-05-31 16:30:23,979 WARNING [20260531_162928_6a9582] agent.tool_executor: Tool read_file returned error (0.40s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/communication/routes/eve
+2026-05-31 16:30:23,980 WARNING [20260531_162928_6a9582] agent.tool_executor: Tool read_file returned error (0.37s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/communication/routes/mod
+2026-05-31 16:52:10,307 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 16:52:39,797 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 16:52:56,071 WARNING [20260531_165210_713b44] agent.tool_executor: Tool read_file returned error (3.67s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/apps/web/lib"}
+2026-05-31 16:53:02,171 WARNING [20260531_165210_713b44] agent.tool_executor: Tool search_files returned error (0.10s): {"total_count": 0, "error": "Path not found: /opt/data/home/omnidome-patches/apps/web"}
+2026-05-31 16:53:16,950 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=2; skill_manage has failed 2 times with identical arguments. This l
+2026-05-31 16:54:08,951 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=3; skill_manage has failed 3 times with identical arguments. This l
+2026-05-31 16:56:17,235 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIConnectionError thread=bg-review:140592524814016 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Connection error.
+2026-05-31 16:56:17,239 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.2330257782379395s (attempt 1/3) thread=bg-review:140592524814016 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Connection error.
+2026-05-31 16:56:21,015 WARNING agent.chat_completion_helpers: Streaming failed after partial delivery, not retrying: [Errno 104] Connection reset by peer
+2026-05-31 16:56:21,016 WARNING [20260531_165210_713b44] agent.chat_completion_helpers: Partial stream dropped tool call(s) ['search_files'] after 118 chars of text; surfaced warning to user: [Errno 104] Connection reset by peer
+2026-05-31 16:57:11,661 WARNING [20260531_165701_57483a] agent.tool_executor: Tool read_file returned error (3.47s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/models.py", "similar
+2026-05-31 16:57:11,669 WARNING [20260531_165701_57483a] agent.tool_executor: Tool read_file returned error (3.51s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/schemas.py", "simila
+2026-05-31 16:57:11,670 WARNING [20260531_165701_57483a] agent.tool_executor: Tool read_file returned error (3.51s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/main.py"}
+2026-05-31 16:57:22,183 WARNING [20260531_165701_57483a] agent.tool_executor: Tool read_file returned error (0.92s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/db.py"}
+2026-05-31 16:57:24,742 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-05-31 17:07:02,074 WARNING [20260531_132024_08bbb750] tools.delegate_tool: Subagent 0 timed out after 600.0s
+2026-05-31 17:07:02,139 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool delegate_task returned error (600.55s): {"results": [{"task_index": 0, "status": "timeout", "summary": null, "error": "Subagent timed out after 600.0s with 18 API call(s) completed — likely stuck on a slow API call or unresponsive network r
+2026-05-31 17:15:30,910 WARNING [20260531_170703_05655f] agent.tool_executor: Tool read_file returned error (0.36s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/__init__.py", "si
+2026-05-31 17:17:04,074 WARNING [20260531_132024_08bbb750] tools.delegate_tool: Subagent 0 timed out after 600.1s
+2026-05-31 17:17:04,108 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool delegate_task returned error (600.96s): {"results": [{"task_index": 0, "status": "timeout", "summary": null, "error": "Subagent timed out after 600.0s with 18 API call(s) completed — likely stuck on a slow API call or unresponsive network r
+2026-05-31 17:26:58,588 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "write_file: missing required field 'path'. Re-emit the tool call with both 'path' and 'content' set."}
+2026-05-31 17:30:10,524 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"error": "Unknown action 'list'. Use: add, replace, remove", "success": false}
+2026-05-31 17:30:44,011 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.03s): {"success": false, "error": "Memory at 1,170/1,375 chars. Adding this entry (499 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["User prefers concise re
+2026-05-31 17:31:15,748 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Replacement would put memory at 1,828/1,375 chars. Shorten the new content or remove other entries first."}
+
+[Tool loop warning: same_tool_failure_warning; count=3; memory
+2026-05-31 17:33:51,523 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.02s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 17:34:42,515 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.03s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 17:35:45,382 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-05-31 17:41:42,917 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (3.41s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /root/Documents/Obsidian Vault/OmniDome/.hermes-tmp.6634: Permission denied\n", "resolved_path": "/ro
+2026-05-31 17:42:40,328 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (3.35s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /home/hermes/Documents/Obsidian Vault/OmniDome/.hermes-tmp.6660: No such file or directory\n", "resol
+2026-05-31 17:50:05,455 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool patch returned error (0.00s): {"error": "Background review denied non-whitelisted tool: patch. Only memory/skill tools are allowed."}
+2026-05-31 18:18:42,221 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 18:18:42,224 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 18:19:42.
+2026-05-31 18:18:42,226 ERROR tools.vision_tools: Error analyzing image: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+Traceback (most recent call last):
+  File "/opt/hermes/tools/vision_tools.py", line 893, in vision_analyze_tool
+    response = await async_call_llm(**call_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hermes/agent/auxiliary_client.py", line 5365, in async_call_llm
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+2026-05-31 18:19:01,018 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 18:19:01,018 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 18:20:01.
+2026-05-31 18:19:01,019 ERROR [20260531_132024_08bbb750] tools.vision_tools: Error analyzing image: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+Traceback (most recent call last):
+  File "/opt/hermes/tools/vision_tools.py", line 893, in vision_analyze_tool
+    response = await async_call_llm(**call_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hermes/agent/auxiliary_client.py", line 5365, in async_call_llm
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+2026-05-31 18:19:01,424 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool vision_analyze returned error (0.48s): {
+  "success": false,
+  "error": "Error analyzing image: No LLM provider configured for task=vision provider=auto. Run: hermes setup",
+  "analysis": "There was a problem with the request and the image
+2026-05-31 18:24:16,575 WARNING [20260531_132024_08bbb750] tools.tirith_security: tirith timed out after 5s
+2026-05-31 18:25:38,100 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:26:34,061 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-05-31 18:26:38,310 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIConnectionError thread=asyncio_4:140592491243200 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Connection error.
+2026-05-31 18:26:39,150 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed ([Errno -3] Temporary failure in name resolution); trying fallback IPs 149.154.166.110
+2026-05-31 18:26:39,152 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.0202660589717842s (attempt 1/3) thread=asyncio_4:140592491243200 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Connection error.
+2026-05-31 18:26:48,941 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-05-31 18:33:53,741 WARNING gateway.platforms.telegram_network: [Telegram] Sticky fallback IP 149.154.166.110 failed; resetting to primary DNS path
+2026-05-31 18:33:55,642 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:34:25,873 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:34:32,935 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:34:35,240 WARNING gateway.platforms.telegram: [Telegram] Network error on send (attempt 1/3), retrying in 1s: Timed out
+2026-05-31 18:34:53,797 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:35:01,073 WARNING gateway.platforms.telegram: [Telegram] Network error on send (attempt 1/3), retrying in 1s: Timed out
+2026-05-31 18:35:20,297 WARNING gateway.platforms.telegram_network: [Telegram] Sticky fallback IP 149.154.166.110 failed; resetting to primary DNS path
+2026-05-31 18:35:38,940 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:35:43,496 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:36:01,206 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:36:07,262 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 19:24:18,508 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.02s): {"success": false, "error": "Memory at 938/1,375 chars. Adding this entry (673 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["Bene Majozi (Burni Majozi
+2026-05-31 19:24:44,454 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Replacement would put memory at 1,751/1,375 chars. Shorten the new content or remove other entries first."}
+2026-05-31 19:48:53,375 WARNING [20260531_132024_08bbb750] hermes.lint.lsp: lsp[bash-language-server] spawn/initialize failed for /tmp/Hermes: TimeoutError: 
+2026-05-31 19:48:57,782 WARNING agent.lsp.servers: bash-language-server: shellcheck not found on PATH — diagnostics will be empty until shellcheck is installed (apt: shellcheck, brew: shellcheck, scoop: shellcheck).
+2026-05-31 19:50:06,159 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.64s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes.git/'", "exit_code"
+2026-05-31 19:51:59,990 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-05-31 19:52:19,544 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 19:52:38,566 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 20:08:41,235 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_2:140584596879040 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 20:08:41,367 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.772501725741159s (attempt 1/3) thread=asyncio_2:140584596879040 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 20:10:45,086 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=asyncio_2:140584596879040 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 20:10:45,087 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 4.295466376490563s (attempt 2/3) thread=asyncio_2:140584596879040 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 20:12:29,446 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:12:29,447 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:13:29.
+2026-05-31 20:12:29,452 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:12:29,452 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:13:29.
+2026-05-31 20:12:29,804 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:12:29,805 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:13:29.
+2026-05-31 20:12:29,810 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:12:29,811 WARNING [20260531_132024_08bbb750] agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:13:29.
+2026-05-31 20:36:53,505 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.23s): {"output": "fatal: not a git repository (or any parent up to mount point /opt)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\nfatal: not a git repository (or any parent u
+2026-05-31 20:37:09,922 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.09s): {"output": "fatal: not a git repository (or any parent up to mount point /opt)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).", "exit_code": 128, "error": null}
+2026-05-31 20:37:29,283 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.30s): {"output": "hint: Using 'master' as the name for the initial branch. This default branch name\nhint: is subject to change. To configure the initial branch name to use in all\nhint: of your new reposit
+2026-05-31 20:38:14,209 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (12.63s): {"output": "hint: Using 'master' as the name for the initial branch. This default branch name\nhint: is subject to change. To configure the initial branch name to use in all\nhint: of your new reposit
+2026-05-31 20:38:46,889 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (17.09s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes-Obsidian.git/'", "e
+2026-05-31 20:41:20,150 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:41:20,150 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:42:20.
+2026-05-31 20:41:20,155 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:41:20,155 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:42:20.
+2026-05-31 20:41:20,271 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:41:20,272 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:42:20.
+2026-05-31 20:41:20,278 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:41:20,278 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:42:20.
+2026-05-31 20:41:44,706 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.42s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes.git/'", "exit_code"
+2026-05-31 20:41:50,898 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'Bene Maji (Burni Majozi) — Snr Manager Business Performance & Insight at Cell C, South Africa. Data Scientist. Starting Doctorate in Data Science & AI (3
+2026-05-31 20:42:11,629 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Memory at 1,179/1,375 chars. Adding this entry (1604 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["Bene Majozi (Burni Maj
+2026-05-31 20:42:33,878 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'Bene Maji (Burni Majozi) — Snr Manager Business Performance & Insight at Cell C, South Africa. Data Scientist. Starting Doctorate in Data Science & AI (3
+2026-05-31 20:42:57,425 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Memory at 308/1,375 chars. Adding this entry (1073 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["GitHub repos:\n- BurniMa
+2026-05-31 20:43:05,536 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'GitHub repos:'."}
+2026-05-31 20:43:15,639 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'GitHub PAT:'."}
+
+[Tool loop warning: same_tool_failure_warning; count=3; memory has failed 3 times this turn. This looks like a loop. Do not switch to te
+2026-05-31 20:43:39,822 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.36s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes.git/'", "exit_code"
+2026-05-31 20:43:49,140 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.42s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes.git/'", "exit_code"
+2026-05-31 20:44:23,689 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-05-31 20:44:37,612 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-05-31 20:55:24,007 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-05-31 20:55:24,008 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 20:56:24.
+2026-05-31 20:55:24,008 ERROR tools.vision_tools: Error analyzing image: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+Traceback (most recent call last):
+  File "/opt/hermes/tools/vision_tools.py", line 893, in vision_analyze_tool
+    response = await async_call_llm(**call_kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hermes/agent/auxiliary_client.py", line 5365, in async_call_llm
+    raise RuntimeError(
+    ...<2 lines>...
+    )
+RuntimeError: No LLM provider configured for task=vision provider=auto. Run: hermes setup
+2026-05-31 20:55:38,610 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Cannot read binary file '/opt/data/image_cache/img_bdeba388c907.jpg' (.jpg). Use vision_analyze for images, or terminal to inspect binary files."}
+2026-05-31 20:57:39,826 WARNING [20260531_132024_08bbb750] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=asyncio_0:140584838624960 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-05-31 20:57:39,827 WARNING [20260531_132024_08bbb750] agent.conversation_loop: Retrying API call in 2.652512939672201s (attempt 1/3) thread=asyncio_0:140584838624960 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-05-31 21:04:52,263 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'Bene Majozi (Burni Majozi) — Snr Manager Business Performance & Insight at Cell C, South Africa. Data Scientist. Starting Doctorate in Data Science & AI 
+2026-05-31 21:05:01,617 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool terminal returned error (0.15s): {"output": "", "exit_code": 1, "error": null}
+2026-05-31 21:06:01,810 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool cronjob returned error (0.00s): {"error": "Blocked: prompt matches threat pattern 'destructive_root_rm'. Cron prompts must not contain injection or exfiltration payloads.", "success": false}
+2026-05-31 21:07:52,346 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-05-31 21:08:06,057 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool todo returned error (0.00s): {"error": "Background review denied non-whitelisted tool: todo. Only memory/skill tools are allowed."}
+2026-05-31 21:09:14,238 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.16s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/models.py", "similar
+2026-05-31 21:09:14,239 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/schemas.py", "simila
+2026-05-31 21:09:17,636 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/main.py"}
+2026-05-31 21:09:17,638 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.15s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/requirements.txt"}
+2026-05-31 21:09:17,640 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.21s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/Dockerfile"}
+
+[Tool 
+2026-05-31 21:09:19,954 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.20s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/db.py"}
+2026-05-31 21:09:19,955 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.16s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/auth.py"}
+2026-05-31 21:09:19,956 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.13s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/entitlements.py",
+2026-05-31 21:09:24,068 WARNING [20260531_210903_0d1b26] agent.tool_executor: Tool read_file returned error (0.45s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/support/requirements.txt
+2026-05-31 21:09:24,292 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.57s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/models.py", "similar
+2026-05-31 21:09:24,296 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.62s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/crm/schemas.py", "simila
+2026-05-31 21:09:29,765 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/db.py"}
+2026-05-31 21:09:29,766 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/entitlements.py",
+2026-05-31 21:09:32,057 WARNING [20260531_210903_0d1b26] agent.tool_executor: Tool read_file returned error (0.15s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/requirements.txt"
+2026-05-31 21:09:32,058 WARNING [20260531_210903_0d1b26] agent.tool_executor: Tool read_file returned error (0.15s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/db.py"}
+2026-05-31 21:09:32,059 WARNING [20260531_210903_0d1b26] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/auth.py"}
+
+[Tool 
+2026-05-31 21:09:32,059 WARNING [20260531_210903_0d1b26] agent.tool_executor: Tool read_file returned error (0.17s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/common/entitlements.py",
+2026-05-31 21:09:43,590 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.20s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/analytics/Dockerfile"}
+2026-05-31 21:09:43,591 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.27s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/analytics/requirements.t
+2026-05-31 21:10:05,937 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.24s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/support/Dockerfile"}
+2026-05-31 21:10:05,938 WARNING [20260531_210903_7d4d71] agent.tool_executor: Tool read_file returned error (0.23s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/home/omnidome-patches/services/support/requirements.txt
+2026-05-31 21:10:09,857 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (0.19s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/omnidome/services/analytics/Dockerfile"}
+2026-05-31 21:10:20,600 WARNING [20260531_210903_43cb23] agent.tool_executor: Tool read_file returned error (1.10s): {"content": "", "total_lines": 0, "file_size": 0, "truncated": false, "is_binary": false, "is_image": false, "error": "File not found: /opt/data/workspace/omnidome/services/hr/Dockerfile"}
+2026-05-31 21:29:21,764 WARNING [20260531_212610_8e54fd] agent.tool_executor: Tool search_files returned error (0.06s): {"total_count": 0, "error": "Path not found: /opt/data/home/omnidome-patches/services/billing/routes"}
+2026-05-31 21:30:48,409 WARNING [20260531_212610_d4c43a] agent.tool_executor: Tool patch returned error (0.72s): {"success": false, "error": "Patch validation failed (no files were modified):\n  • /opt/data/workspace/omnidome/services/marketing/main.py: hunk (no hint) not found — Found 17 matches for old_string.
+2026-05-31 21:32:25,218 WARNING [20260531_212610_8e54fd] agent.tool_executor: Tool write_file returned error (0.08s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /opt/data/workspace/omnidome/services/billing/routes/.hermes-tmp.4115: Permission denied\n", "resolve
+2026-05-31 21:34:17,774 WARNING [20260531_212610_eb576e] agent.conversation_loop: API call failed (attempt 1/3) error_type=RateLimitError thread=ThreadPoolExecutor-40_0:140584289281728 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=HTTP 429: Rate limit exceeded: @ratelimit/too-many-requests. 
+2026-05-31 21:34:17,775 WARNING [20260531_212610_eb576e] agent.conversation_loop: Retrying API call in 2.4679091799411146s (attempt 1/3) thread=ThreadPoolExecutor-40_0:140584289281728 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Error code: 429 - {'error': {'message': 'Rate limit exceeded: @ratelimit/too-many-requests. ', 'code': 429, 'metadata': {'headers': {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1780263300000'}, 'provider_name': None}}, 'user_id': 'user_38q4JXJt0YjF2qYZwudVf2dzCnl'}
+2026-05-31 21:36:10,915 WARNING tools.delegate_tool: Subagent 0 timed out after 600.0s
+2026-05-31 21:36:10,921 WARNING tools.delegate_tool: Subagent 2 timed out after 600.0s
+2026-05-31 21:36:10,931 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool delegate_task returned error (600.86s): {"results": [{"task_index": 0, "status": "timeout", "summary": null, "error": "Subagent timed out after 600.0s with 14 API call(s) completed — likely stuck on a slow API call or unresponsive network r
+2026-05-31 21:36:11,000 WARNING agent.chat_completion_helpers: Streaming failed after partial delivery, not retrying: [Errno 32] Broken pipe
+2026-05-31 21:45:14,717 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'GitHub PAT: ghp_FS...Fxfd (classic token, repo scope)'."}
+2026-05-31 21:45:44,465 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-05-31 21:46:08,844 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=2; skill_manage has failed 2 times with identical arguments. This l
+2026-05-31 21:46:32,231 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool execute_code returned error (0.00s): {"error": "Background review denied non-whitelisted tool: execute_code. Only memory/skill tools are allowed."}
+2026-05-31 21:47:34,907 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 00:00:57,262 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,297 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,366 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,366 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,380 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,381 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,384 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,385 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,979 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,980 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,982 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,983 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:57,994 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:57,995 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:57.
+2026-06-01 00:00:58,000 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 00:00:58,000 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 00:01:58.
+2026-06-01 00:01:26,919 WARNING [cron_c37a101b5787_20260601_000055] agent.tool_executor: Tool terminal returned error (4.04s): {"output": "Author identity unknown\n\n*** Please tell me who you are.\n\nRun\n\n  git config --global user.email \"you@example.com\"\n  git config --global user.name \"Your Name\"\n\nto set your acco
+2026-06-01 00:01:58,878 WARNING [cron_c37a101b5787_20260601_000055] agent.tool_executor: Tool terminal returned error (1.91s): {"output": "[main 971cc96] Auto-backup: 2026-06-01\n 106 files changed, 12509 insertions(+)\n create mode 160000 Obsidian Vault\n create mode 100644 omnidome-patches/apps/web/app/api/modules/[id]/rout
+2026-06-01 00:02:32,291 WARNING [cron_ae7134132653_20260601_000055] agent.tool_executor: Tool terminal returned error (0.55s): {"output": "[main 4b64e1a] Auto-backup 2026-06-01\n 105 files changed, 12508 insertions(+)\n create mode 100644 omnidome-patches/omnidome-patches/apps/web/app/api/modules/[id]/route.ts\n create mode 1
+2026-06-01 00:03:33,161 WARNING [cron_ae7134132653_20260601_000055] agent.tool_executor: Tool terminal returned error (0.33s): {"output": "remote: Invalid username or token. Password authentication is not supported for Git operations.\nfatal: Authentication failed for 'https://github.com/BurniMajozi/Hermes.git/'", "exit_code"
+2026-06-01 02:32:37,032 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Memory at 1,059/1,375 chars. Adding this entry (755 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["GitHub repos:\n- BurniM
+2026-06-01 02:37:09,787 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "old_string is required for 'patch'. Provide the text to find.", "success": false}
+2026-06-01 02:37:31,077 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 02:39:39,472 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 02:40:33,401 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 02:41:21,514 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool execute_code returned error (0.00s): {"error": "Background review denied non-whitelisted tool: execute_code. Only memory/skill tools are allowed."}
+2026-06-01 03:01:21,680 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool patch returned error (0.04s): {"success": false, "error": "old_string and new_string are identical"}
+2026-06-01 03:03:22,477 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool execute_code returned error (0.00s): {"status": "error", "error": "BLOCKED: execute_code runs arbitrary local Python (including subprocess calls that bypass shell-string approval checks). Cron jobs run without a user present to approve i
+2026-06-01 03:12:29,012 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Memory at 1,059/1,375 chars. Adding this entry (1492 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["GitHub repos:\n- Burni
+2026-06-01 03:13:36,426 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Replacement would put memory at 1,847/1,375 chars. Shorten the new content or remove other entries first."}
+2026-06-01 03:16:46,145 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Replacement would put memory at 1,656/1,375 chars. Shorten the new content or remove other entries first."}
+2026-06-01 03:18:56,276 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool todo returned error (0.00s): {"error": "Background review denied non-whitelisted tool: todo. Only memory/skill tools are allowed."}
+2026-06-01 03:20:59,282 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-06-01 03:23:04,293 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-06-01 03:24:50,439 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "old_string is required for 'patch'. Provide the text to find.", "success": false}
+2026-06-01 03:25:36,819 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 03:26:22,752 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 03:27:20,760 WARNING [20260531_132024_08bbb750] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: same_tool_failure_warning; count=3; skill_manage has failed 3 times this turn. This looks like a loop. Do
+2026-06-01 04:38:36,056 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.13s): {"output": "", "exit_code": 1, "error": null, "exit_code_meaning": "No matches found (not an error)"}
+2026-06-01 04:40:33,843 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool write_file returned error (0.15s): {"bytes_written": 0, "dirs_created": false, "error": "Failed to write file: /usr/bin/bash: line 3: /opt/data/workspace/omnidome/services/web_analytics/.hermes-tmp.6013: No such file or directory\n", "
+2026-06-01 04:40:49,681 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.09s): {"output": "mkdir: cannot create directory ‘/opt/data/workspace/omnidome/services/web_analytics’: Permission denied", "exit_code": 1, "error": null}
+2026-06-01 04:49:03,012 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool execute_code returned error (0.00s): {"status": "error", "error": "BLOCKED: execute_code runs arbitrary local Python (including subprocess calls that bypass shell-string approval checks). Cron jobs run without a user present to approve i
+2026-06-01 04:56:22,179 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (300.35s): {"output": "", "exit_code": -1, "error": "BLOCKED: Command timed out without user response. The user has NOT consented to this action. Do NOT retry this command, do NOT rephrase it, and do NOT attempt
+2026-06-01 05:01:32,012 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (300.25s): {"output": "", "exit_code": -1, "error": "BLOCKED: Command timed out without user response. The user has NOT consented to this action. Do NOT retry this command, do NOT rephrase it, and do NOT attempt
+2026-06-01 05:06:59,370 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (300.52s): {"output": "", "exit_code": -1, "error": "BLOCKED: Command timed out without user response. The user has NOT consented to this action. Do NOT retry this command, do NOT rephrase it, and do NOT attempt
+2026-06-01 05:10:22,861 WARNING agent.message_sanitization: Unrepairable tool_call arguments for write_file — replaced with empty object (was: {"content": "\"use client\"\n\nimport { useEffect, useState, useCallback } from )
+2026-06-01 05:23:24,559 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool session_search returned error (0.00s): {"error": "Background review denied non-whitelisted tool: session_search. Only memory/skill tools are allowed."}
+2026-06-01 05:23:24,560 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool session_search returned error (0.00s): {"error": "Background review denied non-whitelisted tool: session_search. Only memory/skill tools are allowed."}
+2026-06-01 05:25:16,328 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 05:25:38,693 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 05:29:44,667 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 05:30:37,048 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 05:35:32,096 WARNING agent.message_sanitization: Unrepairable tool_call arguments for write_file — replaced with empty object (was: {"content": "\"\"\"Journey Manager — orchestrates the cancel → match → offer → o)
+2026-06-01 05:58:36,334 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 05:59:58,480 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.21s): {"success": false, "error": "Found 2 matches for old_string. Provide more context to make it unique, or use replace_all=True.", "file_preview": "---\nname: omnidome\ndescription: \"OmniDome ISP Operat
+2026-06-01 06:00:28,739 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool memory returned error (0.06s): {"success": false, "error": "No entry matched 'OmniDome VM environment: Home directory is /opt/data/home (not /home/hermes). ~ does NOT expand in write_file — must use absolute paths. Project dir /opt
+2026-06-01 06:02:29,623 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 06:03:34,458 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 06:10:27,387 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 06:12:34,460 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_view returned error (0.02s): {"error": "[Errno 21] Is a directory: '/opt/data/skills/omnidome/references'", "success": false}
+2026-06-01 06:13:31,021 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 06:20:34,345 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 06:21:45,357 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=2; skill_manage has failed 2 times with identical arguments. This l
+2026-06-01 06:22:37,300 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_view returned error (0.02s): {"success": false, "error": "File 'references/cancel-flow-integration.md' not found in skill 'omnidome'.", "available_files": {"references": ["references/new-services-2026-05-31.md", "references/subag
+2026-06-01 07:28:53,570 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-06-01 07:28:53,613 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 2.3834662343363586s (attempt 1/3) thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-06-01 07:30:58,053 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-06-01 07:30:58,054 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 4.402492739058197s (attempt 2/3) thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-06-01 07:34:00,566 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 07:34:57,642 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"success": false, "error": "SKILL.md must start with YAML frontmatter (---). See existing skills for format."}
+2026-06-01 07:36:02,581 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 07:38:03,620 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-06-01 07:38:03,621 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 2.9962800686962026s (attempt 1/3) thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-06-01 07:40:08,671 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 2/3) error_type=APIError thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-06-01 07:40:08,672 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 5.519387108334894s (attempt 2/3) thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-06-01 07:41:57,751 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 07:43:58,766 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIError thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Provider returned error
+2026-06-01 07:43:58,768 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 2.057155353345946s (attempt 1/3) thread=bg-review:140584297674432 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Provider returned error
+2026-06-01 07:44:52,247 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: same_tool_failure_warning; count=3; skill_manage has failed 3 times this turn. This looks like a loop. Do
+2026-06-01 07:48:33,949 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.05s): {"success": false, "error": "Could not find a match for old_string in the file\n\nDid you mean one of these sections?\n  25| apps/web/          — Next.js 14 dashboard & marketing (port 3000)\n  26| ap
+2026-06-01 07:52:29,912 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 07:54:31,873 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-06-01 08:01:04,688 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 08:02:41,638 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 08:03:45,467 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: same_tool_failure_warning; count=3; skill_manage has failed 3 times this turn. This looks like a loop. Do
+2026-06-01 08:05:15,864 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=2; skill_manage has failed 2 times with identical arguments. This l
+2026-06-01 08:06:16,307 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool read_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: read_file. Only memory/skill tools are allowed."}
+2026-06-01 08:08:19,829 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"success": false, "error": "SKILL.md must start with YAML frontmatter (---). See existing skills for format."}
+
+[Tool loop warning: same_tool_failure_warning; count=5; skill_manage has failed 5 times
+2026-06-01 08:09:24,058 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.50s): {"success": false, "error": "Could not find a match for old_string in the file\n\nDid you mean one of these sections?\n 185| - Per-provider: vumatel.py, openserve.py, metrofibre.py, frogfoot.py, octot
+2026-06-01 08:10:42,655 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.50s): {"success": false, "error": "Could not find a match for old_string in the file\n\nDid you mean one of these sections?\n 185| - Per-provider: vumatel.py, openserve.py, metrofibre.py, frogfoot.py, octot
+2026-06-01 08:13:14,437 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 08:15:12,371 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.48s): {"success": false, "error": "Could not find a match for old_string in the file\n\nDid you mean one of these sections?\n 185| - Per-provider: vumatel.py, openserve.py, metrofibre.py, frogfoot.py, octot
+2026-06-01 08:30:12,528 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.00s): {"output": "", "exit_code": -1, "error": "This foreground command appears to start a long-lived server/watch process. Run it with background=true, verify readiness (health endpoint/log signal), then e
+2026-06-01 08:31:01,299 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.00s): {"output": "", "exit_code": -1, "error": "This foreground command appears to start a long-lived server/watch process. Run it with background=true, verify readiness (health endpoint/log signal), then e
+2026-06-01 08:37:33,135 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (161.92s): {"output": "[Command timed out after 120s]", "exit_code": 124, "error": null}
+2026-06-01 08:40:29,506 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:00,661 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-06-01 08:41:26,392 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed ([Errno -3] Temporary failure in name resolution); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:48,353 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:52,987 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-06-01 08:42:11,385 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-06-01 08:42:28,921 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:42:49,909 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-06-01 08:43:07,773 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (306.75s): {"output": "[Command timed out after 300s]", "exit_code": 124, "error": null}
+2026-06-01 08:43:40,610 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIConnectionError thread=asyncio_1:140584605271744 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Connection error.
+2026-06-01 08:43:40,611 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 2.7159637422932827s (attempt 1/3) thread=asyncio_1:140584605271744 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Connection error.
+2026-06-01 09:01:59,589 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (875.37s): {"output": "[Command timed out after 600s]", "exit_code": 124, "error": null}
+2026-06-01 09:13:10,271 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (605.42s): {"output": "200---\ncontent-v2\nindex-v5\ntmp\n---\n\n[Command timed out after 600s]", "exit_code": 124, "error": null}
+2026-06-01 09:21:36,683 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (375.58s): {"output": "[Command timed out after 300s]", "exit_code": 124, "error": null}
+2026-06-01 09:22:14,840 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: API call failed (attempt 1/3) error_type=APIConnectionError thread=asyncio_1:140584605271744 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha summary=Connection error.
+2026-06-01 09:22:14,841 WARNING [20260601_043525_ead2eb04] agent.conversation_loop: Retrying API call in 2.791222031960337s (attempt 1/3) thread=asyncio_1:140584605271744 provider=openrouter base_url=https://openrouter.ai/api/v1 model=openrouter/owl-alpha error=Connection error.
+2026-06-01 09:23:19,734 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.00s): {"output": "", "exit_code": -1, "error": "Foreground command uses '&' backgrounding. Use terminal(background=true) for long-lived processes, then run health checks and tests in follow-up terminal call
+2026-06-01 09:28:36,020 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"success": false, "error": "old_string and new_string are identical", "file_preview": "---\nname: omnidome\ndescription: \"OmniDome ISP Operating System — codebase knowledge, architecture, gaps, and 
+2026-06-01 09:29:38,371 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"success": false, "error": "old_string and new_string are identical", "file_preview": "---\nname: omnidome\ndescription: \"OmniDome ISP Operating System — codebase knowledge, architecture, gaps, and 
+2026-06-01 09:31:31,948 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 09:32:25,648 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 09:34:05,646 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool write_file returned error (0.00s): {"error": "Background review denied non-whitelisted tool: write_file. Only memory/skill tools are allowed."}
+2026-06-01 09:40:11,779 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.17s): {"output": "fatal: not a git repository (or any parent up to mount point /opt)\nStopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n===\nfatal: cannot change to '/opt/data/work
+2026-06-01 09:43:23,830 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (61.07s): {"output": "warning: adding embedded git repository: Hermes-Obsidian\nhint: You've added another git repository inside your current repository.\nhint: Clones of the outer repository will not contain t
+2026-06-01 09:44:06,795 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (2.80s): {"output": "", "exit_code": 128, "error": null}
+2026-06-01 09:58:02,610 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.20s): {"output": "https://github.com/BurniMajozi/Hermes-Obsidian.git\n---\n---", "exit_code": 1, "error": null, "exit_code_meaning": "No matches found (not an error)"}
+2026-06-01 10:00:05,931 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 10:00:05,932 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 10:01:05.
+2026-06-01 10:00:05,942 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 10:00:05,943 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 10:01:05.
+2026-06-01 10:00:06,584 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 10:00:06,584 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 10:01:06.
+2026-06-01 10:00:06,590 WARNING agent.auxiliary_client: Auxiliary Nous client unavailable: no Nous authentication found (run: hermes auth).
+2026-06-01 10:00:06,590 WARNING agent.auxiliary_client: Auxiliary: marking nous unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 10:01:06.
+2026-06-01 10:04:23,355 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+2026-06-01 10:05:14,667 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool skill_manage returned error (0.00s): {"error": "file_content is required for 'write_file'.", "success": false}
+
+[Tool loop warning: repeated_exact_failure_warning; count=2; skill_manage has failed 2 times with identical arguments. This l
+2026-06-01 10:08:13,253 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool memory returned error (0.07s): {"success": false, "error": "Memory at 2,107/2,200 chars. Adding this entry (477 chars) would exceed the limit. Replace or remove existing entries first.", "current_entries": ["OmniDome project: 18 mi
+2026-06-01 10:08:41,843 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "Replacement would put memory at 2,359/2,200 chars. Shorten the new content or remove other entries first."}
+2026-06-01 10:09:37,346 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool memory returned error (0.00s): {"success": false, "error": "No entry matched 'GitHub sync status (2026-05-31):\\n- BurniMajozi/Hermes-Obsidian ✅ — pushed, up to date with 8 notes\\n- BurniMajozi/Hermes ⚠️ — remote exists but push a
+2026-06-01 12:17:21,022 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool memory returned error (0.00s): {"error": "content is required for 'replace' action.", "success": false}
+2026-06-01 12:19:39,283 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.18s): {"output": "ls: cannot access '/opt/data/home/omnidome-git/services/': No such file or directory", "exit_code": 2, "error": null}
+2026-06-01 12:20:06,257 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (1.63s): {"output": "agent-orchestrator\nanalytics\nbilling\ncall_center\ncommon\ncommunication\ncrm\nfinance\nhr\niot\njourney_engine\nlifecycle\nmarketing\nnetwork\nportal-builder\nretention\nrica\nsupport\n
+2026-06-01 12:20:31,664 WARNING [20260601_043525_ead2eb04] agent.tool_executor: Tool terminal returned error (0.19s): {"output": "ls: cannot access '/opt/data/workspace/omnidome/services/web_analytics': No such file or directory\nls: cannot access '/opt/data/workspace/omnidome/services/journey_engine': No such file o

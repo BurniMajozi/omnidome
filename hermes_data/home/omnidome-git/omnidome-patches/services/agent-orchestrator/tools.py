@@ -1,0 +1,305 @@
+"""Tool registry — wraps OmniDome microservice APIs as agent tools."""
+
+import os
+import logging
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+
+import httpx
+
+logger = logging.getLogger(__name__)
+
+# Service URL resolution
+SERVICE_URLS = {
+    "crm": os.getenv("CRM_SERVICE_URL", "http://crm:8001"),
+    "billing": os.getenv("BILLING_SERVICE_URL", "http://billing:8003"),
+    "network": os.getenv("NETWORK_SERVICE_URL", "http://network:8005"),
+    "retention": os.getenv("RETENTION_SERVICE_URL", "http://retention:8012"),
+    "support": os.getenv("SUPPORT_SERVICE_URL", "http://support:8008"),
+    "analytics": os.getenv("ANALYTICS_SERVICE_URL", "http://analytics:8011"),
+    "sales": os.getenv("SALES_SERVICE_URL", "http://sales:8002"),
+    "finance": os.getenv("FINANCE_SERVICE_URL", "http://finance:8015"),
+    "call_center": os.getenv("CALL_CENTER_SERVICE_URL", "http://call_center:8007"),
+    "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
+}
+
+
+@dataclass
+class Tool:
+    name: str
+    description: str
+    service: str
+    method: str
+    endpoint: str
+    parameters: Dict[str, Any]
+
+    async def execute(
+        self,
+        tool_input: Dict[str, Any],
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Execute the tool by calling the microservice API."""
+        base_url = SERVICE_URLS.get(self.service, "")
+        if not base_url:
+            return {"success": False, "error": f"Service {self.service} not configured"}
+
+        url = f"{base_url}{self.endpoint}"
+        headers = {}
+        if tenant_id:
+            headers["X-Tenant-Id"] = str(tenant_id)
+        if user_id:
+            headers["X-User-Id"] = str(user_id)
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                if self.method == "GET":
+                    # Map tool_input to query params
+                    resp = await client.get(url, params=tool_input, headers=headers)
+                elif self.method == "POST":
+                    resp = await client.post(url, json=tool_input, headers=headers)
+                else:
+                    return {"success": False, "error": f"Unsupported method: {self.method}"}
+
+                if resp.status_code == 200:
+                    return {"success": True, "data": resp.json()}
+                else:
+                    return {
+                        "success": False,
+                        "error": f"{self.service} returned {resp.status_code}",
+                        "detail": resp.text[:500],
+                    }
+        except httpx.TimeoutException:
+            logger.warning("Tool %s timed out", self.name)
+            return {"success": False, "error": f"{self.service} timeout"}
+        except Exception as e:
+            logger.error("Tool %s failed: %s", self.name, e)
+            return {"success": False, "error": str(e)}
+
+
+class ToolRegistry:
+    """Central registry of all agent tools."""
+
+    def __init__(self):
+        self._tools: Dict[str, Tool] = {}
+        self._register_default_tools()
+
+    def _register_default_tools(self):
+        """Register all built-in OmniDome service tools."""
+
+        # ── CRM Tools ─────────────────────────────────────────────
+        self.register(Tool(
+            name="crm_get_customer",
+            description="Look up a customer by ID, email, phone, or account number. Returns full customer profile.",
+            service="crm",
+            method="GET",
+            endpoint="/api/customers/search",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "account_number": {"type": "string"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="crm_get_customer_360",
+            description="Get full Customer 360 view including billing, support tickets, and network services.",
+            service="crm",
+            method="GET",
+            endpoint="/api/customers/{customer_id}",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
+        ))
+        self.register(Tool(
+            name="crm_create_customer",
+            description="Create a new customer record.",
+            service="crm",
+            method="POST",
+            endpoint="/api/customers",
+            parameters={"type": "object", "properties": {"first_name": {"type": "string"}, "last_name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}}, "required": ["first_name", "last_name"]},
+        ))
+
+        # ── Billing Tools ────────────────────────────────────────
+        self.register(Tool(
+            name="billing_get_balance",
+            description="Get customer's outstanding balance and latest invoice.",
+            service="billing",
+            method="GET",
+            endpoint="/api/customers/{customer_id}/balance",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
+        ))
+        self.register(Tool(
+            name="billing_get_invoice",
+            description="Get a specific invoice by ID.",
+            service="billing",
+            method="GET",
+            endpoint="/api/invoices/{invoice_id}",
+            parameters={"type": "object", "properties": {"invoice_id": {"type": "string"}}, "required": ["invoice_id"]},
+        ))
+        self.register(Tool(
+            name="billing_get_payment_history",
+            description="Get customer's payment history.",
+            service="billing",
+            method="GET",
+            endpoint="/api/customers/{customer_id}/payments",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
+        ))
+
+        # ── Network Tools ────────────────────────────────────────
+        self.register(Tool(
+            name="network_check_coverage",
+            description="Check fibre availability at an address.",
+            service="network",
+            method="GET",
+            endpoint="/api/coverage/check",
+            parameters={"type": "object", "properties": {"address": {"type": "string"}, "latitude": {"type": "string"}, "longitude": {"type": "string"}}, "required": ["address"]},
+        ))
+        self.register(Tool(
+            name="network_get_service_status",
+            description="Get customer's network service status.",
+            service="network",
+            method="GET",
+            endpoint="/api/services/customer/{customer_id}",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
+        ))
+        self.register(Tool(
+            name="network_run_diagnostics",
+            description="Run remote CPE diagnostics for a customer.",
+            service="network",
+            method="POST",
+            endpoint="/api/diagnostics/run",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "service_id": {"type": "string"}}, "required": ["customer_id"]},
+        ))
+
+        # ── Support Tools ────────────────────────────────────────
+        self.register(Tool(
+            name="support_create_ticket",
+            description="Create a support ticket for a customer.",
+            service="support",
+            method="POST",
+            endpoint="/api/tickets",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}, "priority": {"type": "string"}}, "required": ["customer_id", "subject", "description"]},
+        ))
+        self.register(Tool(
+            name="support_get_tickets",
+            description="Get support tickets filtered by customer, status, or priority.",
+            service="support",
+            method="GET",
+            endpoint="/api/tickets",
+            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "status": {"type": "string"}, "priority": {"type": "string"}}, "required": []},
+        ))
+
+        # ── Retention Tools ──────────────────────────────────────
+        self.register(Tool(
+            name="retention_get_predictions",
+            description="Get churn predictions, optionally filtered by risk level.",
+            service="retention",
+            method="GET",
+            endpoint="/api/predictions",
+            parameters={"type": "object", "properties": {"risk_level": {"type": "string"}, "limit": {"type": "integer"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="retention_get_cases",
+            description="Get active retention cases.",
+            service="retention",
+            method="GET",
+            endpoint="/api/cases",
+            parameters={"type": "object", "properties": {"status": {"type": "string"}, "risk_level": {"type": "string"}}, "required": []},
+        ))
+
+        # ── Analytics Tools ─────────────────────────────────────
+        self.register(Tool(
+            name="analytics_get_executive_summary",
+            description="Get AI-driven executive summary with trends and recommendations.",
+            service="analytics",
+            method="GET",
+            endpoint="/api/executive-summary",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
+        # ── Sales Tools ─────────────────────────────────────────
+        self.register(Tool(
+            name="sales_get_pipeline",
+            description="Get sales pipeline summary.",
+            service="sales",
+            method="GET",
+            endpoint="/api/pipeline",
+            parameters={"type": "object", "properties": {"status": {"type": "string"}}, "required": []},
+        ))
+
+        # ── Finance Tools ───────────────────────────────────────
+        self.register(Tool(
+            name="finance_get_financial_summary",
+            description="Get financial summary including revenue, expenses, and margins.",
+            service="finance",
+            method="GET",
+            endpoint="/api/summary",
+            parameters={"type": "object", "properties": {"period": {"type": "string"}}, "required": []},
+        ))
+
+        # ── Call Center Tools ───────────────────────────────────
+        self.register(Tool(
+            name="call_center_get_intelligence",
+            description="Get call center health metrics and sentiment data.",
+            service="call_center",
+            method="GET",
+            endpoint="/api/reports/intelligence",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
+    def register(self, tool: Tool):
+        self._tools[tool.name] = tool
+
+    def get(self, name: str) -> Optional[Tool]:
+        return self._tools.get(name)
+
+    def list_tools(self) -> List[Tool]:
+        return list(self._tools.values())
+
+    def filter_for_agent(self, agent_type: str) -> List[Tool]:
+        """Return only tools an agent type is allowed to use."""
+        AGENT_TOOL_PERMISSIONS = {
+            "customer_facing": [
+                "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "network_check_coverage", "network_get_service_status",
+                "support_create_ticket", "support_get_tickets",
+            ],
+            "retention": [
+                "crm_get_customer", "crm_get_customer_360",
+                "billing_get_balance", "billing_get_payment_history",
+                "retention_get_predictions", "retention_get_cases",
+                "analytics_get_executive_summary",
+            ],
+            "provisioning": [
+                "crm_get_customer", "crm_create_customer",
+                "network_check_coverage", "network_get_service_status",
+                "support_create_ticket",
+            ],
+            "executive": [
+                "analytics_get_executive_summary",
+                "retention_get_predictions",
+                "billing_get_balance", "billing_get_payment_history",
+                "network_get_service_status",
+                "call_center_get_intelligence",
+                "sales_get_pipeline",
+                "finance_get_financial_summary",
+            ],
+            "support": [
+                "support_create_ticket", "support_get_tickets",
+                "crm_get_customer", "crm_get_customer_360",
+                "network_run_diagnostics",
+                "call_center_get_intelligence",
+            ],
+        }
+        allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, [])
+        return [t for t in self._tools.values() if t.name in allowed]
+
+    def to_openai_format(self, tools: List[Tool]) -> List[Dict]:
+        """Convert tool list to OpenAI/Ollama tool-calling format."""
+        result = []
+        for t in tools:
+            result.append({
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.parameters,
+            })
+        return result
+
+
+# Singleton
+tool_registry = ToolRegistry()

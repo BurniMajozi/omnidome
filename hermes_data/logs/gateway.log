@@ -1,0 +1,1451 @@
+2026-05-31 12:55:28,195 INFO gateway.memory_monitor: [MEMORY] baseline rss=111MB gc=(1303, 5, 6) threads=1 uptime=0s
+2026-05-31 12:55:28,196 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 12:55:49,950 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 12:55:49,950 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 12:55:49,981 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 12:55:49,985 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 12:55:49,998 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 12:55:59,719 INFO gateway.run: Connecting to telegram...
+2026-05-31 12:56:01,821 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 12:56:01,822 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 12:56:04,303 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:56:04,315 WARNING gateway.run: ✗ telegram failed to connect
+2026-05-31 12:56:04,317 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 12:56:04,325 WARNING gateway.run: Gateway started with no connected platforms — 1 platform(s) queued for retry: telegram: Telegram startup failed: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:56:04,334 WARNING gateway.run: No adapter could be created for any of the 1 configured platform(s). Check that required dependencies are installed and credentials are set. Gateway will continue for cron job execution.
+2026-05-31 12:56:04,373 INFO gateway.run: Channel directory built: 0 target(s)
+2026-05-31 12:56:04,374 INFO gateway.run: Starting reconnection watcher for 1 failed platform(s): telegram
+2026-05-31 12:56:04,375 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 12:56:04,732 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 12:56:09,381 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 12:56:34,414 INFO gateway.run: Reconnecting telegram (attempt 2)...
+2026-05-31 12:56:34,566 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 12:56:34,566 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 12:56:34,996 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:56:35,009 INFO gateway.run: Reconnect telegram failed, next retry in 60s
+2026-05-31 12:57:35,080 INFO gateway.run: Reconnecting telegram (attempt 3)...
+2026-05-31 12:57:35,220 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 12:57:35,220 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 12:57:35,645 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:57:35,656 INFO gateway.run: Reconnect telegram failed, next retry in 120s
+2026-05-31 12:59:35,814 INFO gateway.run: Reconnecting telegram (attempt 4)...
+2026-05-31 12:59:35,955 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 12:59:35,956 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 12:59:36,383 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 12:59:36,393 INFO gateway.run: Reconnect telegram failed, next retry in 240s
+2026-05-31 13:00:28,197 INFO gateway.memory_monitor: [MEMORY] rss=153MB gc=(1255, 7, 0) threads=7 uptime=300s
+2026-05-31 13:01:03,270 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:01:03,271 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.12 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:01:03,307 INFO gateway.run: Stopping gateway...
+2026-05-31 13:01:03,307 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:01:03,314 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:01:03,314 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.01s
+2026-05-31 13:01:03,905 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.60s
+2026-05-31 13:01:03,907 INFO gateway.run: Shutdown phase: SessionDB close done at +0.60s
+2026-05-31 13:01:03,914 INFO gateway.run: Gateway stopped (total teardown 0.61s)
+2026-05-31 13:01:03,915 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:01:03,915 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.12 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:01:03,917 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:01:03,919 INFO gateway.memory_monitor: [MEMORY] shutdown rss=159MB gc=(275, 10, 0) threads=5 uptime=335s
+2026-05-31 13:01:03,920 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:01:03,920 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:01:17,940 INFO gateway.memory_monitor: [MEMORY] baseline rss=111MB gc=(1303, 5, 6) threads=1 uptime=0s
+2026-05-31 13:01:17,941 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:01:19,722 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:01:19,723 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:01:19,728 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:01:19,728 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:01:19,742 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 13:01:19,745 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:01:20,689 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:01:21,003 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:01:21,004 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:01:21,431 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:21,442 WARNING gateway.run: ✗ telegram failed to connect
+2026-05-31 13:01:21,442 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 13:01:21,448 WARNING gateway.run: Gateway started with no connected platforms — 1 platform(s) queued for retry: telegram: Telegram startup failed: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:21,453 WARNING gateway.run: No adapter could be created for any of the 1 configured platform(s). Check that required dependencies are installed and credentials are set. Gateway will continue for cron job execution.
+2026-05-31 13:01:21,467 INFO gateway.run: Channel directory built: 0 target(s)
+2026-05-31 13:01:21,468 INFO gateway.run: Starting reconnection watcher for 1 failed platform(s): telegram
+2026-05-31 13:01:21,468 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:01:21,575 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:01:26,476 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:01:51,505 INFO gateway.run: Reconnecting telegram (attempt 2)...
+2026-05-31 13:01:51,654 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:01:51,654 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:01:52,088 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:01:52,101 INFO gateway.run: Reconnect telegram failed, next retry in 60s
+2026-05-31 13:02:52,197 INFO gateway.run: Reconnecting telegram (attempt 3)...
+2026-05-31 13:02:52,343 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:02:52,344 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:02:52,794 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:02:52,808 INFO gateway.run: Reconnect telegram failed, next retry in 120s
+2026-05-31 13:04:52,955 INFO gateway.run: Reconnecting telegram (attempt 4)...
+2026-05-31 13:04:53,100 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:04:53,100 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:04:53,546 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:04:53,558 INFO gateway.run: Reconnect telegram failed, next retry in 240s
+2026-05-31 13:06:17,941 INFO gateway.memory_monitor: [MEMORY] rss=151MB gc=(1266, 7, 0) threads=8 uptime=300s
+2026-05-31 13:08:53,884 INFO gateway.run: Reconnecting telegram (attempt 5)...
+2026-05-31 13:08:54,345 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:08:54,346 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:08:54,790 ERROR gateway.platforms.telegram: [Telegram] Failed to connect to Telegram: The token `8024863787:***` was rejected by the server.
+Traceback (most recent call last):
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 856, in initialize
+    await self.get_me()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 2007, in get_me
+    return await super().get_me(
+           ^^^^^^^^^^^^^^^^^^^^^
+    ...<5 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 989, in get_me
+    result = await self._post(
+             ^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 703, in _post
+    return await self._do_post(
+           ^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 369, in _do_post
+    return await super()._do_post(
+           ^^^^^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 732, in _do_post
+    result = await request.post(
+             ^^^^^^^^^^^^^^^^^^^
+    ...<6 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 198, in post
+    result = await self._request_wrapper(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/request/_baserequest.py", line 375, in _request_wrapper
+    raise exception
+telegram.error.InvalidToken: Unauthorized
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/hermes/gateway/platforms/telegram.py", line 1628, in connect
+    await self._app.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_application.py", line 489, in initialize
+    await self.bot.initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/ext/_extbot.py", line 315, in initialize
+    await super().initialize()
+  File "/opt/hermes/.venv/lib/python3.13/site-packages/telegram/_bot.py", line 859, in initialize
+    raise InvalidToken(f"The token `{self._token}` was rejected by the server.") from exc
+telegram.error.InvalidToken: The token `8024863787:***` was rejected by the server.
+2026-05-31 13:08:54,801 INFO gateway.run: Reconnect telegram failed, next retry in 300s
+2026-05-31 13:11:09,610 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:11:09,610 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:09,613 INFO gateway.run: Stopping gateway...
+2026-05-31 13:11:09,613 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:11:09,619 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:11:09,620 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.01s
+2026-05-31 13:11:10,219 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.61s
+2026-05-31 13:11:10,220 INFO gateway.run: Shutdown phase: SessionDB close done at +0.61s
+2026-05-31 13:11:10,245 INFO gateway.run: Gateway stopped (total teardown 0.63s)
+2026-05-31 13:11:10,246 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:11:10,246 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:10,249 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:11:10,249 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.30 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:11:10,257 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:11:10,259 INFO gateway.memory_monitor: [MEMORY] shutdown rss=162MB gc=(287, 10, 0) threads=6 uptime=592s
+2026-05-31 13:11:10,259 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:11:10,260 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:11:26,256 INFO gateway.memory_monitor: [MEMORY] baseline rss=110MB gc=(1303, 5, 6) threads=1 uptime=0s
+2026-05-31 13:11:26,256 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:11:28,212 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:11:28,213 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:11:28,217 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:11:28,218 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:11:28,232 WARNING gateway.run: No user allowlists configured. All unauthorized users will be denied. Set GATEWAY_ALLOW_ALL_USERS=true in ~/.hermes/.env to allow open access, or configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id).
+2026-05-31 13:11:28,234 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:11:29,473 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:11:29,785 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:11:29,786 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:11:32,402 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:11:32,535 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:11:32,673 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:11:32,673 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:11:32,681 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:11:32,690 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:11:32,695 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:11:32,704 INFO gateway.run: Channel directory built: 0 target(s)
+2026-05-31 13:11:33,707 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:11:33,817 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:11:38,715 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:16:26,257 INFO gateway.memory_monitor: [MEMORY] rss=153MB gc=(1804, 4, 1) threads=6 uptime=300s
+2026-05-31 13:18:15,504 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:18:15,505 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:18:15,540 INFO gateway.run: Stopping gateway...
+2026-05-31 13:18:15,540 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:18:15,546 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:18:15,547 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:18:15,547 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:18:16,119 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 13:18:16,119 INFO gateway.run: ✓ telegram disconnected (0.57s)
+2026-05-31 13:18:16,119 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.58s
+2026-05-31 13:18:16,816 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +1.28s
+2026-05-31 13:18:16,817 INFO gateway.run: Shutdown phase: SessionDB close done at +1.28s
+2026-05-31 13:18:16,838 INFO gateway.run: Gateway stopped (total teardown 1.30s)
+2026-05-31 13:18:16,838 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:18:16,839 INFO gateway.memory_monitor: [MEMORY] shutdown rss=159MB gc=(1468, 7, 1) threads=4 uptime=410s
+2026-05-31 13:18:16,840 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:18:16,840 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:18:32,308 INFO gateway.memory_monitor: [MEMORY] baseline rss=110MB gc=(1303, 5, 6) threads=1 uptime=0s
+2026-05-31 13:18:32,309 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:18:35,752 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:18:35,753 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:18:35,757 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:18:35,758 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:18:35,772 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:18:36,685 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:18:37,126 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:18:37,126 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:18:38,907 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:18:39,039 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:18:39,170 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:18:39,170 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:18:39,178 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:18:39,184 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:18:39,189 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:18:39,200 INFO gateway.run: Channel directory built: 0 target(s)
+2026-05-31 13:18:40,202 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:18:40,351 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:18:45,210 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:20:24,034 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (8 chars)
+2026-05-31 13:20:24,179 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Hello 👋.'
+2026-05-31 13:20:40,580 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=16.4s api_calls=1 response=1310 chars
+2026-05-31 13:20:40,626 INFO gateway.run: Transient agent failure in session 20260531_132024_08bbb750 — persisting user message so conversation context is preserved on retry.
+2026-05-31 13:20:40,732 INFO gateway.platforms.base: [Telegram] Sending response (1310 chars) to 8975916657
+2026-05-31 13:23:32,336 INFO gateway.memory_monitor: [MEMORY] rss=220MB gc=(1856, 7, 9) threads=6 uptime=300s
+2026-05-31 13:24:18,148 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:24:18,148 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:24:18,183 INFO gateway.run: Stopping gateway...
+2026-05-31 13:24:18,183 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:24:18,192 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:24:18,195 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:24:18,197 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:24:31,154 INFO gateway.memory_monitor: [MEMORY] baseline rss=76MB gc=(995, 6, 6) threads=1 uptime=0s
+2026-05-31 13:24:31,155 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:24:32,759 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:24:32,759 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:24:32,760 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:24:32,761 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:24:33,912 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:24:34,569 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:24:34,569 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:24:35,954 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:24:36,119 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:24:36,258 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:24:36,258 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:24:36,266 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:24:36,274 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:24:36,280 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:24:36,290 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 13:24:37,293 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:24:37,346 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:24:42,300 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:26:22,227 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:26:22,261 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,283 INFO gateway.run: Stopping gateway...
+2026-05-31 13:26:22,283 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:26:22,289 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:26:22,291 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:26:22,291 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,293 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:26:22,294 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.17 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:26:22,736 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 13:26:22,736 INFO gateway.run: ✓ telegram disconnected (0.45s)
+2026-05-31 13:26:22,736 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.45s
+2026-05-31 13:26:23,153 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.87s
+2026-05-31 13:26:23,162 INFO gateway.run: Shutdown phase: SessionDB close done at +0.88s
+2026-05-31 13:26:23,169 INFO gateway.run: Gateway stopped (total teardown 0.89s)
+2026-05-31 13:26:23,169 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:26:23,170 INFO gateway.memory_monitor: [MEMORY] shutdown rss=142MB gc=(772, 0, 2) threads=4 uptime=112s
+2026-05-31 13:26:23,171 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:26:23,171 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:26:32,186 INFO gateway.memory_monitor: [MEMORY] baseline rss=76MB gc=(995, 6, 6) threads=1 uptime=0s
+2026-05-31 13:26:32,187 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:26:33,328 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:26:33,328 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:26:33,329 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:26:33,330 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:26:33,341 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:26:33,839 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:26:34,023 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:26:34,023 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:26:35,138 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:26:35,270 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:26:35,415 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:26:35,415 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:26:35,420 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:26:35,425 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:26:35,430 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:26:35,438 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 13:26:36,441 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:26:36,459 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:26:41,449 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:27:49,027 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:27:49,028 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,031 INFO gateway.run: Stopping gateway...
+2026-05-31 13:27:49,031 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:27:49,039 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:27:49,041 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:27:49,041 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,044 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:27:49,044 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=114 parent_name=s6-supervise loadavg_1m=0.11 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:27:49,436 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 13:27:49,437 INFO gateway.run: ✓ telegram disconnected (0.40s)
+2026-05-31 13:27:49,437 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.41s
+2026-05-31 13:27:49,488 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.46s
+2026-05-31 13:27:49,489 INFO gateway.run: Shutdown phase: SessionDB close done at +0.46s
+2026-05-31 13:27:49,494 INFO gateway.run: Gateway stopped (total teardown 0.46s)
+2026-05-31 13:27:49,495 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:27:49,495 INFO gateway.memory_monitor: [MEMORY] shutdown rss=139MB gc=(727, 10, 1) threads=5 uptime=77s
+2026-05-31 13:27:49,496 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:27:49,496 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:27:55,474 INFO gateway.memory_monitor: [MEMORY] baseline rss=76MB gc=(995, 6, 6) threads=1 uptime=0s
+2026-05-31 13:27:55,475 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:27:56,123 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:27:56,124 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:27:56,125 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:27:56,125 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:27:56,135 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:27:56,418 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:27:56,651 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:27:56,652 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:27:57,600 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:27:57,736 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:27:57,872 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:27:57,872 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:27:57,877 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:27:57,884 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:27:57,888 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:27:57,895 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 13:27:58,898 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:27:58,916 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:28:03,903 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:30:33,665 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:30:33,666 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:30:33,669 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 13:30:33,669 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=116 parent_name=s6-supervise loadavg_1m=0.02 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 13:30:33,671 INFO gateway.run: Stopping gateway...
+2026-05-31 13:30:33,671 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 13:30:33,679 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 13:30:34,062 INFO gateway.platforms.telegram: [Telegram] Disconnected from Telegram
+2026-05-31 13:30:34,062 INFO gateway.run: ✓ telegram disconnected (0.38s)
+2026-05-31 13:30:34,062 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.39s
+2026-05-31 13:30:34,125 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.45s
+2026-05-31 13:30:34,126 INFO gateway.run: Shutdown phase: SessionDB close done at +0.45s
+2026-05-31 13:30:34,131 INFO gateway.run: Gateway stopped (total teardown 0.46s)
+2026-05-31 13:30:34,131 INFO gateway.run: Cron ticker stopped
+2026-05-31 13:30:34,132 INFO gateway.memory_monitor: [MEMORY] shutdown rss=139MB gc=(1018, 10, 1) threads=4 uptime=158s
+2026-05-31 13:30:34,133 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring stopped
+2026-05-31 13:30:34,133 INFO gateway.run: Exiting with code 1 (signal-initiated shutdown without restart request) so systemd Restart=on-failure can revive the gateway.
+2026-05-31 13:30:40,106 INFO gateway.memory_monitor: [MEMORY] baseline rss=76MB gc=(995, 6, 6) threads=1 uptime=0s
+2026-05-31 13:30:40,107 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 13:30:40,838 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 13:30:40,838 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 13:30:40,839 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 13:30:40,840 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 13:30:40,849 INFO gateway.run: Previous gateway exited cleanly — skipping session suspension
+2026-05-31 13:30:41,146 INFO gateway.run: Connecting to telegram...
+2026-05-31 13:30:41,401 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 13:30:41,402 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 13:30:42,347 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 13:30:42,479 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 13:30:42,634 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 13:30:42,634 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 13:30:42,640 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 13:30:42,649 INFO gateway.run: ✓ telegram connected
+2026-05-31 13:30:42,654 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 13:30:42,662 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 13:30:43,665 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 13:30:43,687 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 13:30:48,673 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 13:34:52,815 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (2 chars)
+2026-05-31 13:34:53,198 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='hi'
+2026-05-31 13:35:22,315 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (5 chars)
+2026-05-31 13:35:39,640 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-05-31 13:35:40,108 INFO gateway.memory_monitor: [MEMORY] rss=186MB gc=(1603, 1, 10) threads=7 uptime=300s
+2026-05-31 13:35:47,828 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=54.6s api_calls=1 response=32 chars
+2026-05-31 13:35:47,952 INFO gateway.platforms.base: [Telegram] Sending response (32 chars) to 8975916657
+2026-05-31 13:36:18,576 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (30 chars)
+2026-05-31 13:36:18,578 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='what model are you running on?'
+2026-05-31 13:36:29,748 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=11.2s api_calls=1 response=52 chars
+2026-05-31 13:36:29,827 INFO gateway.platforms.base: [Telegram] Sending response (52 chars) to 8975916657
+2026-05-31 13:37:16,371 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (47 chars)
+2026-05-31 13:37:16,372 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="I don't think so. You are running on Owl Alpha."
+2026-05-31 13:37:23,035 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=6.7s api_calls=1 response=236 chars
+2026-05-31 13:37:23,060 INFO gateway.platforms.base: [Telegram] Sending response (236 chars) to 8975916657
+2026-05-31 13:40:40,109 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(1804, 3, 10) threads=6 uptime=600s
+2026-05-31 13:45:40,110 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(696, 4, 10) threads=6 uptime=900s
+2026-05-31 13:50:40,111 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(1534, 4, 10) threads=6 uptime=1200s
+2026-05-31 13:55:40,112 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(725, 5, 10) threads=6 uptime=1500s
+2026-05-31 14:00:40,113 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(1487, 5, 10) threads=6 uptime=1800s
+2026-05-31 14:05:40,113 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(444, 6, 10) threads=6 uptime=2100s
+2026-05-31 14:10:40,114 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(1177, 6, 10) threads=6 uptime=2400s
+2026-05-31 14:15:40,115 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(229, 7, 10) threads=6 uptime=2700s
+2026-05-31 14:20:40,116 INFO gateway.memory_monitor: [MEMORY] rss=192MB gc=(1003, 7, 10) threads=6 uptime=3000s
+2026-05-31 14:21:30,842 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (55 chars)
+2026-05-31 14:21:30,845 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='You are within a project. Can you tell me what you see?'
+2026-05-31 14:22:09,331 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=38.5s api_calls=3 response=915 chars
+2026-05-31 14:22:09,343 INFO gateway.platforms.base: [Telegram] Sending response (915 chars) to 8975916657
+2026-05-31 14:24:05,639 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (65 chars)
+2026-05-31 14:24:05,677 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you look for the project OmniDome in the current VM instance?'
+2026-05-31 14:24:47,766 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=42.1s api_calls=3 response=338 chars
+2026-05-31 14:24:47,778 INFO gateway.platforms.base: [Telegram] Sending response (338 chars) to 8975916657
+2026-05-31 14:25:40,117 INFO gateway.memory_monitor: [MEMORY] rss=204MB gc=(205, 10, 10) threads=8 uptime=3300s
+2026-05-31 14:29:31,817 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 14:29:31,817 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 14:29:31,842 INFO gateway.run: Received SIGTERM — initiating shutdown
+2026-05-31 14:29:31,842 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=115 parent_name=s6-supervise loadavg_1m=0.08 parent_cmdline='s6-supervise gateway-default'
+2026-05-31 14:29:31,846 INFO gateway.run: Stopping gateway...
+2026-05-31 14:29:31,846 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-05-31 14:29:31,853 INFO gateway.run: Shutdown phase: drain done at +0.01s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0)
+2026-05-31 14:29:55,196 INFO gateway.memory_monitor: [MEMORY] baseline rss=110MB gc=(1303, 5, 6) threads=1 uptime=0s
+2026-05-31 14:29:55,197 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 14:30:00,129 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 14:30:00,129 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 14:30:00,158 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 14:30:00,159 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 14:30:02,571 INFO gateway.run: Connecting to telegram...
+2026-05-31 14:30:03,317 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 14:30:03,318 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 14:30:05,235 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 14:30:05,373 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 14:30:05,667 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 14:30:05,668 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 100 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 14:30:05,675 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 14:30:05,681 INFO gateway.run: ✓ telegram connected
+2026-05-31 14:30:05,685 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 14:30:05,807 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 14:30:06,809 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 14:30:07,025 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 14:30:11,817 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 14:32:18,331 INFO gateway.platforms.telegram: [Telegram] Cached user voice at /opt/data/audio_cache/audio_be3e76e1209c.ogg
+2026-05-31 14:32:18,603 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg=''
+2026-05-31 14:34:02,785 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=104.2s api_calls=3 response=818 chars
+2026-05-31 14:34:03,189 INFO gateway.platforms.base: [Telegram] Sending response (818 chars) to 8975916657
+2026-05-31 14:34:35,311 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (3 chars)
+2026-05-31 14:34:35,313 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Yes'
+2026-05-31 14:34:55,274 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1004, 5, 8) threads=9 uptime=300s
+2026-05-31 14:35:48,071 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=72.8s api_calls=4 response=2760 chars
+2026-05-31 14:35:48,086 INFO gateway.platforms.base: [Telegram] Sending response (2760 chars) to 8975916657
+2026-05-31 14:38:38,841 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (32 chars)
+2026-05-31 14:38:38,844 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Before we start. Do you know me?'
+2026-05-31 14:39:07,978 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=29.1s api_calls=2 response=428 chars
+2026-05-31 14:39:08,064 INFO gateway.platforms.base: [Telegram] Sending response (428 chars) to 8975916657
+2026-05-31 14:39:55,276 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(565, 7, 8) threads=9 uptime=600s
+2026-05-31 14:44:55,277 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1555, 7, 8) threads=9 uptime=900s
+2026-05-31 14:45:27,778 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (310 chars)
+2026-05-31 14:45:27,779 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="I,m a Telco. I'm a Snr Manager Business Performance & Insight for a Cell C in So"
+2026-05-31 14:46:24,894 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=57.1s api_calls=2 response=453 chars
+2026-05-31 14:46:25,060 INFO gateway.platforms.base: [Telegram] Sending response (453 chars) to 8975916657
+2026-05-31 14:47:55,855 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (1 chars)
+2026-05-31 14:47:55,857 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='1'
+2026-05-31 14:49:55,342 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(526, 11, 8) threads=10 uptime=1200s
+2026-05-31 14:54:43,237 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=407.4s api_calls=7 response=66 chars
+2026-05-31 14:54:43,254 INFO gateway.platforms.base: [Telegram] Sending response (84 chars) to 8975916657
+2026-05-31 14:54:55,461 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(971, 2, 9) threads=10 uptime=1500s
+2026-05-31 14:55:43,497 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (20 chars)
+2026-05-31 14:55:43,552 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Which model provider'
+2026-05-31 14:59:55,461 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1408, 5, 9) threads=11 uptime=1800s
+2026-05-31 15:04:55,501 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1256, 8, 9) threads=11 uptime=2100s
+2026-05-31 15:06:35,085 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=651.5s api_calls=2 response=400 chars
+2026-05-31 15:06:35,374 INFO gateway.platforms.base: [Telegram] Sending response (400 chars) to 8975916657
+2026-05-31 15:09:55,556 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1035, 10, 9) threads=12 uptime=2400s
+2026-05-31 15:09:56,538 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (29 chars)
+2026-05-31 15:09:56,569 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you try more efficiently?'
+2026-05-31 15:10:21,556 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=25.0s api_calls=1 response=121 chars
+2026-05-31 15:10:21,624 INFO gateway.platforms.base: [Telegram] Sending response (121 chars) to 8975916657
+2026-05-31 15:11:04,701 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (94 chars)
+2026-05-31 15:11:04,702 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Plan the agentic layer — design the AI agent architecture on top of the existing'
+2026-05-31 15:12:23,853 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (62 chars)
+2026-05-31 15:14:55,585 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(535, 4, 10) threads=11 uptime=2700s
+2026-05-31 15:19:55,587 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(4, 7, 10) threads=12 uptime=3000s
+2026-05-31 15:24:02,426 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-05-31 15:24:55,589 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1251, 10, 10) threads=12 uptime=3300s
+2026-05-31 15:29:55,589 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1673, 11, 10) threads=11 uptime=3600s
+2026-05-31 15:30:16,187 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=session, user=Bene)
+2026-05-31 15:33:57,546 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=1372.8s api_calls=8 response=6846 chars
+2026-05-31 15:33:57,646 INFO gateway.platforms.base: [Telegram] Sending response (6846 chars) to 8975916657
+2026-05-31 15:34:55,614 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1400, 4, 0) threads=13 uptime=3900s
+2026-05-31 15:39:55,615 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1636, 5, 0) threads=13 uptime=4200s
+2026-05-31 15:44:55,616 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1880, 6, 0) threads=13 uptime=4500s
+2026-05-31 15:49:14,705 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (23 chars)
+2026-05-31 15:49:14,709 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Do you see supper base?'
+2026-05-31 15:49:55,622 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(158, 8, 0) threads=12 uptime=4800s
+2026-05-31 15:49:57,555 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=42.8s api_calls=1 response=795 chars
+2026-05-31 15:49:57,752 INFO gateway.platforms.base: [Telegram] Sending response (795 chars) to 8975916657
+2026-05-31 15:54:55,623 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(975, 8, 0) threads=11 uptime=5100s
+2026-05-31 15:59:55,625 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1829, 8, 0) threads=11 uptime=5400s
+2026-05-31 16:04:26,925 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (3 chars)
+2026-05-31 16:04:26,927 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Yes'
+2026-05-31 16:04:55,625 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1423, 10, 0) threads=12 uptime=5700s
+2026-05-31 16:05:33,662 INFO gateway.run: kanban dispatcher: reaped 1 zombie worker(s), pids=[1328]
+2026-05-31 16:06:28,265 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=121.3s api_calls=3 response=3564 chars
+2026-05-31 16:06:28,451 INFO gateway.platforms.base: [Telegram] Sending response (3564 chars) to 8975916657
+2026-05-31 16:09:30,303 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (3 chars)
+2026-05-31 16:09:30,338 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Yes'
+2026-05-31 16:09:55,626 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1415, 0, 1) threads=12 uptime=6000s
+2026-05-31 16:10:57,082 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=86.7s api_calls=2 response=206 chars
+2026-05-31 16:10:57,578 INFO gateway.platforms.base: [Telegram] Sending response (206 chars) to 8975916657
+2026-05-31 16:12:50,950 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (34 chars)
+2026-05-31 16:12:50,951 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Please go ahead on implementation.'
+2026-05-31 16:14:55,627 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(203, 4, 1) threads=11 uptime=6300s
+2026-05-31 16:19:55,713 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1189, 11, 1) threads=23 uptime=6600s
+2026-05-31 16:24:55,790 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(841, 8, 2) threads=20 uptime=6900s
+2026-05-31 16:29:36,416 INFO gateway.run: kanban dispatcher: reaped 2 zombie worker(s), pids=[3390, 3403]
+2026-05-31 16:29:55,836 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1386, 2, 3) threads=14 uptime=7200s
+2026-05-31 16:34:55,889 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(408, 7, 3) threads=14 uptime=7500s
+2026-05-31 16:39:55,998 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(571, 10, 3) threads=12 uptime=7800s
+2026-05-31 16:44:56,166 INFO gateway.memory_monitor: [MEMORY] rss=501MB gc=(1077, 4, 4) threads=12 uptime=8100s
+2026-05-31 16:49:29,729 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=2198.8s api_calls=30 response=3296 chars
+2026-05-31 16:49:29,893 INFO gateway.platforms.base: [Telegram] Sending response (3296 chars) to 8975916657
+2026-05-31 16:49:56,356 INFO gateway.memory_monitor: [MEMORY] rss=506MB gc=(1519, 9, 4) threads=13 uptime=8401s
+2026-05-31 16:50:23,681 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (3 chars)
+2026-05-31 16:50:23,815 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Yes'
+2026-05-31 16:55:01,406 INFO gateway.memory_monitor: [MEMORY] rss=506MB gc=(1435, 3, 5) threads=26 uptime=8706s
+2026-05-31 17:00:03,550 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(1844, 8, 5) threads=16 uptime=9008s
+2026-05-31 17:05:03,647 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(840, 0, 6) threads=16 uptime=9308s
+2026-05-31 17:10:03,983 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(916, 4, 6) threads=16 uptime=9608s
+2026-05-31 17:15:04,115 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(1169, 7, 6) threads=16 uptime=9908s
+2026-05-31 17:20:04,522 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(1171, 11, 6) threads=14 uptime=10209s
+2026-05-31 17:25:04,641 INFO gateway.memory_monitor: [MEMORY] rss=518MB gc=(4, 6, 7) threads=14 uptime=10509s
+2026-05-31 17:29:35,626 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=2351.8s api_calls=20 response=2462 chars
+2026-05-31 17:29:35,690 INFO gateway.platforms.base: [Telegram] Sending response (2462 chars) to 8975916657
+2026-05-31 17:30:04,705 INFO gateway.memory_monitor: [MEMORY] rss=526MB gc=(0, 11, 7) threads=15 uptime=10809s
+2026-05-31 17:34:47,960 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (60 chars)
+2026-05-31 17:34:48,068 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you make sure you send these chat to my Obsidian memory.'
+2026-05-31 17:35:04,808 INFO gateway.memory_monitor: [MEMORY] rss=530MB gc=(655, 2, 8) threads=16 uptime=11109s
+2026-05-31 17:37:18,045 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=150.0s api_calls=6 response=742 chars
+2026-05-31 17:37:19,182 INFO gateway.platforms.base: [Telegram] Sending response (742 chars) to 8975916657
+2026-05-31 17:39:51,693 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (10 chars)
+2026-05-31 17:39:51,969 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Set it up.'
+2026-05-31 17:40:05,001 INFO gateway.memory_monitor: [MEMORY] rss=535MB gc=(1809, 6, 8) threads=14 uptime=11409s
+2026-05-31 17:43:18,941 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 17:45:05,031 INFO gateway.memory_monitor: [MEMORY] rss=536MB gc=(1352, 11, 8) threads=14 uptime=11709s
+2026-05-31 17:48:14,925 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=503.0s api_calls=14 response=1300 chars
+2026-05-31 17:48:14,998 INFO gateway.platforms.base: [Telegram] Sending response (1300 chars) to 8975916657
+2026-05-31 17:50:05,042 INFO gateway.memory_monitor: [MEMORY] rss=539MB gc=(1133, 3, 9) threads=15 uptime=12009s
+2026-05-31 17:55:05,278 INFO gateway.memory_monitor: [MEMORY] rss=539MB gc=(346, 5, 9) threads=13 uptime=12310s
+2026-05-31 18:00:05,514 INFO gateway.memory_monitor: [MEMORY] rss=539MB gc=(1315, 5, 9) threads=13 uptime=12610s
+2026-05-31 18:05:05,738 INFO gateway.memory_monitor: [MEMORY] rss=539MB gc=(167, 6, 9) threads=13 uptime=12910s
+2026-05-31 18:10:06,039 INFO gateway.memory_monitor: [MEMORY] rss=539MB gc=(892, 6, 9) threads=13 uptime=13210s
+2026-05-31 18:14:50,850 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (49 chars)
+2026-05-31 18:14:51,115 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='What the one db u created for communication dome.'
+2026-05-31 18:15:06,297 INFO gateway.memory_monitor: [MEMORY] rss=546MB gc=(218, 9, 9) threads=14 uptime=13511s
+2026-05-31 18:15:24,671 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=33.6s api_calls=1 response=1301 chars
+2026-05-31 18:15:24,910 INFO gateway.platforms.base: [Telegram] Sending response (1301 chars) to 8975916657
+2026-05-31 18:18:39,273 INFO gateway.platforms.telegram: [Telegram] Cached user photo at /opt/data/image_cache/img_d18257436c33.jpg
+2026-05-31 18:18:40,166 INFO gateway.platforms.telegram: [Telegram] Flushing photo batch agent:main:telegram:dm:8975916657:photo-burst with 1 image(s)
+2026-05-31 18:18:40,203 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Are these sorted.'
+2026-05-31 18:18:42,165 INFO gateway.run: Image routing: text (mode=text). Pre-analyzing 1 image(s) via vision_analyze.
+2026-05-31 18:19:18,924 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=38.7s api_calls=2 response=489 chars
+2026-05-31 18:19:19,314 INFO gateway.platforms.base: [Telegram] Sending response (489 chars) to 8975916657
+2026-05-31 18:20:06,445 INFO gateway.memory_monitor: [MEMORY] rss=546MB gc=(106, 11, 9) threads=13 uptime=13811s
+2026-05-31 18:23:04,146 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (55 chars)
+2026-05-31 18:23:04,357 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Was there any tables that were created within these db.'
+2026-05-31 18:25:09,399 INFO gateway.memory_monitor: [MEMORY] rss=546MB gc=(835, 1, 10) threads=14 uptime=14111s
+2026-05-31 18:25:38,100 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:26:34,061 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-05-31 18:26:39,150 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed ([Errno -3] Temporary failure in name resolution); trying fallback IPs 149.154.166.110
+2026-05-31 18:26:40,976 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (17 chars)
+2026-05-31 18:26:48,941 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-05-31 18:27:21,094 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-05-31 18:28:15,324 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=311.0s api_calls=1 response=28 chars
+2026-05-31 18:28:15,774 INFO gateway.platforms.base: [Telegram] Sending response (28 chars) to 8975916657
+2026-05-31 18:30:23,841 INFO gateway.memory_monitor: [MEMORY] rss=546MB gc=(172, 3, 10) threads=13 uptime=14428s
+2026-05-31 18:31:44,728 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (95 chars)
+2026-05-31 18:31:45,938 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you make sure the chat function is working using Hermes. Create a sub agent '
+2026-05-31 18:33:53,741 WARNING gateway.platforms.telegram_network: [Telegram] Sticky fallback IP 149.154.166.110 failed; resetting to primary DNS path
+2026-05-31 18:33:55,642 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:34:25,873 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:34:32,935 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:34:35,240 WARNING gateway.platforms.telegram: [Telegram] Network error on send (attempt 1/3), retrying in 1s: Timed out
+2026-05-31 18:34:53,797 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:35:01,073 WARNING gateway.platforms.telegram: [Telegram] Network error on send (attempt 1/3), retrying in 1s: Timed out
+2026-05-31 18:35:20,297 WARNING gateway.platforms.telegram_network: [Telegram] Sticky fallback IP 149.154.166.110 failed; resetting to primary DNS path
+2026-05-31 18:35:30,914 INFO gateway.memory_monitor: [MEMORY] rss=546MB gc=(903, 5, 10) threads=13 uptime=14731s
+2026-05-31 18:35:38,940 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-05-31 18:35:43,496 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:36:01,206 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:36:07,262 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-05-31 18:37:45,037 INFO gateway.memory_monitor: [MEMORY] baseline rss=76MB gc=(888, 6, 6) threads=1 uptime=0s
+2026-05-31 18:37:45,039 INFO gateway.memory_monitor: [MEMORY] Periodic memory monitoring started (interval: 300s)
+2026-05-31 18:37:48,034 INFO gateway.run: Starting Hermes Gateway...
+2026-05-31 18:37:48,034 INFO gateway.run: Session storage: /opt/data/sessions
+2026-05-31 18:37:48,035 INFO gateway.run: Agent budget: max_iterations=60 (agent.max_turns from config.yaml, or HERMES_MAX_ITERATIONS from .env, or default 90)
+2026-05-31 18:37:48,036 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-05-31 18:37:49,523 INFO gateway.run: Connecting to telegram...
+2026-05-31 18:37:49,971 INFO gateway.platforms.telegram: [Telegram] Auto-discovered Telegram fallback IPs: 149.154.166.110
+2026-05-31 18:37:49,971 INFO gateway.platforms.telegram: [Telegram] Telegram fallback IPs active: 149.154.166.110
+2026-05-31 18:37:51,427 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeDefault (30 cmds)
+2026-05-31 18:37:51,570 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllPrivateChats (30 cmds)
+2026-05-31 18:37:51,714 INFO gateway.platforms.telegram: [Telegram] set_my_commands OK for scope BotCommandScopeAllGroupChats (30 cmds)
+2026-05-31 18:37:51,714 INFO gateway.platforms.telegram: [Telegram] Telegram menu: 30 commands registered, 101 hidden (over 30 limit). Use /commands for full list.
+2026-05-31 18:37:51,720 INFO gateway.platforms.telegram: [Telegram] Connected to Telegram (polling mode)
+2026-05-31 18:37:51,729 INFO gateway.run: ✓ telegram connected
+2026-05-31 18:37:51,734 INFO gateway.run: Gateway running with 1 platform(s)
+2026-05-31 18:37:51,743 INFO gateway.run: Channel directory built: 1 target(s)
+2026-05-31 18:37:52,746 INFO gateway.run: Press Ctrl+C to stop
+2026-05-31 18:37:52,992 INFO gateway.run: Cron ticker started (interval=60s)
+2026-05-31 18:37:57,753 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-05-31 18:41:07,806 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (2 chars)
+2026-05-31 18:41:07,900 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='👋🏽'
+2026-05-31 18:41:21,569 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=13.7s api_calls=1 response=30 chars
+2026-05-31 18:41:21,844 INFO gateway.platforms.base: [Telegram] Sending response (30 chars) to 8975916657
+2026-05-31 18:41:49,851 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (39 chars)
+2026-05-31 18:41:49,852 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you push all this chat to Obsidian?'
+2026-05-31 18:42:45,040 INFO gateway.memory_monitor: [MEMORY] rss=202MB gc=(328, 8, 10) threads=9 uptime=300s
+2026-05-31 18:44:55,186 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=185.3s api_calls=7 response=815 chars
+2026-05-31 18:44:55,327 INFO gateway.platforms.base: [Telegram] Sending response (815 chars) to 8975916657
+2026-05-31 18:47:45,041 INFO gateway.memory_monitor: [MEMORY] rss=212MB gc=(943, 10, 10) threads=9 uptime=600s
+2026-05-31 18:52:45,043 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(292, 11, 10) threads=9 uptime=900s
+2026-05-31 18:57:45,044 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(1051, 11, 10) threads=9 uptime=1200s
+2026-05-31 19:02:45,050 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(105, 0, 11) threads=9 uptime=1500s
+2026-05-31 19:07:45,052 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(944, 0, 11) threads=9 uptime=1800s
+2026-05-31 19:12:45,053 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(1703, 0, 11) threads=9 uptime=2100s
+2026-05-31 19:17:45,054 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(1231, 0, 0) threads=9 uptime=2400s
+2026-05-31 19:22:45,054 INFO gateway.memory_monitor: [MEMORY] rss=213MB gc=(601, 1, 0) threads=9 uptime=2700s
+2026-05-31 19:23:30,002 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (62 chars)
+2026-05-31 19:23:30,003 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='How do I use this Obsidian for free. I downloaded it in my pc.'
+2026-05-31 19:23:59,137 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=29.1s api_calls=1 response=1352 chars
+2026-05-31 19:23:59,210 INFO gateway.platforms.base: [Telegram] Sending response (1352 chars) to 8975916657
+2026-05-31 19:27:10,301 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (54 chars)
+2026-05-31 19:27:10,302 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='set up a git repo for the vault so you can sync easily'
+2026-05-31 19:27:34,106 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=23.8s api_calls=1 response=724 chars
+2026-05-31 19:27:34,292 INFO gateway.platforms.base: [Telegram] Sending response (724 chars) to 8975916657
+2026-05-31 19:27:45,055 INFO gateway.memory_monitor: [MEMORY] rss=231MB gc=(99, 6, 0) threads=9 uptime=3000s
+2026-05-31 19:31:17,394 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (50 chars)
+2026-05-31 19:31:17,396 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='https://github.com/BurniMajozi/Hermes-Obsidian.git'
+2026-05-31 19:31:39,285 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=21.9s api_calls=1 response=343 chars
+2026-05-31 19:31:39,403 INFO gateway.platforms.base: [Telegram] Sending response (343 chars) to 8975916657
+2026-05-31 19:32:45,057 INFO gateway.memory_monitor: [MEMORY] rss=231MB gc=(263, 8, 0) threads=9 uptime=3300s
+2026-05-31 19:37:45,057 INFO gateway.memory_monitor: [MEMORY] rss=231MB gc=(1551, 8, 0) threads=9 uptime=3600s
+2026-05-31 19:42:45,058 INFO gateway.memory_monitor: [MEMORY] rss=231MB gc=(589, 9, 0) threads=9 uptime=3900s
+2026-05-31 19:46:19,730 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (215 chars)
+2026-05-31 19:46:19,732 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you create Hermes VM setup here: https://github.com/BurniMajozi/Hermes.git .'
+2026-05-31 19:47:45,064 INFO gateway.memory_monitor: [MEMORY] rss=231MB gc=(684, 1, 1) threads=10 uptime=4200s
+2026-05-31 19:50:25,324 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=245.6s api_calls=12 response=895 chars
+2026-05-31 19:50:25,344 INFO gateway.platforms.base: [Telegram] Sending response (895 chars) to 8975916657
+2026-05-31 19:52:45,065 INFO gateway.memory_monitor: [MEMORY] rss=233MB gc=(1465, 7, 1) threads=11 uptime=4500s
+2026-05-31 19:57:45,067 INFO gateway.memory_monitor: [MEMORY] rss=234MB gc=(815, 8, 1) threads=9 uptime=4800s
+2026-05-31 20:02:45,067 INFO gateway.memory_monitor: [MEMORY] rss=235MB gc=(1661, 8, 1) threads=9 uptime=5100s
+2026-05-31 20:05:32,825 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (40 chars)
+2026-05-31 20:05:32,826 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='ghp_FS...Fxfd'
+2026-05-31 20:06:39,094 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 20:07:45,068 INFO gateway.memory_monitor: [MEMORY] rss=236MB gc=(1816, 3, 2) threads=10 uptime=5400s
+2026-05-31 20:11:44,339 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=371.5s api_calls=3 response=447 chars
+2026-05-31 20:11:44,665 INFO gateway.platforms.base: [Telegram] Sending response (447 chars) to 8975916657
+2026-05-31 20:12:27,935 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (1 chars)
+2026-05-31 20:12:27,937 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='B'
+2026-05-31 20:12:45,069 INFO gateway.memory_monitor: [MEMORY] rss=236MB gc=(782, 11, 2) threads=10 uptime=5700s
+2026-05-31 20:12:59,348 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (41 chars)
+2026-05-31 20:13:02,792 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-05-31 20:14:08,824 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=once, user=Bene)
+2026-05-31 20:15:13,860 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=165.9s api_calls=3 response=777 chars
+2026-05-31 20:15:13,875 INFO gateway.platforms.base: [Telegram] Sending response (777 chars) to 8975916657
+2026-05-31 20:16:29,737 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (4 chars)
+2026-05-31 20:16:29,739 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Yes.'
+2026-05-31 20:17:03,721 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=34.0s api_calls=1 response=172 chars
+2026-05-31 20:17:03,778 INFO gateway.platforms.base: [Telegram] Sending response (172 chars) to 8975916657
+2026-05-31 20:17:32,119 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (27 chars)
+2026-05-31 20:17:32,121 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Lets go back to our folder.'
+2026-05-31 20:17:45,070 INFO gateway.memory_monitor: [MEMORY] rss=236MB gc=(134, 8, 3) threads=10 uptime=6000s
+2026-05-31 20:18:07,618 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=35.5s api_calls=1 response=562 chars
+2026-05-31 20:18:07,752 INFO gateway.platforms.base: [Telegram] Sending response (562 chars) to 8975916657
+2026-05-31 20:19:12,904 INFO gateway.platforms.base: [Telegram] Sending response (279 chars) to 8975916657
+2026-05-31 20:22:26,681 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (52 chars)
+2026-05-31 20:22:26,682 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="How do I connect to my project since it's in the vm?"
+2026-05-31 20:22:45,071 INFO gateway.memory_monitor: [MEMORY] rss=236MB gc=(272, 0, 4) threads=10 uptime=6300s
+2026-05-31 20:23:06,305 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=39.6s api_calls=1 response=1696 chars
+2026-05-31 20:23:06,393 INFO gateway.platforms.base: [Telegram] Sending response (1696 chars) to 8975916657
+2026-05-31 20:26:50,229 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (36 chars)
+2026-05-31 20:26:50,231 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Please check my PC expec and advice.'
+2026-05-31 20:27:05,720 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=15.5s api_calls=1 response=22 chars
+2026-05-31 20:27:05,970 INFO gateway.platforms.base: [Telegram] Sending response (22 chars) to 8975916657
+2026-05-31 20:27:45,071 INFO gateway.memory_monitor: [MEMORY] rss=240MB gc=(166, 3, 4) threads=9 uptime=6600s
+2026-05-31 20:32:45,072 INFO gateway.memory_monitor: [MEMORY] rss=240MB gc=(921, 3, 4) threads=9 uptime=6900s
+2026-05-31 20:33:19,293 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (143 chars)
+2026-05-31 20:33:19,295 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="I'm tired now I'm going to sleep. Please go through these while I'm sleeping.Sal"
+2026-05-31 20:37:45,073 INFO gateway.memory_monitor: [MEMORY] rss=240MB gc=(309, 0, 5) threads=10 uptime=7200s
+2026-05-31 20:38:13,906 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 20:38:46,547 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 20:39:31,598 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 20:41:20,089 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=480.8s api_calls=20 response=1769 chars
+2026-05-31 20:41:20,114 INFO gateway.platforms.base: [Telegram] Sending response (1769 chars) to 8975916657
+2026-05-31 20:41:33,793 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (50 chars)
+2026-05-31 20:41:33,794 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Remember the Hermes repo is pushed once every day?'
+2026-05-31 20:42:03,520 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=29.7s api_calls=3 response=449 chars
+2026-05-31 20:42:03,541 INFO gateway.platforms.base: [Telegram] Sending response (449 chars) to 8975916657
+2026-05-31 20:42:45,074 INFO gateway.memory_monitor: [MEMORY] rss=255MB gc=(1686, 6, 6) threads=11 uptime=7500s
+2026-05-31 20:43:10,708 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (19 chars)
+2026-05-31 20:43:10,710 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='We did this before.'
+2026-05-31 20:43:58,222 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=47.5s api_calls=4 response=437 chars
+2026-05-31 20:43:58,375 INFO gateway.platforms.base: [Telegram] Sending response (437 chars) to 8975916657
+2026-05-31 20:44:21,572 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (1 chars)
+2026-05-31 20:44:21,574 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='B'
+2026-05-31 20:44:31,549 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=10.0s api_calls=1 response=420 chars
+2026-05-31 20:44:31,569 INFO gateway.platforms.base: [Telegram] Sending response (420 chars) to 8975916657
+2026-05-31 20:47:45,075 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(518, 7, 7) threads=9 uptime=7800s
+2026-05-31 20:52:45,076 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(1246, 7, 7) threads=9 uptime=8100s
+2026-05-31 20:55:22,950 INFO gateway.platforms.telegram: [Telegram] Cached user photo at /opt/data/image_cache/img_bdeba388c907.jpg
+2026-05-31 20:55:23,751 INFO gateway.platforms.telegram: [Telegram] Flushing photo batch agent:main:telegram:dm:8975916657:photo-burst with 1 image(s)
+2026-05-31 20:55:23,753 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Here are the key access'
+2026-05-31 20:55:23,993 INFO gateway.run: Image routing: text (mode=text). Pre-analyzing 1 image(s) via vision_analyze.
+2026-05-31 20:57:45,077 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(650, 2, 8) threads=10 uptime=8400s
+2026-05-31 20:57:52,443 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=148.7s api_calls=2 response=425 chars
+2026-05-31 20:57:52,462 INFO gateway.platforms.base: [Telegram] Sending response (425 chars) to 8975916657
+2026-05-31 20:58:52,859 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (44 chars)
+2026-05-31 20:58:52,860 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="I've given the key more access.try it again."
+2026-05-31 20:59:33,639 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=40.8s api_calls=1 response=392 chars
+2026-05-31 20:59:33,665 INFO gateway.platforms.base: [Telegram] Sending response (392 chars) to 8975916657
+2026-05-31 21:01:31,438 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (25 chars)
+2026-05-31 21:01:31,439 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='I gave you the key early.'
+2026-05-31 21:02:39,615 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=68.2s api_calls=1 response=664 chars
+2026-05-31 21:02:39,632 INFO gateway.platforms.base: [Telegram] Sending response (664 chars) to 8975916657
+2026-05-31 21:02:45,078 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(101, 8, 8) threads=9 uptime=8700s
+2026-05-31 21:04:32,271 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (57 chars)
+2026-05-31 21:04:32,272 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="That's fine, let's carry on with the other folder issues."
+2026-05-31 21:05:41,499 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-05-31 21:06:24,940 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=112.7s api_calls=8 response=763 chars
+2026-05-31 21:06:25,029 INFO gateway.platforms.base: [Telegram] Sending response (763 chars) to 8975916657
+2026-05-31 21:07:25,323 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (36 chars)
+2026-05-31 21:07:25,324 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="Yes. We'll come back to it tomorrow."
+2026-05-31 21:07:45,078 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(1841, 9, 9) threads=12 uptime=9000s
+2026-05-31 21:12:45,079 INFO gateway.memory_monitor: [MEMORY] rss=261MB gc=(769, 9, 10) threads=21 uptime=9300s
+2026-05-31 21:17:45,099 INFO gateway.memory_monitor: [MEMORY] rss=266MB gc=(1897, 3, 0) threads=10 uptime=9600s
+2026-05-31 21:22:45,100 INFO gateway.memory_monitor: [MEMORY] rss=282MB gc=(70, 10, 0) threads=10 uptime=9900s
+2026-05-31 21:23:01,747 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=936.4s api_calls=11 response=1124 chars
+2026-05-31 21:23:01,834 INFO gateway.platforms.base: [Telegram] Sending response (1124 chars) to 8975916657
+2026-05-31 21:24:28,325 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (22 chars)
+2026-05-31 21:24:28,327 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="Let's fix all of them."
+2026-05-31 21:27:45,102 INFO gateway.memory_monitor: [MEMORY] rss=282MB gc=(722, 7, 1) threads=21 uptime=10200s
+2026-05-31 21:32:45,103 INFO gateway.memory_monitor: [MEMORY] rss=282MB gc=(357, 0, 2) threads=21 uptime=10500s
+2026-05-31 21:33:47,226 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (158 chars)
+2026-05-31 21:37:45,104 INFO gateway.memory_monitor: [MEMORY] rss=282MB gc=(192, 5, 2) threads=10 uptime=10800s
+2026-05-31 21:38:31,953 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (250 chars)
+2026-05-31 21:42:03,660 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-05-31 21:42:45,106 INFO gateway.memory_monitor: [MEMORY] rss=292MB gc=(1055, 8, 3) threads=12 uptime=11100s
+2026-05-31 21:47:45,107 INFO gateway.memory_monitor: [MEMORY] rss=310MB gc=(1863, 6, 4) threads=12 uptime=11400s
+2026-05-31 21:50:26,531 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=1558.2s api_calls=11 response=1803 chars
+2026-05-31 21:50:26,547 INFO gateway.platforms.base: [Telegram] Sending response (1803 chars) to 8975916657
+2026-05-31 21:52:45,108 INFO gateway.memory_monitor: [MEMORY] rss=311MB gc=(494, 11, 4) threads=9 uptime=11700s
+2026-05-31 21:57:45,109 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1678, 11, 4) threads=9 uptime=12000s
+2026-05-31 22:02:45,110 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(849, 0, 5) threads=9 uptime=12300s
+2026-05-31 22:07:45,111 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1582, 0, 5) threads=9 uptime=12600s
+2026-05-31 22:12:45,112 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(571, 1, 5) threads=9 uptime=12900s
+2026-05-31 22:17:45,112 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1330, 1, 5) threads=9 uptime=13200s
+2026-05-31 22:22:45,113 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(386, 2, 5) threads=9 uptime=13500s
+2026-05-31 22:27:45,114 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1144, 2, 5) threads=9 uptime=13800s
+2026-05-31 22:32:45,115 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1903, 2, 5) threads=9 uptime=14100s
+2026-05-31 22:37:45,116 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(743, 3, 5) threads=9 uptime=14400s
+2026-05-31 22:42:45,117 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1739, 3, 5) threads=9 uptime=14700s
+2026-05-31 22:47:45,127 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(572, 4, 5) threads=9 uptime=15000s
+2026-05-31 22:52:45,128 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1331, 4, 5) threads=9 uptime=15300s
+2026-05-31 22:54:19,383 INFO gateway.run: Agent cache idle-TTL evict: session=agent:main:telegram:dm:8975916657 (idle=3833s)
+2026-05-31 22:54:19,418 INFO gateway.run: Agent cache idle sweep: evicted 1 agent(s)
+2026-05-31 22:57:45,128 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(211, 5, 5) threads=9 uptime=15600s
+2026-05-31 23:02:45,129 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1145, 5, 5) threads=9 uptime=15900s
+2026-05-31 23:07:45,130 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1904, 5, 5) threads=9 uptime=16200s
+2026-05-31 23:12:45,131 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(770, 6, 5) threads=9 uptime=16500s
+2026-05-31 23:17:45,132 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1503, 6, 5) threads=9 uptime=16800s
+2026-05-31 23:22:45,133 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(569, 7, 5) threads=9 uptime=17100s
+2026-05-31 23:27:45,134 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(1302, 7, 5) threads=9 uptime=17400s
+2026-05-31 23:32:45,135 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(168, 8, 5) threads=9 uptime=17700s
+2026-05-31 23:37:45,136 INFO gateway.memory_monitor: [MEMORY] rss=314MB gc=(927, 8, 5) threads=9 uptime=18000s
+2026-05-31 23:42:45,137 INFO gateway.memory_monitor: [MEMORY] rss=318MB gc=(1897, 8, 5) threads=9 uptime=18300s
+2026-05-31 23:47:45,138 INFO gateway.memory_monitor: [MEMORY] rss=318MB gc=(787, 9, 5) threads=9 uptime=18600s
+2026-05-31 23:52:45,139 INFO gateway.memory_monitor: [MEMORY] rss=318MB gc=(1517, 9, 5) threads=9 uptime=18900s
+2026-05-31 23:57:45,140 INFO gateway.memory_monitor: [MEMORY] rss=318MB gc=(400, 10, 5) threads=9 uptime=19200s
+2026-06-01 00:02:45,142 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(105, 11, 6) threads=13 uptime=19500s
+2026-06-01 00:07:45,143 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(656, 0, 7) threads=9 uptime=19800s
+2026-06-01 00:12:45,144 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1406, 0, 7) threads=9 uptime=20100s
+2026-06-01 00:17:45,145 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(294, 1, 7) threads=9 uptime=20400s
+2026-06-01 00:22:45,146 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1228, 1, 7) threads=9 uptime=20700s
+2026-06-01 00:27:45,147 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(105, 2, 7) threads=9 uptime=21000s
+2026-06-01 00:32:45,148 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(842, 2, 7) threads=9 uptime=21300s
+2026-06-01 00:37:45,148 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1797, 2, 7) threads=9 uptime=21600s
+2026-06-01 00:42:45,149 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(692, 3, 7) threads=9 uptime=21900s
+2026-06-01 00:47:45,150 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1429, 3, 7) threads=9 uptime=22200s
+2026-06-01 00:52:45,151 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(392, 4, 7) threads=9 uptime=22500s
+2026-06-01 00:57:45,152 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1328, 4, 7) threads=9 uptime=22800s
+2026-06-01 01:02:45,153 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(202, 5, 7) threads=9 uptime=23100s
+2026-06-01 01:07:45,154 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(958, 5, 7) threads=9 uptime=23400s
+2026-06-01 01:12:45,155 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1696, 5, 7) threads=9 uptime=23700s
+2026-06-01 01:17:45,156 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(759, 6, 7) threads=9 uptime=24000s
+2026-06-01 01:22:45,157 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1515, 6, 7) threads=9 uptime=24300s
+2026-06-01 01:27:45,185 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(360, 7, 7) threads=9 uptime=24600s
+2026-06-01 01:32:45,186 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1117, 7, 7) threads=9 uptime=24900s
+2026-06-01 01:37:45,187 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(196, 8, 7) threads=9 uptime=25200s
+2026-06-01 01:42:45,187 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(985, 8, 7) threads=9 uptime=25500s
+2026-06-01 01:47:45,188 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1742, 8, 7) threads=9 uptime=25800s
+2026-06-01 01:52:45,189 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(625, 9, 7) threads=9 uptime=26100s
+2026-06-01 01:57:45,191 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(1583, 9, 7) threads=9 uptime=26400s
+2026-06-01 02:02:45,192 INFO gateway.memory_monitor: [MEMORY] rss=325MB gc=(445, 10, 7) threads=9 uptime=26700s
+2026-06-01 02:05:46,473 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (8 chars)
+2026-06-01 02:05:46,502 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Morning.'
+2026-06-01 02:06:37,375 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=50.9s api_calls=1 response=43 chars
+2026-06-01 02:06:37,644 INFO gateway.platforms.base: [Telegram] Sending response (43 chars) to 8975916657
+2026-06-01 02:07:45,193 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(240, 4, 8) threads=9 uptime=27000s
+2026-06-01 02:07:55,210 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (69 chars)
+2026-06-01 02:07:55,212 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Is my chat functioning properly? What model is it using for replying?'
+2026-06-01 02:09:18,375 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=83.2s api_calls=2 response=630 chars
+2026-06-01 02:09:18,493 INFO gateway.platforms.base: [Telegram] Sending response (630 chars) to 8975916657
+2026-06-01 02:12:45,194 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(502, 8, 8) threads=9 uptime=27300s
+2026-06-01 02:13:05,811 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (145 chars)
+2026-06-01 02:13:05,813 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='I have a portal builder section. The idea was to repid development of landing pa'
+2026-06-01 02:17:45,195 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(784, 3, 9) threads=10 uptime=27600s
+2026-06-01 02:22:45,197 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(1559, 6, 9) threads=10 uptime=27900s
+2026-06-01 02:27:45,198 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(1795, 0, 10) threads=10 uptime=28200s
+2026-06-01 02:31:24,543 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=1098.7s api_calls=12 response=1961 chars
+2026-06-01 02:31:24,560 INFO gateway.platforms.base: [Telegram] Sending response (1961 chars) to 8975916657
+2026-06-01 02:32:45,199 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(1802, 6, 10) threads=11 uptime=28500s
+2026-06-01 02:36:44,090 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (56 chars)
+2026-06-01 02:36:44,092 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="Let's tackle the to do list, starting with critical one."
+2026-06-01 02:37:45,200 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(1684, 8, 0) threads=12 uptime=28800s
+2026-06-01 02:42:45,201 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(588, 5, 1) threads=12 uptime=29100s
+2026-06-01 02:47:45,202 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(4, 1, 2) threads=10 uptime=29400s
+2026-06-01 02:50:33,467 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=829.4s api_calls=14 response=1694 chars
+2026-06-01 02:50:33,484 INFO gateway.platforms.base: [Telegram] Sending response (1694 chars) to 8975916657
+2026-06-01 02:52:45,203 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(441, 4, 2) threads=9 uptime=29700s
+2026-06-01 02:55:17,667 INFO gateway.platforms.base: [Telegram] Sending response (287 chars) to 8975916657
+2026-06-01 02:56:41,825 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (26 chars)
+2026-06-01 02:56:41,826 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg="Let's carry on with to do."
+2026-06-01 02:57:45,204 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(1664, 9, 2) threads=10 uptime=30000s
+2026-06-01 03:02:45,205 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(29, 9, 3) threads=10 uptime=30300s
+2026-06-01 03:07:45,206 INFO gateway.memory_monitor: [MEMORY] rss=330MB gc=(361, 3, 4) threads=10 uptime=30600s
+2026-06-01 03:11:01,434 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=859.6s api_calls=14 response=1852 chars
+2026-06-01 03:11:01,465 INFO gateway.platforms.base: [Telegram] Sending response (1852 chars) to 8975916657
+2026-06-01 03:12:45,206 INFO gateway.memory_monitor: [MEMORY] rss=332MB gc=(105, 8, 4) threads=11 uptime=30900s
+2026-06-01 03:17:45,207 INFO gateway.memory_monitor: [MEMORY] rss=337MB gc=(203, 0, 5) threads=11 uptime=31200s
+2026-06-01 03:22:45,208 INFO gateway.memory_monitor: [MEMORY] rss=337MB gc=(206, 6, 5) threads=11 uptime=31500s
+2026-06-01 03:27:45,209 INFO gateway.memory_monitor: [MEMORY] rss=338MB gc=(152, 11, 5) threads=11 uptime=31800s
+2026-06-01 03:32:45,210 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(748, 0, 6) threads=9 uptime=32100s
+2026-06-01 03:37:45,211 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1503, 0, 6) threads=9 uptime=32400s
+2026-06-01 03:42:45,211 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(472, 1, 6) threads=9 uptime=32700s
+2026-06-01 03:47:45,212 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1227, 1, 6) threads=9 uptime=33000s
+2026-06-01 03:52:45,213 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(290, 2, 6) threads=9 uptime=33300s
+2026-06-01 03:57:45,214 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1027, 2, 6) threads=9 uptime=33600s
+2026-06-01 04:02:45,215 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1782, 2, 6) threads=9 uptime=33900s
+2026-06-01 04:04:49,406 INFO gateway.run: Session expiry: 1 sessions to finalize (telegram:1)
+2026-06-01 04:04:49,419 INFO gateway.run: Session expiry done: 1 finalized
+2026-06-01 04:07:45,216 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(625, 3, 6) threads=9 uptime=34200s
+2026-06-01 04:12:45,217 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1586, 3, 6) threads=9 uptime=34500s
+2026-06-01 04:17:45,218 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(445, 4, 6) threads=9 uptime=34800s
+2026-06-01 04:22:45,219 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1182, 4, 6) threads=9 uptime=35100s
+2026-06-01 04:27:45,220 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(105, 5, 6) threads=9 uptime=35400s
+2026-06-01 04:32:45,221 INFO gateway.memory_monitor: [MEMORY] rss=341MB gc=(1065, 5, 6) threads=9 uptime=35700s
+2026-06-01 04:35:25,562 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (155 chars)
+2026-06-01 04:35:25,565 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='The web portal should have proper analysis like Google analytics on the website.'
+2026-06-01 04:37:45,222 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(987, 0, 7) threads=10 uptime=36000s
+2026-06-01 04:42:45,223 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1889, 4, 7) threads=10 uptime=36300s
+2026-06-01 04:47:45,224 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(867, 8, 7) threads=10 uptime=36600s
+2026-06-01 04:52:45,264 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1029, 11, 7) threads=9 uptime=36900s
+2026-06-01 04:57:45,265 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(339, 0, 8) threads=9 uptime=37200s
+2026-06-01 05:02:45,266 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1877, 0, 8) threads=9 uptime=37500s
+2026-06-01 05:07:45,267 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1834, 1, 8) threads=10 uptime=37800s
+2026-06-01 05:09:02,410 INFO gateway.run: kanban dispatcher: reaped 1 zombie worker(s), pids=[6461]
+2026-06-01 05:12:45,270 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(483, 3, 8) threads=10 uptime=38100s
+2026-06-01 05:17:45,270 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(988, 5, 8) threads=10 uptime=38400s
+2026-06-01 05:22:21,509 INFO gateway.platforms.telegram: Telegram button resolved 0 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-06-01 05:22:29,042 INFO gateway.platforms.telegram: Telegram button resolved 0 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-06-01 05:22:32,593 INFO gateway.platforms.telegram: Telegram button resolved 0 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-06-01 05:22:45,271 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1874, 9, 8) threads=9 uptime=38700s
+2026-06-01 05:22:55,051 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=2849.5s api_calls=60 response=3788 chars
+2026-06-01 05:22:55,148 INFO gateway.platforms.base: [Telegram] Sending response (3788 chars) to 8975916657
+2026-06-01 05:27:45,272 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1111, 1, 9) threads=11 uptime=39000s
+2026-06-01 05:28:24,472 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (216 chars)
+2026-06-01 05:28:24,473 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='I hope you noticed that I had a retention journey. When a customer clicks cancel'
+2026-06-01 05:32:45,273 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(350, 10, 9) threads=10 uptime=39300s
+2026-06-01 05:37:45,274 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(1, 4, 10) threads=10 uptime=39600s
+2026-06-01 05:41:02,598 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=758.1s api_calls=11 response=3314 chars
+2026-06-01 05:41:02,611 INFO gateway.platforms.base: [Telegram] Sending response (3314 chars) to 8975916657
+2026-06-01 05:42:45,275 INFO gateway.memory_monitor: [MEMORY] rss=350MB gc=(350, 6, 10) threads=9 uptime=39900s
+2026-06-01 05:42:55,321 INFO gateway.platforms.base: [Telegram] Sending response (287 chars) to 8975916657
+2026-06-01 05:43:30,773 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (8 chars)
+2026-06-01 05:43:30,774 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Continue'
+2026-06-01 05:47:45,298 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(1572, 11, 10) threads=10 uptime=40200s
+2026-06-01 05:52:45,366 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(1069, 3, 0) threads=10 uptime=40500s
+2026-06-01 05:56:46,470 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=795.7s api_calls=16 response=2365 chars
+2026-06-01 05:56:46,556 INFO gateway.platforms.base: [Telegram] Sending response (2365 chars) to 8975916657
+2026-06-01 05:57:45,367 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(1246, 10, 0) threads=11 uptime=40800s
+2026-06-01 05:59:33,952 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (34 chars)
+2026-06-01 05:59:33,954 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you update the Obsidian vault.'
+2026-06-01 06:02:45,368 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(1636, 5, 1) threads=12 uptime=41100s
+2026-06-01 06:07:08,345 INFO gateway.run: kanban dispatcher: reaped 1 zombie worker(s), pids=[7846]
+2026-06-01 06:07:45,369 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(206, 1, 2) threads=10 uptime=41400s
+2026-06-01 06:08:43,180 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=549.2s api_calls=17 response=726 chars
+2026-06-01 06:08:43,197 INFO gateway.platforms.base: [Telegram] Sending response (726 chars) to 8975916657
+2026-06-01 06:12:45,370 INFO gateway.memory_monitor: [MEMORY] rss=352MB gc=(1840, 8, 2) threads=11 uptime=41700s
+2026-06-01 06:17:45,371 INFO gateway.memory_monitor: [MEMORY] rss=354MB gc=(1838, 10, 2) threads=11 uptime=42000s
+2026-06-01 06:22:45,372 INFO gateway.memory_monitor: [MEMORY] rss=359MB gc=(157, 1, 3) threads=10 uptime=42300s
+2026-06-01 06:24:00,240 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (61 chars)
+2026-06-01 06:24:00,264 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Please use the vault as part of your mid to long-term memory.'
+2026-06-01 06:25:44,199 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=103.9s api_calls=2 response=941 chars
+2026-06-01 06:25:44,214 INFO gateway.platforms.base: [Telegram] Sending response (941 chars) to 8975916657
+2026-06-01 06:27:45,373 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(417, 5, 3) threads=9 uptime=42600s
+2026-06-01 06:32:45,462 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(1149, 5, 3) threads=9 uptime=42900s
+2026-06-01 06:37:45,464 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(171, 6, 3) threads=9 uptime=43200s
+2026-06-01 06:42:45,465 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(939, 6, 3) threads=9 uptime=43500s
+2026-06-01 06:47:45,466 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(1900, 6, 3) threads=9 uptime=43800s
+2026-06-01 06:52:45,467 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(849, 7, 3) threads=9 uptime=44100s
+2026-06-01 06:57:45,468 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(1585, 7, 3) threads=9 uptime=44400s
+2026-06-01 07:02:45,469 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(462, 8, 3) threads=9 uptime=44700s
+2026-06-01 07:07:45,470 INFO gateway.memory_monitor: [MEMORY] rss=361MB gc=(1422, 8, 3) threads=9 uptime=45000s
+2026-06-01 07:11:09,949 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (87 chars)
+2026-06-01 07:11:10,100 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you work with sales and CRM and portal to manage pipeline and lifecycle mana'
+2026-06-01 07:12:45,471 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(486, 2, 4) threads=10 uptime=45300s
+2026-06-01 07:17:45,472 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(1588, 6, 4) threads=10 uptime=45600s
+2026-06-01 07:22:45,473 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(1610, 11, 4) threads=10 uptime=45900s
+2026-06-01 07:26:52,159 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=942.1s api_calls=14 response=1327 chars
+2026-06-01 07:26:52,274 INFO gateway.platforms.base: [Telegram] Sending response (1327 chars) to 8975916657
+2026-06-01 07:27:45,489 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(577, 6, 5) threads=11 uptime=46200s
+2026-06-01 07:32:45,489 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(1712, 9, 5) threads=11 uptime=46500s
+2026-06-01 07:35:46,476 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (8 chars)
+2026-06-01 07:35:46,501 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Continue'
+2026-06-01 07:37:45,491 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(1242, 4, 6) threads=12 uptime=46800s
+2026-06-01 07:42:45,522 INFO gateway.memory_monitor: [MEMORY] rss=372MB gc=(1617, 10, 6) threads=12 uptime=47100s
+2026-06-01 07:47:45,523 INFO gateway.memory_monitor: [MEMORY] rss=379MB gc=(267, 9, 7) threads=12 uptime=47400s
+2026-06-01 07:52:45,524 INFO gateway.memory_monitor: [MEMORY] rss=379MB gc=(204, 7, 8) threads=12 uptime=47700s
+2026-06-01 07:57:45,525 INFO gateway.memory_monitor: [MEMORY] rss=385MB gc=(471, 11, 8) threads=10 uptime=48000s
+2026-06-01 07:58:08,953 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=1342.5s api_calls=22 response=2047 chars
+2026-06-01 07:58:09,026 INFO gateway.platforms.base: [Telegram] Sending response (2047 chars) to 8975916657
+2026-06-01 08:02:45,526 INFO gateway.memory_monitor: [MEMORY] rss=385MB gc=(1836, 5, 9) threads=11 uptime=48300s
+2026-06-01 08:04:55,144 INFO gateway.platforms.base: [Telegram] Sending response (289 chars) to 8975916657
+2026-06-01 08:07:45,527 INFO gateway.memory_monitor: [MEMORY] rss=385MB gc=(317, 8, 9) threads=11 uptime=48600s
+2026-06-01 08:12:45,527 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(171, 0, 10) threads=11 uptime=48900s
+2026-06-01 08:17:45,528 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1814, 4, 10) threads=10 uptime=49200s
+2026-06-01 08:20:53,801 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (83 chars)
+2026-06-01 08:20:53,803 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='I want to see the project on the web. How can I connect to it from the VM or loc'
+2026-06-01 08:22:45,529 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(265, 9, 10) threads=10 uptime=49500s
+2026-06-01 08:27:45,530 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(483, 2, 0) threads=10 uptime=49800s
+2026-06-01 08:32:45,588 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(164, 8, 0) threads=10 uptime=50100s
+2026-06-01 08:37:45,616 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(204, 11, 0) threads=11 uptime=50400s
+2026-06-01 08:40:29,506 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:00,661 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-06-01 08:41:26,392 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed ([Errno -3] Temporary failure in name resolution); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:48,353 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:41:52,987 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-06-01 08:42:11,385 WARNING gateway.platforms.telegram_network: [Telegram] Fallback IP 149.154.166.110 failed: 
+2026-06-01 08:42:28,921 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org connection failed (); trying fallback IPs 149.154.166.110
+2026-06-01 08:42:46,370 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1755, 11, 0) threads=11 uptime=50700s
+2026-06-01 08:42:49,909 WARNING gateway.platforms.telegram_network: [Telegram] Primary api.telegram.org path unreachable; using sticky fallback IP 149.154.166.110
+2026-06-01 08:50:34,134 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(341, 6, 1) threads=11 uptime=51084s
+2026-06-01 09:01:59,937 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (2 chars)
+2026-06-01 09:06:58,214 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1692, 8, 1) threads=11 uptime=52152s
+2026-06-01 09:12:01,311 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1902, 10, 1) threads=11 uptime=52455s
+2026-06-01 09:19:48,689 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(830, 3, 2) threads=11 uptime=52790s
+2026-06-01 09:24:39,876 INFO gateway.run: Queued follow-up for session agent:main:telegram:dm:8975916657: final stream delivery not confirmed; sending first response before continuing.
+2026-06-01 09:25:34,856 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=3881.1s api_calls=2 response=639 chars
+2026-06-01 09:25:34,901 INFO gateway.platforms.base: [Telegram] Sending response (639 chars) to 8975916657
+2026-06-01 09:26:23,707 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(182, 4, 3) threads=12 uptime=53318s
+2026-06-01 09:31:23,708 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(383, 10, 3) threads=12 uptime=53618s
+2026-06-01 09:36:23,802 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(334, 3, 4) threads=10 uptime=53918s
+2026-06-01 09:37:25,456 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (46 chars)
+2026-06-01 09:37:25,478 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Can you make sure you push the changes to Git.'
+2026-06-01 09:41:23,803 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(48, 3, 5) threads=11 uptime=54218s
+2026-06-01 09:46:09,128 INFO gateway.platforms.telegram: Telegram clarify button resolved (id=602b27dba0, choice="Push the full project (I'll be patient — let it run in background)", user=Bene)
+2026-06-01 09:46:23,817 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(129, 9, 5) threads=11 uptime=54518s
+2026-06-01 09:51:23,839 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(120, 3, 6) threads=11 uptime=54818s
+2026-06-01 09:56:23,851 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(115, 0, 7) threads=11 uptime=55118s
+2026-06-01 09:59:37,125 INFO gateway.platforms.telegram: Telegram button resolved 1 approval(s) for session agent:main:telegram:dm:8975916657 (choice=always, user=Bene)
+2026-06-01 10:00:05,857 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=1360.4s api_calls=33 response=1294 chars
+2026-06-01 10:00:05,937 INFO gateway.platforms.base: [Telegram] Sending response (1294 chars) to 8975916657
+2026-06-01 10:01:23,852 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1281, 3, 8) threads=12 uptime=55418s
+2026-06-01 10:06:23,853 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1317, 8, 8) threads=12 uptime=55718s
+2026-06-01 10:11:23,856 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(261, 2, 9) threads=10 uptime=56018s
+2026-06-01 10:16:23,857 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1050, 2, 9) threads=10 uptime=56318s
+2026-06-01 10:21:23,858 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(174, 3, 9) threads=10 uptime=56618s
+2026-06-01 10:26:23,859 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(973, 3, 9) threads=10 uptime=56918s
+2026-06-01 10:31:23,860 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1762, 3, 9) threads=10 uptime=57218s
+2026-06-01 10:36:23,861 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(649, 4, 9) threads=10 uptime=57518s
+2026-06-01 10:41:23,862 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1638, 4, 9) threads=10 uptime=57818s
+2026-06-01 10:46:23,864 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(559, 5, 9) threads=10 uptime=58118s
+2026-06-01 10:51:23,864 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1321, 5, 9) threads=10 uptime=58418s
+2026-06-01 10:56:23,866 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(231, 6, 9) threads=10 uptime=58718s
+2026-06-01 11:01:23,867 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1191, 6, 9) threads=10 uptime=59018s
+2026-06-01 11:03:31,393 INFO gateway.run: Agent cache idle-TTL evict: session=agent:main:telegram:dm:8975916657 (idle=3808s)
+2026-06-01 11:03:31,398 INFO gateway.run: Agent cache idle sweep: evicted 1 agent(s)
+2026-06-01 11:06:23,867 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1953, 6, 9) threads=10 uptime=59318s
+2026-06-01 11:11:23,869 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(870, 7, 9) threads=10 uptime=59618s
+2026-06-01 11:16:23,869 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1632, 7, 9) threads=10 uptime=59918s
+2026-06-01 11:21:23,871 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(752, 8, 9) threads=10 uptime=60218s
+2026-06-01 11:26:23,872 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1576, 8, 9) threads=10 uptime=60518s
+2026-06-01 11:31:23,873 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(440, 9, 9) threads=10 uptime=60818s
+2026-06-01 11:36:23,874 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1229, 9, 9) threads=10 uptime=61118s
+2026-06-01 11:41:23,875 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(307, 10, 9) threads=10 uptime=61418s
+2026-06-01 11:41:44,770 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (2 chars)
+2026-06-01 11:41:44,867 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Hi'
+2026-06-01 11:41:47,692 INFO gateway.run: Session hygiene: 447 messages, ~280,749 tokens (actual) — auto-compressing (threshold: 85% of 1,048,756 = 891,442 tokens)
+2026-06-01 11:42:58,664 INFO gateway.run: Session hygiene: compressed 447 → 30 msgs, ~280,749 → ~4,147 tokens
+2026-06-01 11:43:12,123 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=87.3s api_calls=1 response=481 chars
+2026-06-01 11:43:12,170 INFO gateway.platforms.base: [Telegram] Sending response (481 chars) to 8975916657
+2026-06-01 11:46:23,876 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(685, 4, 10) threads=10 uptime=61718s
+2026-06-01 11:51:23,877 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1447, 4, 10) threads=10 uptime=62018s
+2026-06-01 11:56:23,877 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(425, 5, 10) threads=10 uptime=62318s
+2026-06-01 12:01:23,878 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1415, 5, 10) threads=10 uptime=62618s
+2026-06-01 12:06:23,879 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(305, 6, 10) threads=10 uptime=62918s
+2026-06-01 12:11:23,880 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(1094, 6, 10) threads=10 uptime=63218s
+2026-06-01 12:16:23,881 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(178, 7, 10) threads=10 uptime=63518s
+2026-06-01 12:16:42,425 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (40 chars)
+2026-06-01 12:16:42,426 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='ghp_zn...956Z'
+2026-06-01 12:17:34,998 INFO gateway.run: response ready: platform=telegram chat=8975916657 time=52.6s api_calls=4 response=342 chars
+2026-06-01 12:17:35,015 INFO gateway.platforms.base: [Telegram] Sending response (342 chars) to 8975916657
+2026-06-01 12:19:28,266 INFO gateway.platforms.telegram: [Telegram] Flushing text batch agent:main:telegram:dm:8975916657 (74 chars)
+2026-06-01 12:19:28,269 INFO gateway.run: inbound message: platform=telegram user=Bene Majozi chat=8975916657 msg='Is this in md or code base? I want to push the code of what we were doing.'
+2026-06-01 12:21:23,911 INFO gateway.memory_monitor: [MEMORY] rss=393MB gc=(4, 2, 0) threads=11 uptime=63818s
