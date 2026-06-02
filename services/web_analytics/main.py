@@ -668,6 +668,61 @@ async def analytics_utm(days: int = 30, session: AsyncSession = Depends(get_sess
     ]
 
 
+@app.get("/analytics/clicks")
+async def analytics_clicks(days: int = 30, session: AsyncSession = Depends(get_session)):
+    since = _date_filter(days)
+
+    result = await session.execute(
+        select(
+            func.date_trunc("day", ClickEvent.created_at).label("day"),
+            func.count(ClickEvent.id).label("clicks"),
+            func.count(func.distinct(ClickEvent.session_id)).label("sessions_with_clicks"),
+        )
+        .where(ClickEvent.created_at >= since)
+        .group_by(text("day"))
+        .order_by(text("day"))
+    )
+    rows = result.all()
+    return [
+        {
+            "date": row.day.isoformat() if row.day else "",
+            "clicks": row.clicks,
+            "sessions_with_clicks": row.sessions_with_clicks,
+        }
+        for row in rows
+    ]
+
+
+@app.get("/analytics/page-load")
+async def analytics_page_load(days: int = 30, session: AsyncSession = Depends(get_session)):
+    since = _date_filter(days)
+
+    result = await session.execute(
+        select(
+            func.date_trunc("day", PageView.created_at).label("day"),
+            func.count(PageView.id).label("pageviews"),
+            func.avg(PageView.time_on_page).label("avg_load_seconds"),
+            func.percentile_cont(0.5).within_group(PageView.time_on_page).label("median_load_seconds"),
+        )
+        .where(
+            PageView.created_at >= since,
+            PageView.time_on_page.isnot(None),
+        )
+        .group_by(text("day"))
+        .order_by(text("day"))
+    )
+    rows = result.all()
+    return [
+        {
+            "date": row.day.isoformat() if row.day else "",
+            "pageviews": row.pageviews,
+            "avg_load_seconds": round(row.avg_load_seconds or 0, 1),
+            "median_load_seconds": round(row.median_load_seconds or 0, 1),
+        }
+        for row in rows
+    ]
+
+
 @app.get("/analytics/realtime")
 async def analytics_realtime(session: AsyncSession = Depends(get_session)):
     """Active users in the last 5 minutes."""

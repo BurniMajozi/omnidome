@@ -26,6 +26,11 @@ import {
 } from "recharts"
 import { BarChart3, TrendingUp, Brain, Activity } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
+import { analyticsApi } from "@/lib/analytics/api"
+import type { ClickPoint, PageLoadPoint } from "@/lib/api"
+import { useEffect, useState, useCallback } from "react"
+import { Activity, MousePointerClick, Clock, TrendingUp } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 // Revenue trend data
 const defaultRevenueTrendData = [
@@ -322,6 +327,29 @@ export function AnalyticsModule() {
         tableData: defaultTableData,
     })
 
+    const [days, setDays] = useState(30)
+    const [clicks, setClicks] = useState<ClickPoint[]>([])
+    const [pageLoad, setPageLoad] = useState<PageLoadPoint[]>([])
+    const [analyticsLoading, setAnalyticsLoading] = useState(true)
+
+    const loadAnalytics = useCallback(async () => {
+        setAnalyticsLoading(true)
+        try {
+            const [clicksData, pageLoadData] = await Promise.all([
+                analyticsApi.getClicks(days),
+                analyticsApi.getPageLoad(days),
+            ])
+            setClicks(clicksData)
+            setPageLoad(pageLoadData)
+        } catch (err) {
+            console.error("Failed to load web analytics:", err)
+        } finally {
+            setAnalyticsLoading(false)
+        }
+    }, [days])
+
+    useEffect(() => { loadAnalytics() }, [loadAnalytics])
+
     const flashcardKPIs = (data.flashcardKPIs ?? defaultFlashcardKPIs).map(
         (kpi: (typeof defaultFlashcardKPIs)[number]) => ({
             ...kpi,
@@ -427,6 +455,181 @@ export function AnalyticsModule() {
                     </ResponsiveContainer>
                 </div>
             </div>
-        </ModuleLayout>
+        
+            {/* Web Analytics: Page Load & Click Metrics */}
+            <div className="mt-8">
+                <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
+                        <Activity className="h-5 w-5 text-emerald-400" />
+                        Website Performance
+                    </h3>
+                    <div className="flex gap-2">
+                        {[7, 14, 30, 90].map((d) => (
+                            <button
+                                key={d}
+                                onClick={() => setDays(d)}
+                                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                                    days === d
+                                        ? "bg-primary text-primary-foreground"
+                                        : "bg-secondary text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                                {d}d
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {analyticsLoading ? (
+                    <div className="flex items-center justify-center h-48">
+                        <div className="flex items-center gap-3 text-muted-foreground">
+                            <Activity className="h-5 w-5 animate-spin" />
+                            <span>Loading metrics...</span>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="grid gap-6 lg:grid-cols-2">
+                        {/* Page Load Times — Bar + Line */}
+                        <Card className="border-border bg-card">
+                            <CardHeader>
+                                <CardTitle className="text-base flex items-center gap-2">
+                                    <Clock className="h-4 w-4 text-blue-400" />
+                                    Page Load Times
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                {pageLoad.length === 0 ? (
+                                    <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+                                        No page load data yet
+                                    </div>
+                                ) : (
+                                    <ResponsiveContainer width="100%" height={280}>
+                                        <BarChart data={pageLoad}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                                            <XAxis
+                                                dataKey="date"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                tickFormatter={(v: string) => v?.slice(5, 10) || ""}
+                                            />
+                                            <YAxis
+                                                yAxisId="left"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                tickFormatter={(v: number) => `${v}s`}
+                                                label={{ value: "Avg Load (s)", angle: -90, position: "insideLeft", fill: "#888", fontSize: 11 }}
+                                            />
+                                            <YAxis
+                                                yAxisId="right"
+                                                orientation="right"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                tickFormatter={(v: number) => `${v}s`}
+                                                label={{ value: "Median (s)", angle: 90, position: "insideRight", fill: "#888", fontSize: 11 }}
+                                            />
+                                            <Tooltip
+                                                contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid #333", borderRadius: "8px" }}
+                                                labelFormatter={(v: string) => v}
+                                                formatter={(value: number, name: string) => [
+                                                    `${value}s`,
+                                                    name === "avg_load_seconds" ? "Avg Load" : "Median Load",
+                                                ]}
+                                            />
+                                            <Legend />
+                                            <Bar
+                                                yAxisId="left"
+                                                dataKey="avg_load_seconds"
+                                                fill="#60a5fa"
+                                                name="Avg Load"
+                                                radius={[4, 4, 0, 0]}
+                                                opacity={0.8}
+                                            />
+                                            <Line
+                                                yAxisId="right"
+                                                type="monotone"
+                                                dataKey="median_load_seconds"
+                                                stroke="#f97316"
+                                                strokeWidth={2}
+                                                dot={{ r: 3, fill: "#f97316" }}
+                                                name="Median Load"
+                                            />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                )}
+                            </CardContent>
+                        </Card>
+
+                        {/* Click Metrics — Bar + Line */}
+                        <Card className="border-border bg-card">
+                            <CardHeader>
+                                <CardTitle className="text-base flex items-center gap-2">
+                                    <MousePointerClick className="h-4 w-4 text-violet-400" />
+                                    Click Activity
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent>
+                                {clicks.length === 0 ? (
+                                    <div className="flex items-center justify-center h-64 text-muted-foreground text-sm">
+                                        No click data yet
+                                    </div>
+                                ) : (
+                                    <ResponsiveContainer width="100%" height={280}>
+                                        <BarChart data={clicks}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                                            <XAxis
+                                                dataKey="date"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                tickFormatter={(v: string) => v?.slice(5, 10) || ""}
+                                            />
+                                            <YAxis
+                                                yAxisId="left"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                label={{ value: "Clicks", angle: -90, position: "insideLeft", fill: "#888", fontSize: 11 }}
+                                            />
+                                            <YAxis
+                                                yAxisId="right"
+                                                orientation="right"
+                                                stroke="#888"
+                                                fontSize={11}
+                                                label={{ value: "Sessions", angle: 90, position: "insideRight", fill: "#888", fontSize: 11 }}
+                                            />
+                                            <Tooltip
+                                                contentStyle={{ backgroundColor: "#1a1a2e", border: "1px solid #333", borderRadius: "8px" }}
+                                                labelFormatter={(v: string) => v}
+                                                formatter={(value: number, name: string) => [
+                                                    value.toLocaleString(),
+                                                    name === "clicks" ? "Total Clicks" : "Sessions w/ Clicks",
+                                                ]}
+                                            />
+                                            <Legend />
+                                            <Bar
+                                                yAxisId="left"
+                                                dataKey="clicks"
+                                                fill="#a855f7"
+                                                name="Total Clicks"
+                                                radius={[4, 4, 0, 0]}
+                                                opacity={0.8}
+                                            />
+                                            <Line
+                                                yAxisId="right"
+                                                type="monotone"
+                                                dataKey="sessions_with_clicks"
+                                                stroke="#4ade80"
+                                                strokeWidth={2}
+                                                dot={{ r: 3, fill: "#4ade80" }}
+                                                name="Sessions w/ Clicks"
+                                            />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                )}
+                            </CardContent>
+                        </Card>
+                    </div>
+                )}
+            </div>
+
+</ModuleLayout>
     )
 }

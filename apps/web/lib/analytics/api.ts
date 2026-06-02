@@ -84,7 +84,21 @@ export interface UTMData {
 export interface RealtimeData {
   active_visitors: number
   pageviews_last_5min: number
-  top_pages: { path: string; visitors: number }[]
+  top_pages: { path: string; visitors: number }
+export interface ClickPoint {
+  date: string
+  clicks: number
+  sessions_with_clicks: number
+}
+
+export interface PageLoadPoint {
+  date: string
+  pageviews: number
+  avg_load_seconds: number
+  median_load_seconds: number
+}
+
+[]
 }
 
 export const analyticsApi = {
@@ -97,4 +111,6 @@ export const analyticsApi = {
   getReferrers: (days = 30, limit = 20) => fetchAnalytics<ReferrerData[]>("/referrers", { days: String(days), limit: String(limit) }),
   getUTM: (days = 30) => fetchAnalytics<UTMData[]>("/utm", { days: String(days) }),
   getRealtime: () => fetchAnalytics<RealtimeData>("/realtime"),
+  getClicks: (days = 30) => fetchAnalytics<ClickPoint[]>("/clicks", { days: String(days) }),
+  getPageLoad: (days = 30) => fetchAnalytics<PageLoadPoint[]>("/page-load", { days: String(days) }),
 }
