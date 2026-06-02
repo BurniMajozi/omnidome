@@ -51,6 +51,7 @@ from services.journey_engine.journey_manager import (
 )
 from services.journey_engine.models import (
     CancelEvent,
+    CustomerSnapshot,
     JourneyOutcome,
     JourneyRule,
     RetentionJourney,
@@ -625,6 +626,108 @@ async def respond_to_offer(
         "outcome": outcome_result,
         "message": "Offer accepted — retention applied" if data.decision == "accept"
                   else "Offer rejected — cancellation proceeding",
+    }
+
+
+
+# ---------------------------------------------------------------------------
+# Customer Snapshot Sync (from CRM)
+# ---------------------------------------------------------------------------
+
+class CustomerSnapshotUpsert(BaseModel):
+    customer_id: str
+    tenant_id: str
+    account_number: Optional[str] = None
+    snapshot_data: dict = Field(default_factory=dict)
+    source_event: str = "status_change"
+    crm_updated_at: Optional[datetime] = None
+
+
+@app.post("/customers/snapshot")
+async def upsert_customer_snapshot(
+    payload: CustomerSnapshotUpsert,
+    db: AsyncSession = Depends(get_db),
+):
+    """Receive a customer snapshot push from CRM (on status change, churn risk, etc.)."""
+    from services.journey_engine.models import CustomerSnapshot
+
+    now = datetime.now(timezone.utc)
+
+    stmt = pg_insert(CustomerSnapshot).values(
+        tenant_id=uuid.UUID(payload.tenant_id),
+        customer_id=uuid.UUID(payload.customer_id),
+        account_number=payload.account_number,
+        snapshot_data=payload.snapshot_data,
+        source_event=payload.source_event,
+        crm_updated_at=payload.crm_updated_at or now,
+        updated_at=now,
+    ).on_conflict_do_update(
+        index_elements=["customer_id"],
+        set_={
+            "account_number": payload.account_number,
+            "snapshot_data": payload.snapshot_data,
+            "source_event": payload.source_event,
+            "crm_updated_at": payload.crm_updated_at or now,
+            "updated_at": now,
+        },
+    )
+    await db.execute(stmt)
+    return {"status": "ok", "customer_id": payload.customer_id, "source_event": payload.source_event}
+
+
+@app.get("/snapshots")
+async def list_snapshots(
+    tenant_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    session: AsyncSession = Depends(get_db),
+):
+    """List customer snapshots for a tenant."""
+    query = (
+        select(CustomerSnapshot)
+        .where(CustomerSnapshot.tenant_id == uuid.UUID(tenant_id))
+        .order_by(CustomerSnapshot.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(query)
+    snapshots = result.scalars().all()
+    return [
+        {
+            "customer_id": str(s.customer_id),
+            "tenant_id": str(s.tenant_id),
+            "account_number": s.account_number,
+            "snapshot_data": s.snapshot_data,
+            "source_event": s.source_event,
+            "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        }
+        for s in snapshots
+    ]
+
+
+@app.get("/snapshots/{customer_id}")
+async def get_snapshot(
+    customer_id: str,
+    tenant_id: str,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get a specific customer snapshot."""
+    result = await session.execute(
+        select(CustomerSnapshot).where(
+            CustomerSnapshot.customer_id == uuid.UUID(customer_id),
+            CustomerSnapshot.tenant_id == uuid.UUID(tenant_id),
+        )
+    )
+    snap = result.scalar_one_or_none()
+    if not snap:
+        raise HTTPException(status_code=404, detail="Customer snapshot not found")
+    return {
+        "customer_id": str(snap.customer_id),
+        "tenant_id": str(snap.tenant_id),
+        "account_number": snap.account_number,
+        "snapshot_data": snap.snapshot_data,
+        "source_event": snap.source_event,
+        "updated_at": snap.updated_at.isoformat() if snap.updated_at else None,
     }
 
 

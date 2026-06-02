@@ -2,6 +2,7 @@
 
 import os
 import uuid
+from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -27,6 +28,73 @@ BILLING_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
 SUPPORT_URL = os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")
 NETWORK_URL = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
 LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
+JOURNEY_ENGINE_URL = os.getenv("JOURNEY_ENGINE_SERVICE_URL", "http://journey_engine:8017")
+
+
+# ---------------------------------------------------------------------------
+# CRM → Journey Engine Sync
+# ---------------------------------------------------------------------------
+
+async def _sync_customer_to_journey_engine(
+    session,
+    customer: Customer,
+    source_event: str = "status_change",
+):
+    """Push customer snapshot to journey engine for cancel-flow matching.
+    Non-blocking: sync failures must not break CRM operations."""
+    try:
+        # Gather enriched snapshot data
+        notes_result = await session.execute(
+            select(func.count(CustomerNote.id)).where(CustomerNote.customer_id == customer.id)
+        )
+        notes_count = notes_result.scalar() or 0
+
+        tags_result = await session.execute(
+            select(CustomerTag.tag).where(CustomerTag.customer_id == customer.id)
+        )
+        tags = [row[0] for row in tags_result.all()]
+
+        tenure_days = 0
+        if customer.created_at:
+            tenure_days = (datetime.utcnow() - customer.created_at.replace(tzinfo=None)).days
+
+        snapshot_data = {
+            "account_number": customer.account_number,
+            "email": customer.email,
+            "phone": customer.phone,
+            "first_name": customer.first_name,
+            "last_name": customer.last_name,
+            "status": customer.status,
+            "region": customer.province,
+            "tenure_days": tenure_days,
+            "notes_count": notes_count,
+            "tags": tags,
+            "id_number": customer.id_number,
+        }
+
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{JOURNEY_ENGINE_URL}/customers/snapshot",
+                json={
+                    "customer_id": str(customer.id),
+                    "tenant_id": str(customer.tenant_id),
+                    "account_number": customer.account_number,
+                    "snapshot_data": snapshot_data,
+                    "source_event": source_event,
+                },
+            )
+    except Exception:
+        pass  # non-blocking
+
+
+def _detect_sync_event(body: CustomerUpdate, existing: Customer) -> Optional[str]:
+    """Detect if the update warrants a sync to journey engine. Returns source_event or None."""
+    # Status change → churn risk signal
+    if body.status is not None and body.status != existing.status:
+        if body.status in ("churned", "suspended"):
+            return "churn_risk"
+        return "status_change"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +131,10 @@ async def create_customer(
         session.add(event)
         await session.flush()
         await session.refresh(customer)
+
+        # Sync new customer to journey engine
+        await _sync_customer_to_journey_engine(session, customer, source_event="signup")
+
         return customer
 
 
@@ -266,6 +338,12 @@ async def update_customer(
             setattr(customer, field, value)
         await session.flush()
         await session.refresh(customer)
+
+        # Auto-sync to journey engine on status changes
+        sync_event = _detect_sync_event(body, customer)
+        if sync_event:
+            await _sync_customer_to_journey_engine(session, customer, source_event=sync_event)
+
         return customer
 
 
