@@ -16,6 +16,7 @@ import {
 } from "recharts"
 import { DollarSign, TrendingUp, Target, Users } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
+import { SalesPipelineBoard } from "./sales-pipeline-board"
 
 const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
@@ -435,6 +436,15 @@ export function SalesModule() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+      </div>
+
+      {/* Visual Pipeline Board — Drag & Drop Kanban */}
+      <div className="rounded-xl border border-border bg-card p-5">
+        <h3 className="mb-4 text-lg font-semibold text-foreground flex items-center gap-2">
+          <Target className="h-5 w-5 text-blue-400" />
+          Pipeline Board
+        </h3>
+        <SalesPipelineBoard />
       </div>
     </ModuleLayout>
   )
