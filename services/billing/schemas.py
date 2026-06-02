@@ -43,6 +43,7 @@ class InvoiceRead(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     customer_id: uuid.UUID
+    subscription_id: Optional[uuid.UUID] = None
     number: str
     status: str
     subtotal_zar: Decimal
@@ -50,6 +51,8 @@ class InvoiceRead(BaseModel):
     total_zar: Decimal
     amount_paid_zar: Decimal
     due_date: date
+    billing_period_start: Optional[date] = None
+    billing_period_end: Optional[date] = None
     line_items: Optional[List[Dict[str, Any]]] = None
     notes: Optional[str] = None
     credit_note_of: Optional[uuid.UUID] = None
@@ -214,3 +217,108 @@ class DunningActionRead(BaseModel):
     executed_at: Optional[datetime] = None
     result: Optional[str] = None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Subscription schemas
+# ---------------------------------------------------------------------------
+
+class CreateSubscriptionRequest(BaseModel):
+    customer_id: uuid.UUID
+    plan: str
+    segment: Optional[str] = None
+    billing_interval: str = "monthly"
+    base_price_zar: Decimal = Field(..., gt=0)
+    segment_pricing: Optional[Dict[str, float]] = None
+    billing_anchor: Optional[date] = None
+    trial_days: int = Field(0, ge=0, le=365)
+
+    @field_validator("billing_interval")
+    @classmethod
+    def validate_interval(cls, v: str) -> str:
+        allowed = {"monthly", "quarterly", "semi_annual", "annual"}
+        if v not in allowed:
+            raise ValueError(f"billing_interval must be one of {allowed}")
+        return v
+
+
+class ProratedSubscriptionRequest(BaseModel):
+    customer_id: uuid.UUID
+    plan: str
+    start_date: date
+    billing_anchor: date
+    segment: Optional[str] = None
+    billing_interval: str = "monthly"
+    base_price_zar: Decimal = Field(..., gt=0)
+    segment_pricing: Optional[Dict[str, float]] = None
+
+
+class RecordUsageRequest(BaseModel):
+    metric: str = Field(..., min_length=1, max_length=100)
+    quantity: Decimal = Field(..., ge=0)
+    unit_price_zar: Decimal = Field(..., ge=0)
+    description: Optional[str] = None
+
+
+class SubscriptionUsageRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    metric: str
+    quantity: Decimal
+    unit_price_zar: Decimal
+    recorded_at: datetime
+    billed_invoice_id: Optional[uuid.UUID] = None
+    description: Optional[str] = None
+    created_at: datetime
+
+
+class SubscriptionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    customer_id: uuid.UUID
+    plan: str
+    segment: Optional[str] = None
+    status: str
+    billing_interval: str
+    base_price_zar: Decimal
+    segment_pricing: Optional[Dict[str, Any]] = None
+    billing_anchor: date
+    current_period_start: Optional[date] = None
+    current_period_end: Optional[date] = None
+    trial_ends_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    cancel_at_period_end: bool
+    metadata_: Optional[Dict[str, Any]] = Field(None, alias="metadata")
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProrationResponse(BaseModel):
+    prorated_amount_zar: Decimal
+    days_remaining: int
+    days_in_month: int
+    full_price_zar: Decimal
+    billing_period_start: date
+    billing_period_end: date
+
+
+class InvoicePreviewResponse(BaseModel):
+    subscription_id: uuid.UUID
+    customer_id: uuid.UUID
+    plan: str
+    segment: Optional[str] = None
+    recurring_amount_zar: Decimal
+    usage_amount_zar: Decimal
+    subtotal_zar: Decimal
+    vat_zar: Decimal
+    total_zar: Decimal
+    billing_period_start: date
+    billing_period_end: date
+    line_items: List[Dict[str, Any]]
+    unbilled_usage: List[SubscriptionUsageRead]
+    is_in_trial: bool
+    trial_ends_at: Optional[datetime] = None

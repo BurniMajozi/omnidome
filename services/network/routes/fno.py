@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
 from services.common.auth import AuthContext, get_auth_context
@@ -371,3 +372,111 @@ async def get_automation_job(
 async def list_fno_providers():
     """Return list of registered FNO providers."""
     return {"providers": FNOFactory.list_providers()}
+
+
+# ---------------------------------------------------------------------------
+# ADAPTER ROUTES — direct FNO API calls (availability, orders, provisioning)
+# ---------------------------------------------------------------------------
+
+
+from services.network.adapters import VumatelAPI, OpenserveAPI
+
+
+def _resolve_adapter(fno: str):
+    """Return the correct new-style API adapter for the given FNO."""
+    fno_lower = fno.lower()
+    if fno_lower == "vumatel":
+        return VumatelAPI()
+    if fno_lower == "openserve":
+        return OpenserveAPI()
+    raise HTTPException(
+        status_code=400,
+        detail=f"Adapter routes not yet implemented for FNO: '{fno}'. "
+               f"Supported: vumatel, openserve",
+    )
+
+
+@router.get("/{fno}/availability")
+async def adapter_check_availability(
+    fno: str,
+    address: str = Query(..., min_length=5, max_length=500, description="Street address to check"),
+):
+    """Check fibre availability at an address via the FNO's API.
+
+    GET /network/fno/{fno}/availability?address=...
+    """
+    adapter = _resolve_adapter(fno)
+    try:
+        result = await adapter.check_availability(address)
+        return {"fno": fno.lower(), **result}
+    finally:
+        await adapter.close()
+
+
+class AdapterOrderRequest(BaseModel):
+    """Request body for placing an order via the FNO adapter."""
+    customer_id: str = Field(..., min_length=1, max_length=100)
+    product_code: str = Field(..., min_length=1, max_length=50)
+    address: str = Field(..., min_length=5, max_length=500)
+
+
+@router.post("/{fno}/order")
+async def adapter_place_order(
+    fno: str,
+    payload: AdapterOrderRequest,
+):
+    """Place a new order with the FNO via its API.
+
+    POST /network/fno/{fno}/order
+    """
+    adapter = _resolve_adapter(fno)
+    try:
+        result = await adapter.place_order(
+            customer_id=payload.customer_id,
+            product_code=payload.product_code,
+            address=payload.address,
+        )
+        return {"fno": fno.lower(), **result}
+    finally:
+        await adapter.close()
+
+
+@router.get("/{fno}/order/{order_id}")
+async def adapter_get_order_status(
+    fno: str,
+    order_id: str,
+):
+    """Get the current status of an order via the FNO's API.
+
+    GET /network/fno/{fno}/order/{order_id}
+    """
+    adapter = _resolve_adapter(fno)
+    try:
+        result = await adapter.get_order_status(order_id)
+        return {"fno": fno.lower(), **result}
+    finally:
+        await adapter.close()
+
+
+class AdapterProvisionRequest(BaseModel):
+    """Request body for provisioning a service via the FNO adapter."""
+    ont_serial: Optional[str] = Field(None, max_length=100)
+
+
+@router.post("/{fno}/order/{order_id}/provision")
+async def adapter_provision_service(
+    fno: str,
+    order_id: str,
+    payload: Optional[AdapterProvisionRequest] = None,
+):
+    """Provision / activate a service via the FNO's API.
+
+    POST /network/fno/{fno}/order/{order_id}/provision
+    """
+    adapter = _resolve_adapter(fno)
+    try:
+        ont_serial = payload.ont_serial if payload else None
+        result = await adapter.provision_service(order_id, ont_serial=ont_serial)
+        return {"fno": fno.lower(), **result}
+    finally:
+        await adapter.close()

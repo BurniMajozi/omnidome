@@ -3,7 +3,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy import (
     Boolean,
@@ -56,6 +56,16 @@ ARRANGEMENT_STATUS = SAEnum(
     name="arrangement_status", create_type=True,
 )
 
+SUBSCRIPTION_STATUS = SAEnum(
+    "active", "cancelled", "paused", "trial", "expired",
+    name="subscription_status", create_type=True,
+)
+
+SUBSCRIPTION_BILLING_INTERVAL = SAEnum(
+    "monthly", "quarterly", "semi_annual", "annual",
+    name="subscription_billing_interval", create_type=True,
+)
+
 
 # ---------------------------------------------------------------------------
 # Invoice
@@ -69,6 +79,9 @@ class Invoice(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     number: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(INVOICE_STATUS, nullable=False, default="draft")
     subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
@@ -76,6 +89,8 @@ class Invoice(Base):
     total_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     amount_paid_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    billing_period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    billing_period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     line_items: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     credit_note_of: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -86,11 +101,13 @@ class Invoice(Base):
 
     payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     dunning_actions: Mapped[list["DunningAction"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    subscription: Mapped[Optional["Subscription"]] = relationship(back_populates="invoices")
 
     __table_args__ = (
         Index("ix_invoices_tenant_status", "tenant_id", "status"),
         Index("ix_invoices_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_invoices_tenant_number", "tenant_id", "number", unique=True),
+        Index("ix_invoices_subscription", "subscription_id"),
     )
 
 
@@ -180,3 +197,100 @@ class PaymentArrangement(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Subscription
+# ---------------------------------------------------------------------------
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    plan: Mapped[str] = mapped_column(String(100), nullable=False)
+    segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(SUBSCRIPTION_STATUS, nullable=False, default="active")
+    billing_interval: Mapped[str] = mapped_column(
+        SUBSCRIPTION_BILLING_INTERVAL, nullable=False, default="monthly"
+    )
+    base_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    segment_pricing: Mapped[Optional[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=True, default=dict,
+        description="Per-segment price overrides, e.g. {'Enterprise': 1299.99, 'Premium': 899.99}",
+    )
+    billing_anchor: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    current_period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    current_period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    trial_ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    invoices: Mapped[list["Invoice"]] = relationship(back_populates="subscription")
+    usage_records: Mapped[list["SubscriptionUsage"]] = relationship(back_populates="subscription", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_subscriptions_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_subscriptions_tenant_status", "tenant_id", "status"),
+        Index("ix_subscriptions_tenant_plan", "tenant_id", "plan"),
+    )
+
+    def get_segment_price(self, segment: str, base_price: Decimal) -> Decimal:
+        """Return the price for a given segment, falling back to base_price."""
+        if self.segment_pricing and segment in self.segment_pricing:
+            return Decimal(str(self.segment_pricing[segment]))
+        return base_price
+
+    def is_in_trial(self) -> bool:
+        """Return True if the subscription is still within its trial period."""
+        if self.trial_ends_at is None:
+            return False
+        from datetime import timezone
+        return datetime.now(tz=timezone.utc) < self.trial_ends_at
+
+    def get_interval_months(self) -> int:
+        """Return the number of months for the billing interval."""
+        return {
+            "monthly": 1,
+            "quarterly": 3,
+            "semi_annual": 6,
+            "annual": 12,
+        }.get(self.billing_interval, 1)
+
+
+# ---------------------------------------------------------------------------
+# Subscription Usage (usage-based billing)
+# ---------------------------------------------------------------------------
+
+class SubscriptionUsage(Base):
+    __tablename__ = "subscription_usage"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    metric: Mapped[str] = mapped_column(String(100), nullable=False,
+        description="e.g. 'gb_overage', 'api_calls', 'devices'")
+    quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal("0.00"))
+    unit_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal("0.0000"))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    billed_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True
+    )
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    subscription: Mapped["Subscription"] = relationship(back_populates="usage_records")
+
+    __table_args__ = (
+        Index("ix_subscription_usage_metric", "subscription_id", "metric"),
+        Index("ix_subscription_usage_unbilled", "subscription_id", "billed_invoice_id"),
+    )

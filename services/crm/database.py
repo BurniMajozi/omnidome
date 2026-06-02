@@ -1,48 +1,49 @@
 """Database session management for the CRM service.
 
-Uses SQLAlchemy 2.0 async-style sessions over a synchronous engine
-(matching the common db.py pattern) with tenant-scoped query helpers.
+Uses the async engine and sessionmaker from services/common/db.py
+(AsyncEngine + async_sessionmaker) so DB calls don't block the FastAPI
+event loop.
 """
 
 import uuid
-from contextlib import contextmanager
-from typing import Generator
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from services.common.db import get_engine
+from services.common.db import get_async_engine
 from services.crm.models import Base
 
 
-_session_factory: sessionmaker | None = None
+_async_session_factory: async_sessionmaker | None = None
 
 
-def _get_session_factory() -> sessionmaker:
-    global _session_factory
-    if _session_factory is None:
-        engine = get_engine()
-        _session_factory = sessionmaker(bind=engine, expire_on_commit=False)
-    return _session_factory
+def _get_async_session_factory() -> async_sessionmaker:
+    global _async_session_factory
+    if _async_session_factory is None:
+        engine = get_async_engine()
+        _async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    return _async_session_factory
 
 
-@contextmanager
-def get_session() -> Generator[Session, None, None]:
-    """Yield a transactional DB session and commit on success."""
-    factory = _get_session_factory()
-    session = factory()
-    try:
-        yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
+@asynccontextmanager
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    """Yield a transactional async DB session and commit on success."""
+    factory = _get_async_session_factory()
+    async with factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 def init_tables() -> None:
     """Create all CRM tables if they don't exist (dev convenience)."""
-    engine = get_engine()
+    from services.common.db import get_engine as _get_sync_engine
+
+    engine = _get_sync_engine()
     Base.metadata.create_all(bind=engine)
 
 

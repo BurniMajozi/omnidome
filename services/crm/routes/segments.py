@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import get_session
@@ -50,8 +50,6 @@ def _build_segment_filters(rules: list[dict], tenant_id: uuid.UUID):
         value = rule.get("value")
         column = FIELD_MAP.get(field_name)
         if column is None:
-            # For tenure / spend / churn_risk — store as JSONB-based rules
-            # evaluated later; skip for now (extend as billing data integrates)
             continue
         op_func = OPERATOR_MAP.get(op)
         if op_func:
@@ -59,10 +57,12 @@ def _build_segment_filters(rules: list[dict], tenant_id: uuid.UUID):
     return filters
 
 
-def _count_segment_customers(session, rules: list[dict], tenant_id: uuid.UUID) -> int:
+async def _count_segment_customers(session, rules: list[dict], tenant_id: uuid.UUID) -> int:
     """Count customers matching segment rules."""
     filters = _build_segment_filters(rules, tenant_id)
-    return session.query(func.count(Customer.id)).filter(and_(*filters)).scalar() or 0
+    stmt = select(func.count(Customer.id)).where(and_(*filters))
+    result = await session.execute(stmt)
+    return result.scalar() or 0
 
 
 # ---------------------------------------------------------------------------
@@ -70,11 +70,11 @@ def _count_segment_customers(session, rules: list[dict], tenant_id: uuid.UUID) -
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=SegmentRead, status_code=status.HTTP_201_CREATED)
-def create_segment(
+async def create_segment(
     body: SegmentCreate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
+    async with get_session() as session:
         rules_dicts = [r.model_dump() for r in body.rules]
         segment = Segment(
             tenant_id=ctx.tenant_id,
@@ -84,10 +84,10 @@ def create_segment(
             auto_refresh=body.auto_refresh,
         )
         session.add(segment)
-        session.flush()
-        session.refresh(segment)
+        await session.flush()
+        await session.refresh(segment)
 
-        count = _count_segment_customers(session, rules_dicts, ctx.tenant_id)
+        count = await _count_segment_customers(session, rules_dicts, ctx.tenant_id)
         result = SegmentRead.model_validate(segment)
         result.customer_count = count
         return result
@@ -98,21 +98,22 @@ def create_segment(
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=list[SegmentRead])
-def list_segments(
+async def list_segments(
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        segments = (
-            session.query(Segment)
-            .filter(Segment.tenant_id == ctx.tenant_id)
+    async with get_session() as session:
+        segments_result = await session.execute(
+            select(Segment)
+            .where(Segment.tenant_id == ctx.tenant_id)
             .order_by(Segment.created_at.desc())
-            .all()
         )
+        segments = segments_result.scalars().all()
+
         results = []
         for seg in segments:
             sr = SegmentRead.model_validate(seg)
             rules = seg.rules if isinstance(seg.rules, list) else []
-            sr.customer_count = _count_segment_customers(session, rules, ctx.tenant_id)
+            sr.customer_count = await _count_segment_customers(session, rules, ctx.tenant_id)
             results.append(sr)
         return results
 
@@ -122,33 +123,41 @@ def list_segments(
 # ---------------------------------------------------------------------------
 
 @router.get("/{segment_id}/customers", response_model=PaginatedResponse)
-def get_segment_customers(
+async def get_segment_customers(
     segment_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    with get_session() as session:
-        segment = (
-            session.query(Segment)
-            .filter(Segment.id == segment_id, Segment.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Segment).where(
+                Segment.id == segment_id, Segment.tenant_id == ctx.tenant_id
+            )
         )
+        segment = result.scalar_one_or_none()
+
         if not segment:
             raise HTTPException(status_code=404, detail="Segment not found")
 
         rules = segment.rules if isinstance(segment.rules, list) else []
         filters = _build_segment_filters(rules, ctx.tenant_id)
 
-        query = session.query(Customer).filter(and_(*filters))
-        total = query.count()
+        # Count
+        count_stmt = select(func.count(Customer.id)).where(and_(*filters))
+        total_result = await session.execute(count_stmt)
+        total = total_result.scalar() or 0
         pages = max(1, (total + page_size - 1) // page_size)
-        items = (
-            query.order_by(Customer.created_at.desc())
+
+        # Items
+        items_result = await session.execute(
+            select(Customer)
+            .where(and_(*filters))
+            .order_by(Customer.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
-            .all()
         )
+        items = items_result.scalars().all()
 
         return PaginatedResponse(
             items=[CustomerRead.model_validate(c) for c in items],

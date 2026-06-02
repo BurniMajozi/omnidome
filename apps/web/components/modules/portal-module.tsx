@@ -39,7 +39,8 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useModuleData } from "@/lib/module-data"
 import { useIsClient } from "@/lib/use-is-client"
-import { CancelFlowModal } from "@/components/modules/cancel-flow-modal"
+import { WebAnalyticsDashboard } from "./web-analytics/web-analytics-dashboard"
+import { CancelFlowModal } from "./cancel-flow-modal"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -191,7 +192,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   const journeysSafe = retentionJourneys ?? defaultRetentionJourneys
 
   const [activeTab, setActiveTab] = useState("overview")
-  const [showCancelModal, setShowCancelModal] = useState(false)
+  const [cancelFlowOpen, setCancelFlowOpen] = useState(false)
   const isClient = useIsClient()
 
   useEffect(() => {
@@ -282,6 +283,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
+          <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
           <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
@@ -649,6 +651,10 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           </Card>
         </TabsContent>
 
+        <TabsContent value="web-analytics" className="mt-4">
+          <WebAnalyticsDashboard />
+        </TabsContent>
+
         <TabsContent value="journeys" className="mt-4 space-y-4">
           <div id="portal-retention-journey" />
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -656,10 +662,19 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               <h3 className="text-lg font-semibold text-foreground">Retention Journeys</h3>
               <p className="text-sm text-muted-foreground">Configure the cancel and win-back experiences shown in the portal.</p>
             </div>
-            <Button size="sm" className="bg-primary">
-              <Plus className="mr-2 h-4 w-4" />
-              Create Journey
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setCancelFlowOpen(true)}
+              >
+                Test Cancel Flow
+              </Button>
+              <Button size="sm" className="bg-primary">
+                <Plus className="mr-2 h-4 w-4" />
+                Create Journey
+              </Button>
+            </div>
           </div>
 
           <div className="grid gap-4">
@@ -705,43 +720,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               </Card>
             ))}
           </div>
-
-          {/* Cancel Flow Demo */}
-          <Card className="border-border bg-card border-dashed border-amber-500/30">
-            <CardContent className="p-4 sm:p-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h4 className="font-semibold text-foreground">Cancel-to-Save Flow</h4>
-                  <p className="text-sm text-muted-foreground">
-                    When customers click "Cancel Service" in the portal, they'll see retention offers based on journey rules.
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10"
-                  onClick={() => setShowCancelModal(true)}
-                >
-                  Test Cancel Flow
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {showCancelModal && (
-            <CancelFlowModal
-              customerId="demo-customer-001"
-              customerName="Lerato Mbeki"
-              accountNumber="ACC-78421"
-              onClose={() => setShowCancelModal(false)}
-              onCancelled={() => {
-                setShowCancelModal(false)
-              }}
-              onRetained={() => {
-                setShowCancelModal(false)
-              }}
-            />
-          )}
         </TabsContent>
 
         <TabsContent value="field-sales" className="mt-4 space-y-4">
@@ -877,6 +855,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           </div>
         </TabsContent>
       </Tabs>
+
+      {/* Cancel Flow Modal */}
+      <CancelFlowModal
+        open={cancelFlowOpen}
+        onOpenChange={setCancelFlowOpen}
+        customerId="cust-demo-001"
+        customerName="Demo Customer"
+      />
     </div>
   )
 }

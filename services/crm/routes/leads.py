@@ -4,6 +4,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import generate_account_number, get_session
@@ -24,11 +25,11 @@ router = APIRouter(prefix="/leads", tags=["Leads"])
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=LeadRead, status_code=status.HTTP_201_CREATED)
-def create_lead(
+async def create_lead(
     body: LeadCreate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
+    async with get_session() as session:
         lead = Lead(
             tenant_id=ctx.tenant_id,
             source=body.source,
@@ -40,8 +41,8 @@ def create_lead(
             interested_package=body.interested_package,
         )
         session.add(lead)
-        session.flush()
-        session.refresh(lead)
+        await session.flush()
+        await session.refresh(lead)
         return lead
 
 
@@ -50,7 +51,7 @@ def create_lead(
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=PaginatedResponse)
-def list_leads(
+async def list_leads(
     ctx: AuthContext = Depends(get_auth_context),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -58,24 +59,36 @@ def list_leads(
     source: Optional[str] = Query(None),
     assigned_to: Optional[uuid.UUID] = Query(None),
 ):
-    with get_session() as session:
-        query = session.query(Lead).filter(Lead.tenant_id == ctx.tenant_id)
+    async with get_session() as session:
+        stmt = select(Lead).where(Lead.tenant_id == ctx.tenant_id)
 
         if status_filter:
-            query = query.filter(Lead.status == status_filter)
+            stmt = stmt.where(Lead.status == status_filter)
         if source:
-            query = query.filter(Lead.source == source)
+            stmt = stmt.where(Lead.source == source)
         if assigned_to:
-            query = query.filter(Lead.assigned_to == assigned_to)
+            stmt = stmt.where(Lead.assigned_to == assigned_to)
 
-        total = query.count()
-        pages = max(1, (total + page_size - 1) // page_size)
-        items = (
-            query.order_by(Lead.created_at.desc())
+        # Count total
+        count_stmt = select(Lead.id).where(Lead.tenant_id == ctx.tenant_id)
+        if status_filter:
+            count_stmt = count_stmt.where(Lead.status == status_filter)
+        if source:
+            count_stmt = count_stmt.where(Lead.source == source)
+        if assigned_to:
+            count_stmt = count_stmt.where(Lead.assigned_to == assigned_to)
+
+        total_result = await session.execute(select(Lead.id).select_from(Lead).where(Lead.tenant_id == ctx.tenant_id))
+        total = len(total_result.scalars().all())
+
+        items_result = await session.execute(
+            stmt.order_by(Lead.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
-            .all()
         )
+        items = items_result.scalars().all()
+
+        pages = max(1, (total + page_size - 1) // page_size)
 
         return PaginatedResponse(
             items=[LeadRead.model_validate(l) for l in items],
@@ -91,25 +104,25 @@ def list_leads(
 # ---------------------------------------------------------------------------
 
 @router.put("/{lead_id}", response_model=LeadRead)
-def update_lead(
+async def update_lead(
     lead_id: uuid.UUID,
     body: LeadUpdate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        lead = (
-            session.query(Lead)
-            .filter(Lead.id == lead_id, Lead.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Lead).where(Lead.id == lead_id, Lead.tenant_id == ctx.tenant_id)
         )
+        lead = result.scalar_one_or_none()
+
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
 
         update_data = body.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(lead, field, value)
-        session.flush()
-        session.refresh(lead)
+        await session.flush()
+        await session.refresh(lead)
         return lead
 
 
@@ -118,16 +131,16 @@ def update_lead(
 # ---------------------------------------------------------------------------
 
 @router.post("/{lead_id}/convert", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
-def convert_lead(
+async def convert_lead(
     lead_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        lead = (
-            session.query(Lead)
-            .filter(Lead.id == lead_id, Lead.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Lead).where(Lead.id == lead_id, Lead.tenant_id == ctx.tenant_id)
         )
+        lead = result.scalar_one_or_none()
+
         if not lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         if lead.status == "converted":
@@ -145,7 +158,7 @@ def convert_lead(
             account_number=generate_account_number(ctx.tenant_id),
         )
         session.add(customer)
-        session.flush()
+        await session.flush()
 
         # Update lead
         lead.status = "converted"
@@ -160,6 +173,6 @@ def convert_lead(
             details={"lead_id": str(lead.id)},
         )
         session.add(event)
-        session.flush()
-        session.refresh(customer)
+        await session.flush()
+        await session.refresh(customer)
         return customer

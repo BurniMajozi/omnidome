@@ -119,6 +119,10 @@ services:
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - VUMATEL_API_URL=${VUMATEL_API_URL:-http://vumatel-mock:9001}
+      - VUMATEL_API_KEY=${VUMATEL_API_KEY:-}
+      - OPENSERVE_API_URL=${OPENSERVE_API_URL:-http://openserve-mock:9002}
+      - OPENSERVE_API_KEY=${OPENSERVE_API_KEY:-}
     ports:
       - "8005:8005"
     depends_on:
@@ -273,6 +277,60 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}
+
+  # ── Journey Engine Service ─────────────────────────────────────────
+  journey_engine:
+    build:
+      context: .
+      dockerfile: services/journey_engine/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - MODULE_ID=journey_engine
+    ports:
+      - "8017:8017"
+    depends_on:
+      - db
+    volumes:
+      - ./services/journey_engine:/app/services/journey_engine:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped
+# Web Analytics Service — Docker Compose additions
+# Append these to the services section of docker-compose.yaml
+
+  # ── Web Analytics Service ──────────────────────────────────────────
+  web_analytics:
+    build:
+      context: .
+      dockerfile: services/web_analytics/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - ANALYTICS_IP_SALT=omnidome-web-analytics-${POSTGRES_DB}
+    ports:
+      - "8016:8016"
+    depends_on:
+      - db
+    volumes:
+      - ./services/web_analytics:/app/services/web_analytics:ro
+      - ./services/common:/app/services/common:ro
+    restart: unless-stopped
+
+  lifecycle:
+    build:
+      context: .
+      dockerfile: services/lifecycle/Dockerfile
+    ports:
+      - "8018:8018"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://omnidome:omnidome@db:5432/omnidome
+      - LIFECYCLE_SERVICE_URL=http://lifecycle:8018
+    depends_on:
+      db:
+        condition: service_healthy
+
 
 volumes:
   postgres_data:

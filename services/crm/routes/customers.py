@@ -6,7 +6,7 @@ from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import generate_account_number, get_session
@@ -34,11 +34,11 @@ LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=CustomerRead, status_code=status.HTTP_201_CREATED)
-def create_customer(
+async def create_customer(
     body: CustomerCreate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
+    async with get_session() as session:
         customer = Customer(
             tenant_id=ctx.tenant_id,
             first_name=body.first_name,
@@ -51,7 +51,7 @@ def create_customer(
             account_number=generate_account_number(ctx.tenant_id),
         )
         session.add(customer)
-        session.flush()
+        await session.flush()
 
         # Record timeline event
         event = ActivityEvent(
@@ -61,8 +61,8 @@ def create_customer(
             summary=f"Customer {body.first_name} {body.last_name} created",
         )
         session.add(event)
-        session.flush()
-        session.refresh(customer)
+        await session.flush()
+        await session.refresh(customer)
         return customer
 
 
@@ -71,7 +71,7 @@ def create_customer(
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=PaginatedResponse)
-def list_customers(
+async def list_customers(
     ctx: AuthContext = Depends(get_auth_context),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -79,16 +79,16 @@ def list_customers(
     status_filter: Optional[str] = Query(None, alias="status"),
     province: Optional[str] = Query(None),
 ):
-    with get_session() as session:
-        query = session.query(Customer).filter(Customer.tenant_id == ctx.tenant_id)
+    async with get_session() as session:
+        stmt = select(Customer).where(Customer.tenant_id == ctx.tenant_id)
 
         if status_filter:
-            query = query.filter(Customer.status == status_filter)
+            stmt = stmt.where(Customer.status == status_filter)
         if province:
-            query = query.filter(Customer.province == province)
+            stmt = stmt.where(Customer.province == province)
         if search:
             term = f"%{search}%"
-            query = query.filter(
+            stmt = stmt.where(
                 or_(
                     Customer.first_name.ilike(term),
                     Customer.last_name.ilike(term),
@@ -98,22 +98,29 @@ def list_customers(
                 )
             )
 
-        total = query.count()
-        pages = max(1, (total + page_size - 1) // page_size)
-        items = (
-            query.order_by(Customer.created_at.desc())
+        # Count total
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total_result = await session.execute(count_stmt)
+        total = total_result.scalar_one()
+
+        # Fetch paginated items
+        stmt = (
+            stmt.order_by(Customer.created_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
-            .all()
         )
+        result = await session.execute(stmt)
+        items = result.scalars().all()
 
-        return PaginatedResponse(
-            items=[CustomerRead.model_validate(c) for c in items],
-            total=total,
-            page=page,
-            page_size=page_size,
-            pages=pages,
-        )
+    pages = max(1, (total + page_size - 1) // page_size)
+
+    return PaginatedResponse(
+        items=[CustomerRead.model_validate(c) for c in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        pages=pages,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -145,36 +152,46 @@ async def get_customer_360(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        customer = (
-            session.query(Customer)
-            .filter(Customer.id == customer_id, Customer.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Customer).where(
+                Customer.id == customer_id,
+                Customer.tenant_id == ctx.tenant_id,
+            )
         )
+        customer = result.scalar_one_or_none()
+
         if not customer:
             raise HTTPException(status_code=404, detail="Customer not found")
 
-        tags = (
-            session.query(CustomerTag)
-            .filter(CustomerTag.customer_id == customer_id, CustomerTag.tenant_id == ctx.tenant_id)
-            .all()
+        # Fetch tags
+        tags_result = await session.execute(
+            select(CustomerTag).where(
+                CustomerTag.customer_id == customer_id,
+                CustomerTag.tenant_id == ctx.tenant_id,
+            )
         )
-        notes_count = (
-            session.query(func.count(CustomerNote.id))
-            .filter(CustomerNote.customer_id == customer_id, CustomerNote.tenant_id == ctx.tenant_id)
-            .scalar()
-        ) or 0
+        tags = tags_result.scalars().all()
+
+        # Count notes
+        notes_count_result = await session.execute(
+            select(func.count(CustomerNote.id)).where(
+                CustomerNote.customer_id == customer_id,
+                CustomerNote.tenant_id == ctx.tenant_id,
+            )
+        )
+        notes_count = notes_count_result.scalar_one() or 0
 
         # Build 360 base
-        result = Customer360.model_validate(customer)
-        result.tags = [t.tag for t in tags]
-        result.notes_count = notes_count
+        view = Customer360.model_validate(customer)
+        view.tags = [t.tag for t in tags]
+        view.notes_count = notes_count
 
     # Aggregate cross-service data (best-effort, non-blocking)
     headers = _forward_headers(ctx)
     cid = str(customer_id)
 
-    billing_data, support_data, network_data, lifecycle_data = [], [], [], None
+    billing_data, support_data, network_data = [], [], []
     try:
         billing_data = await _fetch_service_data(
             f"{BILLING_URL}/invoices?customer_id={cid}", headers
@@ -194,31 +211,32 @@ async def get_customer_360(
     except Exception:
         pass
 
-    # Fetch lifecycle stage & history (best-effort)
+    view.billing = billing_data
+    view.support = support_data
+    view.network = network_data
+    view.services = network_data  # alias
+
+    # Lifecycle panel (best-effort, non-blocking)
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            current_resp = await client.get(
-                f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/current",
-                headers=headers,
-            )
-            history_resp = await client.get(
-                f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/history",
-                headers=headers,
-            )
-            lifecycle_data = {
-                "current_stage": current_resp.json() if current_resp.status_code == 200 else None,
-                "history": history_resp.json() if history_resp.status_code == 200 else [],
-            }
+        lifecycle_current = await _fetch_service_data(
+            f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/current", headers
+        )
+        lifecycle_history = await _fetch_service_data(
+            f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/history?limit=20", headers
+        )
+        # Normalize: _fetch_service_data may return list or dict
+        if isinstance(lifecycle_current, list) and lifecycle_current:
+            lifecycle_current = lifecycle_current[0]
+        view.lifecycle_data = {
+            "current_stage": lifecycle_current.get("current_stage") if isinstance(lifecycle_current, dict) else None,
+            "health_score": lifecycle_current.get("health_score") if isinstance(lifecycle_current, dict) else None,
+            "churn_probability": lifecycle_current.get("churn_probability") if isinstance(lifecycle_current, dict) else None,
+            "history": lifecycle_history if isinstance(lifecycle_history, list) else [],
+        }
     except Exception:
-        lifecycle_data = None
+        pass  # Don't fail the 360 if lifecycle is down
 
-    result.billing = billing_data
-    result.support = support_data
-    result.network = network_data
-    result.services = network_data  # alias
-    result.lifecycle_data = lifecycle_data
-
-    return result
+    return view
 
 
 # ---------------------------------------------------------------------------
@@ -226,25 +244,28 @@ async def get_customer_360(
 # ---------------------------------------------------------------------------
 
 @router.put("/{customer_id}", response_model=CustomerRead)
-def update_customer(
+async def update_customer(
     customer_id: uuid.UUID,
     body: CustomerUpdate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        customer = (
-            session.query(Customer)
-            .filter(Customer.id == customer_id, Customer.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Customer).where(
+                Customer.id == customer_id,
+                Customer.tenant_id == ctx.tenant_id,
+            )
         )
+        customer = result.scalar_one_or_none()
+
         if not customer:
             raise HTTPException(status_code=404, detail="Customer not found")
 
         update_data = body.model_dump(exclude_unset=True)
         for field, value in update_data.items():
             setattr(customer, field, value)
-        session.flush()
-        session.refresh(customer)
+        await session.flush()
+        await session.refresh(customer)
         return customer
 
 
@@ -253,29 +274,32 @@ def update_customer(
 # ---------------------------------------------------------------------------
 
 @router.get("/{customer_id}/timeline", response_model=list[TimelineEvent])
-def get_customer_timeline(
+async def get_customer_timeline(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
     limit: int = Query(50, ge=1, le=200),
 ):
-    with get_session() as session:
+    async with get_session() as session:
         # Verify customer belongs to tenant
-        exists = (
-            session.query(Customer.id)
-            .filter(Customer.id == customer_id, Customer.tenant_id == ctx.tenant_id)
-            .first()
+        exists_result = await session.execute(
+            select(Customer.id).where(
+                Customer.id == customer_id,
+                Customer.tenant_id == ctx.tenant_id,
+            )
         )
+        exists = exists_result.scalar_one_or_none()
+
         if not exists:
             raise HTTPException(status_code=404, detail="Customer not found")
 
-        events = (
-            session.query(ActivityEvent)
-            .filter(
+        events_result = await session.execute(
+            select(ActivityEvent).where(
                 ActivityEvent.customer_id == customer_id,
                 ActivityEvent.tenant_id == ctx.tenant_id,
             )
             .order_by(ActivityEvent.created_at.desc())
             .limit(limit)
-            .all()
         )
-        return [TimelineEvent.model_validate(e) for e in events]
+        events = events_result.scalars().all()
+
+    return [TimelineEvent.model_validate(e) for e in events]

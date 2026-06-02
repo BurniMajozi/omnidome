@@ -132,15 +132,9 @@ class Customer360(CustomerRead):
     billing: List[Dict[str, Any]] = Field(default_factory=list)
     support: List[Dict[str, Any]] = Field(default_factory=list)
     network: List[Dict[str, Any]] = Field(default_factory=list)
-    lifecycle_data: Optional[Dict[str, Any]] = None
     tags: List[str] = Field(default_factory=list)
     notes_count: int = 0
-
-
-class CustomerLifecycleInfo(BaseModel):
-    """Lifecycle stage info aggregated from the lifecycle service."""
-    current_stage: Optional[Dict[str, Any]] = None
-    history: List[Dict[str, Any]] = Field(default_factory=list)
+    lifecycle_data: Optional[Dict[str, Any]] = None
 
 
 # ---------------------------------------------------------------------------

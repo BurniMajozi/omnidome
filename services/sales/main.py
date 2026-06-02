@@ -17,6 +17,8 @@ from services.common.entitlements import EntitlementGuard
 app = FastAPI(title="CoreConnect Sales Service", version="1.0.0")
 guard = EntitlementGuard(module_id="sales")
 
+LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
+
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -806,6 +808,26 @@ async def close_deal_won(
 
         stage_name = "Closed Won" if closed_stage_id else deal["stage_name"]
 
+    # Lifecycle bridge: notify lifecycle service on close-won
+    lifecycle_payload = {
+        "tenant_id": str(tenant_id),
+        "customer_id": str(deal["contact_id"]),
+        "deal_id": str(deal_id),
+        "agent_id": str(deal["agent_id"]) if deal["agent_id"] else None,
+        "plan": str(deal["package_id"]) if deal["package_id"] else None,
+        "monthly_recurring_revenue": float(deal["value_zar"] or 0) / 12,
+        "lead_id": str(deal["lead_id"]) if deal["lead_id"] else None,
+    }
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{LIFECYCLE_URL}/lifecycle/from-sale",
+                json=lifecycle_payload,
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass  # Don't fail the sale if lifecycle is down
+
     payload = {
         "event": "deal.closed_won",
         "deal_id": str(deal_id),
@@ -885,6 +907,22 @@ async def close_deal_lost(
         )
 
         stage_name = "Closed Lost" if closed_stage_id else deal["stage_name"]
+
+    # Lifecycle bridge: notify lifecycle service on close-lost
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{LIFECYCLE_URL}/lifecycle/customers/{deal['contact_id']}/transition",
+                json={
+                    "tenant_id": str(tenant_id),
+                    "to_stage": "Closed Lost",
+                    "reason": reason,
+                    "trigger_source": "sale",
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass  # Don't fail the sale if lifecycle is down
 
     return DealResponse(
         id=deal_id,

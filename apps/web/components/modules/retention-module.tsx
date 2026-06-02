@@ -22,6 +22,7 @@ import { TrendingDown, Heart, AlertTriangle, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useModuleData } from "@/lib/module-data"
+import { JourneyBuilderDashboard } from "./journey-builder/journey-builder-dashboard"
 
 // Churn trend data over 6 months
 const defaultChurnTrendData = [
@@ -662,53 +663,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                     </div>
                 </TabsContent>
 
-                <TabsContent value="journeys" className="space-y-6">
-                    <div className="rounded-xl border border-border bg-card p-5">
-                        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <h3 className="text-lg font-semibold text-foreground">Retention Journeys</h3>
-                            <Badge variant="secondary" className="w-fit bg-primary/10 text-primary">
-                                {journeysSafe.length} active journeys
-                            </Badge>
-                        </div>
-                        <div className="space-y-3">
-                            {journeysSafe.map((journey) => (
-                                <div key={journey.id} className="rounded-lg border border-border bg-secondary/30 p-4">
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                        <div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                                <h4 className="font-semibold text-foreground">{journey.name}</h4>
-                                                <Badge
-                                                    className={
-                                                        journey.status === "active"
-                                                            ? "bg-emerald-500/20 text-emerald-400"
-                                                            : "bg-amber-500/20 text-amber-400"
-                                                    }
-                                                >
-                                                    {journey.status}
-                                                </Badge>
-                                            </div>
-                                            <p className="text-sm text-muted-foreground">{journey.audience}</p>
-                                            <p className="text-xs text-muted-foreground">Offer: {journey.offer}</p>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-6 text-sm">
-                                            <div>
-                                                <p className="text-xs text-muted-foreground">Conversion</p>
-                                                <p className="font-semibold text-foreground">{journey.conversion}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-muted-foreground">Saved</p>
-                                                <p className="font-semibold text-foreground">{journey.saved}</p>
-                                            </div>
-                                            <div>
-                                                <p className="text-xs text-muted-foreground">Updated</p>
-                                                <p className="font-semibold text-foreground">{journey.lastUpdated}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
+                <TabsContent value="journeys" className="mt-4">
+                    <JourneyBuilderDashboard />
                 </TabsContent>
 
                 <TabsContent value="events" className="space-y-6">

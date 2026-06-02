@@ -349,10 +349,25 @@ class JourneyOutcome(JourneyBase):
         Numeric(12, 2), default=Decimal("0.00")
     )
 
-    # ML feedback
+    # ML feedback — predicted retention flags
     # Did the customer actually stay for 90+ days after accepting?
     retained_90d: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     retained_180d: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+
+    # Batch-job verified retention flags (ground truth)
+    actual_retained_90d: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True,
+        comment="Verified by batch job: customer still active 90 days after outcome",
+    )
+    actual_retained_180d: Mapped[Optional[bool]] = mapped_column(
+        Boolean, nullable=True,
+        comment="Verified by batch job: customer still active 180 days after outcome",
+    )
+    # Retention rate for this record (1.0 = fully retained, 0.0 = churned)
+    retention_rate: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 4), nullable=True,
+        comment="Computed retention rate: 1.0 if retained_180d, 0.5 if retained_90d only, 0.0 if churned",
+    )
 
     # Features at time of decision (snapshot for training)
     customer_features: Mapped[dict] = mapped_column(JSONB, nullable=False)
@@ -369,4 +384,6 @@ class JourneyOutcome(JourneyBase):
         Index("ix_outcomes_journey", "journey_id"),
         Index("ix_outcomes_offer", "offer_id"),
         Index("ix_outcomes_customer", "customer_id"),
+        Index("ix_outcomes_actual_retained_90d", "actual_retained_90d"),
+        Index("ix_outcomes_actual_retained_180d", "actual_retained_180d"),
     )
