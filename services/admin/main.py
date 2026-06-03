@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import bcrypt
 import logging
 import os
 import secrets
@@ -785,7 +785,7 @@ async def create_user(
     await _require_tenant_admin(ctx, session)
     user_id = uuid.uuid4()
     if payload.password:
-        hashed_password = hashlib.sha256(payload.password.encode("utf-8")).hexdigest()
+        hashed_password = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
     else:
         hashed_password = os.getenv("DEFAULT_USER_PASSWORD_HASH") or secrets.token_hex(16)
 
@@ -899,6 +899,42 @@ async def update_user(
     }
 
 
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+
+
+class PasswordReset(BaseModel):
+    new_password: str = Field(..., min_length=8, max_length=128)
+
+
+@app.post("/users/{user_id}/reset-password")
+async def reset_user_password(
+    user_id: uuid.UUID,
+    payload: PasswordReset,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    new_hash = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+    result = await session.execute(
+        text("update users set hashed_password = :hp where id = :uid and tenant_id = :tid"),
+        {"hp": new_hash, "uid": str(user_id), "tid": str(ctx.tenant_id)},
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    await _log_audit(
+        session,
+        ctx,
+        action="user.reset_password",
+        resource_type="user",
+        resource_id=user_id,
+    )
+    return {"status": "password_reset"}
+
+
 @app.delete("/users/{user_id}")
 async def deactivate_user(
     user_id: uuid.UUID,
@@ -939,8 +975,130 @@ async def deactivate_user(
 
 
 # ---------------------------------------------------------------------------
-# Audit Log
+# Commission Tiers
 # ---------------------------------------------------------------------------
+
+
+class CommissionTierCreate(BaseModel):
+    tier_name: str = Field(..., max_length=100)
+    min_deals: int = Field(0, ge=0)
+    max_deals: Optional[int] = Field(None, ge=0)
+    rate_percent: Decimal = Field(Decimal("5.00"), ge=0, le=Decimal("100"))
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class CommissionTierUpdate(BaseModel):
+    tier_name: Optional[str] = Field(None, max_length=100)
+    min_deals: Optional[int] = Field(None, ge=0)
+    max_deals: Optional[int] = Field(None, ge=0)
+    rate_percent: Optional[Decimal] = Field(None, ge=0, le=Decimal("100"))
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+
+@app.get("/commission-tiers")
+async def list_commission_tiers(
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    result = await session.execute(
+        text(
+            """
+            select id, tenant_id, tier_name, min_deals, max_deals,
+                   rate_percent, is_active, sort_order, created_at, updated_at
+            from commission_tiers
+            where tenant_id = :tid and is_active = true
+            order by sort_order asc, min_deals asc
+            """
+        ),
+        {"tid": str(ctx.tenant_id)},
+    )
+    return result.mappings().all()
+
+
+@app.post("/commission-tiers")
+async def create_commission_tier(
+    payload: CommissionTierCreate,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    tier_id = uuid.uuid4()
+    now = datetime.utcnow()
+    await session.execute(
+        text(
+            """
+            insert into commission_tiers
+                (id, tenant_id, tier_name, min_deals, max_deals, rate_percent, is_active, sort_order, created_at, updated_at)
+            values
+                (:id, :tid, :name, :min_d, :max_d, :rate, :active, :sort, :now, :now)
+            """
+        ),
+        {
+            "id": str(tier_id), "tid": str(ctx.tenant_id),
+            "name": payload.tier_name, "min_d": payload.min_deals,
+            "max_d": payload.max_deals, "rate": str(payload.rate_percent),
+            "active": payload.is_active, "sort": payload.sort_order,
+            "now": now,
+        },
+    )
+    await _log_audit(session, ctx, action="commission_tier.create", resource_type="commission_tier", resource_id=tier_id)
+    return {"id": str(tier_id), "tier_name": payload.tier_name, "rate_percent": str(payload.rate_percent)}
+
+
+@app.put("/commission-tiers/{tier_id}")
+async def update_commission_tier(
+    tier_id: uuid.UUID,
+    payload: CommissionTierUpdate,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    updates: Dict[str, Any] = {}
+    if payload.tier_name is not None:
+        updates["tier_name"] = payload.tier_name
+    if payload.min_deals is not None:
+        updates["min_deals"] = payload.min_deals
+    if payload.max_deals is not None:
+        updates["max_deals"] = payload.max_deals
+    if payload.rate_percent is not None:
+        updates["rate_percent"] = str(payload.rate_percent)
+    if payload.is_active is not None:
+        updates["is_active"] = payload.is_active
+    if payload.sort_order is not None:
+        updates["sort_order"] = payload.sort_order
+    if not updates:
+        raise HTTPException(status_code=400, detail="No updates provided")
+    updates["updated_at"] = datetime.utcnow()
+    updates["id"] = str(tier_id)
+    updates["tid"] = str(ctx.tenant_id)
+    set_clause = ", ".join(f"{k} = :{k}" for k in updates if k not in ("id", "tid"))
+    result = await session.execute(
+        text(f"update commission_tiers set {set_clause} where id = :id and tenant_id = :tid"),
+        updates,
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Tier not found")
+    await _log_audit(session, ctx, action="commission_tier.update", resource_type="commission_tier", resource_id=tier_id)
+    return {"status": "updated"}
+
+
+@app.delete("/commission-tiers/{tier_id}")
+async def delete_commission_tier(
+    tier_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    result = await session.execute(
+        text("delete from commission_tiers where id = :id and tenant_id = :tid"),
+        {"id": str(tier_id), "tid": str(ctx.tenant_id)},
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Tier not found")
+    await _log_audit(session, ctx, action="commission_tier.delete", resource_type="commission_tier", resource_id=tier_id)
+    return {"status": "deleted"}
 
 
 @app.get("/audit-log")

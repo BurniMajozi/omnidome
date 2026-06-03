@@ -43,6 +43,9 @@ import { WebAnalyticsDashboard } from "./web-analytics/web-analytics-dashboard"
 import { WebAnalyticsCustomDashboard } from "@/modules/web-analytics-custom"
 import { CancelFlowModal } from "./cancel-flow-modal"
 import { JourneyABTesting } from "./journey-ab-testing"
+import { CommissionTiers } from "./commission-tiers"
+import { FieldSalesApp } from "./field-sales-app"
+import { TechnicianApp } from "./technician-app"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -291,6 +294,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
+          <TabsTrigger value="commissions">Commissions</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -734,137 +738,16 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <JourneyABTesting />
         </TabsContent>
 
-        <TabsContent value="field-sales" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="border-border bg-card lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-base">Field Sales App Settings</CardTitle>
-                <CardDescription>Configure mobile app for sales agents</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">GPS Tracking</Label>
-                    <p className="text-sm text-muted-foreground">Track agent location during work hours</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Photo Capture</Label>
-                    <p className="text-sm text-muted-foreground">Require photos at customer visits</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Offline Mode</Label>
-                    <p className="text-sm text-muted-foreground">Allow data entry without connection</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Lead Assignment</Label>
-                    <p className="text-sm text-muted-foreground">Auto-assign leads by territory</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Today&apos;s Stats</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{fieldSalesStats.activeAgents}</p>
-                  <p className="text-sm text-muted-foreground">Active Agents</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{fieldSalesStats.visitsToday}</p>
-                  <p className="text-sm text-muted-foreground">Customer Visits</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{fieldSalesStats.leadsGenerated}</p>
-                  <p className="text-sm text-muted-foreground">Leads Generated</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-emerald-400">{fieldSalesStats.dealsWon}</p>
-                  <p className="text-sm text-muted-foreground">Deals Won</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        <TabsContent value="field-sales" className="mt-4">
+          <FieldSalesApp />
         </TabsContent>
 
-        <TabsContent value="technician" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Card className="border-border bg-card lg:col-span-2">
-              <CardHeader>
-                <CardTitle className="text-base">Technician App Settings</CardTitle>
-                <CardDescription>Configure mobile app for field technicians</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Job Routing</Label>
-                    <p className="text-sm text-muted-foreground">Optimize routes automatically</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Inventory Tracking</Label>
-                    <p className="text-sm text-muted-foreground">Track parts and equipment</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Customer Signature</Label>
-                    <p className="text-sm text-muted-foreground">Require sign-off on completion</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-foreground">Speed Test Integration</Label>
-                    <p className="text-sm text-muted-foreground">Run network tests on-site</p>
-                  </div>
-                  <Switch defaultChecked />
-                </div>
-              </CardContent>
-            </Card>
+        <TabsContent value="technician" className="mt-4">
+          <TechnicianApp />
+        </TabsContent>
 
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Today&apos;s Stats</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{technicianStats.activeTechs}</p>
-                  <p className="text-sm text-muted-foreground">Active Technicians</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{technicianStats.jobsCompleted}</p>
-                  <p className="text-sm text-muted-foreground">Jobs Completed</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <p className="text-2xl font-bold text-foreground">{technicianStats.avgJobTime}</p>
-                  <p className="text-sm text-muted-foreground">Avg Job Time</p>
-                </div>
-                <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
-                  <div className="flex items-center justify-center gap-1">
-                    <p className="text-2xl font-bold text-amber-400">{technicianStats.customerRating}</p>
-                    <span className="text-amber-400">★</span>
-                  </div>
-                  <p className="text-sm text-muted-foreground">Customer Rating</p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+        <TabsContent value="commissions" className="mt-4">
+          <CommissionTiers />
         </TabsContent>
       </Tabs>
 

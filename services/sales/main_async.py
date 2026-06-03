@@ -355,6 +355,26 @@ async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uui
         )
     )
     count = result.scalar() or 0
+
+    # Look up tenant-specific commission tiers
+    tier_result = await db.execute(
+        text(
+            """
+            select rate_percent from commission_tiers
+            where tenant_id = :tid and is_active = true
+              and min_deals <= :count
+              and (max_deals is null or max_deals >= :count)
+            order by rate_percent desc
+            limit 1
+            """
+        ),
+        {"tid": str(tenant_id), "count": count},
+    )
+    row = tier_result.mappings().first()
+    if row:
+        return Decimal(str(row["rate_percent"]))
+
+    # Fallback to default tiers
     if count >= 20:
         return Decimal("10.0")
     if count >= 10:

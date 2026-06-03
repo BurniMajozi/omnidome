@@ -246,6 +246,22 @@ CREATE TABLE commissions (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE commission_tiers (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    tier_name TEXT NOT NULL DEFAULT 'Standard',
+    min_deals INTEGER NOT NULL DEFAULT 0,
+    max_deals INTEGER,
+    rate_percent DECIMAL(5, 2) NOT NULL DEFAULT 5.00,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, tier_name)
+);
+
+CREATE INDEX idx_commission_tiers_tenant ON commission_tiers(tenant_id);
+
 CREATE TABLE sales_targets (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
