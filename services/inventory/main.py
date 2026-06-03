@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, date
@@ -83,6 +83,16 @@ class SalesPlan(BaseModel):
     product_id: uuid.UUID
     target_month: date
     forecast_units: int
+
+
+class StockCheckoutItem(BaseModel):
+    product_id: str
+    quantity: int = Field(gt=0, le=100)
+
+
+class StockCheckoutRequest(BaseModel):
+    job_id: str = "unknown"
+    items: List[StockCheckoutItem] = []
 
 # --- Routes ---
 @app.get("/")
@@ -196,20 +206,20 @@ async def query_stock(
 
 @app.post("/stock/checkout")
 async def checkout_stock(
-    payload: dict,
+    payload: StockCheckoutRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """Checkout stock for a job (mobile technician app)"""
-    job_id = payload.get("job_id", "unknown")
-    items = payload.get("items", [])
+    job_id = payload.job_id
+    items = payload.items
 
     _ensure_sample_stock(str(tenant_id))
     stock = _get_tenant_stock(str(tenant_id))
 
     results = []
     for item in items:
-        product_id = item.get("product_id", "")
-        quantity = item.get("quantity", 0)
+        product_id = item.product_id
+        quantity = item.quantity
 
         # Find by product_id or SKU
         found = None

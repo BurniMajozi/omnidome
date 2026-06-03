@@ -161,5 +161,5 @@ export const fieldSalesApi = {
 
   // Invoices (customer billing summary)
   getCustomerInvoices: (contactId: string) =>
-    fetchJSON<MobileInvoice[]>(`/billing/invoices?contact_id=${contactId}`),
+    fetchJSON<MobileInvoice[]>(`/billing/invoices?customer_id=${contactId}`),
 }

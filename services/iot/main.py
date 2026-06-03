@@ -39,8 +39,8 @@ class TelemetryData(BaseModel):
 
 class CommandRequest(BaseModel):
     device_id: uuid.UUID
-    command_type: str # REBOOT, TOGGLE_POWER
-    payload: Optional[Dict] = {}
+    command_type: str  # REBOOT, TOGGLE_POWER
+    payload: Optional[Dict] = None
 
 class SignalTelemetry(BaseModel):
     device_id: uuid.UUID
@@ -129,7 +129,7 @@ async def get_at_risk_customers():
         {
             "customer_name": "Lerato Khumalo",
             "device_id": uuid.uuid4(),
-            "rx_power": -27.2,
+            "rx_power_dbm": -27.2,
             "status": "SIGNAL_DEGRADATION",
             "region": "Cape Town",
             "fno": "Vumatel"
