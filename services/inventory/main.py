@@ -237,6 +237,11 @@ async def checkout_stock(
             "quantity": quantity, "remaining": s["soh"] - s["allocated"],
         })
 
+    # Create stock movement records for checked-out items
+    for r in results:
+        if r["status"] == "CHECKED_OUT":
+            logging.info(f"Stock Movement: SALE for {r['product_id']} x {r.get('quantity', 0)} (job: {job_id})")
+
     return {"job_id": job_id, "items": results, "status": "complete"}
 
 

@@ -7,6 +7,8 @@ multi-provider coverage checks, and service lifecycle operations.
 
 import logging
 import os
+import random
+from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, Depends
@@ -79,14 +81,13 @@ async def run_speed_test(
     auth: AuthContext = Depends(get_auth_context),
 ):
     """Run a speed test from the gateway (simulated for demo)"""
-    import random
     # In production: run actual speed test via iperf3 or similar
     return {
         "download_mbps": round(random.uniform(20, 100), 1),
         "upload_mbps": round(random.uniform(10, 50), 1),
         "latency_ms": round(random.uniform(5, 30), 1),
         "jitter_ms": round(random.uniform(1, 10), 1),
-        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
     }
 
 

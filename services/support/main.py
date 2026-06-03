@@ -35,6 +35,13 @@ class TicketReplyCreate(BaseModel):
 class TicketStatusUpdate(BaseModel):
     status: str
 
+
+class ResolveTicket(BaseModel):
+    resolution_notes: str = ""
+    fcr: bool = False
+    parts_used: List[dict] = []
+    speed_test: Optional[dict] = None
+
 # --- Routes ---
 @app.get("/")
 async def root():
@@ -157,14 +164,14 @@ async def start_ticket(
 @app.post("/tickets/{ticket_id}/resolve")
 async def resolve_ticket(
     ticket_id: uuid.UUID,
-    payload: dict = None,
+    payload: Optional[ResolveTicket] = None,
     auth: AuthContext = Depends(get_auth_context),
 ):
     """Mark ticket as resolved. Accepts optional resolution data from mobile app."""
-    fcr = payload.get("fcr", False) if payload else False
-    resolution_notes = payload.get("resolution_notes", "") if payload else ""
-    parts_used = payload.get("parts_used", []) if payload else []
-    speed_test = payload.get("speed_test") if payload else None
+    fcr = payload.fcr if payload else False
+    resolution_notes = payload.resolution_notes if payload else ""
+    parts_used = payload.parts_used if payload else []
+    speed_test = payload.speed_test if payload else None
 
     return {
         "id": str(ticket_id),
@@ -181,7 +188,7 @@ async def resolve_ticket(
 
 @app.get("/technicians/me/stats")
 async def get_my_stats(
-    auth: AuthContext = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Get current technician's performance stats"""
     return {

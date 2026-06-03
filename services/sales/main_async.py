@@ -239,6 +239,13 @@ class LeadResponse(BaseModel):
     updated_at: Optional[datetime]
 
 
+
+
+class LeadConvert(BaseModel):
+    name: Optional[str] = Field(None, description="Deal name (defaults to lead name)")
+    value_zar: Decimal = Field(default=Decimal("0"), ge=0)
+    agent_id: Optional[uuid.UUID] = None
+
 # ── Contact Schemas ───────────────────────────────────────────────────
 
 class ContactCreate(BaseModel):
@@ -1185,7 +1192,7 @@ async def update_lead(
 @app.post("/leads/{lead_id}/convert", response_model=dict)
 async def convert_lead(
     lead_id: uuid.UUID,
-    payload: dict,
+    payload: LeadConvert,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1211,9 +1218,9 @@ async def convert_lead(
         lead.contact_id = contact_id
 
     # Create deal
-    deal_name = payload.get("name", f"{lead.first_name} {lead.last_name} - New Deal")
-    deal_value = Decimal(str(payload.get("value_zar", 0)))
-    agent_id = payload.get("agent_id") or lead.agent_id
+    deal_name = payload.name or f"{lead.first_name} {lead.last_name} - New Deal"
+    deal_value = payload.value_zar
+    agent_id = payload.agent_id or lead.agent_id
     stage_id = await _resolve_stage_id(db, tenant_id, None, "Prospecting")
     deal = Deal(
         id=uuid.uuid4(), tenant_id=tenant_id, contact_id=contact_id,
