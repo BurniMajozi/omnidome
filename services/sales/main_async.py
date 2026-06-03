@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from services.sales.database import get_db, init_tables
 from services.sales.models import (
-    Pipeline, DealStage, Deal, Quote, Commission, Target,
+    Pipeline, DealStage, Deal, Quote, Commission, Target, Contact, Lead,
 )
 from services.common.auth import get_current_tenant_id
 
@@ -193,7 +193,106 @@ class TargetPerformanceEntry(BaseModel):
     variance_zar: Decimal
 
 
-# ── Default pipeline stages ───────────────────────────────────────────
+# ── Lead Schemas ──────────────────────────────────────────────────────
+
+class LeadCreate(BaseModel):
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source: str = "FIELD_VISIT"
+    interest_level: int = Field(default=3, ge=1, le=5)
+    notes: Optional[str] = None
+    agent_id: Optional[uuid.UUID] = None
+
+
+class LeadUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source: Optional[str] = None
+    interest_level: Optional[int] = Field(None, ge=1, le=5)
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    agent_id: Optional[uuid.UUID] = None
+
+
+class LeadResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    contact_id: Optional[uuid.UUID]
+    agent_id: Optional[uuid.UUID]
+    first_name: str
+    last_name: str
+    email: Optional[str]
+    phone: Optional[str]
+    address: Optional[str]
+    source: str
+    interest_level: int
+    status: str
+    notes: Optional[str]
+    converted_at: Optional[datetime]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+# ── Contact Schemas ───────────────────────────────────────────────────
+
+class ContactCreate(BaseModel):
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    physical_address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    rica_id_number: Optional[str] = None
+
+
+class ContactUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    physical_address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    rica_id_number: Optional[str] = None
+    status: Optional[str] = None
+    lifecycle_stage: Optional[str] = None
+    nps_score: Optional[int] = None
+
+
+class ContactResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    first_name: str
+    last_name: str
+    email: Optional[str]
+    phone: Optional[str]
+    physical_address: Optional[str]
+    city: Optional[str]
+    province: Optional[str]
+    rica_verified: bool
+    status: str
+    lifecycle_stage: str
+    nps_score: Optional[int]
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class Customer360Response(BaseModel):
+    contact: ContactResponse
+    deals: List[DealResponse]
+    quotes: List[QuoteResponse]
+    invoices: List[dict]
+    total_revenue: float
+    open_deals_value: float
 
 DEFAULT_STAGES = [
     {"name": "Prospecting", "probability": 10, "sort_order": 1},
@@ -995,6 +1094,325 @@ async def target_performance(
             variance_zar=variance,
         ))
     return entries
+
+
+# ── Leads ─────────────────────────────────────────────────────────────
+
+@app.get("/leads", response_model=List[LeadResponse])
+async def list_leads(
+    status: Optional[str] = None,
+    agent_id: Optional[uuid.UUID] = None,
+    source: Optional[str] = None,
+    min_interest: Optional[int] = Query(None, ge=1, le=5),
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(Lead).where(Lead.tenant_id == tenant_id)
+    if status:
+        q = q.where(Lead.status == status.upper())
+    if agent_id:
+        q = q.where(Lead.agent_id == agent_id)
+    if source:
+        q = q.where(Lead.source == source)
+    if min_interest:
+        q = q.where(Lead.interest_level >= min_interest)
+    q = q.order_by(Lead.created_at.desc()).limit(limit)
+    result = await db.execute(q)
+    leads = result.scalars().all()
+    return [
+        LeadResponse(
+            id=l.id, tenant_id=l.tenant_id, contact_id=l.contact_id,
+            agent_id=l.agent_id, first_name=l.first_name, last_name=l.last_name,
+            email=l.email, phone=l.phone, address=l.address, source=l.source,
+            interest_level=l.interest_level, status=l.status, notes=l.notes,
+            converted_at=l.converted_at, created_at=l.created_at, updated_at=l.updated_at,
+        ) for l in leads
+    ]
+
+
+@app.post("/leads", response_model=LeadResponse, status_code=201)
+async def create_lead(
+    payload: LeadCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    now = datetime.utcnow()
+    lead = Lead(
+        id=uuid.uuid4(), tenant_id=tenant_id,
+        first_name=payload.first_name, last_name=payload.last_name,
+        email=payload.email, phone=payload.phone, address=payload.address,
+        source=payload.source, interest_level=payload.interest_level,
+        notes=payload.notes, agent_id=payload.agent_id,
+        status="NEW", created_at=now, updated_at=now,
+    )
+    db.add(lead)
+    await db.flush()
+    return LeadResponse(
+        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
+        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
+        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
+        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
+        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
+    )
+
+
+@app.put("/leads/{lead_id}", response_model=LeadResponse)
+async def update_lead(
+    lead_id: uuid.UUID,
+    payload: LeadUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    lead = await db.get(Lead, lead_id)
+    if not lead or lead.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    now = datetime.utcnow()
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(lead, key, value)
+    lead.updated_at = now
+    await db.flush()
+    return LeadResponse(
+        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
+        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
+        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
+        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
+        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
+    )
+
+
+@app.post("/leads/{lead_id}/convert", response_model=dict)
+async def convert_lead(
+    lead_id: uuid.UUID,
+    payload: dict,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    lead = await db.get(Lead, lead_id)
+    if not lead or lead.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    now = datetime.utcnow()
+
+    # Create or find contact
+    contact_id = lead.contact_id
+    if not contact_id:
+        contact = Contact(
+            id=uuid.uuid4(), tenant_id=tenant_id,
+            first_name=lead.first_name, last_name=lead.last_name,
+            email=lead.email, phone=lead.phone,
+            physical_address=lead.address,
+            status="ACTIVE", lifecycle_stage="QUALIFIED",
+            created_at=now, updated_at=now,
+        )
+        db.add(contact)
+        await db.flush()
+        contact_id = contact.id
+        lead.contact_id = contact_id
+
+    # Create deal
+    deal_name = payload.get("name", f"{lead.first_name} {lead.last_name} - New Deal")
+    deal_value = Decimal(str(payload.get("value_zar", 0)))
+    agent_id = payload.get("agent_id") or lead.agent_id
+    stage_id = await _resolve_stage_id(db, tenant_id, None, "Prospecting")
+    deal = Deal(
+        id=uuid.uuid4(), tenant_id=tenant_id, contact_id=contact_id,
+        lead_id=lead.id, agent_id=agent_id, stage_id=stage_id,
+        name=deal_name, value_zar=deal_value, status="OPEN",
+        created_at=now, updated_at=now,
+    )
+    db.add(deal)
+
+    # Mark lead as converted
+    lead.status = "CONVERTED"
+    lead.converted_at = now
+    lead.updated_at = now
+    await db.flush()
+
+    return {"deal_id": str(deal.id), "contact_id": str(contact_id), "message": "Lead converted"}
+
+
+# ── Contacts ──────────────────────────────────────────────────────────
+
+@app.get("/contacts", response_model=List[ContactResponse])
+async def list_contacts(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    lifecycle_stage: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(Contact).where(Contact.tenant_id == tenant_id)
+    if status:
+        q = q.where(Contact.status == status.upper())
+    if lifecycle_stage:
+        q = q.where(Contact.lifecycle_stage == lifecycle_stage)
+    if search:
+        term = f"%{search}%"
+        q = q.where(
+            Contact.first_name.ilike(term) | Contact.last_name.ilike(term) |
+            Contact.email.ilike(term) | Contact.phone.ilike(term)
+        )
+    q = q.order_by(Contact.created_at.desc()).limit(limit)
+    result = await db.execute(q)
+    contacts = result.scalars().all()
+    return [
+        ContactResponse(
+            id=c.id, tenant_id=c.tenant_id, first_name=c.first_name,
+            last_name=c.last_name, email=c.email, phone=c.phone,
+            physical_address=c.physical_address, city=c.city,
+            province=c.province, rica_verified=c.rica_verified,
+            status=c.status, lifecycle_stage=c.lifecycle_stage,
+            nps_score=c.nps_score, created_at=c.created_at, updated_at=c.updated_at,
+        ) for c in contacts
+    ]
+
+
+@app.get("/contacts/{contact_id}", response_model=ContactResponse)
+async def get_contact(
+    contact_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+@app.post("/contacts", response_model=ContactResponse, status_code=201)
+async def create_contact(
+    payload: ContactCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    now = datetime.utcnow()
+    contact = Contact(
+        id=uuid.uuid4(), tenant_id=tenant_id,
+        first_name=payload.first_name, last_name=payload.last_name,
+        email=payload.email, phone=payload.phone,
+        physical_address=payload.physical_address,
+        postal_code=payload.postal_code, city=payload.city,
+        province=payload.province, rica_id_number=payload.rica_id_number,
+        status="ACTIVE", lifecycle_stage="PROSPECT",
+        created_at=now, updated_at=now,
+    )
+    db.add(contact)
+    await db.flush()
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+@app.put("/contacts/{contact_id}", response_model=ContactResponse)
+async def update_contact(
+    contact_id: uuid.UUID,
+    payload: ContactUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    now = datetime.utcnow()
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(contact, key, value)
+    contact.updated_at = now
+    await db.flush()
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+# ── Customer 360 ──────────────────────────────────────────────────────
+
+@app.get("/contacts/{contact_id}/360", response_model=Customer360Response)
+async def get_customer_360(
+    contact_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    # Get deals for this contact
+    deals_result = await db.execute(
+        select(Deal, DealStage.name.label("stage_name"))
+        .outerjoin(DealStage, DealStage.id == Deal.stage_id)
+        .where(Deal.tenant_id == tenant_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+    )
+    deals = []
+    total_revenue = Decimal("0")
+    open_deals_value = Decimal("0")
+    for row in deals_result.all():
+        d = row.Deal
+        deals.append(DealResponse(
+            id=d.id, tenant_id=d.tenant_id, customer_id=d.contact_id,
+            lead_id=d.lead_id, agent_id=d.agent_id, stage_id=d.stage_id,
+            stage_name=row.stage_name, package_id=d.package_id,
+            value_zar=d.value_zar, status=d.status, close_date=d.close_date,
+            closed_at=d.closed_at, close_reason=d.close_reason, notes=d.notes,
+            created_at=d.created_at, updated_at=d.updated_at,
+        ))
+        if d.status == "WON":
+            total_revenue += d.value_zar or Decimal("0")
+        elif d.status == "OPEN":
+            open_deals_value += d.value_zar or Decimal("0")
+
+    # Get quotes for this contact
+    quotes_result = await db.execute(
+        select(Quote).where(Quote.tenant_id == tenant_id, Quote.customer_id == contact_id)
+        .order_by(Quote.created_at.desc()).limit(20)
+    )
+    quotes = []
+    for q in quotes_result.scalars().all():
+        quotes.append(QuoteResponse(
+            id=q.id, tenant_id=q.tenant_id, deal_id=q.deal_id,
+            customer_id=q.customer_id, lead_id=q.lead_id, agent_id=q.agent_id,
+            package_id=q.package_id, items=q.items, total_monthly=q.total_monthly,
+            total_once_off=q.total_once_off, term_months=q.term_months,
+            valid_until=q.valid_until, status=q.status, terms=q.terms,
+            created_at=q.created_at, sent_at=q.sent_at, accepted_at=q.accepted_at,
+        ))
+
+    return Customer360Response(
+        contact=ContactResponse(
+            id=contact.id, tenant_id=contact.tenant_id,
+            first_name=contact.first_name, last_name=contact.last_name,
+            email=contact.email, phone=contact.phone,
+            physical_address=contact.physical_address, city=contact.city,
+            province=contact.province, rica_verified=contact.rica_verified,
+            status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+            nps_score=contact.nps_score, created_at=contact.created_at,
+            updated_at=contact.updated_at,
+        ),
+        deals=deals,
+        quotes=quotes,
+        invoices=[],  # Populated from billing service when available
+        total_revenue=float(total_revenue),
+        open_deals_value=float(open_deals_value),
+    )
 
 
 # ── Entrypoint ────────────────────────────────────────────────────────

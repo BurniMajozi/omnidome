@@ -7,10 +7,12 @@ multi-provider coverage checks, and service lifecycle operations.
 
 import logging
 import os
+from typing import Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 
 from services.common.entitlements import EntitlementGuard
+from services.common.auth import AuthContext, get_auth_context
 from services.network.database import init_tables
 
 # Route modules
@@ -68,6 +70,43 @@ app.include_router(coverage_router)
 @app.get("/health")
 async def health():
     return {"service": "network", "status": "healthy"}
+
+
+# ── Speed Test (for mobile technician app) ────────────────────────────
+
+@app.post("/speed-test")
+async def run_speed_test(
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Run a speed test from the gateway (simulated for demo)"""
+    import random
+    # In production: run actual speed test via iperf3 or similar
+    return {
+        "download_mbps": round(random.uniform(20, 100), 1),
+        "upload_mbps": round(random.uniform(10, 50), 1),
+        "latency_ms": round(random.uniform(5, 30), 1),
+        "jitter_ms": round(random.uniform(1, 10), 1),
+        "timestamp": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+
+# ── RADIUS Account Lookup (for mobile technician app) ─────────────────
+
+@app.get("/radius-accounts")
+async def lookup_radius_account(
+    contact_id: Optional[str] = None,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Look up RADIUS account by contact_id (simulated for demo)"""
+    # In production: query RadiusAccount joined with NetworkService on contact_id
+    if contact_id:
+        return {
+            "username": f"user_{contact_id[:8]}",
+            "status": "ACTIVE",
+            "profile_name": "FTTH-100M",
+            "static_ip": None,
+        }
+    return []
 
 
 # ---------------------------------------------------------------------------

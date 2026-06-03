@@ -122,3 +122,48 @@ class Target(Base):
     target_value_zar = Column(Numeric(14, 2), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime)
+
+
+class Contact(Base):
+    __tablename__ = "contacts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=False)
+    email = Column(String(255))
+    phone = Column(String(20))
+    physical_address = Column(Text)
+    postal_code = Column(String(10))
+    city = Column(String(100))
+    province = Column(String(100))
+    rica_verified = Column(Boolean, nullable=False, default=False)
+    rica_id_number = Column(String(20))
+    status = Column(String(20), nullable=False, default="ACTIVE")
+    lifecycle_stage = Column(String(50), default="PROSPECT")
+    nps_score = Column(Integer)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime)
+
+
+class Lead(Base):
+    __tablename__ = "leads"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    contact_id = Column(UUID(as_uuid=True), ForeignKey("contacts.id", ondelete="SET NULL"))
+    agent_id = Column(UUID(as_uuid=True), index=True)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=False)
+    email = Column(String(255))
+    phone = Column(String(20))
+    address = Column(Text)
+    source = Column(String(50), default="FIELD_VISIT")
+    interest_level = Column(Integer, default=3)
+    status = Column(String(20), nullable=False, default="NEW")
+    notes = Column(Text)
+    converted_at = Column(DateTime)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime)
+
+    contact = relationship("Contact")

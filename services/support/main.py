@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 
 app = FastAPI(title="CoreConnect Support Service", version="0.1.0")
 guard = EntitlementGuard(module_id="support")
@@ -45,17 +45,83 @@ async def create_ticket(ticket: TicketCreate, tenant_id: uuid.UUID = Depends(get
     return {"id": uuid.uuid4(), "status": "OPEN", **ticket.dict()}
 
 @app.get("/tickets")
-async def list_tickets(status: Optional[str] = None, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    return [
+async def list_tickets(
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    category: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Support mobile app job queue — returns ticket-based jobs for technicians"""
+    # Sample tickets for mobile app demo
+    sample_jobs = [
         {
-            "id": uuid.uuid4(),
-            "subject": "Router not connecting",
-            "customer_name": "Thabo Molefe",
-            "status": "OPEN",
+            "id": "ticket-001",
+            "subject": "ONT No Light",
+            "description": "Customer reports no lights on ONT. Likely fibre cut or power issue.",
+            "customer_name": "Lerato Khumalo",
+            "customer_phone": "+27 82 123 4567",
+            "customer_address": "14 Main Rd, Cape Town, 8001",
             "priority": "HIGH",
-            "created_at": datetime.now()
-        }
+            "status": "OPEN",
+            "category": "FIBRE_FAULT",
+            "created_at": "2026-06-03T08:30:00",
+            "fno_reference": "VUMA-2026-0012",
+        },
+        {
+            "id": "ticket-002",
+            "subject": "Slow Speeds",
+            "description": "Customer getting 10Mbps on 100Mbps plan. Signal degradation suspected.",
+            "customer_name": "Sipho Dlamini",
+            "customer_phone": "+27 72 456 7890",
+            "customer_address": "42 Long St, Johannesburg, 2001",
+            "priority": "NORMAL",
+            "status": "OPEN",
+            "category": "SPEED_ISSUE",
+            "created_at": "2026-06-03T09:15:00",
+            "fno_reference": None,
+        },
+        {
+            "id": "ticket-003",
+            "subject": "New Installation",
+            "description": "FTTH Installation at new premises. Pre-wired, ONT needed.",
+            "customer_name": "Amara Okafor",
+            "customer_phone": "+27 83 789 0123",
+            "customer_address": "8 Beach Rd, Durban, 4001",
+            "priority": "NORMAL",
+            "status": "IN_PROGRESS",
+            "category": "INSTALLATION",
+            "created_at": "2026-06-03T07:00:00",
+            "fno_reference": "OPEN-2026-0045",
+        },
+        {
+            "id": "ticket-004",
+            "subject": "Router Reboot Request",
+            "description": "Customer unable to connect. Remote reboot failed. On-site visit required.",
+            "customer_name": "Pieter van der Merwe",
+            "customer_phone": "+27 84 321 6547",
+            "customer_address": "23 Park St, Pretoria, 0002",
+            "priority": "LOW",
+            "status": "OPEN",
+            "category": "EQUIPMENT",
+            "created_at": "2026-06-03T10:00:00",
+            "fno_reference": None,
+        },
     ]
+
+    # Map ticket_id to support actions
+    for job in sample_jobs:
+        job["ticket_id"] = job["id"]
+
+    # Apply filters
+    result = sample_jobs
+    if status:
+        result = [j for j in result if j["status"] == status.upper()]
+    if priority:
+        result = [j for j in result if j["priority"] == priority.upper()]
+    if category:
+        result = [j for j in result if j["category"] == category.upper()]
+
+    return result
 
 @app.post("/tickets/{ticket_id}/escalate-fno")
 async def escalate_to_fno(ticket_id: uuid.UUID):
@@ -69,14 +135,62 @@ async def escalate_to_fno(ticket_id: uuid.UUID):
         "automation_job_id": job_id
     }
 
+
+@app.post("/tickets/{ticket_id}/accept")
+async def accept_ticket(
+    ticket_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Accept a job (technician claims it)"""
+    return {"status": "ACCEPTED", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
+
+
+@app.post("/tickets/{ticket_id}/start")
+async def start_ticket(
+    ticket_id: uuid.UUID,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Start working on a job"""
+    return {"status": "IN_PROGRESS", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
+
+
 @app.post("/tickets/{ticket_id}/resolve")
-async def resolve_ticket(ticket_id: uuid.UUID, fcr: bool = False):
-    """Mark ticket as resolved and track if it was First Contact Resolution (FCR)"""
+async def resolve_ticket(
+    ticket_id: uuid.UUID,
+    payload: dict = None,
+    auth: AuthContext = Depends(get_auth_context),
+):
+    """Mark ticket as resolved. Accepts optional resolution data from mobile app."""
+    fcr = payload.get("fcr", False) if payload else False
+    resolution_notes = payload.get("resolution_notes", "") if payload else ""
+    parts_used = payload.get("parts_used", []) if payload else []
+    speed_test = payload.get("speed_test") if payload else None
+
     return {
-        "id": ticket_id,
+        "id": str(ticket_id),
         "status": "CLOSED",
         "is_fcr": fcr,
-        "resolved_at": datetime.now()
+        "resolved_at": datetime.utcnow().isoformat(),
+        "resolution_notes": resolution_notes,
+        "parts_used_count": len(parts_used),
+        "speed_test_recorded": speed_test is not None,
+    }
+
+
+# ── Technician Stats (for mobile app) ─────────────────────────────────
+
+@app.get("/technicians/me/stats")
+async def get_my_stats(
+    auth: AuthContext = Depends(get_current_tenant_id),
+):
+    """Get current technician's performance stats"""
+    return {
+        "jobs_today": 3,
+        "jobs_week": 12,
+        "avg_resolution_min": 45,
+        "fcr_rate": 75,
+        "customer_rating": 4.5,
+        "revenue_generated": 15000,
     }
 
 @app.get("/reports/fcr-stats")

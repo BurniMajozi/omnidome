@@ -234,7 +234,53 @@ CREATE TABLE quotes (
     accepted_at TIMESTAMP WITH TIME ZONE
 );
 
-CREATE TABLE commissions (
+CREATE TABLE contacts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    physical_address TEXT,
+    postal_code TEXT,
+    city TEXT,
+    province TEXT,
+    rica_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    rica_id_number TEXT,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    lifecycle_stage TEXT DEFAULT 'PROSPECT',
+    nps_score INTEGER,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_contacts_tenant ON contacts(tenant_id);
+CREATE INDEX idx_contacts_email ON contacts(tenant_id, email);
+CREATE INDEX idx_contacts_phone ON contacts(tenant_id, phone);
+
+CREATE TABLE leads (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+    agent_id UUID REFERENCES users(id),
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    email TEXT,
+    phone TEXT,
+    address TEXT,
+    source TEXT DEFAULT 'FIELD_VISIT',
+    interest_level INTEGER DEFAULT 3,
+    status TEXT NOT NULL DEFAULT 'NEW',
+    notes TEXT,
+    converted_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_leads_tenant ON leads(tenant_id);
+CREATE INDEX idx_leads_status ON leads(tenant_id, status);
+CREATE INDEX idx_leads_agent ON leads(tenant_id, agent_id);
+CREATE INDEX idx_leads_contact ON leads(contact_id);
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     deal_id UUID REFERENCES deals(id) ON DELETE CASCADE,
