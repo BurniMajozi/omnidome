@@ -27,7 +27,30 @@ async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
 
 
-# ── Pydantic Schemas ──────────────────────────────────────────────────
+# ── CRM enrichment ────────────────────────────────────────────────────
+
+CRM_URL = os.getenv("CRM_SERVICE_URL", "http://crm:8001")
+
+
+async def _enrich_ticket_with_customer(ticket_dict: dict, tenant_id: uuid.UUID) -> dict:
+    """Fetch customer name from CRM and add to ticket dict. Non-blocking."""
+    import httpx
+    try:
+        cid = ticket_dict.get("customer_id")
+        if cid:
+            async with httpx.AsyncClient(timeout=3) as client:
+                resp = await client.get(
+                    f"{CRM_URL}/customers/{cid}",
+                    headers={"X-Tenant-ID": str(tenant_id)},
+                )
+                if resp.status_code == 200:
+                    customer = resp.json()
+                    ticket_dict["customer_name"] = f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip()
+                    ticket_dict["customer_phone"] = customer.get("phone", "")
+                    ticket_dict["customer_address"] = customer.get("physical_address", "")
+    except Exception:
+        pass  # Non-blocking: tickets still work without customer enrichment
+    return ticket_dict
 
 class TicketCreate(BaseModel):
     customer_id: uuid.UUID
@@ -144,7 +167,12 @@ async def list_tickets(
 
     result = await db.execute(stmt)
     tickets = result.scalars().all()
-    return [_ticket_to_dict(t) for t in tickets]
+    ticket_dicts = [_ticket_to_dict(t) for t in tickets]
+    # Enrich with CRM customer data (non-blocking)
+    enriched = []
+    for td in ticket_dicts:
+        enriched.append(await _enrich_ticket_with_customer(td, tenant_id))
+    return enriched
 
 
 @app.get("/tickets/{ticket_id}")
@@ -165,7 +193,8 @@ async def get_ticket(
     ticket = result.scalar_one_or_none()
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
-    return _ticket_to_dict(ticket)
+    td = _ticket_to_dict(ticket)
+    return await _enrich_ticket_with_customer(td, tenant_id)
 
 
 @app.post("/tickets/{ticket_id}/escalate-fno")

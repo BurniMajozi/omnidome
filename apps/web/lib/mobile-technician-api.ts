@@ -24,18 +24,24 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface TechJob {
   id: string
-  ticket_id?: string
-  customer_name: string
-  customer_phone: string
-  customer_address: string
+  tenant_id: string
+  customer_id: string
   subject: string
-  description: string
+  description: string | null
   priority: "LOW" | "NORMAL" | "HIGH" | "URGENT"
-  status: "OPEN" | "IN_PROGRESS" | "ON_HOLD" | "CLOSED"
-  category: string
+  status: "OPEN" | "IN_PROGRESS" | "ON_HOLD" | "CLOSED" | "ESCALATED"
+  category: string | null
+  assigned_to: string | null
+  external_fno_ref: string | null
+  is_fcr: boolean
+  resolution_notes: string | null
+  resolved_at: string | null
   created_at: string
-  scheduled_date?: string
-  fno_reference?: string
+  updated_at: string | null
+  // Enriched from CRM (may be null if CRM unavailable)
+  customer_name?: string
+  customer_phone?: string
+  customer_address?: string
 }
 
 export interface TechDevice {

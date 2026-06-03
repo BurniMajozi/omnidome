@@ -43,12 +43,12 @@ function JobCard({ job, onSelect }: { job: TechJob; onSelect: (j: TechJob) => vo
               <Badge className="text-[10px] bg-secondary">{job.category}</Badge>
             </div>
             <p className="font-medium text-sm truncate">{job.subject}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">{job.customer_name}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{job.customer_name || job.customer_id}</p>
             <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{job.customer_phone}</span>
+              <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{job.customer_phone || "N/A"}</span>
               <span className="flex items-center gap-1"><Clock className="h-3 w-3" />{new Date(job.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
-            <p className="text-xs text-muted-foreground mt-1 truncate flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" />{job.customer_address}</p>
+            <p className="text-xs text-muted-foreground mt-1 truncate flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" />{job.customer_address || "N/A"}</p>
           </div>
           <ChevronRight className="h-4 w-4 text-muted-foreground self-center ml-2" />
         </div>
@@ -116,8 +116,8 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    technicianApi.getCustomerDevices(job.customer_name).then(setDevices).catch(() => {})
-  }, [job.customer_name])
+    technicianApi.getCustomerDevices(job.customer_id).then(setDevices).catch(() => {})
+  }, [job.customer_id])
 
   const handleStart = async () => {
     await technicianApi.startJob(job.id)
@@ -168,12 +168,12 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
       {/* Customer info */}
       <Card className="border-border bg-card">
         <CardContent className="p-3 space-y-1">
-          <p className="font-medium text-sm">{job.customer_name}</p>
+          <p className="font-medium text-sm">{job.customer_name || job.customer_id}</p>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{job.customer_phone}</span>
+            <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{job.customer_phone || "N/A"}</span>
           </div>
-          <p className="text-xs text-muted-foreground flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" />{job.customer_address}</p>
-          {job.fno_reference && <p className="text-xs text-muted-foreground">FNO Ref: {job.fno_reference}</p>}
+          <p className="text-xs text-muted-foreground flex items-center gap-1"><MapPin className="h-3 w-3 shrink-0" />{job.customer_address || "N/A"}</p>
+          {job.external_fno_ref && <p className="text-xs text-muted-foreground">FNO Ref: {job.external_fno_ref}</p>}
         </CardContent>
       </Card>
 
