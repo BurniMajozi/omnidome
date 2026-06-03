@@ -1,13 +1,19 @@
+"""CoreConnect Support Service — Ticket management, FNO escalation, technician dispatch.
+
+Port: 8008
+"""
+
 from fastapi import FastAPI, Depends, HTTPException, status
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from services.common.entitlements import EntitlementGuard
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
+from services.support.database import get_session, init_tables, Ticket, TicketReply
 
-app = FastAPI(title="CoreConnect Support Service", version="0.1.0")
+app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
 
 
@@ -20,7 +26,9 @@ async def startup() -> None:
 async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
 
-# --- Models ---
+
+# ── Pydantic Schemas ──────────────────────────────────────────────────
+
 class TicketCreate(BaseModel):
     customer_id: uuid.UUID
     subject: str
@@ -28,9 +36,11 @@ class TicketCreate(BaseModel):
     category: str
     priority: str = "NORMAL"
 
+
 class TicketReplyCreate(BaseModel):
     message: str
     is_private: bool = False
+
 
 class TicketStatusUpdate(BaseModel):
     status: str
@@ -39,17 +49,76 @@ class TicketStatusUpdate(BaseModel):
 class ResolveTicket(BaseModel):
     resolution_notes: str = ""
     fcr: bool = False
-    parts_used: List[dict] = []
-    speed_test: Optional[dict] = None
+    parts_used: List[Dict[str, Any]] = Field(default_factory=list)
+    speed_test: Optional[Dict[str, Any]] = None
 
-# --- Routes ---
+
+class TicketResponse(BaseModel):
+    id: str
+    tenant_id: str
+    customer_id: str
+    subject: str
+    description: Optional[str]
+    priority: str
+    status: str
+    category: Optional[str]
+    assigned_to: Optional[str]
+    external_fno_ref: Optional[str]
+    is_fcr: bool
+    resolution_notes: Optional[str]
+    resolved_at: Optional[str]
+    created_at: str
+    updated_at: Optional[str]
+
+
+def _ticket_to_dict(ticket: Ticket) -> dict:
+    return {
+        "id": str(ticket.id),
+        "tenant_id": str(ticket.tenant_id),
+        "customer_id": str(ticket.customer_id),
+        "subject": ticket.subject,
+        "description": ticket.description,
+        "priority": ticket.priority,
+        "status": ticket.status,
+        "category": ticket.category,
+        "assigned_to": str(ticket.assigned_to) if ticket.assigned_to else None,
+        "external_fno_ref": ticket.external_fno_ref,
+        "is_fcr": ticket.is_fcr,
+        "resolution_notes": ticket.resolution_notes,
+        "resolved_at": ticket.resolved_at.isoformat() if ticket.resolved_at else None,
+        "created_at": ticket.created_at.isoformat() if ticket.created_at else None,
+        "updated_at": ticket.updated_at.isoformat() if ticket.updated_at else None,
+    }
+
+
+# ── Routes ─────────────────────────────────────────────────────────────
+
 @app.get("/")
 async def root():
     return {"message": "CoreConnect Support Service is active"}
 
-@app.post("/tickets", status_code=status.HTTP_201_CREATED)
-async def create_ticket(ticket: TicketCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    return {"id": uuid.uuid4(), "status": "OPEN", **ticket.dict()}
+
+@app.post("/tickets", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
+async def create_ticket(
+    ticket: TicketCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Create a new support ticket"""
+    t = Ticket(
+        tenant_id=tenant_id,
+        customer_id=ticket.customer_id,
+        subject=ticket.subject,
+        description=ticket.description,
+        category=ticket.category,
+        priority=ticket.priority,
+        status="OPEN",
+    )
+    db.add(t)
+    await db.flush()
+    await db.refresh(t)
+    return _ticket_to_dict(t)
+
 
 @app.get("/tickets")
 async def list_tickets(
@@ -57,89 +126,76 @@ async def list_tickets(
     priority: Optional[str] = None,
     category: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
 ):
-    """Support mobile app job queue — returns ticket-based jobs for technicians"""
-    # Sample tickets for mobile app demo
-    sample_jobs = [
-        {
-            "id": "ticket-001",
-            "subject": "ONT No Light",
-            "description": "Customer reports no lights on ONT. Likely fibre cut or power issue.",
-            "customer_name": "Lerato Khumalo",
-            "customer_phone": "+27 82 123 4567",
-            "customer_address": "14 Main Rd, Cape Town, 8001",
-            "priority": "HIGH",
-            "status": "OPEN",
-            "category": "FIBRE_FAULT",
-            "created_at": "2026-06-03T08:30:00",
-            "fno_reference": "VUMA-2026-0012",
-        },
-        {
-            "id": "ticket-002",
-            "subject": "Slow Speeds",
-            "description": "Customer getting 10Mbps on 100Mbps plan. Signal degradation suspected.",
-            "customer_name": "Sipho Dlamini",
-            "customer_phone": "+27 72 456 7890",
-            "customer_address": "42 Long St, Johannesburg, 2001",
-            "priority": "NORMAL",
-            "status": "OPEN",
-            "category": "SPEED_ISSUE",
-            "created_at": "2026-06-03T09:15:00",
-            "fno_reference": None,
-        },
-        {
-            "id": "ticket-003",
-            "subject": "New Installation",
-            "description": "FTTH Installation at new premises. Pre-wired, ONT needed.",
-            "customer_name": "Amara Okafor",
-            "customer_phone": "+27 83 789 0123",
-            "customer_address": "8 Beach Rd, Durban, 4001",
-            "priority": "NORMAL",
-            "status": "IN_PROGRESS",
-            "category": "INSTALLATION",
-            "created_at": "2026-06-03T07:00:00",
-            "fno_reference": "OPEN-2026-0045",
-        },
-        {
-            "id": "ticket-004",
-            "subject": "Router Reboot Request",
-            "description": "Customer unable to connect. Remote reboot failed. On-site visit required.",
-            "customer_name": "Pieter van der Merwe",
-            "customer_phone": "+27 84 321 6547",
-            "customer_address": "23 Park St, Pretoria, 0002",
-            "priority": "LOW",
-            "status": "OPEN",
-            "category": "EQUIPMENT",
-            "created_at": "2026-06-03T10:00:00",
-            "fno_reference": None,
-        },
-    ]
+    """List support tickets with optional filters — DB-persisted"""
+    from sqlalchemy import select, desc
 
-    # Map ticket_id to support actions
-    for job in sample_jobs:
-        job["ticket_id"] = job["id"]
+    stmt = select(Ticket).where(Ticket.tenant_id == tenant_id)
 
-    # Apply filters
-    result = sample_jobs
     if status:
-        result = [j for j in result if j["status"] == status.upper()]
+        stmt = stmt.where(Ticket.status == status.upper())
     if priority:
-        result = [j for j in result if j["priority"] == priority.upper()]
+        stmt = stmt.where(Ticket.priority == priority.upper())
     if category:
-        result = [j for j in result if j["category"] == category.upper()]
+        stmt = stmt.where(Ticket.category == category.upper())
 
-    return result
+    stmt = stmt.order_by(desc(Ticket.created_at))
+
+    result = await db.execute(stmt)
+    tickets = result.scalars().all()
+    return [_ticket_to_dict(t) for t in tickets]
+
+
+@app.get("/tickets/{ticket_id}")
+async def get_ticket(
+    ticket_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Get a single ticket by ID"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    return _ticket_to_dict(ticket)
+
 
 @app.post("/tickets/{ticket_id}/escalate-fno")
-async def escalate_to_fno(ticket_id: uuid.UUID):
+async def escalate_to_fno(
+    ticket_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
     """Trigger browser automation to log a ticket on the FNO portal"""
-    logging.info(f"Escalating ticket {ticket_id} to FNO via Browser Automation (Agent: Playwright)")
-    # Mocking a Playwright job ID from the Network Hub
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
     job_id = uuid.uuid4()
+    ticket.external_fno_ref = f"VUMA-OUTAGE-{str(job_id)[:8]}"
+    ticket.status = "ESCALATED"
+
+    logging.info(f"Escalating ticket {ticket_id} to FNO via Browser Automation (Agent: Playwright)")
     return {
         "status": "ESCALATED",
-        "fno_reference": f"VUMA-OUTAGE-{str(job_id)[:8]}",
-        "automation_job_id": job_id
+        "fno_reference": ticket.external_fno_ref,
+        "automation_job_id": str(job_id),
     }
 
 
@@ -147,8 +203,25 @@ async def escalate_to_fno(ticket_id: uuid.UUID):
 async def accept_ticket(
     ticket_id: uuid.UUID,
     auth: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
 ):
     """Accept a job (technician claims it)"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == auth.tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    ticket.status = "IN_PROGRESS"
+    ticket.assigned_to = auth.user_id
+    await db.flush()
+
     return {"status": "ACCEPTED", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
 
 
@@ -156,8 +229,25 @@ async def accept_ticket(
 async def start_ticket(
     ticket_id: uuid.UUID,
     auth: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
 ):
     """Start working on a job"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == auth.tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    ticket.status = "IN_PROGRESS"
+    ticket.assigned_to = auth.user_id
+    await db.flush()
+
     return {"status": "IN_PROGRESS", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
 
 
@@ -166,51 +256,141 @@ async def resolve_ticket(
     ticket_id: uuid.UUID,
     payload: Optional[ResolveTicket] = None,
     auth: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
 ):
-    """Mark ticket as resolved. Accepts optional resolution data from mobile app."""
+    """Mark ticket as resolved — DB-persisted"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == auth.tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
     fcr = payload.fcr if payload else False
     resolution_notes = payload.resolution_notes if payload else ""
     parts_used = payload.parts_used if payload else []
     speed_test = payload.speed_test if payload else None
 
+    ticket.status = "CLOSED"
+    ticket.is_fcr = fcr
+    ticket.resolution_notes = resolution_notes
+    ticket.resolved_at = datetime.utcnow()
+    ticket.assigned_to = auth.user_id
+
+    await db.flush()
+
     return {
         "id": str(ticket_id),
         "status": "CLOSED",
         "is_fcr": fcr,
-        "resolved_at": datetime.utcnow().isoformat(),
+        "resolved_at": ticket.resolved_at.isoformat(),
         "resolution_notes": resolution_notes,
         "parts_used_count": len(parts_used),
         "speed_test_recorded": speed_test is not None,
     }
 
 
-# ── Technician Stats (for mobile app) ─────────────────────────────────
+# ── Technician Stats (computed from DB) ───────────────────────────────
 
 @app.get("/technicians/me/stats")
 async def get_my_stats(
     auth: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
 ):
-    """Get current technician's performance stats"""
+    """Get current technician's performance stats — computed from DB"""
+    from sqlalchemy import select, func, case
+
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    week_ago = today - timedelta(days=7)
+
+    # Jobs resolved today
+    today_result = await db.execute(
+        select(func.count(Ticket.id)).where(
+            Ticket.tenant_id == auth.tenant_id,
+            Ticket.assigned_to == auth.user_id,
+            Ticket.status == "CLOSED",
+            Ticket.resolved_at >= today,
+        )
+    )
+    jobs_today = today_result.scalar() or 0
+
+    # Jobs resolved this week
+    week_result = await db.execute(
+        select(func.count(Ticket.id)).where(
+            Ticket.tenant_id == auth.tenant_id,
+            Ticket.assigned_to == auth.user_id,
+            Ticket.status == "CLOSED",
+            Ticket.resolved_at >= week_ago,
+        )
+    )
+    jobs_week = week_result.scalar() or 0
+
+    # FCR rate (closed tickets that are FCR / total closed)
+    fcr_result = await db.execute(
+        select(
+            func.count(Ticket.id),
+            func.sum(case((Ticket.is_fcr == True, 1), else_=0)),
+        ).where(
+            Ticket.tenant_id == auth.tenant_id,
+            Ticket.assigned_to == auth.user_id,
+            Ticket.status == "CLOSED",
+        )
+    )
+    total_closed, fcr_count = fcr_result.one()
+    fcr_rate = round((fcr_count / total_closed) * 100) if total_closed > 0 else 0
+
     return {
-        "jobs_today": 3,
-        "jobs_week": 12,
-        "avg_resolution_min": 45,
-        "fcr_rate": 75,
-        "customer_rating": 4.5,
-        "revenue_generated": 15000,
+        "jobs_today": jobs_today,
+        "jobs_week": jobs_week,
+        "avg_resolution_min": 45,  # Would need timestamp diff calculation
+        "fcr_rate": fcr_rate,
+        "customer_rating": 4.5,  # Would come from a ratings table
+        "revenue_generated": jobs_week * 1500,  # Simplified estimate
     }
+
 
 @app.get("/reports/fcr-stats")
-async def get_fcr_stats(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    """Return First Contact Resolution metrics for the dashboard"""
+async def get_fcr_stats(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Return First Contact Resolution metrics — computed from DB"""
+    from sqlalchemy import select, func, case
+
+    month_ago = datetime.utcnow() - timedelta(days=30)
+
+    result = await db.execute(
+        select(
+            func.count(Ticket.id),
+            func.sum(case((Ticket.is_fcr == True, 1), else_=0)),
+        ).where(
+            Ticket.tenant_id == tenant_id,
+            Ticket.status == "CLOSED",
+            Ticket.resolved_at >= month_ago,
+        )
+    )
+    total_closed, fcr_count = result.one()
+    fcr_rate = round((fcr_count / total_closed) * 100, 1) if total_closed > 0 else 0.0
+
     return {
-        "fcr_rate": 68.5,
-        "avg_resolution_time_minutes": 145,
-        "total_tickets_month": 1240
+        "fcr_rate": fcr_rate,
+        "avg_resolution_time_minutes": 145,  # Would need timestamp diff
+        "total_tickets_month": total_closed,
     }
 
+
 @app.post("/network/broadcast")
-async def broadcast_alert(title: str, message: str, fno_id: Optional[uuid.UUID] = None, nas_id: Optional[int] = None):
+async def broadcast_alert(
+    title: str,
+    message: str,
+    fno_id: Optional[uuid.UUID] = None,
+    nas_id: Optional[int] = None,
+):
     """Notify specific customers of an outage based on their network path"""
     if nas_id:
         logging.info(f"TARGETED BROADCAST: {title} sent to customers on NAS Hardware #{nas_id}")
@@ -218,8 +398,9 @@ async def broadcast_alert(title: str, message: str, fno_id: Optional[uuid.UUID] 
         logging.info(f"FNO BROADCAST: {title} sent to customers on FNO Portal {fno_id}")
     else:
         logging.info(f"GENERAL BROADCAST: {title} sent to all active subscribers")
-    
+
     return {"status": "SENT", "recipients_count": "CALCULATED_DYNAMICALLY"}
+
 
 if __name__ == "__main__":
     import uvicorn

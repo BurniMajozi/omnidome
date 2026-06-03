@@ -263,23 +263,26 @@ async def seed_inventory_stock(client: httpx.AsyncClient):
 
 
 async def seed_iot_devices(client: httpx.AsyncClient, contacts: list):
-    """IoT devices are seeded in-memory on first request.
-    We'll call the list endpoint to trigger seeding."""
-    r = await client.get(f"{GATEWAY_URL}/iot/devices", headers=_h())
+    """Seed IoT devices via DB-persisted endpoint."""
     devices = []
-    if r.status_code < 400:
-        data = r.json()
-        if isinstance(data, list):
-            devices = data
-    
-    # Assign devices to contacts for the demo
-    for i, device in enumerate(devices):
+    device_data = [
+        {"device_name": "ONT-Lerato-001", "device_type": "ONT", "mac_address": "AA:BB:CC:DD:EE:01",
+         "serial_number": "ONT-V1-001", "firmware_version": "v2.1.4"},
+        {"device_name": "Router-Lerato-001", "device_type": "ROUTER", "mac_address": "AA:BB:CC:DD:EE:02",
+         "serial_number": "RTR-NET-001", "firmware_version": "v1.0.2"},
+        {"device_name": "ONT-Sipho-002", "device_type": "ONT", "mac_address": "AA:BB:CC:DD:EE:03",
+         "serial_number": "ONT-H1-002", "firmware_version": "v2.0.1"},
+    ]
+
+    for i, d in enumerate(device_data):
         if i < len(contacts):
             contact_id = contacts[i].get("id") or contacts[i].get("contact_id")
-            # Devices are in-memory with tenant, so we note the association
-            print(f"    Device {device.get('name', device.get('id', i))} → contact {contact_id}")
+            d["contact_id"] = contact_id
+        r = await client.post(f"{GATEWAY_URL}/iot/devices", json=d, headers=_h())
+        if r.status_code < 400:
+            devices.append(r.json())
 
-    print(f"  IoT: {len(devices)} devices (in-memory seeded)")
+    print(f"  IoT: {len(devices)} devices created (DB-persisted)")
     return devices
 
 
@@ -304,11 +307,14 @@ async def seed_network_radius(client: httpx.AsyncClient, contacts: list):
 
 
 async def seed_crm_contacts(client: httpx.AsyncClient):
-    """Seed CRM contacts (if CRM service has endpoints beyond /health)."""
-    # CRM service is minimal — log and skip
+    """Seed CRM contacts using the CRM service endpoints."""
     r = await client.get(f"{GATEWAY_URL}/crm/health", headers=_h())
-    healthy = r.status_code < 400
-    print(f"  CRM: {'healthy' if healthy else 'unavailable'} — skipping (minimal service)")
+    if r.status_code >= 400:
+        print(f"  CRM: unavailable — skipping")
+        return []
+
+    # The sales service already seeds contacts — just verify CRM is healthy
+    print(f"  CRM: healthy — contacts seeded via sales service")
     return []
 
 
