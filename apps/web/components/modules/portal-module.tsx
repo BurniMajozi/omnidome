@@ -40,7 +40,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useModuleData } from "@/lib/module-data"
 import { useIsClient } from "@/lib/use-is-client"
 import { WebAnalyticsDashboard } from "./web-analytics/web-analytics-dashboard"
+import { WebAnalyticsCustomDashboard } from "@/modules/web-analytics-custom"
 import { CancelFlowModal } from "./cancel-flow-modal"
+import { JourneyABTesting } from "./journey-ab-testing"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -284,7 +286,9 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
           <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
+          <TabsTrigger value="analytics-custom">Custom Dashboards</TabsTrigger>
           <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
+          <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
         </TabsList>
@@ -655,6 +659,10 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <WebAnalyticsDashboard />
         </TabsContent>
 
+        <TabsContent value="analytics-custom" className="mt-4">
+          <WebAnalyticsCustomDashboard />
+        </TabsContent>
+
         <TabsContent value="journeys" className="mt-4 space-y-4">
           <div id="portal-retention-journey" />
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -720,6 +728,10 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               </Card>
             ))}
           </div>
+        </TabsContent>
+
+        <TabsContent value="ab-testing" className="mt-4">
+          <JourneyABTesting />
         </TabsContent>
 
         <TabsContent value="field-sales" className="mt-4 space-y-4">
