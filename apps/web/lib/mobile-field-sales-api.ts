@@ -86,12 +86,31 @@ export interface MobileCommission {
 }
 
 export interface Customer360 {
-  contact: MobileContact
-  deals: MobileDeal[]
-  quotes: MobileQuote[]
-  invoices: MobileInvoice[]
-  total_revenue: number
-  open_deals_value: number
+  id: string
+  tenant_id: string
+  first_name: string
+  last_name: string
+  email: string
+  phone: string
+  id_number?: string
+  physical_address: string
+  province: string
+  account_number: string
+  status: string
+  rica_verified: boolean
+  created_at: string
+  updated_at: string
+  tags: string[]
+  notes_count: number
+  billing: Array<{ id: string; invoice_number: string; amount: number; total_amount: number; status: string; due_date: string }>
+  support: Array<{ id: string; subject: string; status: string; priority: string }>
+  network: Array<{ id: string; status: string; fno_reference: string }>
+  lifecycle_data: {
+    current_stage?: string
+    health_score?: number
+    churn_probability?: number
+    history?: Array<{ stage: string; entered_at: string }>
+  } | null
 }
 
 // ── API methods ──────────────────────────────────────────────────────
@@ -114,19 +133,19 @@ export const fieldSalesApi = {
   convertLead: (leadId: string, data: { name: string; value_zar: number; agent_id?: string }) =>
     fetchJSON<{ deal_id: string }>(`/sales/leads/${leadId}/convert`, { method: "POST", body: JSON.stringify(data) }),
 
-  // Contacts / Customers
+  // Contacts / Customers (CRM service)
   listContacts: (params?: { search?: string; limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.search) q.set("search", params.search)
-    if (params?.limit) q.set("limit", String(params.limit))
-    return fetchJSON<MobileContact[]>(`/sales/contacts?${q}`)
+    if (params?.limit) q.set("page_size", String(params.limit))
+    return fetchJSON<MobileContact[]>(`/crm/customers?${q}`)
   },
 
   getContact: (id: string) =>
-    fetchJSON<MobileContact>(`/sales/contacts/${id}`),
+    fetchJSON<MobileContact>(`/crm/customers/${id}`),
 
   getCustomer360: (contactId: string) =>
-    fetchJSON<Customer360>(`/sales/contacts/${contactId}/360`),
+    fetchJSON<Customer360>(`/crm/customers/${contactId}`),
 
   // Deals
   listDeals: (params?: { status?: string; agent_id?: string; limit?: number }) => {

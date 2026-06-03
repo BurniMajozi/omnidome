@@ -54,49 +54,71 @@ function LeadCard({ lead, onConvert, onView }: { lead: MobileLead; onConvert: (l
 // ── Customer 360 Panel ────────────────────────────────────────────────
 
 function Customer360Panel({ contact, onClose }: { contact: Customer360; onClose: () => void }) {
+  const outstandingBilling = contact.billing?.filter(b => b.status !== "PAID") || []
+  const openSupport = contact.support?.filter(s => s.status !== "CLOSED") || []
+  const lifecycle = contact.lifecycle_data
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" onClick={onClose}><ArrowLeft className="h-4 w-4" /></Button>
         <div>
-          <h3 className="font-semibold text-foreground">{contact.contact.first_name} {contact.contact.last_name}</h3>
+          <h3 className="font-semibold text-foreground">{contact.first_name} {contact.last_name}</h3>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {contact.contact.phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{contact.contact.phone}</span>}
-            {contact.contact.email && <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{contact.contact.email}</span>}
+            {contact.phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{contact.phone}</span>}
+            {contact.email && <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{contact.email}</span>}
           </div>
         </div>
       </div>
 
+      {/* Tags */}
+      {contact.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {contact.tags.map(tag => (
+            <Badge key={tag} variant="secondary" className="text-[10px]">{tag}</Badge>
+          ))}
+        </div>
+      )}
+
+      {/* Lifecycle + Health */}
       <div className="grid grid-cols-2 gap-2">
         <Card className="border-border bg-card"><CardContent className="p-3 text-center">
-          <p className="text-lg font-bold text-emerald-400">R{contact.total_revenue.toLocaleString()}</p>
-          <p className="text-xs text-muted-foreground">Total Revenue</p>
+          <p className="text-lg font-bold text-emerald-400">{lifecycle?.current_stage || "N/A"}</p>
+          <p className="text-xs text-muted-foreground">Lifecycle Stage</p>
         </CardContent></Card>
         <Card className="border-border bg-card"><CardContent className="p-3 text-center">
-          <p className="text-lg font-bold text-violet-400">R{contact.open_deals_value.toLocaleString()}</p>
-          <p className="text-xs text-muted-foreground">Open Pipeline</p>
+          <p className="text-lg font-bold text-violet-400">{lifecycle?.health_score ?? "N/A"}</p>
+          <p className="text-xs text-muted-foreground">Health Score</p>
         </CardContent></Card>
       </div>
 
-      {contact.deals.length > 0 && (
+      {lifecycle?.churn_probability != null && lifecycle.churn_probability > 0.5 && (
+        <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-2 text-xs text-red-400">
+          ⚠️ High churn risk ({(lifecycle.churn_probability * 100).toFixed(0)}%)
+        </div>
+      )}
+
+      {/* Network Services */}
+      {contact.network.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-muted-foreground mb-2">DEALS ({contact.deals.length})</h4>
+          <h4 className="text-xs font-medium text-muted-foreground mb-2">SERVICES ({contact.network.length})</h4>
           <div className="space-y-2">
-            {contact.deals.map(d => (
-              <div key={d.id} className="flex items-center justify-between bg-secondary/30 rounded-lg p-2">
-                <div><p className="text-sm font-medium">{d.name}</p><p className="text-xs text-muted-foreground">{d.stage_name}</p></div>
-                <div className="text-right"><p className="text-sm font-bold">R{d.value_zar.toLocaleString()}</p><Badge className={`text-[10px] ${d.status === "WON" ? "bg-emerald-500/20 text-emerald-400" : d.status === "LOST" ? "bg-red-500/20 text-red-400" : "bg-blue-500/20 text-blue-400"}`}>{d.status}</Badge></div>
+            {contact.network.map(s => (
+              <div key={s.id} className="flex items-center justify-between bg-secondary/30 rounded-lg p-2">
+                <div><p className="text-sm font-medium">{s.fno_reference || s.id}</p></div>
+                <Badge className={`text-[10px] ${s.status === "ACTIVE" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>{s.status}</Badge>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {contact.invoices.filter(i => i.status !== "PAID").length > 0 && (
+      {/* Outstanding Billing */}
+      {outstandingBilling.length > 0 && (
         <div>
-          <h4 className="text-xs font-medium text-muted-foreground mb-2">OUTSTANDING INVOICES</h4>
+          <h4 className="text-xs font-medium text-muted-foreground mb-2">OUTSTANDING INVOICES ({outstandingBilling.length})</h4>
           <div className="space-y-2">
-            {contact.invoices.filter(i => i.status !== "PAID").map(inv => (
+            {outstandingBilling.map(inv => (
               <div key={inv.id} className="flex items-center justify-between bg-amber-500/10 border border-amber-500/20 rounded-lg p-2">
                 <div><p className="text-sm font-medium">{inv.invoice_number}</p><p className="text-xs text-muted-foreground">Due: {inv.due_date}</p></div>
                 <p className="text-sm font-bold text-amber-400">R{inv.total_amount.toLocaleString()}</p>
@@ -104,6 +126,25 @@ function Customer360Panel({ contact, onClose }: { contact: Customer360; onClose:
             ))}
           </div>
         </div>
+      )}
+
+      {/* Open Support Tickets */}
+      {openSupport.length > 0 && (
+        <div>
+          <h4 className="text-xs font-medium text-muted-foreground mb-2">OPEN TICKETS ({openSupport.length})</h4>
+          <div className="space-y-2">
+            {openSupport.map(t => (
+              <div key={t.id} className="flex items-center justify-between bg-secondary/30 rounded-lg p-2">
+                <div><p className="text-sm font-medium">{t.subject}</p></div>
+                <Badge className={`text-[10px] ${t.priority === "HIGH" || t.priority === "URGENT" ? "bg-red-500/20 text-red-400" : "bg-blue-500/20 text-blue-400"}`}>{t.priority}</Badge>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {contact.notes_count > 0 && (
+        <p className="text-xs text-muted-foreground">{contact.notes_count} notes</p>
       )}
     </div>
   )
