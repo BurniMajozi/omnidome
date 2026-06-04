@@ -279,6 +279,29 @@ async def update_verification_callback(
 
     return _verification_to_dict(verification)
 
+
+@app.delete("/verifications/{verification_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_verification(
+    verification_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    from services.rica.database import RicaVerification
+
+    result = await db.execute(
+        select(RicaVerification).where(
+            RicaVerification.id == verification_id,
+            RicaVerification.tenant_id == tenant_id,
+        )
+    )
+    verification = result.scalar_one_or_none()
+    if not verification:
+        raise HTTPException(status_code=404, detail="Verification not found")
+
+    await db.delete(verification)
+    await db.flush()
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8004)

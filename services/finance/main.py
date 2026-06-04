@@ -486,6 +486,34 @@ async def post_journal_entry(
     return {"status": "posted", "id": str(entry_id)}
 
 
+@app.delete("/journal-entries/{entry_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_journal_entry(
+    entry_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Delete a journal entry (only if not posted)"""
+    result = await db.execute(
+        select(JournalEntry).where(
+            JournalEntry.id == entry_id,
+            JournalEntry.tenant_id == tenant_id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+    if not entry:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if entry.is_posted:
+        raise HTTPException(status_code=400, detail="Cannot delete posted entry — reverse with correcting entry")
+
+    # Delete lines first
+    await db.execute(
+        text("DELETE FROM journal_entry_lines WHERE journal_entry_id = :id"),
+        {"id": entry_id},
+    )
+    await db.delete(entry)
+    await db.flush()
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 2. TRIAL BALANCE
 # ════════════════════════════════════════════════════════════════════════
@@ -980,6 +1008,44 @@ async def list_records(
     records = result.scalars().all()
     return [{"id": str(r.id), "record_type": r.record_type,
              "amount": float(r.amount), "period": r.period} for r in records]
+
+
+@app.get("/records/{record_id}")
+async def get_record(
+    record_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    result = await db.execute(
+        select(FinancialRecord).where(
+            FinancialRecord.id == record_id,
+            FinancialRecord.tenant_id == tenant_id,
+        )
+    )
+    r = result.scalar_one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return {"id": str(r.id), "record_type": r.record_type,
+            "amount": float(r.amount), "period": r.period}
+
+
+@app.delete("/records/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_record(
+    record_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    result = await db.execute(
+        select(FinancialRecord).where(
+            FinancialRecord.id == record_id,
+            FinancialRecord.tenant_id == tenant_id,
+        )
+    )
+    r = result.scalar_one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Record not found")
+    await db.delete(r)
+    await db.flush()
 
 
 # ── Health ─────────────────────────────────────────────────────────────

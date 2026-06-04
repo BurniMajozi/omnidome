@@ -305,6 +305,54 @@ async def get_agent(
     return _agent_to_dict(agent)
 
 
+@app.put("/agents/{agent_id}", response_model=AgentResponse)
+async def update_agent(
+    agent_id: uuid.UUID,
+    body: AgentCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Update an agent"""
+    result = await db.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.tenant_id == tenant_id,
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(agent, field, value)
+
+    await db.flush()
+    await db.refresh(agent)
+    return _agent_to_dict(agent)
+
+
+@app.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    agent_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete an agent"""
+    result = await db.execute(
+        select(Agent).where(
+            Agent.id == agent_id,
+            Agent.tenant_id == tenant_id,
+        )
+    )
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    await db.delete(agent)
+    await db.flush()
+
+
 # ── Scripts ──────────────────────────────────────────────────────────────
 
 @app.get("/scripts", response_model=List[ScriptResponse])
@@ -449,6 +497,27 @@ async def end_session(
     await db.refresh(session)
     logging.info(f"Call session ended: {session.id} (duration: {payload.duration_seconds}s)")
     return _session_to_dict(session)
+
+
+@app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete a call session"""
+    result = await db.execute(
+        select(CallSession).where(
+            CallSession.id == session_id,
+            CallSession.tenant_id == tenant_id,
+        )
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Call session not found")
+
+    await db.delete(session)
+    await db.flush()
 
 
 # ── Analytics ────────────────────────────────────────────────────────────

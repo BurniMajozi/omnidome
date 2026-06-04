@@ -147,6 +147,126 @@ async def create_product(product: ProductBase, tenant_id: uuid.UUID = Depends(ge
         **product.dict()
     }
 
+
+@app.get("/products")
+async def list_products(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """List all products for tenant"""
+    from sqlalchemy import select
+
+    await _ensure_sample_data(tenant_id, db)
+    result = await db.execute(
+        select(Product).where(Product.tenant_id == tenant_id)
+    )
+    products = result.scalars().all()
+    return [
+        {
+            "id": str(p.id),
+            "tenant_id": str(p.tenant_id),
+            "sku": p.sku,
+            "name": p.name,
+            "cost_price": float(p.cost_price) if p.cost_price else None,
+            "rrp": float(p.rrp) if p.rrp else None,
+            "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
+        }
+        for p in products
+    ]
+
+
+@app.get("/products/{product_id}")
+async def get_product(
+    product_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Get a single product by ID"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Product).where(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return {
+        "id": str(p.id),
+        "tenant_id": str(p.tenant_id),
+        "sku": p.sku,
+        "name": p.name,
+        "cost_price": float(p.cost_price) if p.cost_price else None,
+        "rrp": float(p.rrp) if p.rrp else None,
+        "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+@app.put("/products/{product_id}")
+async def update_product(
+    product_id: uuid.UUID,
+    body: ProductBase,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Update a product"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Product).where(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    update_data = body.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(p, field, value)
+
+    await db.flush()
+    await db.refresh(p)
+    return {
+        "id": str(p.id),
+        "tenant_id": str(p.tenant_id),
+        "sku": p.sku,
+        "name": p.name,
+        "cost_price": float(p.cost_price) if p.cost_price else None,
+        "rrp": float(p.rrp) if p.rrp else None,
+        "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+@app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product(
+    product_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete a product"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Product).where(
+            Product.id == product_id,
+            Product.tenant_id == tenant_id,
+        )
+    )
+    p = result.scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found")
+
+    await db.delete(p)
+    await db.flush()
+
+
 @app.post("/stock/move", status_code=status.HTTP_202_ACCEPTED)
 async def move_stock(
     move: StockUpdate,
@@ -198,6 +318,119 @@ async def move_stock(
 async def create_warehouse(wh: WarehouseCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     logging.info(f"Creating Warehouse: {wh.name} (External: {wh.is_external})")
     return {"id": uuid.uuid4(), **wh.dict()}
+
+
+@app.get("/warehouses")
+async def list_warehouses(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """List all warehouses for tenant"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Warehouse).where(Warehouse.tenant_id == tenant_id)
+    )
+    warehouses = result.scalars().all()
+    return [
+        {
+            "id": str(w.id),
+            "tenant_id": str(w.tenant_id),
+            "name": w.name,
+            "location": w.location,
+            "is_external": w.is_external,
+            "created_at": w.created_at.isoformat() if w.created_at else None,
+        }
+        for w in warehouses
+    ]
+
+
+@app.get("/warehouses/{warehouse_id}")
+async def get_warehouse(
+    warehouse_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Get a single warehouse by ID"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Warehouse).where(
+            Warehouse.id == warehouse_id,
+            Warehouse.tenant_id == tenant_id,
+        )
+    )
+    w = result.scalar_one_or_none()
+    if not w:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+    return {
+        "id": str(w.id),
+        "tenant_id": str(w.tenant_id),
+        "name": w.name,
+        "location": w.location,
+        "is_external": w.is_external,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+    }
+
+
+@app.put("/warehouses/{warehouse_id}")
+async def update_warehouse(
+    warehouse_id: uuid.UUID,
+    body: WarehouseCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Update a warehouse"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Warehouse).where(
+            Warehouse.id == warehouse_id,
+            Warehouse.tenant_id == tenant_id,
+        )
+    )
+    w = result.scalar_one_or_none()
+    if not w:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    update_data = body.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(w, field, value)
+
+    await db.flush()
+    await db.refresh(w)
+    return {
+        "id": str(w.id),
+        "tenant_id": str(w.tenant_id),
+        "name": w.name,
+        "location": w.location,
+        "is_external": w.is_external,
+        "created_at": w.created_at.isoformat() if w.created_at else None,
+    }
+
+
+@app.delete("/warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_warehouse(
+    warehouse_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete a warehouse"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Warehouse).where(
+            Warehouse.id == warehouse_id,
+            Warehouse.tenant_id == tenant_id,
+        )
+    )
+    w = result.scalar_one_or_none()
+    if not w:
+        raise HTTPException(status_code=404, detail="Warehouse not found")
+
+    await db.delete(w)
+    await db.flush()
+
 
 @app.post("/shipments", status_code=status.HTTP_201_CREATED)
 async def create_global_shipment(shipment: ShipmentCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
