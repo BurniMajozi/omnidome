@@ -12,6 +12,11 @@ from services.inventory.database import get_session, init_tables, Product, Wareh
 app = FastAPI(title="CoreConnect Inventory Service", version="0.2.0")
 guard = EntitlementGuard(module_id="inventory")
 
+
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "inventory"}
+
 # ── DB-based stock operations (replaces in-memory store) ───────────────
 
 async def _ensure_sample_data(tenant_id: uuid.UUID, db):

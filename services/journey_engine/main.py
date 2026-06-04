@@ -58,12 +58,21 @@ from services.journey_engine.models import (
     RetentionOffer,
 )
 from services.journey_engine.rule_engine import ATTRIBUTE_TYPES
+from services.common.entitlements import EntitlementGuard
+from services.common.auth import get_current_tenant_id
 
 app = FastAPI(
     title="OmniDome Journey Engine",
     description="Retention Journey Engine — cancel-to-save lifecycle management",
     version="1.0.0",
 )
+
+guard = EntitlementGuard(module_id="journey_engine")
+
+
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "journey_engine"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,6 +81,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
 
 # ---------------------------------------------------------------------------
 # Startup

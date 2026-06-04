@@ -27,6 +27,11 @@ from services.common.auth import get_current_tenant_id
 app = FastAPI(title="OmniDome Sales Service", version="2.0.0")
 
 
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "sales"}
+
+
 # ── Pydantic Schemas ──────────────────────────────────────────────────
 
 class PipelineStage(BaseModel):

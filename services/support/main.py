@@ -23,6 +23,11 @@ app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
 
 
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "support"}
+
+
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()

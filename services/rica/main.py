@@ -18,6 +18,11 @@ app = FastAPI(title="CoreConnect RICA Service", version="0.1.0")
 guard = EntitlementGuard(module_id="rica", public_paths={"/callback"})
 
 
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "rica"}
+
+
 @app.on_event("startup")
 async def startup() -> None:
     await init_tables()
