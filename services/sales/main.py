@@ -875,6 +875,40 @@ async def close_deal_won(
     except Exception:
         pass  # Don't fail the sale if lifecycle is down
 
+    # Finance bridge: create GL revenue entry on close-won
+    FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
+    try:
+        with httpx.Client(timeout=5) as client:
+            client.post(
+                f"{FINANCE_URL}/journal-entries",
+                json={
+                    "entry_date": now.strftime("%Y-%m-%d"),
+                    "reference": f"DEAL-{str(deal_id)[:8]}",
+                    "description": f"Won deal - {deal['contact_id']}",
+                    "source": "SALES",
+                    "source_id": str(deal_id),
+                    "lines": [
+                        {
+                            "account_code": "1100",
+                            "account_name": "Accounts Receivable",
+                            "description": f"AR - Customer {str(deal['contact_id'])[:8]}",
+                            "debit": float(deal["value_zar"] or 0),
+                            "credit": 0,
+                        },
+                        {
+                            "account_code": "4000",
+                            "account_name": "Revenue - FTTH Subscriptions",
+                            "description": f"Revenue - Deal {str(deal_id)[:8]}",
+                            "debit": 0,
+                            "credit": float(deal["value_zar"] or 0),
+                        },
+                    ],
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass  # Don't fail the sale if finance is down
+
     payload = {
         "event": "deal.closed_won",
         "deal_id": str(deal_id),

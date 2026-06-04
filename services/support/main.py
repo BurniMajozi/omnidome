@@ -385,6 +385,30 @@ async def resolve_ticket(
     td = _ticket_to_dict(ticket)
     await _notify_ticket_update(str(auth.tenant_id), td)
 
+    # Finance bridge: track support cost on resolve
+    FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
+    try:
+        parts_cost = sum(
+            float(p.get("unit_cost", 0)) * int(p.get("quantity", 1))
+            for p in parts_used
+        )
+        labor_cost = 150.0  # Standard callout fee
+        total_cost = labor_cost + parts_cost
+
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{FINANCE_URL}/records",
+                json={
+                    "record_type": "EXPENSE",
+                    "description": f"Support ticket {str(ticket_id)[:8]} - {ticket.subject}",
+                    "amount": total_cost,
+                    "period": ticket.resolved_at.strftime("%Y-%m"),
+                },
+                headers={"X-Tenant-Id": str(auth.tenant_id)},
+            )
+    except Exception:
+        pass  # Non-blocking
+
     return {
         "id": str(ticket_id),
         "status": "CLOSED",
