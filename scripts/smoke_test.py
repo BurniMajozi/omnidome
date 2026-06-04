@@ -193,19 +193,59 @@ async def test_rica_session(client: httpx.AsyncClient, contact_id: str):
         report("Check RICA status", False, "skipped")
 
 
-async def test_finance_records(client: httpx.AsyncClient):
-    """Test 7: Create finance record → verify overview."""
-    print("\n── Test 7: Finance Records ──")
-    r = await client.post(f"{GATEWAY_URL}/api/finance/records", json={
-        "record_type": "REVENUE",
-        "description": "Smoke test revenue",
-        "amount": "100000",
-        "period": "FY2026-Q2",
-    }, headers=HEADERS)
-    report("Create finance record", r.status_code < 400, f"status={r.status_code}")
+async def test_finance_gl(client: httpx.AsyncClient):
+    """Test 7: GL Journal Entries → Trial Balance → Cash Flow."""
+    print("\n── Test 7: Finance GL ──")
 
+    # Create a balanced journal entry
+    r = await client.post(f"{GATEWAY_URL}/api/finance/journal-entries", json={
+        "entry_date": "2026-06-01",
+        "reference": "SMOKE-001",
+        "description": "Smoke test revenue entry",
+        "source": "MANUAL",
+        "lines": [
+            {"account_code": "1100", "account_name": "Accounts Receivable",
+             "debit": 50000, "credit": 0, "description": "Test AR"},
+            {"account_code": "4000", "account_name": "Revenue - FTTH Subscriptions",
+             "debit": 0, "credit": 50000, "description": "Test revenue"},
+        ],
+    }, headers=HEADERS)
+    report("Create journal entry", r.status_code < 400, f"status={r.status_code}")
+
+    if r.status_code < 400:
+        entry_id = r.json().get("id")
+        r = await client.post(
+            f"{GATEWAY_URL}/api/finance/journal-entries/{entry_id}/post",
+            headers=HEADERS,
+        )
+        report("Post journal entry", r.status_code < 400, f"status={r.status_code}")
+
+    # List journal entries
+    r = await client.get(f"{GATEWAY_URL}/api/finance/journal-entries", headers=HEADERS)
+    report("List journal entries", r.status_code < 400, f"status={r.status_code}")
+
+    # Trial balance
+    r = await client.get(f"{GATEWAY_URL}/api/finance/trial-balance", headers=HEADERS)
+    report("Trial balance", r.status_code < 400, f"status={r.status_code}")
+    if r.status_code < 400:
+        tb = r.json()
+        report(
+            "Trial balance balanced",
+            tb.get("is_balanced", False),
+            f"debits={tb.get('total_debits')}, credits={tb.get('total_credits')}",
+        )
+
+    # Cash flow statement
+    r = await client.get(f"{GATEWAY_URL}/api/finance/cash-flow", headers=HEADERS)
+    report("Cash flow statement", r.status_code < 400, f"status={r.status_code}")
+
+    # Financial statements
+    r = await client.get(f"{GATEWAY_URL}/api/finance/statements", headers=HEADERS)
+    report("Financial statements", r.status_code < 400, f"status={r.status_code}")
+
+    # Overview
     r = await client.get(f"{GATEWAY_URL}/api/finance/overview", headers=HEADERS)
-    report("Get finance overview", r.status_code < 400, f"status={r.status_code}")
+    report("Finance overview", r.status_code < 400, f"status={r.status_code}")
 
 
 async def test_gateway_health(client: httpx.AsyncClient):
@@ -245,7 +285,7 @@ async def main():
         await test_inventory_checkout(client)
         await test_hr_employee(client)
         await test_rica_session(client, contact_id)
-        await test_finance_records(client)
+        await test_finance_gl(client)
         await test_gateway_health(client)
 
     print(f"\n═══ Results: {PASSED} passed, {FAILED} failed ═══")

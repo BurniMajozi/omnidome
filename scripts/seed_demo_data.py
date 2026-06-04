@@ -359,21 +359,67 @@ async def seed_rica_verifications(client: httpx.AsyncClient, contacts: list):
 
 
 async def seed_finance_records(client: httpx.AsyncClient):
-    """Seed finance records."""
-    records = []
-    finance_data = [
-        {"record_type": "REVENUE", "description": "Monthly subscription revenue", "amount": "48000000", "period": "FY2026-Q1"},
-        {"record_type": "OPEX", "description": "Network operations", "amount": "14000000", "period": "FY2026-Q1"},
-        {"record_type": "CAPEX", "description": "Fibre infrastructure", "amount": "9000000", "period": "FY2026-Q1"},
-        {"record_type": "INTEREST", "description": "Debt servicing", "amount": "1800000", "period": "FY2026-Q1"},
-        {"record_type": "TAX", "description": "Corporate tax provision", "amount": "2856000", "period": "FY2026-Q1"},
+    """Seed finance GL journal entries."""
+    entries = []
+    journal_data = [
+        {
+            "entry_date": "2026-04-01",
+            "reference": "JE-2026-001",
+            "description": "Monthly subscription revenue recognition",
+            "source": "BILLING",
+            "lines": [
+                {"account_code": "1100", "account_name": "Accounts Receivable",
+                 "debit": 48000000, "credit": 0, "description": "AR from invoices"},
+                {"account_code": "4000", "account_name": "Revenue - FTTH Subscriptions",
+                 "debit": 0, "credit": 48000000, "description": "Revenue recognized"},
+            ],
+        },
+        {
+            "entry_date": "2026-04-01",
+            "reference": "JE-2026-002",
+            "description": "FNO access cost recognition",
+            "source": "BILLING",
+            "lines": [
+                {"account_code": "5000", "account_name": "Cost of Service - FNO Access",
+                 "debit": 14000000, "credit": 0, "description": "FNO wholesale fees"},
+                {"account_code": "2000", "account_name": "Accounts Payable",
+                 "debit": 0, "credit": 14000000, "description": "AP to FNOs"},
+            ],
+        },
+        {
+            "entry_date": "2026-04-01",
+            "reference": "JE-2026-003",
+            "description": "Salaries and wages",
+            "source": "PAYROLL",
+            "lines": [
+                {"account_code": "6000", "account_name": "Salaries & Wages",
+                 "debit": 8000000, "credit": 0, "description": "Monthly payroll"},
+                {"account_code": "1000", "account_name": "Cash & Bank",
+                 "debit": 0, "credit": 8000000, "description": "Cash disbursement"},
+            ],
+        },
+        {
+            "entry_date": "2026-04-01",
+            "reference": "JE-2026-004",
+            "description": "Depreciation - network infrastructure",
+            "source": "ADJUSTMENT",
+            "lines": [
+                {"account_code": "6400", "account_name": "Depreciation & Amortization",
+                 "debit": 500000, "credit": 0, "description": "Monthly depreciation"},
+                {"account_code": "1600", "account_name": "Accumulated Depreciation",
+                 "debit": 0, "credit": 500000, "description": "Accumulated depreciation"},
+            ],
+        },
     ]
-    for rec in finance_data:
-        r = await client.post(f"{GATEWAY_URL}/finance/records", json=rec, headers=_h())
+    for entry in journal_data:
+        r = await client.post(f"{GATEWAY_URL}/finance/journal-entries", json=entry, headers=_h())
         if r.status_code < 400:
-            records.append(r.json())
-    print(f"  Finance: {len(records)} records created")
-    return records
+            entries.append(r.json())
+            # Post the entry
+            entry_id = r.json().get("id")
+            await client.post(f"{GATEWAY_URL}/finance/journal-entries/{entry_id}/post", headers=_h())
+    print(f"  Finance: {len(entries)} journal entries created")
+    return entries
 
 
 # ── Main ─────────────────────────────────────────────────────────────

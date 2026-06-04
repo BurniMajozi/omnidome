@@ -1038,6 +1038,41 @@ CREATE TABLE budget_scenarios (
 
 CREATE INDEX idx_budget_scenarios_tenant ON budget_scenarios(tenant_id);
 
+-- 15b. GL JOURNAL ENTRIES (Double-Entry Bookkeeping)
+CREATE TABLE journal_entries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    entry_date DATE NOT NULL,
+    reference VARCHAR(100),
+    description TEXT,
+    source VARCHAR(50),
+    source_id VARCHAR(100),
+    is_posted BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_journal_entries_tenant ON journal_entries(tenant_id);
+CREATE INDEX idx_journal_entries_date ON journal_entries(tenant_id, entry_date);
+CREATE INDEX idx_journal_entries_source ON journal_entries(tenant_id, source, source_id);
+CREATE INDEX idx_journal_entries_posted ON journal_entries(tenant_id, is_posted);
+
+CREATE TABLE journal_entry_lines (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    journal_entry_id UUID REFERENCES journal_entries(id) ON DELETE CASCADE,
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    account_code VARCHAR(10) NOT NULL,
+    account_name VARCHAR(200) NOT NULL,
+    description TEXT,
+    debit NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    credit NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_jel_entry ON journal_entry_lines(journal_entry_id);
+CREATE INDEX idx_jel_tenant ON journal_entry_lines(tenant_id);
+CREATE INDEX idx_jel_account ON journal_entry_lines(tenant_id, account_code);
+
 -- Deferred Foreign Keys (resolving forward references)
 ALTER TABLE radius_accounts ADD CONSTRAINT fk_radius_device FOREIGN KEY (device_id) REFERENCES iot_devices(id);
 ALTER TABLE fiber_health_alerts ADD CONSTRAINT fk_alert_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id);
