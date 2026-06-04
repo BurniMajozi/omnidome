@@ -387,3 +387,34 @@ class JourneyOutcome(JourneyBase):
         Index("ix_outcomes_actual_retained_90d", "actual_retained_90d"),
         Index("ix_outcomes_actual_retained_180d", "actual_retained_180d"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Customer Snapshot — CRM synced customer state for rule evaluation
+# ---------------------------------------------------------------------------
+
+class CustomerSnapshot(JourneyBase):
+    __tablename__ = "customer_snapshots"
+
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    account_number: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True
+    )
+    snapshot_data: Mapped[dict] = mapped_column(
+        JSONB, nullable=False
+    )
+    source_event: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="status_change"
+    )
+    crm_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
