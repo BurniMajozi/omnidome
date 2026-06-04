@@ -827,3 +827,139 @@ class StoreBundleItem(Base):
         Index("ix_bundle_item_bundle", "bundle_id"),
         UniqueConstraint("bundle_id", "product_id", name="uq_bundle_item"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# RICA INTEGRATION FLOWS
+# ════════════════════════════════════════════════════════════════════════
+
+class RicaFlow(Base):
+    """Orchestrates RICA verification within the customer journey.
+    
+    Tracks the end-to-end RICA flow: trigger → session creation → 
+    verification → result → post-verification actions.
+    """
+    __tablename__ = "rica_flows"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    account_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Source of the RICA trigger
+    trigger_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    # order_placed, manual, admin, self_service, bulk_import
+    source_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Personal info (captured at time of RICA)
+    id_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    gender: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    # Address (for RICA proof of address)
+    physical_address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    physical_address_city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    physical_address_postal_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    # Smile ID integration
+    smile_id_job_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    smile_id_partner_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Verification status
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending")
+    # pending, session_created, in_progress, completed, failed, expired, manual_review
+
+    # Result
+    result_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    result_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    verification_type: Mapped[str] = mapped_column(String(50), default="DOCUMENT_VERIFICATION")
+
+    # Document info
+    document_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # south_african_id, passport, smart_id
+    document_country: Mapped[str] = mapped_column(String(5), default="ZA")
+
+    # Post-verification actions
+    auto_activate: Mapped[bool] = mapped_column(Boolean, default=True)
+    activation_triggered: Mapped[bool] = mapped_column(Boolean, default=False)
+    activation_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Failure handling
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    last_failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # RICA regulation tracking
+    rica_regulation: Mapped[str] = mapped_column(String(50), default="RICA_2002")
+    proof_of_address_provided: Mapped[bool] = mapped_column(Boolean, default=False)
+    proof_of_address_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # utility_bank_statement, lease_agreement, municipal_account
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_rica_flow_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_rica_flow_tenant_status", "tenant_id", "status"),
+        Index("ix_rica_flow_smile_job", "smile_id_job_id"),
+        Index("ix_rica_flow_order", "source_order_id"),
+        Index("ix_rica_flow_id_number", "id_number"),
+    )
+
+
+class RicaFlowEvent(Base):
+    """Audit trail of every event in a RICA flow."""
+    __tablename__ = "rica_flow_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    rica_flow_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("rica_flows.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # flow_created, session_initiated, callback_received, verification_completed,
+    # verification_failed, retry_scheduled, manual_review_needed, activation_triggered
+
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    source: Mapped[str] = mapped_column(String(30), nullable=False)
+    # rica_service, callback, customer_journey, cron, manual
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_rica_event_flow", "rica_flow_id", "created_at"),
+        Index("ix_rica_event_type", "tenant_id", "event_type"),
+    )
+
+
+class RicaBulkImport(Base):
+    """Bulk RICA import batch for migrating existing customers."""
+    __tablename__ = "rica_bulk_imports"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Import details
+    filename: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    total_records: Mapped[int] = mapped_column(Integer, default=0)
+    processed_count: Mapped[int] = mapped_column(Integer, default=0)
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Status
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # pending, processing, completed, failed
+
+    # Error log
+    error_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_rica_bulk_tenant", "tenant_id", "status"),
+    )
