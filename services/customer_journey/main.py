@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from services.common.entitlements import EntitlementGuard
 from services.customer_journey.database import init_tables
 from services.customer_journey.routes import router as journey_router
+from services.customer_journey.store_routes import router as store_router
 
 logger = logging.getLogger("customer_journey")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -42,6 +43,7 @@ async def entitlement_middleware(request, call_next):
 
 # Register routes
 app.include_router(journey_router)
+app.include_router(store_router)
 
 
 if __name__ == "__main__":

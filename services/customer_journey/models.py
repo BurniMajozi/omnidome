@@ -583,3 +583,247 @@ class Announcement(Base):
         Index("ix_announcements_tenant_type", "tenant_id", "announcement_type"),
         Index("ix_announcements_active", "tenant_id", "is_active"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# STORE: HARDWARE + VAS
+# ════════════════════════════════════════════════════════════════════════
+
+class StoreCategory(Base):
+    """Product category for the store (hardware, VAS, accessories)."""
+    __tablename__ = "store_categories"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    icon_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_store_cat_tenant", "tenant_id", "slug", unique=True),
+        Index("ix_store_cat_parent", "parent_id"),
+    )
+
+
+class StoreProduct(Base):
+    """Sellable product — hardware (routers, ONTs) or VAS (static IP, antivirus, etc.)."""
+    __tablename__ = "store_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Classification
+    sku: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    slug: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    short_description: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    product_type: Mapped[str] = mapped_column(String(20), nullable=False)  # hardware, vas, accessory
+    # hardware: router, ont, cable, mesh_node
+    # vas: static_ip, antivirus, parental_control, cloud_storage, vpn
+    # accessory: ethernet_cable, power_adapter, wall_bracket
+
+    # Pricing
+    once_off_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    monthly_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    # once_off_price_zar: for hardware purchases
+    # monthly_price_zar: for VAS recurring charges
+
+    # Inventory
+    stock_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    low_stock_threshold: Mapped[int] = mapped_column(Integer, default=5)
+    track_inventory: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_backorder: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Attributes
+    image_urls: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+    specs: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True, default=dict)
+    # e.g. {"Manufacturer": "TP-Link", "Model": "Archer AX55", "Speed": "AX3000", "Ports": 4}
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_featured: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Subscription link (for VAS that requires a base subscription)
+    requires_subscription: Mapped[bool] = mapped_column(Boolean, default=False)
+    compatible_packages: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_store_prod_tenant_sku", "tenant_id", "sku", unique=True),
+        Index("ix_store_prod_tenant_slug", "tenant_id", "slug"),
+        Index("ix_store_prod_tenant_category", "tenant_id", "category_id"),
+        Index("ix_store_prod_tenant_type", "tenant_id", "product_type"),
+        Index("ix_store_prod_active", "tenant_id", "is_active"),
+        Index("ix_store_prod_featured", "tenant_id", "is_featured"),
+    )
+
+
+class ShoppingCart(Base):
+    """Active shopping cart per customer. One cart per customer."""
+    __tablename__ = "shopping_carts"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Cart status
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    # active, converted_to_order, abandoned, expired
+
+    # Summary (denormalized for quick reads)
+    item_count: Mapped[int] = mapped_column(Integer, default=0)
+    subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    discount_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    total_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # Promotion
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    promotion_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Expiry (abandonment handling)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_cart_tenant_customer", "tenant_id", "customer_id", unique=True),
+        Index("ix_cart_status", "status"),
+        Index("ix_cart_expires", "expires_at"),
+    )
+
+
+class ShoppingCartItem(Base):
+    """Line item in a shopping cart."""
+    __tablename__ = "shopping_cart_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cart_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("shopping_carts.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    product_type: Mapped[str] = mapped_column(String(20), nullable=False)  # hardware, vas, accessory
+
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    total_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # Snapshot of product at time of add
+    product_name_snapshot: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    product_sku_snapshot: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # VAS-specific: link to subscription being added to
+    target_subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_cart_item_cart", "cart_id"),
+        Index("ix_cart_item_product", "product_id"),
+        UniqueConstraint("cart_id", "product_id", "target_subscription_id", name="uq_cart_item"),
+    )
+
+
+class StoreWishlist(Base):
+    """Customer wishlist for store products."""
+    __tablename__ = "store_wishlists"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_wishlist_tenant_customer", "tenant_id", "customer_id"),
+        UniqueConstraint("customer_id", "product_id", name="uq_wishlist_item"),
+    )
+
+
+class ProductReview(Base):
+    """Customer product reviews for store items."""
+    __tablename__ = "product_reviews"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    rating: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-5
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_verified_purchase: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_review_product", "product_id", "is_published"),
+        Index("ix_review_customer", "customer_id"),
+        UniqueConstraint("customer_id", "product_id", "order_id", name="uq_review"),
+    )
+
+
+class StoreBundle(Base):
+    """Product bundles (e.g. 'Complete WiFi Package' = router + mesh node + installation)."""
+    __tablename__ = "store_bundles"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Pricing
+    total_once_off_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    total_monthly_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    bundle_discount_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0.00"))
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_bundle_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class StoreBundleItem(Base):
+    """Products within a bundle."""
+    __tablename__ = "store_bundle_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bundle_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("store_bundles.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    is_optional: Mapped[bool] = mapped_column(Boolean, default=False)  # optional add-on
+
+    __table_args__ = (
+        Index("ix_bundle_item_bundle", "bundle_id"),
+        UniqueConstraint("bundle_id", "product_id", name="uq_bundle_item"),
+    )
