@@ -623,3 +623,203 @@ class CollectionEvent(Base):
         Index("ix_coll_event_severity", "tenant_id", "severity"),
         Index("ix_coll_event_created", "tenant_id", "created_at"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# FNO BROWSER AUTOMATION
+# ════════════════════════════════════════════════════════════════════════
+
+FNO_PORTAL = SAEnum(
+    "vumatel_active", "vumatel_passive", "openserve", "frogfoot", "octotel", "other",
+    name="fno_portal", create_type=True,
+)
+
+AUTOMATION_STATUS = SAEnum(
+    "queued", "running", "waiting_captcha", "waiting_2fa", "completed",
+    "failed", "retrying", "cancelled", "manual_intervention",
+    name="automation_status", create_type=True,
+)
+
+AUTOMATION_ACTION = SAEnum(
+    "login", "navigate", "fill_form", "submit", "screenshot", "extract_data",
+    "click", "wait", "scroll", "download", "upload",
+    name="automation_action", create_type=True,
+)
+
+
+class FNOAutomationJob(Base):
+    """Browser automation job for FNO portal interactions.
+    
+    Tracks the full lifecycle of an automated browser session
+    interacting with an FNO portal (Vumatel, Openserve, etc.)
+    for cancellations, provisioning, or data extraction.
+    """
+    __tablename__ = "fno_automation_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # FNO details
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+    fno_account_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Related entity
+    cancellation_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    provisioning_queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Automation details
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # cancellation, provisioning, status_check, data_extraction
+    status: Mapped[str] = mapped_column(AUTOMATION_STATUS, nullable=False, default="queued")
+
+    # Browser session
+    browser_session_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    browser_profile: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # chrome, firefox, headless_chrome
+
+    # Portal credentials (encrypted reference only)
+    credential_vault_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Execution
+    priority: Mapped[int] = mapped_column(Integer, default=5)
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Retry
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Result
+    result_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    confirmation_number: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_screenshot_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Screenshots
+    screenshot_paths: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    # Manual intervention
+    requires_manual: Mapped[bool] = mapped_column(Boolean, default=False)
+    manual_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_fno_auto_tenant_status", "tenant_id", "status"),
+        Index("ix_fno_auto_fno", "fno_name", "fno_portal"),
+        Index("ix_fno_auto_customer", "tenant_id", "customer_id"),
+        Index("ix_fno_auto_cancellation", "cancellation_request_id"),
+        Index("ix_fno_auto_scheduled", "scheduled_at"),
+        Index("ix_fno_auto_priority", "priority", "status"),
+    )
+
+
+class FNOAutomationStep(Base):
+    """Individual step within an automation job."""
+    __tablename__ = "fno_automation_steps"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    job_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("fno_automation_jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    step_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(AUTOMATION_ACTION, nullable=False)
+
+    # Target
+    target_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    target_selector: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    target_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Result
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # pending, running, completed, failed, skipped
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    screenshot_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    extracted_data: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # Timing
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fno_step_job", "job_id", "step_number"),
+    )
+
+
+class FNOAutomationTemplate(Base):
+    """Reusable automation template for common FNO portal workflows."""
+    __tablename__ = "fno_automation_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Template steps (JSON array of step definitions)
+    steps_template: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Each step: {"action": "login", "target_url": "...", "target_selector": "...", "target_value": "..."}
+
+    # Selectors (CSS/XPath for portal elements)
+    selectors: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True, default=dict)
+    # e.g. {"username_field": "#username", "password_field": "#password", "login_button": "button[type=submit]"}
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    success_rate: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    total_runs: Mapped[int] = mapped_column(Integer, default=0)
+    successful_runs: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_fno_template_portal", "fno_portal", "action_type"),
+        Index("ix_fno_template_active", "tenant_id", "is_active"),
+    )
+
+
+class FNOBrowserSession(Base):
+    """Active browser session for FNO portal automation."""
+    __tablename__ = "fno_browser_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Session
+    session_id: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+    browser_type: Mapped[str] = mapped_column(String(50), default="headless_chrome")
+
+    # Status
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    # active, idle, closed, error
+
+    # Current page
+    current_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    current_page_title: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+    # Linked job
+    active_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Timing
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_activity_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_fno_session_tenant", "tenant_id", "status"),
+        Index("ix_fno_session_active_job", "active_job_id"),
+    )
