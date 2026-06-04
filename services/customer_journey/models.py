@@ -1,0 +1,585 @@
+"""Customer Journey service — unified data model for the fiber customer lifecycle.
+
+Owns cross-cutting tables that span multiple services:
+- coverage_areas: FNO coverage by geography
+- orders / order_items: full order lifecycle
+- delivery_tracking: courier and delivery status
+- technician_visits: dispatch, GPS tracking, completion
+- activity_timeline: unified customer event log
+- promotions / customer_promotions: promo codes, referrals
+- announcements: service notifications by area/segment
+- customer_addresses: service + physical addresses with GPS
+- payment_methods: stored payment instruments
+"""
+
+import uuid
+from datetime import datetime, date, timedelta
+from decimal import Decimal
+from typing import Optional, List
+
+from sqlalchemy import (
+    Boolean, Column, Date, DateTime, Enum as SAEnum, ForeignKey,
+    Index, Integer, Numeric, String, Text, UniqueConstraint, func, text,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ENUMS
+# ════════════════════════════════════════════════════════════════════════
+
+COVERAGE_STATUS = SAEnum(
+    "available", "coming_soon", "unavailable", "construction",
+    name="coverage_status", create_type=True,
+)
+
+FNO_TECHNOLOGY = SAEnum(
+    "FTTH", "FTTB", "LTE", "5G", "fixed_wireless",
+    name="fno_technology", create_type=True,
+)
+
+ORDER_STATUS = SAEnum(
+    "cart", "pending", "confirmed", "processing", "shipped",
+    "delivered", "installed", "completed", "cancelled", "refunded",
+    name="order_status", create_type=True,
+)
+
+ORDER_ITEM_TYPE = SAEnum(
+    "package", "hardware", "vas", "installation", "delivery",
+    name="order_item_type", create_type=True,
+)
+
+DELIVERY_STATUS = SAEnum(
+    "pending", "courier_assigned", "picked_up", "in_transit",
+    "out_for_delivery", "delivered", "failed", "returned",
+    name="delivery_status", create_type=True,
+)
+
+TECH_VISIT_STATUS = SAEnum(
+    "scheduled", "dispatched", "en_route", "on_site",
+    "in_progress", "completed", "cancelled", "no_access", "rescheduled",
+    name="tech_visit_status", create_type=True,
+)
+
+TECH_VISIT_TYPE = SAEnum(
+    "installation", "repair", "maintenance", "survey",
+    "move_house_install", "router_collection", "fiber_repair",
+    name="tech_visit_type", create_type=True,
+)
+
+PROMO_TYPE = SAEnum(
+    "percentage_discount", "fixed_discount", "free_months",
+    "referral_bonus", "loyalty_reward", "bundle_deal",
+    name="promo_type", create_type=True,
+)
+
+PROMO_STATUS = SAEnum(
+    "active", "paused", "expired", "depleted",
+    name="promo_status", create_type=True,
+)
+
+ANNOUNCEMENT_TYPE = SAEnum(
+    "outage", "maintenance", "promotion", "general", "urgent",
+    name="announcement_type", create_type=True,
+)
+
+ANNOUNCEMENT_AUDIENCE = SAEnum(
+    "all", "area", "segment", "individual",
+    name="announcement_audience", create_type=True,
+)
+
+CONTACT_CHANNEL = SAEnum(
+    "sms", "whatsapp", "email", "push", "phone",
+    name="contact_channel", create_type=True,
+)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# BASE
+# ════════════════════════════════════════════════════════════════════════
+
+class Base(DeclarativeBase):
+    pass
+
+
+# ════════════════════════════════════════════════════════════════════════
+# COVERAGE AREAS
+# ════════════════════════════════════════════════════════════════════════
+
+class CoverageArea(Base):
+    __tablename__ = "coverage_areas"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # FNO details
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    technology: Mapped[str] = mapped_column(FNO_TECHNOLOGY, nullable=False)
+
+    # Geography
+    area_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    suburb: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    city: Mapped[str] = mapped_column(String(100), nullable=False)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    geo_boundary: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)  # GeoJSON polygon
+
+    # Availability
+    status: Mapped[str] = mapped_column(COVERAGE_STATUS, nullable=False, default="available")
+    max_speed_mbps: Mapped[int] = mapped_column(Integer, default=1000)
+    available_packages: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+    estimated_install_days: Mapped[int] = mapped_column(Integer, default=14)
+
+    # Metadata
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_coverage_fno", "fno_name", "technology"),
+        Index("ix_coverage_city", "city", "suburb"),
+        Index("ix_coverage_postal", "postal_code"),
+        Index("ix_coverage_status", "status"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# CUSTOMER ADDRESSES
+# ════════════════════════════════════════════════════════════════════════
+
+class CustomerAddress(Base):
+    __tablename__ = "customer_addresses"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    address_type: Mapped[str] = mapped_column(String(20), nullable=False, default="service")  # service, physical, billing
+    line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    city: Mapped[str] = mapped_column(String(100), nullable=False)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    postal_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    coverage_area_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_cust_addr_customer", "customer_id", "address_type"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PAYMENT METHODS
+# ════════════════════════════════════════════════════════════════════════
+
+class PaymentMethod(Base):
+    __tablename__ = "payment_methods"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    method_type: Mapped[str] = mapped_column(String(20), nullable=False)  # card, bank_account, paystack
+    provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # paystack, stripe
+    token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # encrypted token
+    last_four: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    card_brand: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # visa, mastercard
+    expiry_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    expiry_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bank_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    account_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # cheque, savings
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_paymethods_customer", "customer_id", "is_active"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ORDERS
+# ════════════════════════════════════════════════════════════════════════
+
+class Order(Base):
+    __tablename__ = "orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    account_number: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    order_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(ORDER_STATUS, nullable=False, default="cart")
+
+    # Addresses
+    service_address_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    billing_address_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Totals
+    subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    vat_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    discount_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    total_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # Payment
+    payment_method_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    payment_status: Mapped[str] = mapped_column(String(20), default="pending")
+    payment_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Promotion
+    promotion_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Contact preference
+    preferred_contact_channel: Mapped[str] = mapped_column(CONTACT_CHANNEL, default="sms")
+    contact_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    contact_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Notes
+    customer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Timestamps
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_orders_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_orders_status", "status"),
+        Index("ix_orders_number", "order_number"),
+    )
+
+
+class OrderItem(Base):
+    __tablename__ = "order_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    item_type: Mapped[str] = mapped_column(ORDER_ITEM_TYPE, nullable=False)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    total_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # For packages
+    package_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    monthly_recurring_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    once_off_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # For hardware
+    serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    imei: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_order_items_order", "order_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# DELIVERY TRACKING
+# ════════════════════════════════════════════════════════════════════════
+
+class DeliveryTracking(Base):
+    __tablename__ = "delivery_tracking"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Courier
+    courier: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    courier_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Status
+    status: Mapped[Optional[str]] = mapped_column(DELIVERY_STATUS, nullable=True, default="pending")
+
+    # Address
+    delivery_address_line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    delivery_address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    delivery_city: Mapped[str] = mapped_column(String(100), nullable=False)
+    delivery_postal_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    delivery_gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    delivery_gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Scheduling
+    scheduled_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    scheduled_time_slot: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # "08:00-12:00"
+    estimated_delivery: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Actual
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    signed_by: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    signature_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Contact
+    recipient_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    recipient_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # Notes
+    delivery_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_delivery_order", "order_id"),
+        Index("ix_delivery_tracking_no", "tracking_number"),
+        Index("ix_delivery_status", "status"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# TECHNICIAN VISITS
+# ════════════════════════════════════════════════════════════════════════
+
+class TechnicianVisit(Base):
+    __tablename__ = "technician_visits"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True)
+    subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    visit_type: Mapped[str] = mapped_column(TECH_VISIT_TYPE, nullable=False, default="installation")
+    status: Mapped[str] = mapped_column(TECH_VISIT_STATUS, nullable=False, default="scheduled")
+
+    # Scheduling
+    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
+    scheduled_time_slot: Mapped[str] = mapped_column(String(50), nullable=False)  # "08:00-12:00", "12:00-16:00", "16:00-20:00"
+    estimated_duration_minutes: Mapped[int] = mapped_column(Integer, default=120)
+
+    # Address
+    address_line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    city: Mapped[str] = mapped_column(String(100), nullable=False)
+    postal_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Technician
+    technician_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    technician_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    technician_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # GPS Tracking
+    dispatch_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    en_route_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    on_site_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    current_gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    last_gps_update: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Work details
+    work_description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    work_completed: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parts_used: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+    photos: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)  # URLs
+
+    # Customer interaction
+    customer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    customer_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-5
+    customer_signature_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # FNO
+    fno_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_ticket_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Reschedule tracking
+    reschedule_count: Mapped[int] = mapped_column(Integer, default=0)
+    original_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_tech_visits_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_tech_visits_technician", "technician_id", "scheduled_date"),
+        Index("ix_tech_visits_status", "status"),
+        Index("ix_tech_visits_date", "scheduled_date"),
+        Index("ix_tech_visits_order", "order_id"),
+        Index("ix_tech_visits_ticket", "ticket_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ACTIVITY TIMELINE
+# ════════════════════════════════════════════════════════════════════════
+
+class ActivityTimeline(Base):
+    __tablename__ = "activity_timeline"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    account_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Event classification
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    # lead_created, order_placed, order_confirmed, delivery_scheduled, delivery_completed,
+    # installation_scheduled, installation_completed, subscription_activated,
+    # payment_received, invoice_sent, ticket_created, ticket_resolved,
+    # pause_requested, pause_activated, move_house_initiated, move_house_completed,
+    # cancellation_requested, cancellation_completed, retention_offered, retention_accepted,
+    # promotion_applied, referral_made, announcement_sent, note_added
+
+    event_category: Mapped[str] = mapped_column(String(30), nullable=False)
+    # sales, billing, support, fulfillment, lifecycle, marketing, system
+
+    # Content
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    # Source
+    source_service: Mapped[str] = mapped_column(String(50), nullable=False)  # crm, sales, billing, support, etc.
+    source_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)  # ID in source service
+    actor_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)  # user who triggered
+    actor_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # customer, agent, system
+
+    # Related entities
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_timeline_customer", "tenant_id", "customer_id", "created_at"),
+        Index("ix_timeline_type", "tenant_id", "event_type"),
+        Index("ix_timeline_category", "tenant_id", "event_category"),
+        Index("ix_timeline_source", "source_service", "source_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PROMOTIONS
+# ════════════════════════════════════════════════════════════════════════
+
+class Promotion(Base):
+    __tablename__ = "promotions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    promo_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True)
+
+    promo_type: Mapped[str] = mapped_column(PROMO_TYPE, nullable=False)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # percentage_discount: {"percent": 15, "max_discount_zar": 500}
+    # fixed_discount: {"amount_zar": 200}
+    # free_months: {"months": 2}
+    # referral_bonus: {"referrer_discount_zar": 100, "referee_discount_zar": 100, "max_referrals": 10}
+
+    # Limits
+    max_total_redemptions: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    total_redemptions: Mapped[int] = mapped_column(Integer, default=0)
+    max_per_customer: Mapped[int] = mapped_column(Integer, default=1)
+
+    # Validity
+    valid_from: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    valid_until: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # Targeting
+    target_segments: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+    target_packages: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    status: Mapped[str] = mapped_column(PROMO_STATUS, nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_promos_tenant_status", "tenant_id", "status"),
+        Index("ix_promos_code", "promo_code"),
+        Index("ix_promos_valid", "valid_from", "valid_until"),
+    )
+
+
+class CustomerPromotion(Base):
+    __tablename__ = "customer_promotions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    promotion_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("promotions.id", ondelete="CASCADE"), nullable=False)
+
+    # Usage
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    discount_applied_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # Referral tracking
+    referred_by_customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    referral_code: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    redeemed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_cust_promos_customer", "customer_id"),
+        Index("ix_cust_promos_promo", "promotion_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ANNOUNCEMENTS
+# ════════════════════════════════════════════════════════════════════════
+
+class Announcement(Base):
+    __tablename__ = "announcements"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+
+    announcement_type: Mapped[str] = mapped_column(ANNOUNCEMENT_TYPE, nullable=False, default="general")
+    audience: Mapped[str] = mapped_column(ANNOUNCEMENT_AUDIENCE, nullable=False, default="all")
+
+    # Targeting
+    target_areas: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)  # area names
+    target_segments: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)  # customer segments
+    target_customer_ids: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    # Channels
+    channels: Mapped[list] = mapped_column(JSONB, nullable=False, default=["sms"])  # sms, whatsapp, email, push
+
+    # Scheduling
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sent_count: Mapped[int] = mapped_column(Integer, default=0)
+    delivered_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_announcements_tenant_type", "tenant_id", "announcement_type"),
+        Index("ix_announcements_active", "tenant_id", "is_active"),
+    )
