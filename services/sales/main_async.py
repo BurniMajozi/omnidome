@@ -675,6 +675,45 @@ async def list_deals(
     ]
 
 
+@app.get("/deals/{deal_id}", response_model=DealResponse)
+async def get_deal(
+    deal_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Deal, DealStage.name.label("stage_name"))
+        .join(DealStage, Deal.stage_id == DealStage.id)
+        .where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
+        .options(selectinload(Deal.stage))
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return DealResponse(
+        id=row.Deal.id, tenant_id=row.Deal.tenant_id, contact_id=row.Deal.contact_id,
+        lead_id=row.Deal.lead_id, agent_id=row.Deal.agent_id, stage_id=row.Deal.stage_id,
+        name=row.Deal.name, amount=row.Deal.amount, value_zar=row.Deal.value_zar,
+        status=row.Deal.status, stage_name=row.stage_name,
+        close_date=row.Deal.close_date, closed_at=row.Deal.closed_at,
+        close_reason=row.Deal.close_reason, notes=row.Deal.notes,
+        created_at=row.Deal.created_at, updated_at=row.Deal.updated_at,
+    )
+
+
+@app.delete("/deals/{deal_id}")
+async def delete_deal(
+    deal_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    await db.delete(deal)
+    return {"status": "deleted", "id": str(deal_id)}
+
+
 @app.put("/deals/{deal_id}", response_model=DealResponse)
 async def update_deal(
     deal_id: uuid.UUID,

@@ -17,6 +17,7 @@ from services.billing.routes.paystack import router as paystack_router
 from services.billing.routes.collections import router as collections_router
 from services.billing.routes.reports import router as reports_router
 from services.billing.routes.subscriptions import router as subscriptions_router
+from services.billing.routes.cancellations import router as cancellations_router
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -70,6 +71,7 @@ app.include_router(paystack_router)
 app.include_router(collections_router)
 app.include_router(reports_router)
 app.include_router(subscriptions_router)
+app.include_router(cancellations_router)
 
 
 # ---------------------------------------------------------------------------

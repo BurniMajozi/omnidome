@@ -294,3 +294,224 @@ class SubscriptionUsage(Base):
         Index("ix_subscription_usage_metric", "subscription_id", "metric"),
         Index("ix_subscription_usage_unbilled", "subscription_id", "billed_invoice_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Cancellation Request
+# ---------------------------------------------------------------------------
+
+CANCEL_TYPE = SAEnum(
+    "voluntary", "move_house", "debt_collection", "death", "other",
+    name="cancel_type", create_type=True,
+)
+
+CANCEL_STATUS = SAEnum(
+    "pending", "retention_offered", "retention_accepted", "retention_rejected",
+    "fno_submitted", "fno_confirmed", "completed", "cancelled",
+    name="cancel_status", create_type=True,
+)
+
+
+class CancellationRequest(Base):
+    __tablename__ = "cancellation_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+    account_number: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    cancel_type: Mapped[str] = mapped_column(CANCEL_TYPE, nullable=False, default="voluntary")
+    cancel_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cancel_reason_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(CANCEL_STATUS, nullable=False, default="pending")
+
+    # Retention
+    retention_offer_shown: Mapped[bool] = mapped_column(Boolean, default=False)
+    retention_offer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    retention_accepted: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # FNO
+    fno_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_cancellation_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Effective date
+    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_cancellation_tenant_status", "tenant_id", "status"),
+        Index("ix_cancellation_customer", "customer_id", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Termination Fee Calculation
+# ---------------------------------------------------------------------------
+
+class TerminationFee(Base):
+    __tablename__ = "termination_fees"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    cancellation_request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cancellation_requests.id", ondelete="CASCADE"), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+
+    # Contract details at time of cancellation
+    monthly_rate_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    remaining_months: Mapped[int] = mapped_column(Integer, nullable=False)
+    penalty_percentage: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+
+    # ETF breakdown
+    contract_etf_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    router_charge_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    outstanding_balance_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    total_etf_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+
+    # Router details
+    router_product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    router_serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    router_value_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    router_depreciation_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=Decimal("0.00"))
+    router_returned: Mapped[bool] = mapped_column(Boolean, default=False)
+    router_returned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Payment
+    paid_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_termination_fees_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_termination_fees_cancellation", "cancellation_request_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Router Return (Reverse Logistics)
+# ---------------------------------------------------------------------------
+
+ROUTER_RETURN_STATUS = SAEnum(
+    "pending", "courier_booked", "in_transit", "received", "inspected",
+    "refund_issued", "completed", "written_off",
+    name="router_return_status", create_type=True,
+)
+
+ROUTER_CONDITION = SAEnum(
+    "new", "good", "fair", "damaged", "missing_parts",
+    name="router_condition", create_type=True,
+)
+
+
+class RouterReturn(Base):
+    __tablename__ = "router_returns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    cancellation_request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cancellation_requests.id", ondelete="CASCADE"), nullable=False)
+    termination_fee_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("termination_fees.id", ondelete="SET NULL"), nullable=True)
+
+    # Router identification
+    product_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    serial_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    imei: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # Return logistics
+    status: Mapped[str] = mapped_column(ROUTER_RETURN_STATUS, nullable=False, default="pending")
+    courier: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tracking_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    pickup_address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    booked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Inspection
+    condition: Mapped[Optional[str]] = mapped_column(ROUTER_CONDITION, nullable=True)
+    condition_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    refund_amount_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    inspected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    inspected_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # Refund
+    refund_issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    refund_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_router_returns_tenant_status", "tenant_id", "status"),
+        Index("ix_router_returns_customer", "customer_id"),
+        Index("ix_router_returns_cancellation", "cancellation_request_id"),
+        Index("ix_router_returns_serial", "serial_number"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# FNO Cancellation Tracking
+# ---------------------------------------------------------------------------
+
+FNO_CANCELLATION_METHOD = SAEnum(
+    "api", "browser_automation", "manual", "email", "phone",
+    name="fno_cancellation_method", create_type=True,
+)
+
+FNO_CANCELLATION_STATUS = SAEnum(
+    "pending", "in_progress", "submitted", "confirmed", "failed", "retrying",
+    name="fno_cancellation_status", create_type=True,
+)
+
+
+class FNOCancellation(Base):
+    __tablename__ = "fno_cancellations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    cancellation_request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cancellation_requests.id", ondelete="CASCADE"), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+
+    # FNO details
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_account_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Method & status
+    method: Mapped[str] = mapped_column(FNO_CANCELLATION_METHOD, nullable=False, default="browser_automation")
+    status: Mapped[str] = mapped_column(FNO_CANCELLATION_STATUS, nullable=False, default="pending")
+
+    # Browser automation tracking
+    automation_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    automation_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    automation_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    automation_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    screenshot_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
+    # Confirmation
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmation_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Retry tracking
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_retry_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_fno_cancellation_tenant_status", "tenant_id", "status"),
+        Index("ix_fno_cancellation_customer", "customer_id"),
+        Index("ix_fno_cancellation_request", "cancellation_request_id"),
+        Index("ix_fno_cancellation_job", "automation_job_id"),
+    )

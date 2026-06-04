@@ -158,7 +158,111 @@ class JourneyRule(JourneyBase):
     )
 
     __table_args__ = (
-        Index("ix_journey_rules_journey", "journey_id", "rule_group"),
+        ix_outcomes_customer_outcome_idx := Index("ix_outcomes_tenant_outcome", "tenant_id", "outcome"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Move House Request
+# ---------------------------------------------------------------------------
+
+MOVE_HOUSE_STATUS = SAEnum(
+    "pending", "coverage_check", "covered", "not_covered",
+    "installation_scheduled", "completed", "cancelled",
+    name="move_house_status", create_type=True,
+)
+
+
+class MoveHouseRequest(JourneyBase):
+    __tablename__ = "move_house_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+    account_number: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Old address
+    old_address: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # New address
+    new_address: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    new_address_line1: Mapped[str] = mapped_column(String(255), nullable=False)
+    new_address_line2: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    new_city: Mapped[str] = mapped_column(String(100), nullable=False)
+    new_postal_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    new_province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    new_gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    new_gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Coverage check
+    coverage_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    coverage_available: Mapped[bool] = mapped_column(Boolean, default=False)
+    recommended_package_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    fno_at_new_address: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Status
+    status: Mapped[str] = mapped_column(MOVE_HOUSE_STATUS, nullable=False, default="pending")
+
+    # Installation
+    installation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    technician_visit_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # Effective date
+    requested_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_move_house_tenant_status", "tenant_id", "status"),
+        Index("ix_move_house_customer", "customer_id", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Service Pause Request
+# ---------------------------------------------------------------------------
+
+PAUSE_STATUS = SAEnum(
+    "pending", "approved", "active", "expiring_soon", "reactivated", "cancelled",
+    name="pause_status", create_type=True,
+)
+
+
+class ServicePauseRequest(JourneyBase):
+    __tablename__ = "service_pause_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True)
+    account_number: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Pause details
+    reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    pause_start_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    pause_end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    max_pause_months: Mapped[int] = mapped_column(Integer, default=3)
+
+    # Status
+    status: Mapped[str] = mapped_column(PAUSE_STATUS, nullable=False, default="pending")
+
+    # Minimum monthly fee during pause (if any)
+    pause_monthly_fee_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # Actual dates
+    paused_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reactivated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_pause_tenant_status", "tenant_id", "status"),
+        Index("ix_pause_customer", "customer_id", "created_at"),
+        Index("ix_pause_end_date", "pause_end_date"),
     )
 
 

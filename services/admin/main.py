@@ -501,7 +501,37 @@ async def list_roles(
     return result.mappings().all()
 
 
-@app.put("/roles/{role_id}")
+@app.get("/roles/{role_id}")
+async def get_role(
+    role_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    result = await session.execute(
+        text("select id, name, description, scope, is_system, created_at from roles where id = :role_id and tenant_id = :tenant_id"),
+        {"role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    return row
+
+
+@app.delete("/roles/{role_id}")
+async def delete_role(
+    role_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    result = await session.execute(
+        text("delete from roles where id = :role_id and tenant_id = :tenant_id and is_system = false"),
+        {"role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found or system role")
+    return {"status": "deleted", "id": str(role_id)}
 async def update_role_permissions(
     role_id: uuid.UUID,
     payload: RoleUpdate,
@@ -780,6 +810,23 @@ async def list_users(
         }
         for row in rows
     ]
+
+
+@app.get("/users/{user_id}")
+async def get_user(
+    user_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    await _require_tenant_admin(ctx, session)
+    result = await session.execute(
+        text("select id, email, full_name, is_active, created_at from users where id = :uid and tenant_id = :tid"),
+        {"uid": str(user_id), "tid": str(ctx.tenant_id)},
+    )
+    row = result.mappings().first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return row
 
 
 @app.post("/users", status_code=status.HTTP_201_CREATED)
