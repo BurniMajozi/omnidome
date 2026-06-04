@@ -1025,3 +1025,422 @@ async def get_customer_360(
             ],
             lifetime_value_zar=ltv,
         )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# SELF-SERVICE PORTAL
+# ════════════════════════════════════════════════════════════════════════
+
+@router.get("/portal/customers/{customer_id}/statements")
+async def get_customer_statements(
+    customer_id: uuid.UUID,
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Get customer billing statements (invoices + payments)."""
+    from sqlalchemy import select
+    from services.customer_journey.database import get_session
+    from services.billing.models import Invoice, Payment
+
+    async with get_session() as session:
+        stmt = select(Invoice).where(
+            Invoice.customer_id == customer_id,
+            Invoice.tenant_id == ctx.tenant_id,
+        )
+        if date_from:
+            stmt = stmt.where(Invoice.created_at >= date_from)
+        if date_to:
+            stmt = stmt.where(Invoice.created_at <= date_to)
+
+        invoices = (await session.execute(stmt.order_by(Invoice.created_at.desc()))).scalars().all()
+
+        return {
+            "customer_id": str(customer_id),
+            "statements": [
+                {
+                    "id": str(inv.id),
+                    "number": inv.number,
+                    "status": inv.status,
+                    "subtotal_zar": float(inv.subtotal_zar),
+                    "vat_zar": float(inv.vat_zar),
+                    "total_zar": float(inv.total_zar),
+                    "amount_paid_zar": float(inv.amount_paid_zar),
+                    "balance_zar": float(inv.total_zar - inv.amount_paid_zar),
+                    "due_date": inv.due_date.isoformat() if inv.due_date else None,
+                    "created_at": inv.created_at.isoformat() if inv.created_at else None,
+                }
+                for inv in invoices
+            ],
+        }
+
+
+@router.get("/portal/customers/{customer_id}/proof-of-payment")
+async def get_proof_of_payment(
+    customer_id: uuid.UUID,
+    invoice_id: Optional[uuid.UUID] = Query(None),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Get proof of payment for a specific invoice or latest payment."""
+    from sqlalchemy import select
+    from services.customer_journey.database import get_session
+    from services.billing.models import Payment, Invoice
+
+    async with get_session() as session:
+        if invoice_id:
+            payment = (await session.execute(
+                select(Payment).where(
+                    Payment.invoice_id == invoice_id,
+                    Payment.tenant_id == ctx.tenant_id,
+                    Payment.status == "completed",
+                )
+            )).scalar_one_or_none()
+        else:
+            payment = (await session.execute(
+                select(Payment).where(
+                    Payment.customer_id == customer_id,
+                    Payment.tenant_id == ctx.tenant_id,
+                    Payment.status == "completed",
+                ).order_by(Payment.created_at.desc())
+            )).scalar_one_or_none()
+
+        if not payment:
+            raise HTTPException(status_code=404, detail="No payment found")
+
+        invoice = (await session.execute(
+            select(Invoice).where(Invoice.id == payment.invoice_id)
+        )).scalar_one_or_none()
+
+        return {
+            "payment_id": str(payment.id),
+            "invoice_number": invoice.number if invoice else None,
+            "amount_zar": float(payment.amount_zar),
+            "method": payment.method,
+            "reference": payment.reference or payment.paystack_ref,
+            "paid_at": payment.created_at.isoformat() if payment.created_at else None,
+            "status": payment.status,
+        }
+
+
+@router.get("/portal/customers/{customer_id}/usage")
+async def get_usage_summary(
+    customer_id: uuid.UUID,
+    period: Optional[str] = Query(None),  # YYYY-MM
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Get customer usage summary (speed tests, data usage)."""
+    from sqlalchemy import select
+    from services.customer_journey.database import get_session
+    from services.billing.models import Subscription, SubscriptionUsage
+
+    async with get_session() as session:
+        subs = (await session.execute(
+            select(Subscription).where(
+                Subscription.customer_id == customer_id,
+                Subscription.tenant_id == ctx.tenant_id,
+            )
+        )).scalars().all()
+
+        usage_data = []
+        for sub in subs:
+            usage_records = (await session.execute(
+                select(SubscriptionUsage).where(
+                    SubscriptionUsage.subscription_id == sub.id,
+                ).order_by(SubscriptionUsage.recorded_at.desc()).limit(30)
+            )).scalars().all()
+
+            usage_data.append({
+                "subscription_id": str(sub.id),
+                "plan": sub.plan,
+                "status": sub.status,
+                "usage": [
+                    {
+                        "metric": u.metric,
+                        "quantity": float(u.quantity),
+                        "unit_price_zar": float(u.unit_price_zar),
+                        "recorded_at": u.recorded_at.isoformat() if u.recorded_at else None,
+                    }
+                    for u in usage_records
+                ],
+            })
+
+        return {
+            "customer_id": str(customer_id),
+            "period": period or "all",
+            "subscriptions": usage_data,
+        }
+
+
+@router.get("/portal/customers/{customer_id}/account")
+async def get_account_summary(
+    customer_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Get full account summary for self-service portal."""
+    from sqlalchemy import select, func
+    from services.customer_journey.database import get_session
+    from services.billing.models import Subscription, Invoice, Payment
+
+    async with get_session() as session:
+        # Active subscriptions
+        subs = (await session.execute(
+            select(Subscription).where(
+                Subscription.customer_id == customer_id,
+                Subscription.tenant_id == ctx.tenant_id,
+            )
+        )).scalars().all()
+
+        # Outstanding balance
+        outstanding = (await session.execute(
+            select(func.sum(Invoice.total_zar - Invoice.amount_paid_zar)).where(
+                Invoice.customer_id == customer_id,
+                Invoice.tenant_id == ctx.tenant_id,
+                Invoice.status.in_(["sent", "overdue", "partially_paid"]),
+            )
+        ).scalar()) or Decimal("0.00")
+
+        # Last payment
+        last_payment = (await session.execute(
+            select(Payment).where(
+                Payment.customer_id == customer_id,
+                Payment.tenant_id == ctx.tenant_id,
+                Payment.status == "completed",
+            ).order_by(Payment.created_at.desc())
+        )).scalar_one_or_none()
+
+        # Payment methods
+        pay_methods = (await session.execute(
+            select(PaymentMethod).where(
+                PaymentMethod.customer_id == customer_id,
+                PaymentMethod.tenant_id == ctx.tenant_id,
+                PaymentMethod.is_active == True,
+            )
+        )).scalars().all()
+
+        return {
+            "customer_id": str(customer_id),
+            "subscriptions": [
+                {
+                    "id": str(s.id),
+                    "plan": s.plan,
+                    "status": s.status,
+                    "monthly_zar": float(s.base_price_zar),
+                    "billing_interval": s.billing_interval,
+                    "next_billing": s.current_period_end.isoformat() if s.current_period_end else None,
+                }
+                for s in subs
+            ],
+            "outstanding_balance_zar": float(outstanding),
+            "last_payment": {
+                "amount_zar": float(last_payment.amount_zar),
+                "method": last_payment.method,
+                "date": last_payment.created_at.isoformat() if last_payment.created_at else None,
+            } if last_payment else None,
+            "payment_methods": [
+                {
+                    "id": str(pm.id),
+                    "type": pm.method_type,
+                    "last_four": pm.last_four,
+                    "is_default": pm.is_default,
+                }
+                for pm in pay_methods
+            ],
+        }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# UPGRADE / DOWNGRADE PACKAGES
+# ════════════════════════════════════════════════════════════════════════
+
+class UpgradeRequest(BaseModel):
+    subscription_id: uuid.UUID
+    target_plan: str
+    effective_date: Optional[date] = None
+
+
+class UpgradeResponse(BaseModel):
+    subscription_id: str
+    old_plan: str
+    new_plan: str
+    old_monthly_zar: Decimal
+    new_monthly_zar: Decimal
+    prorated_charge_zar: Decimal
+    effective_date: date
+    message: str
+
+
+@router.post("/subscriptions/upgrade", response_model=UpgradeResponse)
+async def upgrade_subscription(
+    body: UpgradeRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Upgrade customer to a higher-tier package."""
+    from sqlalchemy import select
+    from services.customer_journey.database import get_session
+    from services.billing.models import Subscription, Invoice
+
+    async with get_session() as session:
+        sub = (await session.execute(
+            select(Subscription).where(
+                Subscription.id == body.subscription_id,
+                Subscription.tenant_id == ctx.tenant_id,
+            )
+        )).scalar_one_or_none()
+        if not sub:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+
+        old_plan = sub.plan
+        old_price = sub.base_price_zar
+
+        # Get new plan pricing (would come from a plans table in production)
+        PLAN_PRICING = {
+            "Home 50Mbps": Decimal("799.00"),
+            "Home 100Mbps": Decimal("999.00"),
+            "Home 200Mbps": Decimal("1299.00"),
+            "Home 500Mbps": Decimal("1799.00"),
+            "Home 1000Mbps": Decimal("2499.00"),
+            "Uncapped 50Mbps": Decimal("1099.00"),
+            "Uncapped 100Mbps": Decimal("1499.00"),
+            "Uncapped 200Mbps": Decimal("1999.00"),
+        }
+
+        new_price = PLAN_PRICING.get(body.target_plan)
+        if not new_price:
+            raise HTTPException(status_code=400, detail=f"Unknown plan: {body.target_plan}")
+        if new_price <= old_price:
+            raise HTTPException(status_code=400, detail="Use /downgrade for lower-tier plans")
+
+        # Calculate prorated charge
+        effective = body.effective_date or date.today()
+        if sub.current_period_end and sub.current_period_start:
+            days_in_period = (sub.current_period_end - sub.current_period_start).days
+            days_remaining = max(0, (sub.current_period_end - effective).days)
+            daily_old = old_price / Decimal(str(max(1, days_in_period)))
+            daily_new = new_price / Decimal(str(max(1, days_in_period)))
+            prorated = (daily_new * Decimal(str(days_remaining))) - (daily_old * Decimal(str(days_remaining)))
+            prorated = prorated.quantize(Decimal("0.01"))
+        else:
+            prorated = Decimal("0.00")
+
+        # Update subscription
+        sub.plan = body.target_plan
+        sub.base_price_zar = new_price
+        sub.current_period_start = effective
+
+        # Generate prorated invoice if charge > 0
+        if prorated > 0:
+            inv = Invoice(
+                tenant_id=ctx.tenant_id,
+                customer_id=sub.customer_id,
+                subscription_id=sub.id,
+                number=f"PROR-{str(sub.id)[:8]}",
+                status="sent",
+                subtotal_zar=prorated,
+                vat_zar=(prorated * Decimal("0.15")).quantize(Decimal("0.01")),
+                total_zar=(prorated * Decimal("1.15")).quantize(Decimal("0.01")),
+                due_date=date.today() + timedelta(days=14),
+                line_items=[{
+                    "description": f"Prorated upgrade: {old_plan} → {body.target_plan}",
+                    "quantity": 1,
+                    "unit_price_zar": str(prorated),
+                }],
+            )
+            session.add(inv)
+
+        await session.commit()
+
+        # Log timeline
+        timeline = ActivityTimeline(
+            tenant_id=ctx.tenant_id,
+            customer_id=sub.customer_id,
+            event_type="subscription_upgraded",
+            event_category="lifecycle",
+            summary=f"Upgraded from {old_plan} to {body.target_plan}",
+            source_service="customer_journey",
+            subscription_id=sub.id,
+        )
+        session.add(timeline)
+        await session.commit()
+
+        return UpgradeResponse(
+            subscription_id=str(sub.id),
+            old_plan=old_plan,
+            new_plan=body.target_plan,
+            old_monthly_zar=old_price,
+            new_monthly_zar=new_price,
+            prorated_charge_zar=prorated,
+            effective_date=effective,
+            message=f"Upgraded to {body.target_plan}. New monthly fee: R{new_price}",
+        )
+
+
+@router.post("/subscriptions/downgrade", response_model=UpgradeResponse)
+async def downgrade_subscription(
+    body: UpgradeRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Downgrade customer to a lower-tier package."""
+    from sqlalchemy import select
+    from services.customer_journey.database import get_session
+    from services.billing.models import Subscription
+
+    async with get_session() as session:
+        sub = (await session.execute(
+            select(Subscription).where(
+                Subscription.id == body.subscription_id,
+                Subscription.tenant_id == ctx.tenant_id,
+            )
+        )).scalar_one_or_none()
+        if not sub:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+
+        old_plan = sub.plan
+        old_price = sub.base_price_zar
+
+        PLAN_PRICING = {
+            "Home 50Mbps": Decimal("799.00"),
+            "Home 100Mbps": Decimal("999.00"),
+            "Home 200Mbps": Decimal("1299.00"),
+            "Home 500Mbps": Decimal("1799.00"),
+            "Home 1000Mbps": Decimal("2499.00"),
+            "Uncapped 50Mbps": Decimal("1099.00"),
+            "Uncapped 100Mbps": Decimal("1499.00"),
+            "Uncapped 200Mbps": Decimal("1999.00"),
+        }
+
+        new_price = PLAN_PRICING.get(body.target_plan)
+        if not new_price:
+            raise HTTPException(status_code=400, detail=f"Unknown plan: {body.target_plan}")
+        if new_price >= old_price:
+            raise HTTPException(status_code=400, detail="Use /upgrade for higher-tier plans")
+
+        effective = body.effective_date or date.today()
+
+        sub.plan = body.target_plan
+        sub.base_price_zar = new_price
+        sub.current_period_start = effective
+
+        await session.commit()
+
+        timeline = ActivityTimeline(
+            tenant_id=ctx.tenant_id,
+            customer_id=sub.customer_id,
+            event_type="subscription_downgraded",
+            event_category="lifecycle",
+            summary=f"Downgraded from {old_plan} to {body.target_plan}",
+            source_service="customer_journey",
+            subscription_id=sub.id,
+        )
+        session.add(timeline)
+        await session.commit()
+
+        return UpgradeResponse(
+            subscription_id=str(sub.id),
+            old_plan=old_plan,
+            new_plan=body.target_plan,
+            old_monthly_zar=old_price,
+            new_monthly_zar=new_price,
+            prorated_charge_zar=Decimal("0.00"),
+            effective_date=effective,
+            message=f"Downgraded to {body.target_plan}. New monthly fee: R{new_price}. Effective next billing cycle.",
+        )
