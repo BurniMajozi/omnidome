@@ -211,6 +211,56 @@ async def get_ticket(
     return await _enrich_ticket_with_customer(td, tenant_id)
 
 
+@app.put("/tickets/{ticket_id}")
+async def update_ticket(
+    ticket_id: uuid.UUID,
+    payload: TicketStatusUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Update ticket status"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    ticket.status = payload.status
+    await db.flush()
+    td = _ticket_to_dict(ticket)
+    await _notify_ticket_update(str(tenant_id), td)
+    return td
+
+
+@app.delete("/tickets/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_ticket(
+    ticket_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete a ticket"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(Ticket).where(
+            Ticket.id == ticket_id,
+            Ticket.tenant_id == tenant_id,
+        )
+    )
+    ticket = result.scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    await db.delete(ticket)
+    await db.flush()
+
+
 @app.post("/tickets/{ticket_id}/escalate-fno")
 async def escalate_to_fno(
     ticket_id: uuid.UUID,

@@ -17,8 +17,13 @@ from services.common.entitlements import EntitlementGuard
 app = FastAPI(title="CoreConnect Sales Service", version="1.0.0")
 guard = EntitlementGuard(module_id="sales")
 
-LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
 
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "sales"}
+
+
+LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -613,6 +618,48 @@ async def list_deals(
             params,
         ).mappings().all()
     return [DealResponse(**row) for row in rows]
+
+
+@app.get("/deals/{deal_id}", response_model=DealResponse)
+async def get_deal(
+    deal_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Get a single deal by ID"""
+    engine = _get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                select d.id, d.tenant_id, d.contact_id as customer_id, d.lead_id, d.agent_id,
+                       d.stage_id, s.name as stage_name, d.package_id, d.value_zar, d.status,
+                       d.close_date, d.closed_at, d.close_reason, d.notes, d.created_at, d.updated_at
+                from deals d
+                left join deal_stages s on s.id = d.stage_id
+                where d.id = :deal_id and d.tenant_id = :tenant_id
+                """
+            ),
+            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
+        ).mappings().one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    return DealResponse(**row, stage_name=row["stage_name"])
+
+
+@app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_deal(
+    deal_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Delete a deal"""
+    engine = _get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("delete from deals where id = :deal_id and tenant_id = :tenant_id"),
+            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
 
 @app.put("/deals/{deal_id}", response_model=DealResponse)

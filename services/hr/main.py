@@ -266,6 +266,24 @@ async def update_employee(
     return _employee_to_dict(emp)
 
 
+@app.delete("/employees/{emp_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_employee(
+    emp_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete (deactivate) an employee"""
+    result = await db.execute(
+        select(Employee).where(Employee.id == emp_id, Employee.tenant_id == tenant_id)
+    )
+    emp = result.scalars().first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    emp.status = "INACTIVE"
+    await db.flush()
+
+
 @app.get("/employees/{emp_id}/performance", response_model=List[PerformanceReviewOut])
 async def get_employee_performance(
     emp_id: uuid.UUID,

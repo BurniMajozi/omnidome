@@ -247,6 +247,29 @@ async def update_device(
     return _device_to_dict(device)
 
 
+@app.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_device(
+    device_id: str,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Delete a device"""
+    from sqlalchemy import select
+
+    result = await db.execute(
+        select(IoTDevice).where(
+            IoTDevice.id == uuid.UUID(device_id),
+            IoTDevice.tenant_id == tenant_id,
+        )
+    )
+    device = result.scalar_one_or_none()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    await db.delete(device)
+    await db.flush()
+
+
 @app.get("/devices/{device_id}/signal")
 async def get_device_signal(
     device_id: str,
