@@ -173,6 +173,97 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  support:
+    build:
+      context: .
+      dockerfile: services/support/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8008:8008"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  hr:
+    build:
+      context: .
+      dockerfile: services/hr/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8009:8009"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  inventory:
+    build:
+      context: .
+      dockerfile: services/inventory/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8010:8010"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  communication:
+    build:
+      context: .
+      dockerfile: services/communication/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8020:8020"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  agent-orchestrator:
+    build:
+      context: .
+      dockerfile: services/agent-orchestrator/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+    ports:
+      - "8021:8021"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
   retention:
     build:
       context: .

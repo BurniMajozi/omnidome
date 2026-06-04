@@ -1,0 +1,17 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY services/common/requirements.txt ./services/common/requirements.txt
+COPY services/support/requirements.txt ./services/support/requirements.txt
+ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_RETRIES=5
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r services/support/requirements.txt
+
+COPY services/support/ ./services/support/
+COPY services/common/ ./services/common/
+
+ENV PYTHONPATH=/app
+EXPOSE 8008
+
+CMD ["python", "services/support/main.py"]

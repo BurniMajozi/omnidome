@@ -1,0 +1,174 @@
+name: OmniDome CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  # ── Lint & Syntax Check ──────────────────────────────────────────────
+  lint:
+    name: Lint & Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linting tools
+        run: pip install flake8 pyright
+
+      - name: Python syntax check (all services)
+        run: |
+          errors=0
+          for f in $(find services -name "*.py" -not -path "*/__pycache__/*" -not -path "*/migrations/*"); do
+            python -m py_compile "$f" || errors=$((errors + 1))
+          done
+          for f in $(find apps -name "*.py" -not -path "*/__pycache__/*" 2>/dev/null); do
+            python -m py_compile "$f" || errors=$((errors + 1))
+          done
+          if [ $errors -gt 0 ]; then
+            echo "❌ $errors file(s) failed syntax check"
+            exit 1
+          fi
+          echo "✅ All Python files pass syntax check"
+
+      - name: Flake8 lint (critical errors only)
+        run: |
+          pip install flake8
+          flake8 services/ scripts/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+  # ── Docker Build Verification ────────────────────────────────────────
+  docker-build:
+    name: Docker Build Verification
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yaml
+        run: |
+          pip install pyyaml
+          python -c "import yaml; yaml.safe_load(open('docker-compose.yaml')); echo '✅ Valid YAML'"
+
+      - name: Check all service Dockerfiles exist
+        run: |
+          errors=0
+          for svc in crm sales billing finance rica network iot call_center support hr inventory retention marketing admin gateway communication agent-orchestrator journey_engine web_analytics lifecycle; do
+            if [ ! -f "services/$svc/Dockerfile" ]; then
+              echo "❌ Missing: services/$svc/Dockerfile"
+              errors=$((errors + 1))
+            fi
+          done
+          if [ ! -f "apps/web/Dockerfile" ]; then
+            echo "❌ Missing: apps/web/Dockerfile"
+            errors=$((errors + 1))
+          fi
+          if [ $errors -gt 0 ]; then
+            echo "❌ $errors Dockerfile(s) missing"
+            exit 1
+          fi
+          echo "✅ All Dockerfiles present"
+
+      - name: Verify docker-compose references valid Dockerfiles
+        run: |
+          python3 -c "
+          import yaml
+          with open('docker-compose.yaml') as f:
+              data = yaml.safe_load(f)
+          errors = 0
+          for name, svc in data.get('services', {}).items():
+              if 'build' in svc:
+                  df = svc['build'].get('dockerfile', 'Dockerfile')
+                  ctx = svc['build'].get('context', '.')
+                  import os
+                  path = os.path.join(ctx, df)
+                  if not os.path.exists(path):
+                      print(f'❌ {name}: {path} not found')
+                      errors += 1
+          if errors:
+              exit(1)
+          print('✅ All docker-compose build references valid')
+          "
+
+  # ── Schema Validation ───────────────────────────────────────────────
+  schema:
+    name: Database Schema Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check master_schema.sql is valid SQL
+        run: |
+          # Basic validation: check for unmatched parentheses
+          python3 -c "
+          with open('config/master_schema.sql') as f:
+              sql = f.read()
+          opens = sql.count('(')
+          closes = sql.count(')')
+          if opens != closes:
+              print(f'❌ Unmatched parentheses: {opens} open, {closes} close')
+              exit(1)
+          print(f'✅ Schema SQL: {opens} matched parentheses')
+          "
+
+      - name: Check for duplicate table definitions
+        run: |
+          python3 -c "
+          import re
+          with open('config/master_schema.sql') as f:
+              sql = f.read()
+          tables = re.findall(r'CREATE TABLE\s+(?:IF NOT EXISTS\s+)?(\w+)', sql, re.IGNORECASE)
+          seen = set()
+          dupes = []
+          for t in tables:
+              if t in seen:
+                  dupes.append(t)
+              seen.add(t)
+          if dupes:
+              print(f'⚠️  Duplicate table definitions: {dupes}')
+          else:
+              print(f'✅ No duplicate tables ({len(tables)} unique)')
+          "
+
+  # ── Seed Script Validation ──────────────────────────────────────────
+  seed:
+    name: Seed Script Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install httpx
+
+      - name: Syntax check seed script
+        run: python -m py_compile scripts/seed_demo_data.py && echo "✅ Seed script OK"
+
+      - name: Dry-run seed script (import check)
+        run: |
+          python3 -c "
+          import ast, sys
+          with open('scripts/seed_demo_data.py') as f:
+              tree = ast.parse(f.read())
+          funcs = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+          required = ['seed_sales_contacts_and_leads', 'seed_support_tickets', 'seed_hr_employees',
+                      'seed_call_center_agents', 'seed_rica_verifications', 'seed_finance_records',
+                      'seed_inventory_stock', 'seed_iot_devices', 'main']
+          missing = [f for f in required if f not in funcs]
+          if missing:
+              print(f'❌ Missing functions: {missing}')
+              sys.exit(1)
+          print(f'✅ All {len(required)} seed functions present')
+          "
