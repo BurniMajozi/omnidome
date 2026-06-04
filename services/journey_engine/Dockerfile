@@ -5,6 +5,8 @@ WORKDIR /app
 COPY services/common/requirements.txt /tmp/common-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/common-requirements.txt
 
+COPY services/common/requirements.txt /common/requirements.txt
+
 COPY services/journey_engine/requirements.txt /tmp/journey-engine-requirements.txt
 RUN pip install --no-cache-dir -r /tmp/journey-engine-requirements.txt
 

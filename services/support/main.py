@@ -3,15 +3,21 @@
 Port: 8008
 """
 
-from fastapi import FastAPI, Depends, HTTPException, status
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
+import asyncio
+import json
+import logging
+import os
 import uuid
 from datetime import datetime, timedelta
-import logging
-from services.common.entitlements import EntitlementGuard
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
-from services.support.database import get_session, init_tables, Ticket, TicketReply
+from services.common.entitlements import EntitlementGuard
+from services.support.database import Ticket, TicketReply, get_session, init_tables
 
 app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
@@ -140,7 +146,10 @@ async def create_ticket(
     db.add(t)
     await db.flush()
     await db.refresh(t)
-    return _ticket_to_dict(t)
+    ticket_dict = _ticket_to_dict(t)
+    # Notify SSE streams (non-blocking)
+    await _notify_new_ticket(str(tenant_id), ticket_dict)
+    return ticket_dict
 
 
 @app.get("/tickets")
@@ -220,6 +229,10 @@ async def escalate_to_fno(
     ticket.external_fno_ref = f"VUMA-OUTAGE-{str(job_id)[:8]}"
     ticket.status = "ESCALATED"
 
+    await db.flush()
+    td = _ticket_to_dict(ticket)
+    await _notify_ticket_update(str(tenant_id), td)
+
     logging.info(f"Escalating ticket {ticket_id} to FNO via Browser Automation (Agent: Playwright)")
     return {
         "status": "ESCALATED",
@@ -250,7 +263,8 @@ async def accept_ticket(
     ticket.status = "IN_PROGRESS"
     ticket.assigned_to = auth.user_id
     await db.flush()
-
+    td = _ticket_to_dict(ticket)
+    await _notify_ticket_update(str(auth.tenant_id), td)
     return {"status": "ACCEPTED", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
 
 
@@ -276,7 +290,8 @@ async def start_ticket(
     ticket.status = "IN_PROGRESS"
     ticket.assigned_to = auth.user_id
     await db.flush()
-
+    td = _ticket_to_dict(ticket)
+    await _notify_ticket_update(str(auth.tenant_id), td)
     return {"status": "IN_PROGRESS", "ticket_id": str(ticket_id), "technician_id": str(auth.user_id)}
 
 
@@ -312,6 +327,8 @@ async def resolve_ticket(
     ticket.assigned_to = auth.user_id
 
     await db.flush()
+    td = _ticket_to_dict(ticket)
+    await _notify_ticket_update(str(auth.tenant_id), td)
 
     return {
         "id": str(ticket_id),
@@ -429,6 +446,98 @@ async def broadcast_alert(
         logging.info(f"GENERAL BROADCAST: {title} sent to all active subscribers")
 
     return {"status": "SENT", "recipients_count": "CALCULATED_DYNAMICALLY"}
+
+
+# ── SSE Stream for Technician Job Dispatch ──────────────────────────────
+
+# In-memory store of active SSE connections per tenant
+# In production, use Redis pub/sub for multi-instance support
+_active_streams: Dict[str, List[asyncio.Queue]] = {}
+
+
+async def _notify_new_ticket(tenant_id: str, ticket_dict: dict) -> None:
+    """Push new ticket to all active SSE streams for this tenant."""
+    queues = _active_streams.get(tenant_id, [])
+    for q in queues:
+        try:
+            q.put_nowait({"event": "new_ticket", "data": ticket_dict})
+        except asyncio.QueueFull:
+            pass
+
+
+async def _notify_ticket_update(tenant_id: str, ticket_dict: dict) -> None:
+    """Push ticket status update to all active SSE streams for this tenant."""
+    queues = _active_streams.get(tenant_id, [])
+    for q in queues:
+        try:
+            q.put_nowait({"event": "ticket_update", "data": ticket_dict})
+        except asyncio.QueueFull:
+            pass
+
+
+@app.get("/technicians/me/stream")
+async def stream_technician_events(
+    auth: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
+):
+    """SSE stream for real-time technician job dispatch notifications.
+
+    Events:
+    - connected: Stream established (includes user_id, tenant_id)
+    - initial_state: Current open jobs on connect
+    - new_ticket: New ticket assigned to technician
+    - ticket_update: Status change on assigned ticket
+    - ping: Keep-alive (every 30s)
+    """
+    tenant_id = str(auth.tenant_id)
+    user_id = str(auth.user_id)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+
+    # Register stream
+    if tenant_id not in _active_streams:
+        _active_streams[tenant_id] = []
+    _active_streams[tenant_id].append(queue)
+
+    async def event_generator():
+        try:
+            # Send initial connection ack
+            yield f"event: connected\ndata: {json.dumps({'user_id': user_id, 'tenant_id': tenant_id})}\n\n"
+
+            # Send current open jobs on connect
+            from sqlalchemy import select, desc
+            stmt = select(Ticket).where(
+                Ticket.tenant_id == auth.tenant_id,
+                Ticket.assigned_to == auth.user_id,
+                Ticket.status.in_(["OPEN", "IN_PROGRESS"]),
+            ).order_by(desc(Ticket.created_at))
+            result = await db.execute(stmt)
+            open_tickets = result.scalars().all()
+            yield f"event: initial_state\ndata: {json.dumps([_ticket_to_dict(t) for t in open_tickets])}\n\n"
+
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield f"event: {event['event']}\ndata: {json.dumps(event['data'])}\n\n"
+                except asyncio.TimeoutError:
+                    yield f"event: ping\ndata: {json.dumps({'ts': datetime.utcnow().isoformat()})}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            # Unregister stream
+            if tenant_id in _active_streams:
+                _active_streams[tenant_id] = [q for q in _active_streams[tenant_id] if q is not queue]
+                if not _active_streams[tenant_id]:
+                    del _active_streams[tenant_id]
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 if __name__ == "__main__":

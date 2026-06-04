@@ -259,6 +259,15 @@ export function FieldSalesApp() {
 
   useEffect(() => { load() }, [load])
 
+  // Polling fallback — refresh leads/deals every 30s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fieldSalesApi.listLeads({ status: "NEW" }).then(setLeads).catch(() => {})
+      fieldSalesApi.listDeals({ status: "OPEN" }).then(setDeals).catch(() => {})
+    }, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   const handleConvert = async (lead: MobileLead) => {
     try {
       await fieldSalesApi.convertLead(lead.id, { name: `${lead.first_name} ${lead.last_name} - New Deal`, value_zar: 0 })

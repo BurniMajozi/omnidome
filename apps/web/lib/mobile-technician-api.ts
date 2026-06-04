@@ -163,4 +163,28 @@ export const technicianApi = {
       customer_rating: number
       revenue_generated: number
     }>(`/support/technicians/me/stats`),
+
+  // SSE stream for real-time job dispatch
+  streamJobEvents: (onEvent: (event: { event: string; data: unknown }) => void) => {
+    const evtSource = new EventSource(`/api/support/technicians/me/stream`)
+    evtSource.addEventListener("connected", (e) => {
+      onEvent({ event: "connected", data: JSON.parse(e.data as string) })
+    })
+    evtSource.addEventListener("initial_state", (e) => {
+      onEvent({ event: "initial_state", data: JSON.parse(e.data as string) })
+    })
+    evtSource.addEventListener("new_ticket", (e) => {
+      onEvent({ event: "new_ticket", data: JSON.parse(e.data as string) })
+    })
+    evtSource.addEventListener("ticket_update", (e) => {
+      onEvent({ event: "ticket_update", data: JSON.parse(e.data as string) })
+    })
+    evtSource.addEventListener("ping", () => {
+      // Keep-alive, no action needed
+    })
+    evtSource.onerror = () => {
+      onEvent({ event: "error", data: { message: "Stream connection lost" } })
+    }
+    return () => evtSource.close()
+  },
 }

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,12 +17,16 @@ from services.common.auth import AuthContext, get_auth_context
 from services.common.entitlements import EntitlementGuard
 from services.common.rbac import has_permission, has_role
 from services.common.db import get_async_session
+from services.common.rate_limiter import RateLimiter
 
 logger = logging.getLogger("admin")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="OmniDome Admin Service", version="1.0.0")
 guard = EntitlementGuard(module_name="admin")
+
+# Rate limiter for auth-sensitive endpoints (10 req/min per IP)
+_auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
 
 
 @app.on_event("startup")
@@ -430,10 +434,11 @@ async def delete_tenant(
 @app.post("/roles", status_code=status.HTTP_201_CREATED)
 async def create_role(
     payload: RoleCreate,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _require_tenant_admin(ctx, session)
+    await _auth_rate_limiter.check(request)
     role_id = uuid.uuid4()
 
     result = await session.execute(
@@ -544,10 +549,11 @@ async def update_role_permissions(
 async def assign_role(
     user_id: uuid.UUID,
     payload: RoleAssign,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _require_tenant_admin(ctx, session)
+    await _auth_rate_limiter.check(request)
 
     role_row = await session.execute(
         text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
@@ -779,10 +785,11 @@ async def list_users(
 @app.post("/users", status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreate,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _require_tenant_admin(ctx, session)
+    await _auth_rate_limiter.check(request)
     user_id = uuid.uuid4()
     if payload.password:
         hashed_password = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
@@ -914,9 +921,11 @@ class PasswordReset(BaseModel):
 async def reset_user_password(
     user_id: uuid.UUID,
     payload: PasswordReset,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
+    await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
     new_hash = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
     result = await session.execute(
@@ -938,10 +947,11 @@ async def reset_user_password(
 @app.delete("/users/{user_id}")
 async def deactivate_user(
     user_id: uuid.UUID,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _require_tenant_admin(ctx, session)
+    await _auth_rate_limiter.check(request)
     result = await session.execute(
         text(
             """

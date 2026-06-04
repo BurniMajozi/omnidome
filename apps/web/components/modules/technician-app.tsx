@@ -5,6 +5,7 @@ import {
   Wrench, MapPin, Phone, Clock, CheckCircle, AlertTriangle, Zap,
   Wifi, Thermometer, ArrowLeft, Play, Square, Package, Camera,
   ChevronRight, Signal, RotateCcw, Star, Timer, TrendingUp, Plus,
+  Radio,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -310,6 +311,26 @@ export function TechnicianApp() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Real-time SSE subscription for job dispatch
+  useEffect(() => {
+    const unsubscribe = technicianApi.streamJobEvents((evt) => {
+      if (evt.event === "new_ticket") {
+        const newJob = evt.data as TechJob
+        setJobs((prev) => {
+          // Avoid duplicates
+          if (prev.find((j) => j.id === newJob.id)) return prev
+          return [newJob, ...prev]
+        })
+      } else if (evt.event === "ticket_update") {
+        const updatedJob = evt.data as TechJob
+        setJobs((prev) =>
+          prev.map((j) => (j.id === updatedJob.id ? updatedJob : j))
+        )
+      }
+    })
+    return unsubscribe
+  }, [])
 
   const filteredJobs = jobs.filter(j => filter === "ALL" || j.status === filter)
 

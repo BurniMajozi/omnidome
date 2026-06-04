@@ -400,6 +400,10 @@ CREATE TABLE rica_verifications (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_rica_verifications_tenant ON rica_verifications (tenant_id);
+CREATE INDEX idx_rica_verifications_job_id ON rica_verifications (job_id);
+CREATE INDEX idx_rica_verifications_contact ON rica_verifications (contact_id);
+
 CREATE TABLE fno_portals (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
@@ -1001,6 +1005,140 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- 15. FINANCIAL RECORDS & BUDGET SCENARIOS
+CREATE TABLE financial_records (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    record_type VARCHAR(50) NOT NULL,
+    description VARCHAR(500),
+    amount NUMERIC(14, 2) NOT NULL,
+    period VARCHAR(20),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_financial_records_tenant ON financial_records(tenant_id);
+CREATE INDEX idx_financial_records_type ON financial_records(tenant_id, record_type);
+
+CREATE TABLE budget_scenarios (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    name VARCHAR(200) NOT NULL,
+    revenue_growth_pct NUMERIC(5, 2),
+    opex_change_pct NUMERIC(5, 2),
+    capex_change_pct NUMERIC(5, 2),
+    result_revenue NUMERIC(14, 2),
+    result_opex NUMERIC(14, 2),
+    result_ebita NUMERIC(14, 2),
+    result_ebit NUMERIC(14, 2),
+    result_fcf NUMERIC(14, 2),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_budget_scenarios_tenant ON budget_scenarios(tenant_id);
+
 -- Deferred Foreign Keys (resolving forward references)
 ALTER TABLE radius_accounts ADD CONSTRAINT fk_radius_device FOREIGN KEY (device_id) REFERENCES iot_devices(id);
 ALTER TABLE fiber_health_alerts ADD CONSTRAINT fk_alert_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id);
+
+-- 16. HR SERVICE TABLES
+CREATE TABLE employees (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    employee_id VARCHAR(20) NOT NULL,
+    full_name VARCHAR(200) NOT NULL,
+    job_title VARCHAR(200) NOT NULL,
+    department VARCHAR(100) NOT NULL,
+    hire_date DATE NOT NULL,
+    status VARCHAR(20) DEFAULT 'ACTIVE',
+    email VARCHAR(200),
+    phone VARCHAR(20),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_employees_tenant ON employees(tenant_id);
+CREATE INDEX idx_employees_employee_id ON employees(tenant_id, employee_id);
+
+CREATE TABLE leave_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    leave_type VARCHAR(50) NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    status VARCHAR(20) DEFAULT 'PENDING',
+    reason TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_leave_requests_tenant ON leave_requests(tenant_id);
+CREATE INDEX idx_leave_requests_employee ON leave_requests(employee_id);
+
+CREATE TABLE performance_reviews (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    review_period VARCHAR(20) NOT NULL,
+    tickets_resolved INTEGER DEFAULT 0,
+    avg_resolution_time INTEGER DEFAULT 0,
+    fcr_rate NUMERIC(5, 2),
+    kpi_score NUMERIC(4, 2),
+    sentiment_score NUMERIC(4, 2),
+    attrition_risk VARCHAR(10),
+    reviewer_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_performance_reviews_tenant ON performance_reviews(tenant_id);
+CREATE INDEX idx_performance_reviews_employee ON performance_reviews(employee_id);
+
+-- 9. CALL CENTER
+CREATE TABLE call_center_agents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    name VARCHAR(200) NOT NULL,
+    extension VARCHAR(20) NOT NULL,
+    status VARCHAR(20) DEFAULT 'IDLE',
+    daily_sales NUMERIC(12, 2) DEFAULT 0,
+    mttr_minutes NUMERIC(5, 2) DEFAULT 0,
+    csat_score NUMERIC(3, 2) DEFAULT 0,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_call_center_agents_tenant ON call_center_agents(tenant_id);
+
+CREATE TABLE call_center_scripts (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    title VARCHAR(200) NOT NULL,
+    category VARCHAR(50) NOT NULL,
+    content TEXT NOT NULL,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_call_center_scripts_tenant ON call_center_scripts(tenant_id);
+
+CREATE TABLE call_sessions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    agent_id UUID REFERENCES call_center_agents(id) ON DELETE CASCADE,
+    customer_id UUID,
+    start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_time TIMESTAMP WITH TIME ZONE,
+    duration_seconds INTEGER DEFAULT 0,
+    sentiment_score NUMERIC(4, 2),
+    recording_url VARCHAR(500),
+    transcript TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_call_sessions_tenant ON call_sessions(tenant_id);
+CREATE INDEX idx_call_sessions_agent ON call_sessions(agent_id);

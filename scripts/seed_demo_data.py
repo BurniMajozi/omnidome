@@ -306,16 +306,74 @@ async def seed_network_radius(client: httpx.AsyncClient, contacts: list):
     return radius_accounts
 
 
-async def seed_crm_contacts(client: httpx.AsyncClient):
-    """Seed CRM contacts using the CRM service endpoints."""
-    r = await client.get(f"{GATEWAY_URL}/crm/health", headers=_h())
-    if r.status_code >= 400:
-        print(f"  CRM: unavailable — skipping")
-        return []
+async def seed_hr_employees(client: httpx.AsyncClient):
+    """Seed HR employees."""
+    employees = []
+    hr_data = [
+        {"employee_id": "STF-001", "full_name": "Thabo Molefe", "job_title": "Support Lead",
+         "department": "Support", "email": "thabo@demo.local", "phone": "0821234567"},
+        {"employee_id": "STF-002", "full_name": "Sarah Jenkins", "job_title": "Network Technician",
+         "department": "Network", "email": "sarah@demo.local", "phone": "0724567890"},
+        {"employee_id": "STF-003", "full_name": "Lerato Khumalo", "job_title": "Field Sales Rep",
+         "department": "Sales", "email": "lerato@demo.local", "phone": "0837890123"},
+        {"employee_id": "STF-004", "full_name": "Sipho Dlamini", "job_title": "Call Center Agent",
+         "department": "Call Center", "email": "sipho@demo.local", "phone": "0731112233"},
+    ]
+    for emp in hr_data:
+        r = await client.post(f"{GATEWAY_URL}/hr/employees", json=emp, headers=_h())
+        if r.status_code < 400:
+            employees.append(r.json())
+    print(f"  HR: {len(employees)} employees created")
+    return employees
 
-    # The sales service already seeds contacts — just verify CRM is healthy
-    print(f"  CRM: healthy — contacts seeded via sales service")
-    return []
+
+async def seed_call_center_agents(client: httpx.AsyncClient):
+    """Seed call center agents."""
+    agents = []
+    agent_data = [
+        {"name": "Sipho Nkosi", "extension": "1001", "status": "IDLE"},
+        {"name": "Jane Doe", "extension": "1005", "status": "IDLE"},
+        {"name": "Thabo Molefe", "extension": "1010", "status": "ON_CALL"},
+    ]
+    for agent in agent_data:
+        r = await client.post(f"{GATEWAY_URL}/call_center/agents", json=agent, headers=_h())
+        if r.status_code < 400:
+            agents.append(r.json())
+    print(f"  Call Center: {len(agents)} agents created")
+    return agents
+
+
+async def seed_rica_verifications(client: httpx.AsyncClient, contacts: list):
+    """Seed RICA verifications."""
+    verifications = []
+    for contact in contacts[:3]:
+        contact_id = contact.get("id") or contact.get("contact_id")
+        r = await client.post(f"{GATEWAY_URL}/rica/sessions", json={
+            "contact_id": contact_id,
+            "verification_type": "DOCUMENT_VERIFICATION",
+        }, headers=_h())
+        if r.status_code < 400:
+            verifications.append(r.json())
+    print(f"  RICA: {len(verifications)} verification sessions created")
+    return verifications
+
+
+async def seed_finance_records(client: httpx.AsyncClient):
+    """Seed finance records."""
+    records = []
+    finance_data = [
+        {"record_type": "REVENUE", "description": "Monthly subscription revenue", "amount": "48000000", "period": "FY2026-Q1"},
+        {"record_type": "OPEX", "description": "Network operations", "amount": "14000000", "period": "FY2026-Q1"},
+        {"record_type": "CAPEX", "description": "Fibre infrastructure", "amount": "9000000", "period": "FY2026-Q1"},
+        {"record_type": "INTEREST", "description": "Debt servicing", "amount": "1800000", "period": "FY2026-Q1"},
+        {"record_type": "TAX", "description": "Corporate tax provision", "amount": "2856000", "period": "FY2026-Q1"},
+    ]
+    for rec in finance_data:
+        r = await client.post(f"{GATEWAY_URL}/finance/records", json=rec, headers=_h())
+        if r.status_code < 400:
+            records.append(r.json())
+    print(f"  Finance: {len(records)} records created")
+    return records
 
 
 # ── Main ─────────────────────────────────────────────────────────────
@@ -366,8 +424,20 @@ async def main():
         await seed_network_radius(client, sales_data["contacts"])
 
         print()
-        print("── Phase 7: CRM ──")
-        await seed_crm_contacts(client)
+        print("── Phase 7: HR ──")
+        await seed_hr_employees(client)
+
+        print()
+        print("── Phase 8: Call Center ──")
+        await seed_call_center_agents(client)
+
+        print()
+        print("── Phase 9: RICA ──")
+        await seed_rica_verifications(client, sales_data["contacts"])
+
+        print()
+        print("── Phase 10: Finance ──")
+        await seed_finance_records(client)
 
         print()
         print("═══ Seed complete ═══")
@@ -376,10 +446,13 @@ async def main():
         print(f"  {len(sales_data['leads'])} leads (3 converted)")
         print(f"  {len(sales_data['deals'])} deals")
         print(f"  {len(sales_data['quotes'])} quotes")
-        print(f"  8 support tickets (4 sample + seeded)")
+        print(f"  8 support tickets")
         print(f"  7 inventory products")
-        print(f"  3 IoT devices (in-memory)")
-        print(f"\nTo reset: restart all services (clears in-memory stores)")
+        print(f"  3 IoT devices")
+        print(f"  4 HR employees")
+        print(f"  3 call center agents")
+        print(f"  3 RICA verifications")
+        print(f"  5 finance records")
 
 
 if __name__ == "__main__":
