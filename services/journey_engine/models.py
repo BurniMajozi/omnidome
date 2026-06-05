@@ -158,7 +158,7 @@ class JourneyRule(JourneyBase):
     )
 
     __table_args__ = (
-        ix_outcomes_customer_outcome_idx := Index("ix_outcomes_tenant_outcome", "tenant_id", "outcome"),
+        Index("ix_journey_rules_journey", "journey_id", "rule_group"),
     )
 
 
