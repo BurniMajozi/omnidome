@@ -4,6 +4,7 @@ WORKDIR /app
 COPY services/common/requirements.txt /tmp/common-reqs.txt
 RUN pip install --no-cache-dir -r /tmp/common-reqs.txt
 
+COPY services/common/requirements.txt /common/requirements.txt
 COPY services/agent-orchestrator/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
