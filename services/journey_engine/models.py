@@ -9,14 +9,16 @@ This service manages the full cancel-to-save lifecycle:
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
+    Enum as SAEnum,
     ForeignKey,
     Index,
     Integer,
