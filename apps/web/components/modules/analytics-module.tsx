@@ -24,12 +24,11 @@ import {
     PolarAngleAxis,
     PolarRadiusAxis,
 } from "recharts"
-import { BarChart3, TrendingUp, Brain, Activity } from "lucide-react"
+import { BarChart3, TrendingUp, Brain, Activity, MousePointerClick, Clock } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { analyticsApi } from "@/lib/analytics/api"
 import type { ClickPoint, PageLoadPoint } from "@/lib/api"
 import { useEffect, useState, useCallback } from "react"
-import { Activity, MousePointerClick, Clock, TrendingUp } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 // Revenue trend data

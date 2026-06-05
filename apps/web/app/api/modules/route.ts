@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '../../../lib/supabase/server'
+import { getSupabaseServer } from '../../../lib/supabase/server'
 
 // GET /api/modules/[id] — fetch module data by ID
 export async function GET(
@@ -7,7 +7,10 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const sb = createServerSupabase()
+  const { client: sb, error: sbError } = getSupabaseServer()
+  if (sbError || !sb) {
+    return NextResponse.json({ error: sbError ?? "Supabase client not initialized" }, { status: 500 })
+  }
   const { data, error } = await sb
     .from('module_data')
     .select('*')
@@ -28,7 +31,10 @@ export async function POST(
   const { id } = await params
   const body = await request.json()
 
-  const sb = createServerSupabase()
+  const { client: sb, error: sbError } = getSupabaseServer()
+  if (sbError || !sb) {
+    return NextResponse.json({ error: sbError ?? "Supabase client not initialized" }, { status: 500 })
+  }
   const { data, error } = await sb
     .from('module_data')
     .upsert({ module_name: id, payload: body }, { onConflict: 'module_name' })
