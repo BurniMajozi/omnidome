@@ -719,14 +719,17 @@ CREATE TABLE employees (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE SET NULL, -- Link to system user if they have access
-    employee_id TEXT UNIQUE NOT NULL, -- Internal ID (e.g. STF-001)
-    full_name TEXT NOT NULL,
-    job_title TEXT NOT NULL,
-    department TEXT NOT NULL, -- Support, Sales, Network, HR, Admin
+    employee_id VARCHAR(50) UNIQUE NOT NULL, -- Internal ID (e.g. STF-001)
+    full_name VARCHAR(200) NOT NULL,
+    job_title VARCHAR(200) NOT NULL,
+    department VARCHAR(100) NOT NULL, -- Support, Sales, Network, HR, Admin
     hire_date DATE NOT NULL,
-    status TEXT DEFAULT 'ACTIVE', -- ACTIVE, ON_LEAVE, TERMINATED
+    status VARCHAR(20) DEFAULT 'ACTIVE', -- ACTIVE, ON_LEAVE, TERMINATED
+    email VARCHAR(200),
+    phone VARCHAR(20),
     profile_photo_url TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE onboarding_tasks (
@@ -1053,23 +1056,8 @@ ALTER TABLE radius_accounts ADD CONSTRAINT fk_radius_device FOREIGN KEY (device_
 ALTER TABLE fiber_health_alerts ADD CONSTRAINT fk_alert_ticket FOREIGN KEY (ticket_id) REFERENCES tickets(id);
 
 -- 16. HR SERVICE TABLES
-CREATE TABLE employees (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    employee_id VARCHAR(20) NOT NULL,
-    full_name VARCHAR(200) NOT NULL,
-    job_title VARCHAR(200) NOT NULL,
-    department VARCHAR(100) NOT NULL,
-    hire_date DATE NOT NULL,
-    status VARCHAR(20) DEFAULT 'ACTIVE',
-    email VARCHAR(200),
-    phone VARCHAR(20),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_employees_tenant ON employees(tenant_id);
-CREATE INDEX idx_employees_employee_id ON employees(tenant_id, employee_id);
+CREATE INDEX IF NOT EXISTS idx_employees_tenant ON employees(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_employees_employee_id ON employees(tenant_id, employee_id);
 
 CREATE TABLE leave_requests (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
