@@ -806,7 +806,7 @@ CREATE TABLE audit_logs (
 );
 
 -- Indexes for Sales performance
-CREATE INDEX idx_leads_tenant ON leads(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id);
 CREATE INDEX idx_deals_tenant ON deals(tenant_id);
 CREATE INDEX idx_deals_stage ON deals(stage_id);
 CREATE INDEX idx_deals_agent ON deals(agent_id);
@@ -817,7 +817,7 @@ CREATE INDEX idx_commissions_agent ON commissions(agent_id);
 CREATE INDEX idx_commissions_status ON commissions(status);
 CREATE INDEX idx_targets_agent ON sales_targets(agent_id);
 CREATE INDEX idx_tasks_delegate ON tasks(user_id);
-CREATE INDEX idx_contacts_tenant ON contacts(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_contacts_tenant ON contacts(tenant_id);
 CREATE INDEX idx_services_contact ON services(contact_id);
 CREATE INDEX idx_audit_tenant ON audit_logs(tenant_id);
 
