@@ -84,7 +84,9 @@ export interface UTMData {
 export interface RealtimeData {
   active_visitors: number
   pageviews_last_5min: number
-  top_pages: { path: string; visitors: number }
+  top_pages: { path: string; visitors: number }[]
+}
+
 export interface ClickPoint {
   date: string
   clicks: number
@@ -96,9 +98,6 @@ export interface PageLoadPoint {
   pageviews: number
   avg_load_seconds: number
   median_load_seconds: number
-}
-
-[]
 }
 
 export const analyticsApi = {

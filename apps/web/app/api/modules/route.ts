@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerSupabase } from '../../lib/supabase/server'
+import { createServerSupabase } from '../../../lib/supabase/server'
 
 // GET /api/modules/[id] — fetch module data by ID
 export async function GET(
