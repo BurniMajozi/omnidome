@@ -47,10 +47,10 @@ class JournalEntry(Base):
     reference: Mapped[Optional[str]] = mapped_column(String(100))
     description: Mapped[Optional[str]] = mapped_column(Text)
     source: Mapped[Optional[str]] = mapped_column(
-        String(50), description="e.g. BILLING, MANUAL, PAYROLL, ADJUSTMENT",
+        String(50), comment="e.g. BILLING, MANUAL, PAYROLL, ADJUSTMENT",
     )
     source_id: Mapped[Optional[str]] = mapped_column(
-        String(100), description="ID of the source document (invoice, payment, etc.)",
+        String(100), comment="ID of the source document (invoice, payment, etc.)",
     )
     is_posted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

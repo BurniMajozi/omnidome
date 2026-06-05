@@ -6,6 +6,7 @@ import os
 import secrets
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status

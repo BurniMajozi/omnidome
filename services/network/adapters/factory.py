@@ -12,8 +12,8 @@ from typing import Any, Dict
 from .base import FNOAdapter
 from .api_adapter import APIFNOAdapter
 from .browser_adapter import BrowserFNOAdapter
-from .vumatel import VumatelAdapter
-from .openserve import OpenserveAdapter
+from .vumatel import VumatelAPI as VumatelAdapter
+from .openserve import OpenserveAPI as OpenserveAdapter
 from .metrofibre import MetroFibreAdapter
 from .frogfoot import FrogfootAdapter
 from .octotel import OctotelAdapter

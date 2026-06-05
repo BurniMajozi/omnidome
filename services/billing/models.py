@@ -220,7 +220,7 @@ class Subscription(Base):
     base_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
     segment_pricing: Mapped[Optional[dict[str, Any]]] = mapped_column(
         JSONB, nullable=True, default=dict,
-        description="Per-segment price overrides, e.g. {'Enterprise': 1299.99, 'Premium': 899.99}",
+        comment="Per-segment price overrides, e.g. {'Enterprise': 1299.99, 'Premium': 899.99}",
     )
     billing_anchor: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
     current_period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -278,7 +278,7 @@ class SubscriptionUsage(Base):
         UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     metric: Mapped[str] = mapped_column(String(100), nullable=False,
-        description="e.g. 'gb_overage', 'api_calls', 'devices'")
+        comment="e.g. 'gb_overage', 'api_calls', 'devices'")
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal("0.00"))
     unit_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=Decimal("0.0000"))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

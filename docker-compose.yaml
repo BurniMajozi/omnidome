@@ -423,7 +423,7 @@ services:
     ports:
       - "8018:8018"
     environment:
-      - DATABASE_URL=postgresql+asyncpg://omnidome:omnidome@db:5432/omnidome
+      - DATABASE_URL=${DATABASE_URL}
       - LIFECYCLE_SERVICE_URL=http://lifecycle:8018
     depends_on:
       db:

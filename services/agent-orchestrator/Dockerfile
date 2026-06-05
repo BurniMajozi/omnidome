@@ -1,11 +1,6 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq-dev gcc && \
-    rm -rf /var/lib/apt/lists/*
-
 COPY services/common/requirements.txt /tmp/common-reqs.txt
 RUN pip install --no-cache-dir -r /tmp/common-reqs.txt
 
