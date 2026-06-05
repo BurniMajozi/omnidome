@@ -1,0 +1,70 @@
+{
+  "cli": {
+    "version": ">= 14.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleDebug"
+      },
+      "ios": {
+        "resourceClass": "m-medium",
+        "simulator": true
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "env": {
+        "NEXT_PUBLIC_API_BASE_URL": "https://api.myisp.co.za",
+        "BRAND_NAME": "MyISP",
+        "BRAND_PRIMARY_COLOR": "#2563eb",
+        "BRAND_ACCENT_COLOR": "#f59e0b"
+      }
+    },
+    "huawei": {
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "NEXT_PUBLIC_API_BASE_URL": "https://api.myisp.co.za",
+        "BRAND_NAME": "MyISP",
+        "BRAND_PRIMARY_COLOR": "#2563eb",
+        "BRAND_ACCENT_COLOR": "#f59e0b"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "android": {
+        "serviceAccountKeyPath": "./google-play-service-account.json",
+        "track": "internal",
+        "releaseStatus": "completed",
+        "rollout": 0.1
+      },
+      "ios": {
+        "ascApiKeyPath": "./AppStoreConnect-API-Key.p8",
+        "ascApiKeyIssuerId": "your-issuer-id",
+        "ascApiKeyId": "your-key-id",
+        "bundleId": "com.myisp.customerportal"
+      }
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "app": {
+    "packageName": "com.myisp.customerportal",
+    "name": "MyISP Connect",
+    "versionName": "1.0.0",
+    "versionCode": 1,
+    "icon": "./assets/icon.png",
+    "permissions": [
+      "android.permission.CAMERA",
+      "android.permission.READ_EXTERNAL_STORAGE",
+      "android.permission.ACCESS_FINE_LOCATION",
+      "android.permission.ACCESS_COARSE_LOCATION",
+      "android.permission.RECEIVE_BOOT_COMPLETED",
+      "android.permission.VIBRATE"
+    ],
+    "features": [
+      "android.hardware.camera",
+      "android.hardware.camera.autofocus"
+    ]
+  },
+  "release": {
+    "type": "production",
+    "artifactType": "aab"
+  }
+}
