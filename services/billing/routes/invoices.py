@@ -14,7 +14,8 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.billing.database import compute_vat, get_session, next_invoice_number
-from services.billing.models import DunningAction, Invoice
+from services.billing.models import DunningAction, Invoice, Subscription, SubscriptionUsage
+from services.billing.routes.subscriptions import _add_interval
 from services.billing.schemas import (
     CreditNoteRequest,
     InvoiceGenerateRequest,
@@ -40,45 +41,94 @@ async def generate_invoices(
     body: InvoiceGenerateRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Batch-generate invoices for active customers."""
+    """Batch-generate invoices from active subscriptions.
+
+    For each active subscription, looks up the subscription's pricing
+    (base_price_zar + segment_pricing), rolls up unbilled usage, and
+    creates a linked invoice. Skips subscriptions still in trial.
+    """
     async with get_session() as session:
+        # Resolve target subscriptions
+        sub_stmt = select(Subscription).where(
+            Subscription.tenant_id == ctx.tenant_id,
+            Subscription.status.in_(["active", "trial"]),
+        )
+        if body.customer_ids:
+            sub_stmt = sub_stmt.where(Subscription.customer_id.in_(body.customer_ids))
+
+        sub_result = await session.execute(sub_stmt)
+        subscriptions = sub_result.scalars().all()
+
         created: list[Invoice] = []
+        for sub in subscriptions:
+            # Skip trial subscriptions
+            if sub.is_in_trial():
+                continue
 
-        customer_ids = body.customer_ids
-        if not customer_ids:
-            result = await session.execute(
-                select(Invoice.customer_id)
-                .where(Invoice.tenant_id == ctx.tenant_id)
-                .distinct()
+            # Resolve segment pricing
+            segment = sub.segment
+            if segment and sub.segment_pricing and segment in sub.segment_pricing:
+                recurring = Decimal(str(sub.segment_pricing[segment]))
+            else:
+                recurring = sub.base_price_zar
+
+            # Roll up unbilled usage
+            usage_result = await session.execute(
+                select(SubscriptionUsage).where(
+                    SubscriptionUsage.subscription_id == sub.id,
+                    SubscriptionUsage.billed_invoice_id.is_(None),
+                )
             )
-            customer_ids = [r[0] for r in result.all()]
+            unbilled = usage_result.scalars().all()
+            usage_amount = sum(u.quantity * u.unit_price_zar for u in unbilled)
 
-        for cid in customer_ids:
-            number = next_invoice_number(session, ctx.tenant_id)
-            due = body.billing_date + timedelta(days=DEFAULT_DUE_DAYS)
-
-            line_items = [
-                {"description": "Monthly internet service", "quantity": 1,
-                 "unit_price_zar": "0.00", "total_zar": "0.00"}
-            ]
-            subtotal = Decimal("0.00")
+            subtotal = recurring + usage_amount
             vat = compute_vat(subtotal)
             total = subtotal + vat
 
+            period_start = sub.current_period_start or sub.billing_anchor
+            period_end = sub.current_period_end or _add_interval(period_start, sub.billing_interval)
+
+            line_items = [{
+                "description": f"Subscription — {sub.plan}" + (f" ({segment})" if segment else ""),
+                "quantity": 1,
+                "unit_price_zar": str(recurring),
+                "total_zar": str(recurring),
+            }]
+            for u in unbilled:
+                line_items.append({
+                    "description": f"Usage: {u.metric}" + (f" — {u.description}" if u.description else ""),
+                    "quantity": float(u.quantity),
+                    "unit_price_zar": str(u.unit_price_zar),
+                    "total_zar": str((u.quantity * u.unit_price_zar).quantize(Decimal("0.01"))),
+                })
+
+            number = next_invoice_number(session, ctx.tenant_id)
             inv = Invoice(
                 tenant_id=ctx.tenant_id,
-                customer_id=cid,
+                customer_id=sub.customer_id,
+                subscription_id=sub.id,
                 number=number,
                 status="draft",
-                subtotal_zar=subtotal,
+                subtotal_zar=subtotal.quantize(Decimal("0.01")),
                 vat_zar=vat,
-                total_zar=total,
-                due_date=due,
+                total_zar=total.quantize(Decimal("0.01")),
+                due_date=body.billing_date + timedelta(days=DEFAULT_DUE_DAYS),
+                billing_period_start=period_start,
+                billing_period_end=period_end,
                 line_items=line_items,
             )
             session.add(inv)
             await session.flush()
             await session.refresh(inv)
+
+            # Mark usage as billed
+            for u in unbilled:
+                u.billed_invoice_id = inv.id
+
+            # Advance billing period
+            sub.current_period_start = period_end
+            sub.current_period_end = _add_interval(period_end, sub.billing_interval)
 
             _schedule_dunning(session, inv)
             created.append(inv)
