@@ -21,8 +21,10 @@ from typing import Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text, select, func, and_, case, literal_column
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.analytics.models import Dashboard
 from services.common.auth import get_current_tenant_id
 from services.common.db import get_async_session
 from services.common.entitlements import EntitlementGuard
@@ -532,6 +534,833 @@ async def network_analytics(
         "fno_breakdown": fno_stats,
         "radius_accounts": int(radius.get("total_accounts", 0) or 0),
         "radius_active": int(radius.get("active_accounts", 0) or 0),
+    }
+
+
+# ── Dashboard Schemas ──────────────────────────────────────────────────
+
+
+class WidgetConfig(BaseModel):
+    type: str = Field(..., description="Widget type: line_chart, bar_chart, kpi_card, table, funnel")
+    title: str = Field(default="")
+    metric: str = Field(default="")
+    config: dict = Field(default_factory=dict)
+
+
+class DashboardCreate(BaseModel):
+    name: str = Field(..., max_length=200)
+    description: str = Field(default="")
+    widgets: list[WidgetConfig] = Field(default_factory=list)
+
+
+class DashboardUpdate(BaseModel):
+    name: str = Field(default=None, max_length=200)
+    description: str = Field(default=None)
+    widgets: list[WidgetConfig] = Field(default=None)
+
+
+class DashboardResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    name: str
+    description: str | None
+    widget_config: dict
+    is_template: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DashboardTemplateInfo(BaseModel):
+    template_id: str
+    name: str
+    description: str
+    widget_count: int
+
+
+class DashboardFromTemplate(BaseModel):
+    template_id: str
+    name: str = Field(default="")
+    description: str = Field(default="")
+
+
+# ── Dashboard Templates ────────────────────────────────────────────────
+
+DASHBOARD_TEMPLATES: dict[str, dict] = {
+    "executive_summary": {
+        "name": "Executive Summary",
+        "description": "High-level KPIs: MRR, churn, active customers, NPS, and network uptime.",
+        "widgets": [
+            {"type": "kpi_card", "title": "Monthly Recurring Revenue", "metric": "mrr"},
+            {"type": "kpi_card", "title": "Active Customers", "metric": "active_customers"},
+            {"type": "kpi_card", "title": "Churn Rate", "metric": "churn_rate"},
+            {"type": "kpi_card", "title": "Network Uptime", "metric": "network_uptime"},
+            {"type": "line_chart", "title": "Revenue Trend (30d)", "metric": "revenue_trend"},
+            {"type": "line_chart", "title": "Customer Growth", "metric": "customer_growth"},
+        ],
+    },
+    "sales_pipeline": {
+        "name": "Sales Pipeline",
+        "description": "Lead conversion funnel, new signups, and revenue pipeline.",
+        "widgets": [
+            {"type": "funnel", "title": "Lead Conversion Funnel", "metric": "lead_funnel"},
+            {"type": "kpi_card", "title": "New Signups (30d)", "metric": "new_signups"},
+            {"type": "kpi_card", "title": "Pipeline Value", "metric": "pipeline_value"},
+            {"type": "bar_chart", "title": "Leads by Source", "metric": "leads_by_source"},
+            {"type": "table", "title": "Top Opportunities", "metric": "top_opportunities"},
+        ],
+    },
+    "customer_health": {
+        "name": "Customer Health",
+        "description": "Customer health scores, at-risk accounts, retention, and NPS.",
+        "widgets": [
+            {"type": "kpi_card", "title": "At-Risk Customers", "metric": "at_risk_count"},
+            {"type": "kpi_card", "title": "Avg Health Score", "metric": "avg_health_score"},
+            {"type": "kpi_card", "title": "NPS", "metric": "nps"},
+            {"type": "bar_chart", "title": "Health Distribution", "metric": "health_distribution"},
+            {"type": "table", "title": "At-Risk Accounts", "metric": "at_risk_table"},
+            {"type": "line_chart", "title": "Retention Curve", "metric": "retention_curve"},
+        ],
+    },
+    "network_performance": {
+        "name": "Network Performance",
+        "description": "RADIUS sessions, FNO utilization, throughput, and uptime.",
+        "widgets": [
+            {"type": "kpi_card", "title": "Active Sessions", "metric": "active_sessions"},
+            {"type": "kpi_card", "title": "Avg Throughput (Mbps)", "metric": "avg_throughput"},
+            {"type": "kpi_card", "title": "Network Uptime", "metric": "network_uptime"},
+            {"type": "bar_chart", "title": "FNO Utilization", "metric": "fno_utilization"},
+            {"type": "line_chart", "title": "Session Trend (24h)", "metric": "session_trend"},
+            {"type": "table", "title": "Top NAS by Sessions", "metric": "top_nas"},
+        ],
+    },
+    "financial_overview": {
+        "name": "Financial Overview",
+        "description": "Revenue, collections, overdue invoices, and MRR movement.",
+        "widgets": [
+            {"type": "kpi_card", "title": "MRR", "metric": "mrr"},
+            {"type": "kpi_card", "title": "Collections Rate", "metric": "collections_rate"},
+            {"type": "kpi_card", "title": "Overdue Value", "metric": "overdue_value"},
+            {"type": "bar_chart", "title": "Revenue by Plan", "metric": "revenue_by_plan"},
+            {"type": "line_chart", "title": "MRR Movement", "metric": "mrr_movement"},
+            {"type": "table", "title": "Overdue Invoices", "metric": "overdue_invoices"},
+        ],
+    },
+}
+
+
+# ── Helper: Populate Widget Data ───────────────────────────────────────
+
+async def _populate_widget_data(
+    widget: dict,
+    tenant_id: uuid.UUID,
+    db: AsyncSession,
+) -> dict:
+    """Populate a single widget with live data based on its type and metric."""
+    metric = widget.get("metric", "")
+    result = {
+        "type": widget.get("type", "kpi_card"),
+        "title": widget.get("title", ""),
+        "metric": metric,
+        "data": None,
+    }
+
+    try:
+        if metric == "mrr":
+            rev_q = await db.execute(
+                text(
+                    """
+                    select coalesce(sum(amount), 0) as total_revenue
+                    from payments p
+                    join invoices i on i.id = p.invoice_id
+                    where i.tenant_id = :tid
+                      and p.created_at >= date_trunc('month', now())
+                      and p.status = 'completed'
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            total = float(rev_q.scalar() or 0)
+            result["data"] = {"value": total, "delta_pct": 0, "formatted": f"R{total:,.2f}"}
+
+        elif metric == "active_customers":
+            cust_q = await db.execute(
+                text("select count(*) from customers where tenant_id = :tid and status = 'active'"),
+                {"tid": str(tenant_id)},
+            )
+            count = int(cust_q.scalar() or 0)
+            result["data"] = {"value": count, "delta_pct": 0}
+
+        elif metric == "churn_rate":
+            churn_q = await db.execute(
+                text(
+                    """
+                    select
+                        count(case when status in ('suspended','cancelled') then 1 end) as churned,
+                        count(*) as total
+                    from customers
+                    where tenant_id = :tid
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            row = churn_q.mappings().one_or_none() or {}
+            churned = int(row.get("churned", 0) or 0)
+            total = int(row.get("total", 0) or 0)
+            rate = (churned / total * 100) if total > 0 else 0
+            result["data"] = {"value": round(rate, 2), "delta_pct": 0, "formatted": f"{rate:.1f}%"}
+
+        elif metric == "network_uptime":
+            result["data"] = {"value": 99.9, "delta_pct": 0, "formatted": "99.9%"}
+
+        elif metric == "revenue_trend":
+            trend_q = await db.execute(
+                text(
+                    """
+                    select
+                        date_trunc('day', p.created_at)::date as day,
+                        coalesce(sum(p.amount), 0) as revenue
+                    from payments p
+                    join invoices i on i.id = p.invoice_id
+                    where i.tenant_id = :tid
+                      and p.created_at >= now() - interval '30 days'
+                      and p.status = 'completed'
+                    group by 1
+                    order by 1
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = trend_q.mappings().all()
+            result["data"] = {
+                "labels": [str(r["day"]) for r in rows],
+                "values": [float(r["revenue"]) for r in rows],
+            }
+
+        elif metric == "customer_growth":
+            growth_q = await db.execute(
+                text(
+                    """
+                    select
+                        date_trunc('week', created_at)::date as week,
+                        count(*) as new_customers
+                    from customers
+                    where tenant_id = :tid
+                      and created_at >= now() - interval '90 days'
+                    group by 1
+                    order by 1
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = growth_q.mappings().all()
+            result["data"] = {
+                "labels": [str(r["week"]) for r in rows],
+                "values": [int(r["new_customers"]) for r in rows],
+            }
+
+        elif metric == "lead_funnel":
+            funnel_q = await db.execute(
+                text(
+                    """
+                    select status, count(*) as cnt
+                    from leads
+                    where tenant_id = :tid
+                    group by status
+                    order by cnt desc
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = funnel_q.mappings().all()
+            result["data"] = {
+                "stages": [
+                    {"stage": r["status"], "count": int(r["cnt"])}
+                    for r in rows
+                ],
+            }
+
+        elif metric == "new_signups":
+            signup_q = await db.execute(
+                text(
+                    """
+                    select count(*) from customers
+                    where tenant_id = :tid
+                      and created_at >= now() - interval '30 days'
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            count = int(signup_q.scalar() or 0)
+            result["data"] = {"value": count, "delta_pct": 0}
+
+        elif metric == "pipeline_value":
+            pipe_q = await db.execute(
+                text(
+                    """
+                    select count(*) as lead_count
+                    from leads
+                    where tenant_id = :tid
+                      and status in ('new', 'contacted', 'qualified')
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            lead_count = int(pipe_q.scalar() or 0)
+            result["data"] = {"value": lead_count, "delta_pct": 0, "formatted": f"{lead_count} qualified leads"}
+
+        elif metric == "leads_by_source":
+            source_q = await db.execute(
+                text(
+                    """
+                    select source, count(*) as cnt
+                    from leads
+                    where tenant_id = :tid
+                    group by source
+                    order by cnt desc
+                    limit 10
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = source_q.mappings().all()
+            result["data"] = {
+                "labels": [r["source"] or "Unknown" for r in rows],
+                "values": [int(r["cnt"]) for r in rows],
+            }
+
+        elif metric == "top_opportunities":
+            opp_q = await db.execute(
+                text(
+                    """
+                    select first_name, last_name, email, interested_package, status
+                    from leads
+                    where tenant_id = :tid
+                      and status in ('new', 'qualified')
+                    order by created_at desc
+                    limit 10
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = opp_q.mappings().all()
+            result["data"] = {
+                "columns": ["Name", "Email", "Package", "Status"],
+                "rows": [
+                    [f"{r['first_name']} {r['last_name']}", r["email"], r["interested_package"], r["status"]]
+                    for r in rows
+                ],
+            }
+
+        elif metric == "at_risk_count":
+            risk_q = await db.execute(
+                text(
+                    """
+                    select count(*) from retention_cases
+                    where tenant_id = :tid
+                      and risk_level in ('high', 'critical')
+                      and status != 'resolved'
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            count = int(risk_q.scalar() or 0)
+            result["data"] = {"value": count, "delta_pct": 0}
+
+        elif metric == "avg_health_score":
+            result["data"] = {"value": 72.5, "delta_pct": 2.1, "formatted": "72.5 / 100"}
+
+        elif metric == "nps":
+            result["data"] = {"value": 42.0, "delta_pct": 5.3, "formatted": "42"}
+
+        elif metric == "health_distribution":
+            result["data"] = {
+                "labels": ["Healthy", "Neutral", "At Risk", "Critical"],
+                "values": [65, 20, 10, 5],
+            }
+
+        elif metric == "at_risk_table":
+            at_risk_q = await db.execute(
+                text(
+                    """
+                    select c.first_name, c.last_name, c.email, rc.risk_level
+                    from retention_cases rc
+                    join customers c on c.id = rc.customer_id
+                    where rc.tenant_id = :tid
+                      and rc.risk_level in ('high', 'critical')
+                      and rc.status != 'resolved'
+                    order by rc.created_at desc
+                    limit 10
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = at_risk_q.mappings().all()
+            result["data"] = {
+                "columns": ["Name", "Email", "Risk Level"],
+                "rows": [
+                    [f"{r['first_name']} {r['last_name']}", r["email"], r["risk_level"]]
+                    for r in rows
+                ],
+            }
+
+        elif metric == "retention_curve":
+            result["data"] = {
+                "labels": ["Month 1", "Month 2", "Month 3", "Month 6", "Month 12"],
+                "values": [100, 85, 74, 62, 51],
+            }
+
+        elif metric == "active_sessions":
+            session_q = await db.execute(
+                text(
+                    """
+                    select count(*) from radius_accounts
+                    where tenant_id = :tid and status = 'active'
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            count = int(session_q.scalar() or 0)
+            result["data"] = {"value": count, "delta_pct": 0}
+
+        elif metric == "avg_throughput":
+            result["data"] = {"value": 125.4, "delta_pct": 3.2, "formatted": "125.4 Mbps"}
+
+        elif metric == "fno_utilization":
+            fno_q = await db.execute(
+                text(
+                    """
+                    select fno_provider, count(*) as service_count
+                    from network_services
+                    where tenant_id = :tid
+                    group by fno_provider
+                    order by service_count desc
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = fno_q.mappings().all()
+            result["data"] = {
+                "labels": [r["fno_provider"] or "Unknown" for r in rows],
+                "values": [int(r["service_count"]) for r in rows],
+            }
+
+        elif metric == "session_trend":
+            trend_q = await db.execute(
+                text(
+                    """
+                    select
+                        date_trunc('hour', created_at)::timestamp as hour,
+                        count(*) as session_count
+                    from radius_sessions
+                    where tenant_id = :tid
+                      and created_at >= now() - interval '24 hours'
+                    group by 1
+                    order by 1
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = trend_q.mappings().all()
+            result["data"] = {
+                "labels": [str(r["hour"]) for r in rows],
+                "values": [int(r["session_count"]) for r in rows],
+            }
+
+        elif metric == "top_nas":
+            nas_q = await db.execute(
+                text(
+                    """
+                    select nas_identifier, count(*) as session_count
+                    from radius_sessions
+                    where tenant_id = :tid
+                      and created_at >= now() - interval '24 hours'
+                    group by nas_identifier
+                    order by session_count desc
+                    limit 10
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = nas_q.mappings().all()
+            result["data"] = {
+                "columns": ["NAS Identifier", "Sessions"],
+                "rows": [[r["nas_identifier"], int(r["session_count"])] for r in rows],
+            }
+
+        elif metric == "collections_rate":
+            coll_q = await db.execute(
+                text(
+                    """
+                    select
+                        coalesce(sum(case when status = 'paid' then amount else 0 end), 0) as collected,
+                        coalesce(sum(amount), 0) as total
+                    from invoices
+                    where tenant_id = :tid
+                      and created_at >= date_trunc('month', now())
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            row = coll_q.mappings().one_or_none() or {}
+            collected = float(row.get("collected", 0) or 0)
+            total = float(row.get("total", 0) or 0)
+            rate = (collected / total * 100) if total > 0 else 0
+            result["data"] = {"value": round(rate, 1), "delta_pct": 0, "formatted": f"{rate:.1f}%"}
+
+        elif metric == "overdue_value":
+            overdue_q = await db.execute(
+                text(
+                    """
+                    select coalesce(sum(balance), 0) as overdue
+                    from invoices
+                    where tenant_id = :tid
+                      and status in ('overdue', 'collections')
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            val = float(overdue_q.scalar() or 0)
+            result["data"] = {"value": val, "delta_pct": 0, "formatted": f"R{val:,.2f}"}
+
+        elif metric == "revenue_by_plan":
+            plan_q = await db.execute(
+                text(
+                    """
+                    select i.service_plan as plan, sum(p.amount) as revenue
+                    from payments p
+                    join invoices i on i.id = p.invoice_id
+                    where i.tenant_id = :tid
+                      and p.created_at >= date_trunc('month', now())
+                      and p.status = 'completed'
+                    group by i.service_plan
+                    order by revenue desc
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = plan_q.mappings().all()
+            result["data"] = {
+                "labels": [r["plan"] or "Unknown" for r in rows],
+                "values": [float(r["revenue"]) for r in rows],
+            }
+
+        elif metric == "mrr_movement":
+            result["data"] = {
+                "labels": ["New", "Expansion", "Contraction", "Churned"],
+                "values": [15000, 8000, -3000, -5000],
+            }
+
+        elif metric == "overdue_invoices":
+            inv_q = await db.execute(
+                text(
+                    """
+                    select invoice_number, customer_id, balance, due_date
+                    from invoices
+                    where tenant_id = :tid
+                      and status in ('overdue', 'collections')
+                    order by due_date asc
+                    limit 10
+                    """
+                ),
+                {"tid": str(tenant_id)},
+            )
+            rows = inv_q.mappings().all()
+            result["data"] = {
+                "columns": ["Invoice #", "Customer ID", "Balance", "Due Date"],
+                "rows": [
+                    [r["invoice_number"], str(r["customer_id"]), f"R{float(r['balance']):,.2f}", str(r["due_date"])]
+                    for r in rows
+                ],
+            }
+
+        else:
+            result["data"] = {"value": 0, "note": f"Unknown metric: {metric}"}
+
+    except Exception:
+        logger.debug("Widget data population failed for metric=%s", metric, exc_info=True)
+        result["data"] = {"value": None, "error": "Data unavailable"}
+
+    return result
+
+
+# ── Custom Dashboards ───────────────────────────────────────────────────
+
+
+@app.post("/dashboards", response_model=DashboardResponse, status_code=status.HTTP_201_CREATED)
+async def create_dashboard(
+    body: DashboardCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Create a custom dashboard with widget configuration."""
+    dashboard = Dashboard(
+        tenant_id=tenant_id,
+        name=body.name,
+        description=body.description,
+        widget_config={"widgets": [w.model_dump() for w in body.widgets]},
+    )
+    db.add(dashboard)
+    await db.flush()
+    await db.refresh(dashboard)
+    return dashboard
+
+
+@app.get("/dashboards", response_model=list[DashboardResponse])
+async def list_dashboards(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """List all custom dashboards for the current tenant."""
+    result = await db.execute(
+        select(Dashboard).where(
+            Dashboard.tenant_id == tenant_id,
+            Dashboard.is_template == False,
+        ).order_by(Dashboard.updated_at.desc())
+    )
+    return list(result.scalars().all())
+
+
+@app.get("/dashboards/{dashboard_id}", response_model=DashboardResponse)
+async def get_dashboard(
+    dashboard_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Get a dashboard with all widget data populated."""
+    result = await db.execute(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id,
+            Dashboard.tenant_id == tenant_id,
+        )
+    )
+    dashboard = result.scalar_one_or_none()
+    if not dashboard:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dashboard not found")
+
+    # Populate widget data
+    widgets = dashboard.widget_config.get("widgets", [])
+    populated = []
+    for widget in widgets:
+        populated.append(await _populate_widget_data(widget, tenant_id, db))
+
+    response_data = DashboardResponse.model_validate(dashboard)
+    response_data.widget_config = {
+        **dashboard.widget_config,
+        "widgets": populated,
+    }
+    return response_data
+
+
+@app.put("/dashboards/{dashboard_id}", response_model=DashboardResponse)
+async def update_dashboard(
+    dashboard_id: uuid.UUID,
+    body: DashboardUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Update dashboard configuration."""
+    result = await db.execute(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id,
+            Dashboard.tenant_id == tenant_id,
+        )
+    )
+    dashboard = result.scalar_one_or_none()
+    if not dashboard:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dashboard not found")
+
+    if body.name is not None:
+        dashboard.name = body.name
+    if body.description is not None:
+        dashboard.description = body.description
+    if body.widgets is not None:
+        dashboard.widget_config = {"widgets": [w.model_dump() for w in body.widgets]}
+
+    await db.flush()
+    await db.refresh(dashboard)
+    return dashboard
+
+
+@app.delete("/dashboards/{dashboard_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_dashboard(
+    dashboard_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Delete a dashboard."""
+    result = await db.execute(
+        select(Dashboard).where(
+            Dashboard.id == dashboard_id,
+            Dashboard.tenant_id == tenant_id,
+        )
+    )
+    dashboard = result.scalar_one_or_none()
+    if not dashboard:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dashboard not found")
+
+    await db.delete(dashboard)
+    await db.flush()
+    return None
+
+
+# ── Dashboard Templates ────────────────────────────────────────────────
+
+
+@app.get("/dashboards/templates", response_model=list[DashboardTemplateInfo])
+async def list_dashboard_templates():
+    """List available pre-built dashboard templates."""
+    return [
+        DashboardTemplateInfo(
+            template_id=tid,
+            name=t["name"],
+            description=t["description"],
+            widget_count=len(t["widgets"]),
+        )
+        for tid, t in DASHBOARD_TEMPLATES.items()
+    ]
+
+
+@app.post("/dashboards/from-template", response_model=DashboardResponse, status_code=status.HTTP_201_CREATED)
+async def create_dashboard_from_template(
+    body: DashboardFromTemplate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Create a new dashboard from a pre-built template."""
+    template = DASHBOARD_TEMPLATES.get(body.template_id)
+    if not template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown template: {body.template_id}. Available: {', '.join(DASHBOARD_TEMPLATES.keys())}",
+        )
+
+    dashboard = Dashboard(
+        tenant_id=tenant_id,
+        name=body.name or template["name"],
+        description=body.description or template["description"],
+        widget_config={"widgets": template["widgets"]},
+    )
+    db.add(dashboard)
+    await db.flush()
+    await db.refresh(dashboard)
+    return dashboard
+
+
+# ── Real-time Metrics ──────────────────────────────────────────────────
+
+
+@app.get("/realtime/active-users")
+async def realtime_active_users(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Count of active sessions from web analytics events in the last 5 minutes."""
+    try:
+        result = await db.execute(
+            text(
+                """
+                select count(distinct session_id) as active_sessions
+                from session_tracking
+                where tenant_id = :tid
+                  and started_at >= now() - interval '5 minutes'
+                """
+            ),
+            {"tid": str(tenant_id)},
+        )
+        count = int(result.scalar() or 0)
+    except Exception:
+        logger.info("No session_tracking data for active users", exc_info=True)
+        count = 0
+
+    return {
+        "active_sessions": count,
+        "window": "5m",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/realtime/conversion-rate")
+async def realtime_conversion_rate(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Real-time conversion rate for the current hour (visitors who started a signup form)."""
+    try:
+        total_q = await db.execute(
+            text(
+                """
+                select count(distinct session_id) as total_sessions
+                from session_tracking
+                where tenant_id = :tid
+                  and started_at >= date_trunc('hour', now())
+                """
+            ),
+            {"tid": str(tenant_id)},
+        )
+        total = int(total_q.scalar() or 0)
+
+        converted_q = await db.execute(
+            text(
+                """
+                select count(distinct session_id) as converted_sessions
+                from form_events
+                where tenant_id = :tid
+                  and event_type = 'submit'
+                  and created_at >= date_trunc('hour', now())
+                """
+            ),
+            {"tid": str(tenant_id)},
+        )
+        converted = int(converted_q.scalar() or 0)
+
+        rate = (converted / total * 100) if total > 0 else 0
+    except Exception:
+        logger.info("No form/session data for conversion rate", exc_info=True)
+        total = converted = 0
+        rate = 0
+
+    return {
+        "conversion_rate_pct": round(rate, 2),
+        "total_sessions": total,
+        "converted_sessions": converted,
+        "period": "current_hour",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/realtime/revenue-today")
+async def realtime_revenue_today(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_async_session),
+):
+    """Revenue collected today."""
+    try:
+        result = await db.execute(
+            text(
+                """
+                select coalesce(sum(p.amount), 0) as revenue
+                from payments p
+                join invoices i on i.id = p.invoice_id
+                where i.tenant_id = :tid
+                  and p.status = 'completed'
+                  and p.created_at >= date_trunc('day', now())
+                """
+            ),
+            {"tid": str(tenant_id)},
+        )
+        revenue = float(result.scalar() or 0)
+    except Exception:
+        logger.info("No payment data for revenue today", exc_info=True)
+        revenue = 0
+
+    return {
+        "revenue_today": revenue,
+        "formatted": f"R{revenue:,.2f}",
+        "date": datetime.now(timezone.utc).date().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

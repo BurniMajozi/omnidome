@@ -1,11 +1,45 @@
 /**
  * Auth Store — Zustand
  * Manages customer authentication state
+ *
+ * Uses expo-secure-store for native builds and localStorage for web/PWA.
+ * The storage adapter is selected at runtime based on platform detection.
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { api, ApiError } from './client';
 import type { CustomerProfile } from './types';
+
+// Platform-aware storage adapter
+// On native (Expo), uses SecureStore. On web/PWA, uses localStorage.
+const getStorageAdapter = () => {
+  try {
+    // Check if we're in a native Expo environment
+    const SecureStore = require('expo-secure-store');
+    const hasWindow = typeof window !== 'undefined';
+
+    if (!hasWindow) {
+      // Native-only environment (no WebView)
+      return {
+        getItem: async (name: string) => {
+          const value = await SecureStore.getItemAsync(name);
+          return value ?? null;
+        },
+        setItem: async (name: string, value: string) => {
+          await SecureStore.setItemAsync(name, value);
+        },
+        removeItem: async (name: string) => {
+          await SecureStore.deleteItemAsync(name);
+        },
+      };
+    }
+  } catch {
+    // expo-secure-store not available, fall through to web storage
+  }
+
+  // Web / PWA fallback — use localStorage via Zustand's default storage
+  return undefined; // Let Zustand use its default localStorage storage
+};
 
 interface AuthState {
   customer: CustomerProfile | null;
@@ -66,6 +100,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'customer-auth',
+      storage: getStorageAdapter(),
       partialize: (state) => ({ customer: state.customer, isAuthenticated: state.isAuthenticated }),
     }
   )

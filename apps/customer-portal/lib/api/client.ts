@@ -6,9 +6,13 @@
  * - Tenant context (X-Tenant-ID header)
  * - Request/response interceptors
  * - Error handling with automatic token refresh
+ * - Environment-aware base URL (works in web PWA and native Expo builds)
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  'http://localhost:8000';
 
 export interface ApiResponse<T> {
   data: T;

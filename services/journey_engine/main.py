@@ -62,6 +62,7 @@ from services.journey_engine.rule_engine import ATTRIBUTE_TYPES
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.journey_engine.lifecycle_routes import router as lifecycle_router
+from services.journey_engine.routes.ab_testing import router as ab_testing_router
 
 app = FastAPI(
     title="OmniDome Journey Engine",
@@ -92,6 +93,7 @@ async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
 
 app.include_router(lifecycle_router)
+app.include_router(ab_testing_router)
 
 # ---------------------------------------------------------------------------
 # Startup

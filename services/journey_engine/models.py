@@ -524,3 +524,88 @@ class CustomerSnapshot(JourneyBase):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+
+# ---------------------------------------------------------------------------
+# A/B Testing — compare two retention journeys head-to-head
+# ---------------------------------------------------------------------------
+
+AB_TEST_STATUS = SAEnum(
+    "draft", "running", "paused", "completed",
+    name="ab_test_status", create_type=True,
+)
+
+
+class ABTest(JourneyBase):
+    __tablename__ = "ab_tests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+
+    # The two journeys being compared
+    journey_a_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("retention_journeys.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    journey_b_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("retention_journeys.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # Percentage of traffic routed to journey_b (0-100)
+    traffic_split: Mapped[Decimal] = mapped_column(
+        Numeric(5, 2), nullable=False, default=Decimal("50.00")
+    )
+
+    status: Mapped[str] = mapped_column(
+        AB_TEST_STATUS, nullable=False, default="draft"
+    )
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ended_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # "a" or "b" — set when test is completed
+    winner: Mapped[Optional[str]] = mapped_column(String(1), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_ab_tests_tenant_status", "tenant_id", "status"),
+    )
+
+
+class ABTestAssignment(JourneyBase):
+    __tablename__ = "ab_test_assignments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ab_test_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ab_tests.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    variant: Mapped[str] = mapped_column(String(1), nullable=False)  # "a" or "b"
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_ab_test_assignments_test_customer", "ab_test_id", "customer_id", unique=True),
+    )
+
