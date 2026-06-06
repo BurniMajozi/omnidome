@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "MyISP Connect",
-    "slug": "omni-customer-portal",
+    "name": "OmniDome Customer",
+    "slug": "omnidome-customer",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

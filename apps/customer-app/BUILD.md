@@ -1,6 +1,6 @@
-# OmniDome Customer Portal — Build Guide
+# OmniDome Customer App — Build Guide
 
-This guide covers building the OmniDome customer portal as a native mobile app using Expo and EAS Build.
+This guide covers building the OmniDome Customer App as a native mobile app using Expo and EAS Build.
 
 ## Table of Contents
 

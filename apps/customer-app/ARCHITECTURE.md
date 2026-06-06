@@ -1,4 +1,4 @@
-# OmniDome Customer Portal — Architecture
+# OmniDome Customer App — Architecture
 
 ## Stack
 - **Framework**: Next.js 16 (App Router) + React 19
