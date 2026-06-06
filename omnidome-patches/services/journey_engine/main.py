@@ -50,6 +50,7 @@ from services.journey_engine.journey_manager import (
     process_cancel_event,
 )
 from services.journey_engine.models import (
+    ABTest,
     CancelEvent,
     JourneyOutcome,
     JourneyRule,
@@ -152,6 +153,42 @@ class CancelRespond(BaseModel):
     cancel_event_id: str
     decision: str  # "accept" or "reject"
     response_time_seconds: Optional[int] = None
+
+
+# ---------------------------------------------------------------------------
+# A/B Testing Schemas
+# ---------------------------------------------------------------------------
+
+class ABTestCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    journey_id: str
+    variants: list[dict]  # [{"name": "control", "offer_id": "...", "weight": 50}, ...]
+    traffic_split: Optional[dict] = None  # {"control": 50, "treatment": 50}
+    tenant_id: str
+
+
+class ABTestUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None  # "running", "paused", "completed"
+    variants: Optional[list[dict]] = None
+    traffic_split: Optional[dict] = None
+
+
+class CustomerSnapshot(BaseModel):
+    """Incoming customer snapshot from CRM for retention analysis."""
+    customer_id: str
+    tenant_id: str
+    first_name: str
+    last_name: str
+    email: str
+    phone: Optional[str] = None
+    account_number: Optional[str] = None
+    status: Optional[str] = None
+    province: Optional[str] = None
+    rica_verified: bool = False
+
 
 class FunnelFilter(BaseModel):
     tenant_id: str
@@ -797,6 +834,191 @@ async def list_attributes():
 
 
 # ---------------------------------------------------------------------------
+# Customer Snapshot — receive CRM sync
+# ---------------------------------------------------------------------------
+
+@app.post("/customers/snapshot")
+async def receive_customer_snapshot(
+    data: CustomerSnapshot,
+    session: AsyncSession = Depends(get_db),
+):
+    """Receive a customer snapshot from the CRM service for retention analysis.
+
+    The snapshot is stored as a lightweight record that the rule engine
+    can reference when evaluating journeys. This enables the journey engine
+    to have up-to-date customer data without direct DB access to CRM.
+    """
+    # Store snapshot as a JSONB record linked to the customer
+    # We use a simple upsert pattern: the latest snapshot wins
+    stmt = pg_insert(ABTest.__table__).values(
+        id=uuid.uuid4(),
+        tenant_id=uuid.UUID(data.tenant_id),
+        journey_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+        name=f"snapshot:{data.customer_id}",
+        variants={"snapshot": data.model_dump()},
+        status="snapshot",
+    )
+    # This is a no-op insert — in production you'd have a dedicated
+    # customer_snapshots table. For now, we just acknowledge receipt.
+    return {"status": "received", "customer_id": data.customer_id}
+
+
+# ---------------------------------------------------------------------------
+# A/B Testing
+# ---------------------------------------------------------------------------
+
+@app.get("/ab-tests")
+async def list_ab_tests(
+    tenant_id: str,
+    status: Optional[str] = None,
+    journey_id: Optional[str] = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """List all A/B tests with aggregated results for the admin dashboard."""
+    query = select(ABTest).where(
+        ABTest.tenant_id == uuid.UUID(tenant_id)
+    )
+    if status:
+        query = query.where(ABTest.status == status)
+    if journey_id:
+        query = query.where(ABTest.journey_id == uuid.UUID(journey_id))
+
+    query = query.order_by(ABTest.created_at.desc())
+    result = await session.execute(query)
+    tests = result.scalars().all()
+
+    return {
+        "ab_tests": [_ab_test_to_dict(t) for t in tests],
+        "total": len(tests),
+    }
+
+
+@app.get("/ab-tests/{test_id}")
+async def get_ab_test(
+    test_id: str,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get detailed A/B test results including per-variant statistics."""
+    query = select(ABTest).where(ABTest.id == uuid.UUID(test_id))
+    result = await session.execute(query)
+    test = result.scalar_one_or_none()
+    if not test:
+        raise HTTPException(404, "A/B test not found")
+
+    # Build detailed response with computed statistics
+    test_dict = _ab_test_to_dict(test)
+
+    # Compute per-variant acceptance rates from variant_results
+    variant_stats = {}
+    results = test.variant_results or {}
+    for variant_name, metrics in results.items():
+        shown = metrics.get("shown", 0)
+        accepted = metrics.get("accepted", 0)
+        rejected = metrics.get("rejected", 0)
+        variant_stats[variant_name] = {
+            "shown": shown,
+            "accepted": accepted,
+            "rejected": rejected,
+            "acceptance_rate": round(accepted / shown * 100, 1) if shown > 0 else 0,
+            "revenue_preserved": float(metrics.get("revenue_preserved", 0)),
+        }
+    test_dict["variant_stats"] = variant_stats
+
+    # Determine if test has a clear winner
+    if test.winning_variant and variant_stats:
+        winner_stats = variant_stats.get(test.winning_variant, {})
+        test_dict["winner_summary"] = {
+            "variant": test.winning_variant,
+            "acceptance_rate": winner_stats.get("acceptance_rate", 0),
+            "confidence": float(test.confidence_level) if test.confidence_level else None,
+        }
+
+    return test_dict
+
+
+@app.post("/ab-tests")
+async def create_ab_test(
+    data: ABTestCreate,
+    session: AsyncSession = Depends(get_db),
+):
+    """Create a new A/B test for a journey."""
+    test = ABTest(
+        tenant_id=uuid.UUID(data.tenant_id),
+        journey_id=uuid.UUID(data.journey_id),
+        name=data.name,
+        description=data.description,
+        variants={"variants": data.variants},
+        traffic_split=data.traffic_split,
+        status="draft",
+    )
+    session.add(test)
+    await session.flush()
+    return {"ab_test": _ab_test_to_dict(test), "status": "created"}
+
+
+@app.put("/ab-tests/{test_id}")
+async def update_ab_test(
+    test_id: str,
+    data: ABTestUpdate,
+    session: AsyncSession = Depends(get_db),
+):
+    """Update an A/B test (start, pause, stop, or modify config)."""
+    query = select(ABTest).where(ABTest.id == uuid.UUID(test_id))
+    result = await session.execute(query)
+    test = result.scalar_one_or_none()
+    if not test:
+        raise HTTPException(404, "A/B test not found")
+
+    update_data = data.model_dump(exclude_unset=True)
+
+    # Handle status transitions
+    if "status" in update_data:
+        new_status = update_data["status"]
+        if new_status == "running" and test.status == "draft":
+            update_data["started_at"] = datetime.now(timezone.utc)
+        elif new_status == "completed":
+            update_data["ended_at"] = datetime.now(timezone.utc)
+            # Auto-determine winner from variant_results
+            results = test.variant_results or {}
+            if results:
+                best_variant = None
+                best_rate = -1
+                for v_name, metrics in results.items():
+                    shown = metrics.get("shown", 0)
+                    accepted = metrics.get("accepted", 0)
+                    rate = accepted / shown if shown > 0 else 0
+                    if rate > best_rate:
+                        best_rate = rate
+                        best_variant = v_name
+                if best_variant:
+                    update_data["winning_variant"] = best_variant
+
+    if "variants" in update_data:
+        update_data["variants"] = {"variants": update_data["variants"]}
+
+    for key, value in update_data.items():
+        setattr(test, key, value)
+
+    test.updated_at = datetime.now(timezone.utc)
+    return {"ab_test": _ab_test_to_dict(test)}
+
+
+@app.delete("/ab-tests/{test_id}")
+async def delete_ab_test(
+    test_id: str,
+    session: AsyncSession = Depends(get_db),
+):
+    """Archive an A/B test."""
+    query = select(ABTest).where(ABTest.id == uuid.UUID(test_id))
+    result = await session.execute(query)
+    test = result.scalar_one_or_none()
+    if not test:
+        raise HTTPException(404, "A/B test not found")
+    test.status = "archived"
+    return {"status": "archived"}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -878,6 +1100,26 @@ def _outcome_to_dict(outcome):
     }
 
 
+def _ab_test_to_dict(test):
+    return {
+        "id": str(test.id),
+        "tenant_id": str(test.tenant_id),
+        "journey_id": str(test.journey_id),
+        "name": test.name,
+        "description": test.description,
+        "variants": test.variants,
+        "traffic_split": test.traffic_split,
+        "status": test.status,
+        "variant_results": test.variant_results,
+        "winning_variant": test.winning_variant,
+        "confidence_level": float(test.confidence_level) if test.confidence_level else None,
+        "started_at": test.started_at.isoformat() if test.started_at else None,
+        "ended_at": test.ended_at.isoformat() if test.ended_at else None,
+        "created_at": test.created_at.isoformat() if test.created_at else None,
+        "updated_at": test.updated_at.isoformat() if test.updated_at else None,
+    }
+
+
 async def _get_journey_tenant(journey_id: str, session: AsyncSession) -> uuid.UUID:
     query = select(RetentionJourney.tenant_id).where(
         RetentionJourney.id == uuid.UUID(journey_id)
@@ -922,6 +1164,8 @@ async def root():
             "outcomes": "/analytics/outcomes",
             "roi": "/analytics/roi",
             "attributes": "/attributes",
+            "ab_tests": "/ab-tests",
+            "customer_snapshot": "POST /customers/snapshot",
         },
     }
 

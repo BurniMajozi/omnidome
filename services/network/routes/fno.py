@@ -380,6 +380,9 @@ async def list_fno_providers():
 
 
 from services.network.adapters import VumatelAPI, OpenserveAPI
+from services.network.adapters.metrofibre import MetroFibreAdapter
+from services.network.adapters.frogfoot import FrogfootAdapter
+from services.network.adapters.octotel import OctotelAdapter
 
 
 def _resolve_adapter(fno: str):
@@ -389,10 +392,16 @@ def _resolve_adapter(fno: str):
         return VumatelAPI()
     if fno_lower == "openserve":
         return OpenserveAPI()
+    if fno_lower == "metrofibre":
+        return MetroFibreAdapter(api_key="", base_url="https://api.metrofibre.co.za/v1")
+    if fno_lower == "frogfoot":
+        return FrogfootAdapter(api_key="", base_url="https://api.frogfoot.com/v2")
+    if fno_lower == "octotel":
+        return OctotelAdapter(api_key="", base_url="https://api.octotel.co.za/v1")
     raise HTTPException(
         status_code=400,
         detail=f"Adapter routes not yet implemented for FNO: '{fno}'. "
-               f"Supported: vumatel, openserve",
+               f"Supported: vumatel, openserve, metrofibre, frogfoot, octotel",
     )
 
 

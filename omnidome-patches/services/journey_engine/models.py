@@ -370,3 +370,60 @@ class JourneyOutcome(JourneyBase):
         Index("ix_outcomes_offer", "offer_id"),
         Index("ix_outcomes_customer", "customer_id"),
     )
+
+
+# ---------------------------------------------------------------------------
+# A/B Tests — split testing for journey variants
+# ---------------------------------------------------------------------------
+
+class ABTest(JourneyBase):
+    __tablename__ = "ab_tests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    journey_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("retention_journeys.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Variant configuration
+    variants: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    # Example: {"control": {"offer_id": "...", "weight": 50}, "treatment": {"offer_id": "...", "weight": 50}}
+
+    traffic_split: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Example: {"control": 50, "treatment": 50}
+
+    # Status: draft, running, paused, completed
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+
+    # Results (aggregated from outcomes)
+    variant_results: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    # Example: {"control": {"shown": 100, "accepted": 30}, "treatment": {"shown": 100, "accepted": 45}}
+
+    # Winning variant (set when test is completed)
+    winning_variant: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Confidence level (statistical significance)
+    confidence_level: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_ab_tests_tenant_status", "tenant_id", "status"),
+        Index("ix_ab_tests_journey", "journey_id"),
+    )

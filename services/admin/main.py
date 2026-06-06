@@ -32,6 +32,15 @@ configure_production(app)
 # Rate limiter for auth-sensitive endpoints (10 req/min per IP)
 _auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
 
+# Global rate limiter middleware (100 req/min per IP)
+_global_rate_limiter = RateLimiter(max_requests=100, window_seconds=60)
+
+
+@app.middleware("http")
+async def global_rate_limit_middleware(request: Request, call_next):
+    await _global_rate_limiter.check(request)
+    return await call_next(request)
+
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -101,10 +110,10 @@ class ModulesUpdateRequest(BaseModel):
 
 
 class UserCreate(BaseModel):
-    email: str
+    email: str = Field(..., min_length=3, max_length=254)
     name: Optional[str] = None
     role_id: Optional[uuid.UUID] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(None, min_length=8, max_length=128)
     is_active: bool = True
 
 
@@ -218,9 +227,11 @@ async def health():
 @app.post("/tenants", status_code=status.HTTP_201_CREATED)
 async def create_tenant(
     payload: TenantCreate,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
+    await _auth_rate_limiter.check(request)
     await _require_platform_admin(ctx, session)
     domain = _domain_from_payload(payload)
     if not domain:
@@ -536,12 +547,17 @@ async def delete_role(
     if result.rowcount == 0:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found or system role")
     return {"status": "deleted", "id": str(role_id)}
+
+
+@app.put("/roles/{role_id}")
 async def update_role_permissions(
     role_id: uuid.UUID,
     payload: RoleUpdate,
+    request: Request,
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
+    await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
 
     role_row = await session.execute(
@@ -588,6 +604,7 @@ async def assign_role(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _auth_rate_limiter.check(request)
+    await _require_tenant_admin(ctx, session)
 
     role_row = await session.execute(
         text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
@@ -1003,6 +1020,7 @@ async def deactivate_user(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _auth_rate_limiter.check(request)
+    await _require_tenant_admin(ctx, session)
     result = await session.execute(
         text(
             """
@@ -1063,6 +1081,7 @@ async def list_commission_tiers(
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
+    await _require_tenant_admin(ctx, session)
     result = await session.execute(
         text(
             """
@@ -1177,6 +1196,7 @@ async def audit_log(
     if tenant_id and (tenant_id != ctx.tenant_id):
         await _require_platform_admin(ctx, session)
     elif not ctx.is_platform_admin:
+        await _require_tenant_admin(ctx, session)
         tenant_id = ctx.tenant_id
 
     clauses = []

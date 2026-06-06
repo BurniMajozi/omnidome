@@ -14,6 +14,9 @@ from .base import FNOAdapter
 from .factory import FNOFactory
 from .openserve import OpenserveAPI
 from .vumatel import VumatelAPI
+from .metrofibre import MetroFibreAdapter
+from .frogfoot import FrogfootAdapter
+from .octotel import OctotelAdapter
 
 # Also export the new concrete API classes so routes can import them directly
 __all__ = [
@@ -21,6 +24,9 @@ __all__ = [
     "FNOFactory",
     "VumatelAPI",
     "OpenserveAPI",
+    "MetroFibreAdapter",
+    "FrogfootAdapter",
+    "OctotelAdapter",
     "get_adapter",
 ]
 

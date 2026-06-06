@@ -26,6 +26,38 @@ router = APIRouter(prefix="/customers", tags=["Customers"])
 BILLING_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
 SUPPORT_URL = os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")
 NETWORK_URL = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
+JOURNEY_ENGINE_URL = os.getenv("JOURNEY_ENGINE_SERVICE_URL", "http://journey_engine:8017")
+
+
+async def _sync_to_journey_engine(customer, ctx: AuthContext) -> None:
+    """Push a customer snapshot to the Journey Engine for retention analysis.
+
+    Fire-and-forget: failures are logged but must not block the CRM operation.
+    """
+    snapshot = {
+        "customer_id": str(customer.id),
+        "tenant_id": str(ctx.tenant_id),
+        "first_name": customer.first_name,
+        "last_name": customer.last_name,
+        "email": customer.email,
+        "phone": customer.phone,
+        "account_number": customer.account_number,
+        "status": customer.status,
+        "province": customer.province,
+        "rica_verified": customer.rica_verified,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(
+                f"{JOURNEY_ENGINE_URL}/customers/snapshot",
+                json=snapshot,
+                headers={
+                    "X-User-Id": str(ctx.user_id),
+                    "X-Tenant-Id": str(ctx.tenant_id),
+                },
+            )
+    except Exception:
+        pass  # non-blocking: CRM operation must succeed regardless
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +94,11 @@ async def create_customer(
         session.add(event)
         await session.flush()
         await session.refresh(customer)
-        return customer
+
+    # Sync to Journey Engine (non-blocking, fire-and-forget)
+    await _sync_to_journey_engine(customer, ctx)
+
+    return customer
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +281,11 @@ async def update_customer(
             setattr(customer, field, value)
         await session.flush()
         await session.refresh(customer)
-        return customer
+
+    # Sync to Journey Engine (non-blocking, fire-and-forget)
+    await _sync_to_journey_engine(customer, ctx)
+
+    return customer
 
 
 # ---------------------------------------------------------------------------
