@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CreditCard, FileText, Download, ChevronRight, AlertCircle, CheckCircle, Clock, Plus } from "lucide-react";
+import { CreditCard, FileText, Download, ChevronRight, AlertCircle, CheckCircle, Clock, Plus, X } from "lucide-react";
 import brandConfig from "@/config/brand.json";
 
 interface Invoice {
@@ -132,6 +132,21 @@ export default function BillingPage() {
             <p className="text-xs text-gray-400">Registration compliance</p>
           </div>
           <ChevronRight size={16} className="text-gray-400" />
+        </Link>
+      </div>
+
+      {/* Danger zone */}
+      <div className="bg-white rounded-xl border border-red-200 p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <X size={16} className="text-red-500" />
+          <p className="text-sm font-medium text-red-700">Danger Zone</p>
+        </div>
+        <p className="text-xs text-gray-500">Cancelling your service will disconnect you at the end of your current billing cycle.</p>
+        <Link
+          href="/cancel"
+          className="block w-full py-2.5 rounded-lg text-center text-sm font-medium text-red-600 border border-red-200 hover:bg-red-50 transition-colors"
+        >
+          Cancel Service
         </Link>
       </div>
     </div>

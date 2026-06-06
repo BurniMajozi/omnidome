@@ -278,6 +278,36 @@ class ApiClient {
   async markNotificationRead(id: string) {
     return this.request(`/portal/notifications/${id}/read`, { method: 'POST' });
   }
+
+  // Journey Engine — Cancel Flow
+  async triggerCancel(customerSnapshot: Record<string, any>, cancelReason: string) {
+    return this.request<{
+      cancel_event_id: string;
+      matched: boolean;
+      journey?: any;
+      offer?: any;
+      estimated_cost?: number;
+    }>('/api/journey-engine/cancel/trigger', {
+      method: 'POST',
+      body: JSON.stringify({
+        customer_id: customerSnapshot.id || customerSnapshot.customer_id,
+        account_number: customerSnapshot.account_number || 'ACC-0001',
+        customer_snapshot: customerSnapshot,
+        cancel_reason: cancelReason,
+        source_channel: 'portal',
+      }),
+    });
+  }
+
+  async respondToCancel(cancelEventId: string, decision: 'accept' | 'reject') {
+    return this.request('/api/journey-engine/cancel/respond', {
+      method: 'POST',
+      body: JSON.stringify({
+        cancel_event_id: cancelEventId,
+        decision,
+      }),
+    });
+  }
 }
 
 export class ApiError extends Error {
