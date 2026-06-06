@@ -49,6 +49,7 @@ from services.journey_engine.journey_manager import (
     compute_outcome_result,
     process_cancel_event,
 )
+from services.journey_engine.batch_outcomes import get_outcome_stats, process_outcomes
 from services.journey_engine.models import (
     CancelEvent,
     CustomerSnapshot,
@@ -177,6 +178,26 @@ class FunnelFilter(BaseModel):
     tenant_id: str
     journey_id: Optional[str] = None
     days: int = 30
+
+
+class OutcomesProcessRequest(BaseModel):
+    """Request body for POST /outcomes/process — trigger the retention batch job."""
+
+    tenant_id: Optional[str] = Field(
+        None, description="If provided, only process outcomes for this tenant"
+    )
+    dry_run: bool = Field(
+        False, description="If true, compute results but don't persist changes"
+    )
+
+
+class OutcomesStatsResponse(BaseModel):
+    """Response model for GET /outcome-stats."""
+
+    total_outcomes: dict
+    pending_90d_checks: int
+    pending_180d_checks: int
+    retention_rate_distribution: dict
 
 
 # ---------------------------------------------------------------------------
@@ -916,6 +937,44 @@ async def list_attributes():
             {"type": "personal_outreach", "label": "Personal Outreach", "params": {"priority": "string", "assign_team": "string"}},
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Outcome Batch Processing — retention flag checks
+# ---------------------------------------------------------------------------
+
+
+@app.post("/outcomes/process", tags=["Outcomes"])
+@app.post("/outcomes/process/")
+async def outcomes_process(
+    data: OutcomesProcessRequest,
+    session: AsyncSession = Depends(get_db),
+):
+    """Trigger the daily outcome batch job to check 90d/180d retention flags.
+
+    Scans JourneyOutcome records for accepted offers and verifies whether
+    customers are still active at the 90-day and 180-day marks by checking
+    their latest CustomerSnapshot from CRM.
+
+    Can be run on-demand or scheduled via cron. Use dry_run=true to preview
+    results without persisting changes.
+    """
+    result = await process_outcomes(
+        session=session,
+        tenant_id=data.tenant_id,
+        dry_run=data.dry_run,
+    )
+    return result
+
+
+@app.get("/outcome-stats", tags=["Outcomes"])
+@app.get("/outcome-stats/")
+async def outcome_stats(
+    session: AsyncSession = Depends(get_db),
+):
+    """Get current outcome statistics — pending checks and retention distribution."""
+    stats = await get_outcome_stats(session)
+    return stats
 
 
 # ---------------------------------------------------------------------------

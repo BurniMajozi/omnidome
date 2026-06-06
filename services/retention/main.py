@@ -20,6 +20,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.retention.batch_churn import (
+    run_batch_churn_prediction,
+    get_latest_predictions,
+    get_flagged_customers,
+)
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.db import get_async_session
@@ -753,7 +758,90 @@ async def get_customer_prediction(
     raise HTTPException(status_code=404, detail="Customer snapshot not found. Sync from CRM first via POST /customers/{id}/sync")
 
 
-@app.post("/predict/batch", response_model=BatchPredictionResponse)
+@app.post("/retention/batch-predict", response_model=BatchPredictionResponse)
+async def retention_batch_predict(
+    request: BatchPredictionRequest,
+    db: AsyncSession = Depends(get_async_session),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Trigger a full batch churn prediction run.
+
+    - Optionally filter by segment or a list of customer IDs.
+    - Persists predictions to the retention_predictions table.
+    - Flags high-risk customers (risk_score >= 70) for the retention team.
+    - Returns a batch run summary.
+
+    For production scheduling, wire this endpoint to a daily cron job:
+        POST /retention/batch-predict  { "segment": null }
+    """
+    result = await run_batch_churn_prediction(
+        db=db,
+        tenant_id=tenant_id,
+        model=churn_model,
+        segment=request.segment,
+        customer_ids=request.customer_ids,
+    )
+
+    return BatchPredictionResponse(
+        job_id=result.job_id,
+        status=result.status,
+        customers_scored=result.customers_scored,
+        high_risk_count=result.high_risk_count,
+        medium_risk_count=result.medium_risk_count,
+        low_risk_count=result.low_risk_count,
+    )
+
+
+@app.get("/retention/batch-predict/results")
+async def retention_batch_results(
+    risk_level: Optional[RiskLevel] = None,
+    min_risk_score: float = Query(0, ge=0, le=100),
+    limit: int = Query(50, le=500),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_async_session),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Retrieve the latest batch prediction results for this tenant.
+
+    Supports filtering by risk_level and min_risk_score with pagination.
+    """
+    rl_value = risk_level.value if risk_level else None
+    predictions = await get_latest_predictions(
+        db=db,
+        tenant_id=tenant_id,
+        risk_level=rl_value,
+        min_risk_score=min_risk_score,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "tenant_id": str(tenant_id),
+        "count": len(predictions),
+        "predictions": predictions,
+    }
+
+
+@app.get("/retention/batch-predict/flagged")
+async def retention_flagged_customers(
+    limit: int = Query(100, le=500),
+    db: AsyncSession = Depends(get_async_session),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Get customers flagged for retention action (risk_score >= 70) from the latest batch."""
+    flagged = await get_flagged_customers(
+        db=db,
+        tenant_id=tenant_id,
+        limit=limit,
+    )
+    return {
+        "tenant_id": str(tenant_id),
+        "flagged_count": len(flagged),
+        "high_risk_threshold": 70,
+        "customers": flagged,
+    }
+
+
+@app.get("/predict/batch", response_model=BatchPredictionResponse)
 async def trigger_batch_prediction(
     request: BatchPredictionRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),

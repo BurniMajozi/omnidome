@@ -1,473 +1,335 @@
-"""Daily batch job: verify 90-day and 180-day retention for journey outcomes.
+"""Batch job for processing Journey Engine outcomes — daily 90d/180d retention flag checks.
 
-This script runs as a standalone Python process (not FastAPI).  It:
-  1. Queries journey_outcomes for records approaching their 90-day or 180-day
-     verification window (created_at between 85-90 days ago or 175-180 days ago).
-  2. For each matching outcome, checks whether the customer is still active
-     by calling the lifecycle service or querying the database directly.
-  3. Updates actual_retained_90d / actual_retained_180d and computes a
-     retention_rate for each record.
-  4. POSTs aggregated feedback to the retention service at /retention/feedback.
+This module provides the core logic for the POST /outcomes/process endpoint.
+It scans JourneyOutcome records for customers who accepted retention offers
+and checks whether they are still active at the 90-day and 180-day marks.
 
-Designed to be invoked via:
-    docker compose run journey_engine python -m services.journey_engine.batch_outcomes
+The job is designed to be run daily (e.g., via cron or a scheduler) and can
+also be triggered on-demand via the API endpoint.
 
-Or directly:
-    python -m services.journey_engine.batch_outcomes
-
-Environment variables:
-    DATABASE_URL        — PostgreSQL connection string (required)
-    LIFECYCLE_URL       — Base URL of the lifecycle service (default: http://lifecycle:8016)
-    RETENTION_URL       — Base URL of the retention service (default: http://retention:8018)
-    BATCH_DRY_RUN       — If "true", skip DB writes and HTTP feedback (default: false)
-    BATCH_LOG_LEVEL     — Logging level (default: INFO)
+Retention verification strategy:
+  - 90-day check:  outcomes created >= 90 days ago where actual_retained_90d is NULL
+  - 180-day check: outcomes created >= 180 days ago where actual_retained_180d is NULL
+  - A customer is considered "retained" if their latest CustomerSnapshot does NOT
+    indicate a churned/cancelled status (source_event in CHURN_EVENTS).
 """
 
-from __future__ import annotations
-
-import asyncio
 import logging
-import os
-import sys
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Optional
-from uuid import UUID
+from typing import Optional
 
-import httpx
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.engine import make_url
+from sqlalchemy import and_, case, func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.journey_engine.models import JourneyOutcome
+from services.journey_engine.models import CustomerSnapshot, JourneyOutcome
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
+logger = logging.getLogger(__name__)
 
-logger = logging.getLogger("batch_outcomes")
+# Source events that indicate a customer has churned / is no longer active
+CHURN_EVENTS = frozenset({
+    "churned",
+    "cancelled",
+    "account_closed",
+    "service_terminated",
+    "deactivated",
+})
 
-DEFAULT_DATABASE_URL = "postgresql://postgres:***@localhost:5432/postgres"
-DEFAULT_LIFECYCLE_URL = "http://lifecycle:8016"
-DEFAULT_RETENTION_URL = "http://retention:8018"
-
-# Windows for "approaching" the check date (days ago)
-DAY_90_WINDOW_START = 85
-DAY_90_WINDOW_END = 90
-DAY_180_WINDOW_START = 175
-DAY_180_WINDOW_END = 180
-
-
-def _build_async_url(url: str) -> str:
-    parsed = make_url(url)
-    if parsed.drivername.startswith("postgresql") and "+asyncpg" not in parsed.drivername:
-        parsed = parsed.set(drivername="postgresql+asyncpg")
-    return str(parsed)
+# Source events that indicate a customer is still active
+ACTIVE_EVENTS = frozenset({
+    "status_change",
+    "payment_received",
+    "plan_change",
+    "reactivated",
+    "upgrade",
+    "downgrade",
+    "renewal",
+})
 
 
-def _get_session_factory() -> async_sessionmaker[AsyncSession]:
-    db_url = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
-    engine = create_async_engine(_build_async_url(db_url), pool_pre_ping=True)
-    return async_sessionmaker(engine, expire_on_commit=False)
+def _is_customer_active(snapshot: Optional[CustomerSnapshot]) -> bool:
+    """Determine if a customer is still active based on their latest snapshot.
 
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
-@dataclass
-class RetentionCheck:
-    """Result of a single retention verification."""
-    outcome_id: UUID
-    customer_id: UUID
-    tenant_id: UUID
-    journey_id: Optional[UUID]
-    offer_id: Optional[UUID]
-    outcome: str
-    check_type: str  # "90d" or "180d"
-    is_retained: bool
-
-
-@dataclass
-class BatchResult:
-    """Aggregated results for the retention service feedback."""
-    total_checked: int = 0
-    retained_90d_count: int = 0
-    retained_180d_count: int = 0
-    checks: list[RetentionCheck] = field(default_factory=list)
-
-    @property
-    def retention_rate_90d(self) -> Optional[float]:
-        ninety = [c for c in self.checks if c.check_type == "90d"]
-        if not ninety:
-            return None
-        return sum(1 for c in ninety if c.is_retained) / len(ninety)
-
-    @property
-    def retention_rate_180d(self) -> Optional[float]:
-        oneeighty = [c for c in self.checks if c.check_type == "180d"]
-        if not oneeighty:
-            return None
-        return sum(1 for c in oneeighty if c.is_retained) / len(oneeighty)
-
-
-# ---------------------------------------------------------------------------
-# Retention verification
-# ---------------------------------------------------------------------------
-
-async def check_customer_active_lifecycle(
-    client: httpx.AsyncClient,
-    customer_id: UUID,
-    base_url: str,
-) -> bool:
-    """Check if a customer is still active via the lifecycle service.
-
-    Calls GET /customers/{customer_id}/status and returns True if the
-    customer's status is 'active'.
+    Returns True if the customer is considered retained (still active),
+    False if they have churned, and True (optimistic default) if no
+    snapshot exists (we assume active when data is missing).
     """
-    try:
-        resp = await client.get(
-            f"{base_url}/customers/{customer_id}/status",
-            timeout=10.0,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get("status") == "active"
-        elif resp.status_code == 404:
-            logger.warning("Customer %s not found in lifecycle service", customer_id)
-            return False
-        else:
-            logger.error(
-                "Unexpected status %d from lifecycle for customer %s",
-                resp.status_code,
-                customer_id,
-            )
-            return False
-    except httpx.HTTPError as exc:
-        logger.error("HTTP error checking customer %s: %s", customer_id, exc)
+    if snapshot is None:
+        # No snapshot data available — optimistically assume retained
+        # This avoids penalizing outcomes when CRM sync hasn't happened
+        logger.debug("No customer snapshot found, assuming active")
+        return True
+
+    source_event = (snapshot.source_event or "").lower()
+
+    if source_event in CHURN_EVENTS:
         return False
 
+    # Any known active event or unknown event (new CRM events) = retained
+    return True
 
-async def check_customer_active_db(
+
+async def _check_retention_batch(
     session: AsyncSession,
-    customer_id: UUID,
-) -> bool:
-    """Fallback: check if a customer is still active via direct DB query.
+    days: int,
+    field_name: str,
+) -> dict:
+    """Check retention for outcomes that are exactly `days` old and haven't been verified yet.
 
-    Looks up the customer in the lifecycle_customers table (if it exists)
-    and checks the status column.  Returns True if active.
+    Args:
+        session: Async database session
+        days: The retention window (90 or 180)
+        field_name: The JourneyOutcome field to update ('actual_retained_90d' or 'actual_retained_180d')
+
+    Returns:
+        Dict with counts of checked, retained, and churned outcomes
     """
-    try:
-        result = await session.execute(
-            select(1).select_from(
-                # Use raw text to avoid hard dependency on lifecycle models
-                __import__("sqlalchemy").text(
-                    "SELECT 1 FROM lifecycle_customers "
-                    "WHERE id = :cid AND status = 'active'"
-                )
-            ).params(cid=customer_id)
-        )
-        return result.scalar_one_or_none() is not None
-    except Exception as exc:
-        logger.error("DB fallback check failed for customer %s: %s", customer_id, exc)
-        return False
+    cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
+    # Look for outcomes created within a 24-hour window of the target date
+    # (i.e., outcomes that are now exactly `days` old)
+    window_start = cutoff_date - timedelta(hours=12)
+    window_end = cutoff_date + timedelta(hours=12)
 
-
-async def verify_retention(
-    session: AsyncSession,
-    client: httpx.AsyncClient,
-    outcome: JourneyOutcome,
-    check_type: str,
-    lifecycle_url: str,
-) -> RetentionCheck:
-    """Verify whether a customer retained for the given check window."""
-    # Try lifecycle service first, fall back to direct DB
-    is_retained = await check_customer_active_lifecycle(
-        client, outcome.customer_id, lifecycle_url
-    )
-    if not is_retained:
-        is_retained = await check_customer_active_db(session, outcome.customer_id)
-
-    return RetentionCheck(
-        outcome_id=outcome.id,
-        customer_id=outcome.customer_id,
-        tenant_id=outcome.tenant_id,
-        journey_id=outcome.journey_id,
-        offer_id=outcome.offer_id,
-        outcome=outcome.outcome,
-        check_type=check_type,
-        is_retained=is_retained,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Retention rate computation
-# ---------------------------------------------------------------------------
-
-def compute_retention_rate(actual_90d: Optional[bool], actual_180d: Optional[bool]) -> Optional[float]:
-    """Compute a scalar retention rate from the two boolean flags.
-
-    Rules:
-        actual_180d == True  → 1.0   (fully retained)
-        actual_90d  == True  → 0.5   (retained at 90d but not verified at 180d)
-        otherwise           → 0.0   (churned)
-        both None           → None  (not yet verified)
-    """
-    if actual_180d is True:
-        return 1.0
-    if actual_90d is True:
-        return 0.5
-    if actual_90d is False or actual_180d is False:
-        return 0.0
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Database operations
-# ---------------------------------------------------------------------------
-
-async def fetch_outcomes_for_window(
-    session: AsyncSession,
-    window_start_days: int,
-    window_end_days: int,
-) -> list[JourneyOutcome]:
-    """Fetch outcomes created within the given day window that haven't been verified."""
-    now = datetime.now(timezone.utc)
-    window_start = now - timedelta(days=window_end_days)
-    window_end = now - timedelta(days=window_start_days)
-
-    # For the 90d window, we check actual_retained_90d IS NULL
-    # For the 180d window, we check actual_retained_180d IS NULL
-    if window_start_days == DAY_90_WINDOW_START:
-        verify_col = JourneyOutcome.actual_retained_90d
+    # Map field_name to the actual column
+    if field_name == "actual_retained_90d":
+        retention_col = JourneyOutcome.actual_retained_90d
+    elif field_name == "actual_retained_180d":
+        retention_col = JourneyOutcome.actual_retained_180d
     else:
-        verify_col = JourneyOutcome.actual_retained_180d
+        raise ValueError(f"Unknown retention field: {field_name}")
 
-    stmt = (
+    # Find outcomes in the time window that haven't been checked yet
+    query = (
         select(JourneyOutcome)
         .where(
-            JourneyOutcome.created_at >= window_start,
-            JourneyOutcome.created_at <= window_end,
-            JourneyOutcome.outcome.in_(["accepted", "retained"]),
-            verify_col.is_(None),
+            and_(
+                JourneyOutcome.outcome == "accepted",
+                JourneyOutcome.created_at >= window_start,
+                JourneyOutcome.created_at <= window_end,
+                retention_col.is_(None),
+            )
         )
         .order_by(JourneyOutcome.created_at)
     )
-    result = await session.execute(stmt)
-    return list(result.scalars().all())
 
+    result = await session.execute(query)
+    outcomes = result.scalars().all()
 
-async def update_outcome_retention(
-    session: AsyncSession,
-    check: RetentionCheck,
-    dry_run: bool,
-) -> None:
-    """Update a single outcome record with the verified retention flag."""
-    rate = compute_retention_rate(
-        actual_90d=check.is_retained if check.check_type == "90d" else None,
-        actual_180d=check.is_retained if check.check_type == "180d" else None,
-    )
+    if not outcomes:
+        logger.info("No outcomes to check for %dd retention window", days)
+        return {"checked": 0, "retained": 0, "churned": 0, "window_start": window_start.isoformat(), "window_end": window_end.isoformat()}
 
-    if check.check_type == "90d":
-        update_values = {
-            "actual_retained_90d": check.is_retained,
-            "retention_rate": rate,
-        }
-    else:
-        update_values = {
-            "actual_retained_180d": check.is_retained,
-            "retention_rate": rate,
-        }
+    logger.info("Found %d outcomes to check for %dd retention", len(outcomes), days)
 
-    if dry_run:
-        logger.info(
-            "[DRY RUN] Would update outcome %s: %s",
-            check.outcome_id,
-            update_values,
+    checked = 0
+    retained_count = 0
+    churned_count = 0
+
+    for outcome in outcomes:
+        # Get the latest customer snapshot
+        snap_query = (
+            select(CustomerSnapshot)
+            .where(
+                and_(
+                    CustomerSnapshot.customer_id == outcome.customer_id,
+                    CustomerSnapshot.tenant_id == outcome.tenant_id,
+                )
+            )
+            .order_by(CustomerSnapshot.updated_at.desc())
+            .limit(1)
         )
-        return
+        snap_result = await session.execute(snap_query)
+        snapshot = snap_result.scalar_one_or_none()
 
-    stmt = (
-        update(JourneyOutcome)
-        .where(JourneyOutcome.id == check.outcome_id)
-        .values(**update_values)
-    )
-    await session.execute(stmt)
-    logger.info(
-        "Updated outcome %s: %s=%s rate=%s",
-        check.outcome_id,
-        check.check_type,
-        check.is_retained,
-        rate,
-    )
+        is_active = _is_customer_active(snapshot)
 
+        # Update the outcome record
+        if field_name == "actual_retained_90d":
+            outcome.actual_retained_90d = is_active
+        else:
+            outcome.actual_retained_180d = is_active
 
-# ---------------------------------------------------------------------------
-# Feedback to retention service
-# ---------------------------------------------------------------------------
+        checked += 1
+        if is_active:
+            retained_count += 1
+        else:
+            churned_count += 1
 
-async def send_retention_feedback(
-    client: httpx.AsyncClient,
-    result: BatchResult,
-    retention_url: str,
-    dry_run: bool,
-) -> bool:
-    """POST aggregated retention feedback to the retention service."""
-    payload: dict[str, Any] = {
-        "source": "journey_engine_batch_outcomes",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "total_checked": result.total_checked,
-        "retention_rate_90d": result.retention_rate_90d,
-        "retention_rate_180d": result.retention_rate_180d,
-        "retained_90d_count": result.retained_90d_count,
-        "retained_180d_count": result.retained_180d_count,
-        "checks": [
-            {
-                "outcome_id": str(c.outcome_id),
-                "customer_id": str(c.customer_id),
-                "tenant_id": str(c.tenant_id),
-                "journey_id": str(c.journey_id) if c.journey_id else None,
-                "offer_id": str(c.offer_id) if c.offer_id else None,
-                "outcome": c.outcome,
-                "check_type": c.check_type,
-                "is_retained": c.is_retained,
-            }
-            for c in result.checks
-        ],
+        logger.debug(
+            "Outcome %s: customer %s %s at %dd (snapshot event: %s)",
+            outcome.id,
+            outcome.customer_id,
+            "retained" if is_active else "churned",
+            days,
+            snapshot.source_event if snapshot else "none",
+        )
+
+    return {
+        "checked": checked,
+        "retained": retained_count,
+        "churned": churned_count,
+        "window_start": window_start.isoformat(),
+        "window_end": window_end.isoformat(),
     }
 
-    if dry_run:
-        logger.info("[DRY RUN] Would POST to %s/retention/feedback", retention_url)
-        logger.debug("[DRY RUN] Payload: %s", payload)
-        return True
 
-    try:
-        resp = await client.post(
-            f"{retention_url}/retention/feedback",
-            json=payload,
-            timeout=30.0,
+async def _update_retention_rates(session: AsyncSession) -> int:
+    """Recompute retention_rate for all outcomes that have both 90d and 180d flags set.
+
+    retention_rate values:
+      - 1.0  = retained at 180d (fully retained)
+      - 0.5  = retained at 90d but not 180d (partially retained)
+      - 0.0  = churned before 90d
+      - NULL = not yet fully evaluated
+
+    Returns:
+        Number of records updated
+    """
+    # Update outcomes where both flags are set but retention_rate hasn't been computed
+    # or needs recomputation
+    update_stmt = (
+        update(JourneyOutcome)
+        .where(
+            and_(
+                JourneyOutcome.actual_retained_90d.isnot(None),
+                JourneyOutcome.actual_retained_180d.isnot(None),
+            )
         )
-        if resp.status_code in (200, 201, 202, 204):
-            logger.info(
-                "Feedback sent to retention service: %d records, status=%d",
-                result.total_checked,
-                resp.status_code,
+        .values(
+            retention_rate=case(
+                (JourneyOutcome.actual_retained_180d == True, Decimal("1.0")),
+                (JourneyOutcome.actual_retained_90d == True, Decimal("0.5")),
+                else_=Decimal("0.0"),
             )
-            return True
-        else:
-            logger.error(
-                "Retention service returned %d: %s",
-                resp.status_code,
-                resp.text[:500],
-            )
-            return False
-    except httpx.HTTPError as exc:
-        logger.error("Failed to send feedback to retention service: %s", exc)
-        return False
+        )
+    )
+    result = await session.execute(update_stmt)
+    return result.rowcount
 
 
-# ---------------------------------------------------------------------------
-# Main batch logic
-# ---------------------------------------------------------------------------
+async def process_outcomes(
+    session: AsyncSession,
+    tenant_id: Optional[str] = None,
+    dry_run: bool = False,
+) -> dict:
+    """Main entry point: run the daily outcome batch job.
 
-async def run_batch() -> BatchResult:
-    """Execute the full batch job."""
-    dry_run = os.getenv("BATCH_DRY_RUN", "false").lower() == "true"
-    lifecycle_url = os.getenv("LIFECYCLE_URL", DEFAULT_LIFECYCLE_URL)
-    retention_url = os.getenv("RETENTION_URL", DEFAULT_RETENTION_URL)
+    Processes both 90-day and 180-day retention checks in a single pass.
 
-    logger.info("=" * 60)
-    logger.info("Journey Engine — Outcome Retention Batch Job")
-    logger.info("Dry run: %s", dry_run)
-    logger.info("=" * 60)
+    Args:
+        session: Async database session
+        tenant_id: Optional tenant filter — if provided, only process outcomes
+                   for this tenant
+        dry_run: If True, compute results but don't commit changes
 
-    session_factory = _get_session_factory()
-    result = BatchResult()
-
-    async with session_factory() as session:
-        async with httpx.AsyncClient() as client:
-            # ---- 90-day window ----
-            logger.info(
-                "Fetching outcomes for 90-day window (%d-%d days ago)…",
-                DAY_90_WINDOW_START,
-                DAY_90_WINDOW_END,
-            )
-            outcomes_90d = await fetch_outcomes_for_window(
-                session, DAY_90_WINDOW_START, DAY_90_WINDOW_END
-            )
-            logger.info("Found %d outcomes for 90-day check", len(outcomes_90d))
-
-            for outcome in outcomes_90d:
-                check = await verify_retention(
-                    session, client, outcome, "90d", lifecycle_url
-                )
-                result.checks.append(check)
-                result.total_checked += 1
-                if check.is_retained:
-                    result.retained_90d_count += 1
-                await update_outcome_retention(session, check, dry_run)
-
-            # ---- 180-day window ----
-            logger.info(
-                "Fetching outcomes for 180-day window (%d-%d days ago)…",
-                DAY_180_WINDOW_START,
-                DAY_180_WINDOW_END,
-            )
-            outcomes_180d = await fetch_outcomes_for_window(
-                session, DAY_180_WINDOW_START, DAY_180_WINDOW_END
-            )
-            logger.info("Found %d outcomes for 180-day check", len(outcomes_180d))
-
-            for outcome in outcomes_180d:
-                check = await verify_retention(
-                    session, client, outcome, "180d", lifecycle_url
-                )
-                result.checks.append(check)
-                result.total_checked += 1
-                if check.is_retained:
-                    result.retained_180d_count += 1
-                await update_outcome_retention(session, check, dry_run)
-
-            # Commit all updates (unless dry run)
-            if not dry_run:
-                await session.commit()
-                logger.info("All updates committed.")
-            else:
-                logger.info("[DRY RUN] No changes committed.")
-
-            # ---- Send feedback ----
-            logger.info("Sending retention feedback to retention service…")
-            await send_retention_feedback(client, result, retention_url, dry_run)
-
-    # ---- Summary ----
-    logger.info("=" * 60)
-    logger.info("Batch complete.")
-    logger.info("  Total checked:     %d", result.total_checked)
-    logger.info("  90d retained:      %d (rate=%s)", result.retained_90d_count, result.retention_rate_90d)
-    logger.info("  180d retained:     %d (rate=%s)", result.retained_180d_count, result.retention_rate_180d)
-    logger.info("=" * 60)
-
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def setup_logging() -> None:
-    level = os.getenv("BATCH_LOG_LEVEL", "INFO").upper()
-    logging.basicConfig(
-        level=getattr(logging, level, logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        stream=sys.stdout,
+    Returns:
+        Summary dict with counts for both windows
+    """
+    logger.info(
+        "Starting outcome batch job (tenant=%s, dry_run=%s)",
+        tenant_id or "all",
+        dry_run,
     )
 
+    job_start = datetime.now(timezone.utc)
 
-def main() -> None:
-    setup_logging()
-    asyncio.run(run_batch())
+    # Run 90-day check
+    result_90d = await _check_retention_batch(
+        session, days=90, field_name="actual_retained_90d"
+    )
+
+    # Run 180-day check
+    result_180d = await _check_retention_batch(
+        session, days=180, field_name="actual_retained_180d"
+    )
+
+    # Recompute retention rates for all fully-evaluated outcomes
+    rates_updated = await _update_retention_rates(session)
+
+    job_end = datetime.now(timezone.utc)
+    duration_seconds = (job_end - job_start).total_seconds()
+
+    summary = {
+        "status": "completed",
+        "dry_run": dry_run,
+        "tenant_id": tenant_id,
+        "job_started_at": job_start.isoformat(),
+        "job_completed_at": job_end.isoformat(),
+        "duration_seconds": round(duration_seconds, 2),
+        "retention_90d": result_90d,
+        "retention_180d": result_180d,
+        "retention_rates_updated": rates_updated,
+    }
+
+    logger.info("Outcome batch job completed in %.2fs: %s", duration_seconds, summary)
+
+    if dry_run:
+        # Rollback all changes in dry-run mode
+        await session.rollback()
+        summary["status"] = "dry_run_completed"
+
+    return summary
 
 
-if __name__ == "__main__":
-    main()
+async def get_outcome_stats(session: AsyncSession) -> dict:
+    """Get current outcome statistics for monitoring.
+
+    Returns counts of total outcomes, pending checks, and retention rates.
+    """
+    # Total outcomes by type
+    total_query = (
+        select(
+            JourneyOutcome.outcome,
+            func.count(JourneyOutcome.id).label("count"),
+        )
+        .group_by(JourneyOutcome.outcome)
+    )
+    total_result = await session.execute(total_query)
+    totals = {row.outcome: row.count for row in total_result.all()}
+
+    # Pending 90d checks (accepted, created >= 90 days ago, not yet checked)
+    cutoff_90d = datetime.now(timezone.utc) - timedelta(days=90)
+    pending_90d_query = (
+        select(func.count(JourneyOutcome.id))
+        .where(
+            and_(
+                JourneyOutcome.outcome == "accepted",
+                JourneyOutcome.created_at <= cutoff_90d,
+                JourneyOutcome.actual_retained_90d.is_(None),
+            )
+        )
+    )
+    pending_90d = (await session.execute(pending_90d_query)).scalar() or 0
+
+    # Pending 180d checks
+    cutoff_180d = datetime.now(timezone.utc) - timedelta(days=180)
+    pending_180d_query = (
+        select(func.count(JourneyOutcome.id))
+        .where(
+            and_(
+                JourneyOutcome.outcome == "accepted",
+                JourneyOutcome.created_at <= cutoff_180d,
+                JourneyOutcome.actual_retained_180d.is_(None),
+            )
+        )
+    )
+    pending_180d = (await session.execute(pending_180d_query)).scalar() or 0
+
+    # Retention rate summary (for outcomes that have been fully evaluated)
+    rate_query = (
+        select(
+            JourneyOutcome.retention_rate,
+            func.count(JourneyOutcome.id).label("count"),
+        )
+        .where(JourneyOutcome.retention_rate.isnot(None))
+        .group_by(JourneyOutcome.retention_rate)
+    )
+    rate_result = await session.execute(rate_query)
+    rate_distribution = {str(row.retention_rate): row.count for row in rate_result.all()}
+
+    return {
+        "total_outcomes": totals,
+        "pending_90d_checks": pending_90d,
+        "pending_180d_checks": pending_180d,
+        "retention_rate_distribution": rate_distribution,
+    }

@@ -8,10 +8,11 @@ import uuid
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
-from services.common.db import get_engine
+from services.common.db import get_async_engine
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 
@@ -222,12 +223,12 @@ class TargetPerformanceEntry(BaseModel):
 
 
 # ---- Helpers ----
-def _get_engine():
-    return get_engine()
+def _get_engine() -> AsyncEngine:
+    return get_async_engine()
 
 
-def _ensure_default_pipeline(conn, tenant_id: uuid.UUID) -> uuid.UUID:
-    row = conn.execute(
+async def _ensure_default_pipeline(conn: AsyncConnection, tenant_id: uuid.UUID) -> uuid.UUID:
+    row = await conn.execute(
         text(
             """
             select id from pipelines
@@ -236,11 +237,12 @@ def _ensure_default_pipeline(conn, tenant_id: uuid.UUID) -> uuid.UUID:
             """
         ),
         {"tenant_id": str(tenant_id)},
-    ).fetchone()
+    )
+    result = row.fetchone()
 
-    if not row:
+    if not result:
         pipeline_id = uuid.uuid4()
-        conn.execute(
+        await conn.execute(
             text(
                 """
                 insert into pipelines (id, tenant_id, name, is_default)
@@ -250,15 +252,16 @@ def _ensure_default_pipeline(conn, tenant_id: uuid.UUID) -> uuid.UUID:
             {"id": str(pipeline_id), "tenant_id": str(tenant_id), "name": "Default Pipeline"},
         )
     else:
-        pipeline_id = row[0]
+        pipeline_id = result[0]
 
-    stage_count = conn.execute(
+    stage_count_row = await conn.execute(
         text("select count(*) from deal_stages where pipeline_id = :pipeline_id"),
         {"pipeline_id": str(pipeline_id)},
-    ).scalar()
+    )
+    stage_count = stage_count_row.scalar()
 
     if stage_count == 0:
-        conn.execute(
+        await conn.execute(
             text(
                 """
                 insert into deal_stages (id, pipeline_id, name, probability, sort_order)
@@ -280,8 +283,8 @@ def _ensure_default_pipeline(conn, tenant_id: uuid.UUID) -> uuid.UUID:
     return pipeline_id
 
 
-def _get_stages(conn, pipeline_id: uuid.UUID) -> List[Dict[str, Any]]:
-    rows = conn.execute(
+async def _get_stages(conn: AsyncConnection, pipeline_id: uuid.UUID) -> List[Dict[str, Any]]:
+    rows = await conn.execute(
         text(
             """
             select id, name, probability, sort_order
@@ -291,21 +294,21 @@ def _get_stages(conn, pipeline_id: uuid.UUID) -> List[Dict[str, Any]]:
             """
         ),
         {"pipeline_id": str(pipeline_id)},
-    ).mappings().all()
-    return list(rows)
+    )
+    return list(rows.mappings().all())
 
 
-def _resolve_stage_id(
-    conn,
+async def _resolve_stage_id(
+    conn: AsyncConnection,
     tenant_id: uuid.UUID,
     stage_id: Optional[uuid.UUID],
     stage_name: Optional[str],
 ) -> uuid.UUID:
-    pipeline_id = _ensure_default_pipeline(conn, tenant_id)
+    pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
     if stage_id:
         return stage_id
     if stage_name:
-        row = conn.execute(
+        row = await conn.execute(
             text(
                 """
                 select id from deal_stages
@@ -313,18 +316,19 @@ def _resolve_stage_id(
                 """
             ),
             {"pipeline_id": str(pipeline_id), "name": stage_name},
-        ).fetchone()
-        if row:
-            return row[0]
-    stages = _get_stages(conn, pipeline_id)
+        )
+        result = row.fetchone()
+        if result:
+            return result[0]
+    stages = await _get_stages(conn, pipeline_id)
     if not stages:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Pipeline stages missing")
     return stages[0]["id"]
 
 
-def _get_closed_stage_id(conn, tenant_id: uuid.UUID, name: str) -> Optional[uuid.UUID]:
-    pipeline_id = _ensure_default_pipeline(conn, tenant_id)
-    row = conn.execute(
+async def _get_closed_stage_id(conn: AsyncConnection, tenant_id: uuid.UUID, name: str) -> Optional[uuid.UUID]:
+    pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
+    row = await conn.execute(
         text(
             """
             select id from deal_stages
@@ -333,8 +337,9 @@ def _get_closed_stage_id(conn, tenant_id: uuid.UUID, name: str) -> Optional[uuid
             """
         ),
         {"pipeline_id": str(pipeline_id), "name": name},
-    ).fetchone()
-    return row[0] if row else None
+    )
+    result = row.fetchone()
+    return result[0] if result else None
 
 
 def _calculate_quote_totals(items: Optional[List[QuoteItem]]) -> Dict[str, Decimal]:
@@ -358,12 +363,12 @@ def _apply_discount(value: Decimal, discount_percent: Optional[Decimal]) -> Deci
     return (value - discount).quantize(Decimal("0.01"))
 
 
-def _commission_rate_for_agent(conn, tenant_id: uuid.UUID, agent_id: uuid.UUID, now: datetime) -> Decimal:
+async def _commission_rate_for_agent(conn: AsyncConnection, tenant_id: uuid.UUID, agent_id: uuid.UUID, now: datetime) -> Decimal:
     period_start = date(now.year, now.month, 1)
     next_month = period_start + timedelta(days=32)
     period_end = date(next_month.year, next_month.month, 1)
 
-    count = conn.execute(
+    row = await conn.execute(
         text(
             """
             select count(*)
@@ -381,7 +386,8 @@ def _commission_rate_for_agent(conn, tenant_id: uuid.UUID, agent_id: uuid.UUID, 
             "start_date": period_start,
             "end_date": period_end,
         },
-    ).scalar() or 0
+    )
+    count = row.scalar() or 0
 
     if count >= 20:
         return Decimal("10.0")
@@ -419,10 +425,10 @@ async def root():
 @app.get("/pipeline", response_model=List[PipelineOverviewStage])
 async def get_pipeline_overview(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     engine = _get_engine()
-    with engine.begin() as conn:
-        pipeline_id = _ensure_default_pipeline(conn, tenant_id)
-        stages = _get_stages(conn, pipeline_id)
-        stage_rows = conn.execute(
+    async with engine.begin() as conn:
+        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
+        stages = await _get_stages(conn, pipeline_id)
+        stage_rows = await conn.execute(
             text(
                 """
                 select d.stage_id, count(*) as deal_count, coalesce(sum(d.value_zar), 0) as total_value
@@ -432,8 +438,8 @@ async def get_pipeline_overview(tenant_id: uuid.UUID = Depends(get_current_tenan
                 """
             ),
             {"tenant_id": str(tenant_id)},
-        ).fetchall()
-        totals = {row[0]: {"deal_count": row[1], "total_value": row[2]} for row in stage_rows}
+        )
+        totals = {row[0]: {"deal_count": row[1], "total_value": row[2]} for row in stage_rows.fetchall()}
 
     overview: List[PipelineOverviewStage] = []
     for stage in stages:
@@ -454,9 +460,9 @@ async def get_pipeline_overview(tenant_id: uuid.UUID = Depends(get_current_tenan
 @app.get("/pipeline/stages", response_model=List[PipelineStage])
 async def list_pipeline_stages(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     engine = _get_engine()
-    with engine.begin() as conn:
-        pipeline_id = _ensure_default_pipeline(conn, tenant_id)
-        stages = _get_stages(conn, pipeline_id)
+    async with engine.begin() as conn:
+        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
+        stages = await _get_stages(conn, pipeline_id)
     return [PipelineStage(**stage) for stage in stages]
 
 
@@ -466,17 +472,18 @@ async def create_pipeline_stage(
 ):
     engine = _get_engine()
     stage_id = uuid.uuid4()
-    with engine.begin() as conn:
-        pipeline_id = _ensure_default_pipeline(conn, tenant_id)
+    async with engine.begin() as conn:
+        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
         if payload.sort_order is None:
-            max_sort = conn.execute(
+            max_sort_row = await conn.execute(
                 text("select coalesce(max(sort_order), 0) from deal_stages where pipeline_id = :pipeline_id"),
                 {"pipeline_id": str(pipeline_id)},
-            ).scalar()
+            )
+            max_sort = max_sort_row.scalar()
             sort_order = int(max_sort or 0) + 1
         else:
             sort_order = payload.sort_order
-        conn.execute(
+        await conn.execute(
             text(
                 """
                 insert into deal_stages (id, pipeline_id, name, probability, sort_order)
@@ -507,9 +514,9 @@ async def create_deal(
     engine = _get_engine()
     deal_id = uuid.uuid4()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        stage_id = _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
-        conn.execute(
+    async with engine.begin() as conn:
+        stage_id = await _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
+        await conn.execute(
             text(
                 """
                 insert into deals (
@@ -540,10 +547,11 @@ async def create_deal(
                 "updated_at": now,
             },
         )
-        stage_name = conn.execute(
+        stage_name_row = await conn.execute(
             text("select name from deal_stages where id = :stage_id"),
             {"stage_id": str(stage_id)},
-        ).scalar()
+        )
+        stage_name = stage_name_row.scalar()
     return DealResponse(
         id=deal_id,
         tenant_id=tenant_id,
@@ -605,8 +613,8 @@ async def list_deals(
 
     where_clause = " and ".join(conditions)
     engine = _get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(
+    async with engine.connect() as conn:
+        rows = await conn.execute(
             text(
                 f"""
                 select d.id, d.tenant_id, d.contact_id as customer_id, d.lead_id, d.agent_id,
@@ -619,8 +627,9 @@ async def list_deals(
                 """
             ),
             params,
-        ).mappings().all()
-    return [DealResponse(**row) for row in rows]
+        )
+        result_rows = list(rows.mappings().all())
+    return [DealResponse(**row) for row in result_rows]
 
 
 @app.get("/deals/{deal_id}", response_model=DealResponse)
@@ -630,8 +639,8 @@ async def get_deal(
 ):
     """Get a single deal by ID"""
     engine = _get_engine()
-    with engine.connect() as conn:
-        row = conn.execute(
+    async with engine.connect() as conn:
+        row = await conn.execute(
             text(
                 """
                 select d.id, d.tenant_id, d.contact_id as customer_id, d.lead_id, d.agent_id,
@@ -643,10 +652,11 @@ async def get_deal(
                 """
             ),
             {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
-    if not row:
+        )
+        result = row.mappings().one_or_none()
+    if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-    return DealResponse(**row, stage_name=row["stage_name"])
+    return DealResponse(**result, stage_name=result["stage_name"])
 
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -656,8 +666,8 @@ async def delete_deal(
 ):
     """Delete a deal"""
     engine = _get_engine()
-    with engine.begin() as conn:
-        result = conn.execute(
+    async with engine.begin() as conn:
+        result = await conn.execute(
             text("delete from deals where id = :deal_id and tenant_id = :tenant_id"),
             {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
         )
@@ -688,10 +698,10 @@ async def update_deal(
     if payload.notes is not None:
         updates["notes"] = payload.notes
 
-    with engine.begin() as conn:
+    async with engine.begin() as conn:
         if payload.stage_id or payload.stage_name:
             updates["stage_id"] = str(
-                _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
+                await _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
             )
         if not updates:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
@@ -699,7 +709,7 @@ async def update_deal(
         updates["deal_id"] = str(deal_id)
         updates["tenant_id"] = str(tenant_id)
         updates["updated_at"] = now
-        row = conn.execute(
+        row = await conn.execute(
             text(
                 f"""
                 update deals
@@ -711,14 +721,16 @@ async def update_deal(
                 """
             ),
             updates,
-        ).mappings().one_or_none()
-        if not row:
+        )
+        result = row.mappings().one_or_none()
+        if not result:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-        stage_name = conn.execute(
+        stage_name_row = await conn.execute(
             text("select name from deal_stages where id = :stage_id"),
-            {"stage_id": str(row["stage_id"])},
-        ).scalar()
-    return DealResponse(**row, stage_name=stage_name)
+            {"stage_id": str(result["stage_id"])},
+        )
+        stage_name = stage_name_row.scalar()
+    return DealResponse(**result, stage_name=stage_name)
 
 
 @app.put("/deals/{deal_id}/stage", response_model=DealResponse)
@@ -729,8 +741,8 @@ async def move_deal_stage(
 ):
     engine = _get_engine()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        deal = conn.execute(
+    async with engine.begin() as conn:
+        deal_row = await conn.execute(
             text(
                 """
                 select d.id, d.stage_id, s.pipeline_id
@@ -740,15 +752,16 @@ async def move_deal_stage(
                 """
             ),
             {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
+        )
+        deal = deal_row.mappings().one_or_none()
         if not deal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
         stage_id = payload.stage_id
         if not stage_id and payload.stage_name:
-            stage_id = _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
+            stage_id = await _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
         if not stage_id and payload.direction:
-            stages = _get_stages(conn, deal["pipeline_id"])
+            stages = await _get_stages(conn, deal["pipeline_id"])
             stage_ids = [stage["id"] for stage in stages]
             try:
                 idx = stage_ids.index(deal["stage_id"])
@@ -762,7 +775,7 @@ async def move_deal_stage(
         if not stage_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No stage specified")
 
-        row = conn.execute(
+        row = await conn.execute(
             text(
                 """
                 update deals
@@ -779,14 +792,17 @@ async def move_deal_stage(
                 "deal_id": str(deal_id),
                 "tenant_id": str(tenant_id),
             },
-        ).mappings().one_or_none()
-        if not row:
+        )
+        result = row.mappings().one_or_none()
+        if not result:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-        stage_name = conn.execute(
+        stage_name_row = await conn.execute(
             text("select name from deal_stages where id = :stage_id"),
-            {"stage_id": str(row["stage_id"])},
-        ).scalar()
-    return DealResponse(**row, stage_name=stage_name)
+            {"stage_id": str(result["stage_id"])},
+        )
+        stage_name = stage_name_row.scalar()
+    return DealResponse(**result, stage_name=stage_name)
+
 
 @app.post("/deals/{deal_id}/close-won", response_model=DealResponse)
 async def close_deal_won(
@@ -796,8 +812,8 @@ async def close_deal_won(
 ):
     engine = _get_engine()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        deal = conn.execute(
+    async with engine.begin() as conn:
+        deal_row = await conn.execute(
             text(
                 """
                 select d.*, s.name as stage_name
@@ -807,12 +823,13 @@ async def close_deal_won(
                 """
             ),
             {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
+        )
+        deal = deal_row.mappings().one_or_none()
         if not deal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
-        closed_stage_id = _get_closed_stage_id(conn, tenant_id, "Closed Won")
-        conn.execute(
+        closed_stage_id = await _get_closed_stage_id(conn, tenant_id, "Closed Won")
+        await conn.execute(
             text(
                 """
                 update deals
@@ -833,11 +850,11 @@ async def close_deal_won(
         )
 
         if deal["agent_id"]:
-            rate = _commission_rate_for_agent(conn, tenant_id, deal["agent_id"], now)
+            rate = await _commission_rate_for_agent(conn, tenant_id, deal["agent_id"], now)
             amount_zar = (Decimal(str(deal["value_zar"] or 0)) * rate / Decimal("100")).quantize(
                 Decimal("0.01")
             )
-            conn.execute(
+            await conn.execute(
                 text(
                     """
                     insert into commissions (id, tenant_id, deal_id, agent_id, amount_zar, rate_percent, status, created_at, updated_at)
@@ -952,8 +969,8 @@ async def close_deal_lost(
 ):
     engine = _get_engine()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        deal = conn.execute(
+    async with engine.begin() as conn:
+        deal_row = await conn.execute(
             text(
                 """
                 select d.*, s.name as stage_name
@@ -963,12 +980,13 @@ async def close_deal_lost(
                 """
             ),
             {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
+        )
+        deal = deal_row.mappings().one_or_none()
         if not deal:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
 
-        closed_stage_id = _get_closed_stage_id(conn, tenant_id, "Closed Lost")
-        conn.execute(
+        closed_stage_id = await _get_closed_stage_id(conn, tenant_id, "Closed Lost")
+        await conn.execute(
             text(
                 """
                 update deals
@@ -1075,8 +1093,8 @@ async def create_quote(
     valid_until = date.today() + timedelta(days=payload.valid_days)
     items_json = _serialize_items(payload.items)
 
-    with engine.begin() as conn:
-        conn.execute(
+    async with engine.begin() as conn:
+        await conn.execute(
             text(
                 """
                 insert into quotes (
@@ -1136,8 +1154,8 @@ async def get_quote(
     quote_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
 ):
     engine = _get_engine()
-    with engine.connect() as conn:
-        row = conn.execute(
+    async with engine.connect() as conn:
+        row = await conn.execute(
             text(
                 """
                 select id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
@@ -1148,28 +1166,29 @@ async def get_quote(
                 """
             ),
             {"quote_id": str(quote_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
-    if not row:
+        )
+        result = row.mappings().one_or_none()
+    if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
 
     return QuoteResponse(
-        id=row["id"],
-        tenant_id=row["tenant_id"],
-        deal_id=row["deal_id"],
-        customer_id=row["customer_id"],
-        lead_id=row["lead_id"],
-        agent_id=row["agent_id"],
-        package_id=row["package_id"],
-        items=_deserialize_items(row["items"]),
-        total_monthly=Decimal(str(row["total_monthly"] or 0)),
-        total_once_off=Decimal(str(row["total_once_off"] or 0)),
-        term_months=row["term_months"],
-        valid_until=row["valid_until"],
-        status=row["status"],
-        terms=row["terms"],
-        created_at=row["created_at"],
-        sent_at=row["sent_at"],
-        accepted_at=row["accepted_at"],
+        id=result["id"],
+        tenant_id=result["tenant_id"],
+        deal_id=result["deal_id"],
+        customer_id=result["customer_id"],
+        lead_id=result["lead_id"],
+        agent_id=result["agent_id"],
+        package_id=result["package_id"],
+        items=_deserialize_items(result["items"]),
+        total_monthly=Decimal(str(result["total_monthly"] or 0)),
+        total_once_off=Decimal(str(result["total_once_off"] or 0)),
+        term_months=result["term_months"],
+        valid_until=result["valid_until"],
+        status=result["status"],
+        terms=result["terms"],
+        created_at=result["created_at"],
+        sent_at=result["sent_at"],
+        accepted_at=result["accepted_at"],
     )
 
 
@@ -1181,8 +1200,8 @@ async def send_quote(
 ):
     engine = _get_engine()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        row = conn.execute(
+    async with engine.begin() as conn:
+        row = await conn.execute(
             text(
                 """
                 update quotes
@@ -1195,28 +1214,29 @@ async def send_quote(
                 """
             ),
             {"quote_id": str(quote_id), "tenant_id": str(tenant_id), "sent_at": now},
-        ).mappings().one_or_none()
-    if not row:
+        )
+        result = row.mappings().one_or_none()
+    if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
 
     return QuoteResponse(
-        id=row["id"],
-        tenant_id=row["tenant_id"],
-        deal_id=row["deal_id"],
-        customer_id=row["customer_id"],
-        lead_id=row["lead_id"],
-        agent_id=row["agent_id"],
-        package_id=row["package_id"],
-        items=_deserialize_items(row["items"]),
-        total_monthly=Decimal(str(row["total_monthly"] or 0)),
-        total_once_off=Decimal(str(row["total_once_off"] or 0)),
-        term_months=row["term_months"],
-        valid_until=row["valid_until"],
-        status=row["status"],
-        terms=row["terms"],
-        created_at=row["created_at"],
-        sent_at=row["sent_at"],
-        accepted_at=row["accepted_at"],
+        id=result["id"],
+        tenant_id=result["tenant_id"],
+        deal_id=result["deal_id"],
+        customer_id=result["customer_id"],
+        lead_id=result["lead_id"],
+        agent_id=result["agent_id"],
+        package_id=result["package_id"],
+        items=_deserialize_items(result["items"]),
+        total_monthly=Decimal(str(result["total_monthly"] or 0)),
+        total_once_off=Decimal(str(result["total_once_off"] or 0)),
+        term_months=result["term_months"],
+        valid_until=result["valid_until"],
+        status=result["status"],
+        terms=result["terms"],
+        created_at=result["created_at"],
+        sent_at=result["sent_at"],
+        accepted_at=result["accepted_at"],
     )
 
 
@@ -1228,8 +1248,8 @@ async def accept_quote(
 ):
     engine = _get_engine()
     now = datetime.utcnow()
-    with engine.begin() as conn:
-        quote = conn.execute(
+    async with engine.begin() as conn:
+        quote_row = await conn.execute(
             text(
                 """
                 select id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
@@ -1240,7 +1260,8 @@ async def accept_quote(
                 """
             ),
             {"quote_id": str(quote_id), "tenant_id": str(tenant_id)},
-        ).mappings().one_or_none()
+        )
+        quote = quote_row.mappings().one_or_none()
 
         if not quote:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
@@ -1252,10 +1273,10 @@ async def accept_quote(
             contract_value = _deal_value_from_quote(total_monthly, total_once_off, quote["term_months"] or 12)
             stage_id = None
             if payload.stage_name:
-                stage_id = _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
+                stage_id = await _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
 
             if deal_id:
-                conn.execute(
+                await conn.execute(
                     text(
                         """
                         update deals
@@ -1279,9 +1300,9 @@ async def accept_quote(
                     },
                 )
             else:
-                stage_id = stage_id or _resolve_stage_id(conn, tenant_id, None, None)
+                stage_id = stage_id or await _resolve_stage_id(conn, tenant_id, None, None)
                 deal_id = uuid.uuid4()
-                conn.execute(
+                await conn.execute(
                     text(
                         """
                         insert into deals (
@@ -1311,7 +1332,7 @@ async def accept_quote(
                     },
                 )
 
-        row = conn.execute(
+        row = await conn.execute(
             text(
                 """
                 update quotes
@@ -1330,26 +1351,27 @@ async def accept_quote(
                 "accepted_at": now,
                 "deal_id": str(deal_id) if deal_id else None,
             },
-        ).mappings().one_or_none()
+        )
+        result = row.mappings().one_or_none()
 
     return QuoteResponse(
-        id=row["id"],
-        tenant_id=row["tenant_id"],
-        deal_id=row["deal_id"],
-        customer_id=row["customer_id"],
-        lead_id=row["lead_id"],
-        agent_id=row["agent_id"],
-        package_id=row["package_id"],
-        items=_deserialize_items(row["items"]),
-        total_monthly=Decimal(str(row["total_monthly"] or 0)),
-        total_once_off=Decimal(str(row["total_once_off"] or 0)),
-        term_months=row["term_months"],
-        valid_until=row["valid_until"],
-        status=row["status"],
-        terms=row["terms"],
-        created_at=row["created_at"],
-        sent_at=row["sent_at"],
-        accepted_at=row["accepted_at"],
+        id=result["id"],
+        tenant_id=result["tenant_id"],
+        deal_id=result["deal_id"],
+        customer_id=result["customer_id"],
+        lead_id=result["lead_id"],
+        agent_id=result["agent_id"],
+        package_id=result["package_id"],
+        items=_deserialize_items(result["items"]),
+        total_monthly=Decimal(str(result["total_monthly"] or 0)),
+        total_once_off=Decimal(str(result["total_once_off"] or 0)),
+        term_months=result["term_months"],
+        valid_until=result["valid_until"],
+        status=result["status"],
+        terms=result["terms"],
+        created_at=result["created_at"],
+        sent_at=result["sent_at"],
+        accepted_at=result["accepted_at"],
     )
 
 
@@ -1383,8 +1405,8 @@ async def list_commissions(
 
     where_clause = " and ".join(conditions)
     engine = _get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(
+    async with engine.connect() as conn:
+        rows = await conn.execute(
             text(
                 f"""
                 select id, deal_id, agent_id, amount_zar, rate_percent, status,
@@ -1395,7 +1417,8 @@ async def list_commissions(
                 """
             ),
             params,
-        ).mappings().all()
+        )
+        result_rows = list(rows.mappings().all())
     return [
         CommissionResponse(
             id=row["id"],
@@ -1407,7 +1430,7 @@ async def list_commissions(
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
-        for row in rows
+        for row in result_rows
     ]
 
 
@@ -1426,8 +1449,8 @@ async def commission_report(
     end_exclusive = end_date + timedelta(days=1)
 
     engine = _get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(
+    async with engine.connect() as conn:
+        rows = await conn.execute(
             text(
                 """
                 select agent_id,
@@ -1450,7 +1473,8 @@ async def commission_report(
                 "start_date": start_date,
                 "end_exclusive": end_exclusive,
             },
-        ).mappings().all()
+        )
+        result_rows = list(rows.mappings().all())
 
     return [
         CommissionReportEntry(
@@ -1462,7 +1486,7 @@ async def commission_report(
             paid=row["paid"],
             clawback=row["clawback"],
         )
-        for row in rows
+        for row in result_rows
     ]
 
 
@@ -1476,8 +1500,8 @@ async def create_target(
 
     target_id = uuid.uuid4()
     engine = _get_engine()
-    with engine.begin() as conn:
-        conn.execute(
+    async with engine.begin() as conn:
+        await conn.execute(
             text(
                 """
                 insert into sales_targets (
@@ -1537,8 +1561,8 @@ async def target_performance(
 
     where_clause = " and ".join(conditions)
     engine = _get_engine()
-    with engine.connect() as conn:
-        targets = conn.execute(
+    async with engine.connect() as conn:
+        targets = await conn.execute(
             text(
                 f"""
                 select id, agent_id, team_id, period_start, period_end, target_value_zar
@@ -1548,13 +1572,14 @@ async def target_performance(
                 """
             ),
             params,
-        ).mappings().all()
+        )
+        target_rows = list(targets.mappings().all())
 
         results: List[TargetPerformanceEntry] = []
-        for target in targets:
+        for target in target_rows:
             end_exclusive = target["period_end"] + timedelta(days=1)
             if target["agent_id"]:
-                total = conn.execute(
+                total_row = await conn.execute(
                     text(
                         """
                         select coalesce(sum(value_zar), 0) as total_value
@@ -1572,9 +1597,9 @@ async def target_performance(
                         "start_date": target["period_start"],
                         "end_exclusive": end_exclusive,
                     },
-                ).scalar()
+                )
             else:
-                total = conn.execute(
+                total_row = await conn.execute(
                     text(
                         """
                         select coalesce(sum(value_zar), 0) as total_value
@@ -1590,9 +1615,9 @@ async def target_performance(
                         "start_date": target["period_start"],
                         "end_exclusive": end_exclusive,
                     },
-                ).scalar()
+                )
 
-            actual_value = Decimal(str(total or 0))
+            actual_value = Decimal(str(total_row.scalar() or 0))
             target_value = Decimal(str(target["target_value_zar"] or 0))
             results.append(
                 TargetPerformanceEntry(
