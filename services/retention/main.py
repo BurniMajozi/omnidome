@@ -44,10 +44,10 @@ async def startup() -> None:
 
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
-    configure_production(app)
+    return await guard.middleware(request, call_next)
 
 
-    # ── Model path ────────────────────────────────────────────────────────
+# ── Model path ────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/app/models"))
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
