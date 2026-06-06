@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, CreditCard, ShoppingBag, HeadphonesIcon,
   Settings, LogOut, Wifi, Bell, Menu, X, User, Zap,
+  FlaskConical, BarChart3,
 } from "lucide-react";
 import brandConfig from "@/config/brand.json";
 
@@ -14,6 +15,8 @@ const navItems = [
   { href: "/billing", label: "Billing", icon: CreditCard },
   { href: "/store", label: "Store", icon: ShoppingBag },
   { href: "/support", label: "Support", icon: HeadphonesIcon },
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/ab-testing", label: "A/B Tests", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

@@ -333,6 +333,88 @@ export interface AppNotification {
 // WHITE-LABEL
 // ════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════
+// A/B TESTING
+// ════════════════════════════════════════════════════════════════════════
+
+export interface ABTest {
+  id: string;
+  tenant_id: string;
+  name: string;
+  journey_a_id: string;
+  journey_b_id: string;
+  traffic_split: number;
+  status: 'draft' | 'running' | 'paused' | 'completed';
+  started_at?: string;
+  ended_at?: string;
+  winner?: 'a' | 'b';
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ABTestCreate {
+  name: string;
+  journey_a_id: string;
+  journey_b_id: string;
+  traffic_split: number;
+}
+
+export interface ABTestResults {
+  variant_a: { assignments: number; outcomes: number; acceptance_rate: number };
+  variant_b: { assignments: number; outcomes: number; acceptance_rate: number };
+  winner?: 'a' | 'b';
+  confidence?: number;
+}
+
+export interface ABTestAssignment {
+  id: string;
+  ab_test_id: string;
+  customer_id: string;
+  variant: 'a' | 'b';
+  assigned_at: string;
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ANALYTICS DASHBOARDS
+// ════════════════════════════════════════════════════════════════════════
+
+export interface WidgetConfig {
+  type: 'line_chart' | 'bar_chart' | 'kpi_card' | 'table' | 'funnel';
+  title: string;
+  metric: string;
+  config?: Record<string, any>;
+}
+
+export interface Dashboard {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description?: string;
+  widget_config: WidgetConfig[];
+  is_template: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DashboardCreate {
+  name: string;
+  description?: string;
+  widget_config: WidgetConfig[];
+}
+
+export interface DashboardTemplate {
+  id: string;
+  name: string;
+  description: string;
+  widget_config: WidgetConfig[];
+}
+
+export interface RealtimeMetrics {
+  active_users?: number;
+  conversion_rate?: number;
+  revenue_today?: number;
+}
+
 export interface BrandConfig {
   appName: string;
   logo: string;

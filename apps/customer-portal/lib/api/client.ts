@@ -14,6 +14,12 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'http://localhost:8000';
 
+import type {
+  ABTest, ABTestCreate, ABTestResults,
+  Dashboard, DashboardCreate, DashboardTemplate,
+  RealtimeMetrics,
+} from './types';
+
 export interface ApiResponse<T> {
   data: T;
   status: number;
@@ -281,6 +287,77 @@ class ApiClient {
 
   async markNotificationRead(id: string) {
     return this.request(`/portal/notifications/${id}/read`, { method: 'POST' });
+  }
+
+  // A/B Testing
+  async getABTests(params?: { status?: string }) {
+    const qs = new URLSearchParams(params as Record<string, string>).toString();
+    return this.request<ABTest[]>(`/api/journey-engine/ab-testing${qs ? '?' + qs : ''}`);
+  }
+
+  async getABTest(id: string) {
+    return this.request<ABTest & { results: ABTestResults }>(`/api/journey-engine/ab-testing/${id}`);
+  }
+
+  async createABTest(data: ABTestCreate) {
+    return this.request<ABTest>('/api/journey-engine/ab-testing', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async startABTest(id: string) {
+    return this.request<ABTest>(`/api/journey-engine/ab-testing/${id}/start`, { method: 'POST' });
+  }
+
+  async stopABTest(id: string) {
+    return this.request<ABTest>(`/api/journey-engine/ab-testing/${id}/stop`, { method: 'POST' });
+  }
+
+  async deleteABTest(id: string) {
+    return this.request(`/api/journey-engine/ab-testing/${id}`, { method: 'DELETE' });
+  }
+
+  // Analytics Dashboards
+  async getDashboards() {
+    return this.request<Dashboard[]>(`/api/analytics/dashboards`);
+  }
+
+  async getDashboard(id: string) {
+    return this.request<Dashboard & { widget_data: any[] }>(`/api/analytics/dashboards/${id}`);
+  }
+
+  async createDashboard(data: DashboardCreate) {
+    return this.request<Dashboard>('/api/analytics/dashboards', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDashboard(id: string, data: Partial<DashboardCreate>) {
+    return this.request<Dashboard>(`/api/analytics/dashboards/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteDashboard(id: string) {
+    return this.request(`/api/analytics/dashboards/${id}`, { method: 'DELETE' });
+  }
+
+  async getDashboardTemplates() {
+    return this.request<DashboardTemplate[]>('/api/analytics/dashboards/templates');
+  }
+
+  async createDashboardFromTemplate(templateId: string, name: string) {
+    return this.request<Dashboard>('/api/analytics/dashboards/from-template', {
+      method: 'POST',
+      body: JSON.stringify({ template_id: templateId, name }),
+    });
+  }
+
+  async getRealtimeMetrics() {
+    return this.request<RealtimeMetrics>('/api/analytics/realtime');
   }
 
   // Journey Engine — Cancel Flow
