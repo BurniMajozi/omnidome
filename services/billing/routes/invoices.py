@@ -1,4 +1,7 @@
-"""Invoice Management routes — generation, listing, detail, send, credit notes."""
+"""Invoice Management routes — generation, listing, detail, send, credit notes.
+
+All routes use async SQLAlchemy (session.execute(select(...))).
+"""
 
 import logging
 import uuid
@@ -7,6 +10,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.billing.database import compute_vat, get_session, next_invoice_number
@@ -24,7 +28,6 @@ logger = logging.getLogger("billing.invoices")
 
 router = APIRouter(prefix="/invoices", tags=["Invoices"])
 
-# Default payment terms in days
 DEFAULT_DUE_DAYS = 30
 
 
@@ -33,38 +36,27 @@ DEFAULT_DUE_DAYS = 30
 # ---------------------------------------------------------------------------
 
 @router.post("/generate", response_model=list[InvoiceRead], status_code=status.HTTP_201_CREATED)
-def generate_invoices(
+async def generate_invoices(
     body: InvoiceGenerateRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Batch-generate invoices for active customers.
-
-    In a production system this would pull active subscriptions / packages from
-    the CRM/Sales service.  Here we demonstrate the invoice generation pipeline
-    that accepts an explicit list of customer IDs (or generates for all known
-    customers with existing invoices when none specified).
-    """
-    with get_session() as session:
+    """Batch-generate invoices for active customers."""
+    async with get_session() as session:
         created: list[Invoice] = []
 
-        # Determine customer set
         customer_ids = body.customer_ids
         if not customer_ids:
-            # If no explicit customers, we'd normally query CRM.  Fallback:
-            # generate for all customers who already have invoices in our DB.
-            rows = (
-                session.query(Invoice.customer_id)
-                .filter(Invoice.tenant_id == ctx.tenant_id)
+            result = await session.execute(
+                select(Invoice.customer_id)
+                .where(Invoice.tenant_id == ctx.tenant_id)
                 .distinct()
-                .all()
             )
-            customer_ids = [r[0] for r in rows]
+            customer_ids = [r[0] for r in result.all()]
 
         for cid in customer_ids:
             number = next_invoice_number(session, ctx.tenant_id)
             due = body.billing_date + timedelta(days=DEFAULT_DUE_DAYS)
 
-            # Placeholder line item — real system would pull from subscriptions
             line_items = [
                 {"description": "Monthly internet service", "quantity": 1,
                  "unit_price_zar": "0.00", "total_zar": "0.00"}
@@ -85,12 +77,10 @@ def generate_invoices(
                 line_items=line_items,
             )
             session.add(inv)
-            session.flush()
-            session.refresh(inv)
+            await session.flush()
+            await session.refresh(inv)
 
-            # Schedule dunning actions
             _schedule_dunning(session, inv)
-
             created.append(inv)
 
         return [InvoiceRead.model_validate(i) for i in created]
@@ -120,7 +110,7 @@ def _schedule_dunning(session, inv: Invoice) -> None:
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=PaginatedResponse)
-def list_invoices(
+async def list_invoices(
     ctx: AuthContext = Depends(get_auth_context),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -131,30 +121,36 @@ def list_invoices(
     min_amount: Optional[Decimal] = Query(None),
     max_amount: Optional[Decimal] = Query(None),
 ):
-    with get_session() as session:
-        q = session.query(Invoice).filter(Invoice.tenant_id == ctx.tenant_id)
+    async with get_session() as session:
+        stmt = select(Invoice).where(Invoice.tenant_id == ctx.tenant_id)
+        count_stmt = select(func.count(Invoice.id)).where(Invoice.tenant_id == ctx.tenant_id)
 
         if status_filter:
-            q = q.filter(Invoice.status == status_filter)
+            stmt = stmt.where(Invoice.status == status_filter)
+            count_stmt = count_stmt.where(Invoice.status == status_filter)
         if customer_id:
-            q = q.filter(Invoice.customer_id == customer_id)
+            stmt = stmt.where(Invoice.customer_id == customer_id)
+            count_stmt = count_stmt.where(Invoice.customer_id == customer_id)
         if due_from:
-            q = q.filter(Invoice.due_date >= due_from)
+            stmt = stmt.where(Invoice.due_date >= due_from)
+            count_stmt = count_stmt.where(Invoice.due_date >= due_from)
         if due_to:
-            q = q.filter(Invoice.due_date <= due_to)
+            stmt = stmt.where(Invoice.due_date <= due_to)
+            count_stmt = count_stmt.where(Invoice.due_date <= due_to)
         if min_amount is not None:
-            q = q.filter(Invoice.total_zar >= min_amount)
+            stmt = stmt.where(Invoice.total_zar >= min_amount)
+            count_stmt = count_stmt.where(Invoice.total_zar >= min_amount)
         if max_amount is not None:
-            q = q.filter(Invoice.total_zar <= max_amount)
+            stmt = stmt.where(Invoice.total_zar <= max_amount)
+            count_stmt = count_stmt.where(Invoice.total_zar <= max_amount)
 
-        total = q.count()
+        total_result = await session.execute(count_stmt)
+        total = total_result.scalar() or 0
         pages = max(1, (total + page_size - 1) // page_size)
-        items = (
-            q.order_by(Invoice.created_at.desc())
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-            .all()
-        )
+
+        stmt = stmt.order_by(Invoice.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
+        items_result = await session.execute(stmt)
+        items = items_result.scalars().all()
 
         return PaginatedResponse(
             items=[InvoiceRead.model_validate(i) for i in items],
@@ -170,16 +166,18 @@ def list_invoices(
 # ---------------------------------------------------------------------------
 
 @router.get("/{invoice_id}", response_model=InvoiceRead)
-def get_invoice(
+async def get_invoice(
     invoice_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        inv = (
-            session.query(Invoice)
-            .filter(Invoice.id == invoice_id, Invoice.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_id,
+                Invoice.tenant_id == ctx.tenant_id,
+            )
         )
+        inv = result.scalar_one_or_none()
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
         return InvoiceRead.model_validate(inv)
@@ -190,29 +188,30 @@ def get_invoice(
 # ---------------------------------------------------------------------------
 
 @router.post("/{invoice_id}/send", response_model=InvoiceRead)
-def send_invoice(
+async def send_invoice(
     invoice_id: uuid.UUID,
     body: InvoiceSendRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        inv = (
-            session.query(Invoice)
-            .filter(Invoice.id == invoice_id, Invoice.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_id,
+                Invoice.tenant_id == ctx.tenant_id,
+            )
         )
+        inv = result.scalar_one_or_none()
         if not inv:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if inv.status == "voided":
             raise HTTPException(status_code=400, detail="Cannot send a voided invoice")
 
-        # In production: dispatch to email/SMS provider here
         logger.info("Sending invoice %s via %s to customer %s", inv.number, body.channel, inv.customer_id)
 
         if inv.status == "draft":
             inv.status = "sent"
-            session.flush()
-            session.refresh(inv)
+            await session.flush()
+            await session.refresh(inv)
 
         return InvoiceRead.model_validate(inv)
 
@@ -222,23 +221,24 @@ def send_invoice(
 # ---------------------------------------------------------------------------
 
 @router.post("/{invoice_id}/credit-note", response_model=InvoiceRead, status_code=status.HTTP_201_CREATED)
-def create_credit_note(
+async def create_credit_note(
     invoice_id: uuid.UUID,
     body: CreditNoteRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    with get_session() as session:
-        original = (
-            session.query(Invoice)
-            .filter(Invoice.id == invoice_id, Invoice.tenant_id == ctx.tenant_id)
-            .first()
+    async with get_session() as session:
+        result = await session.execute(
+            select(Invoice).where(
+                Invoice.id == invoice_id,
+                Invoice.tenant_id == ctx.tenant_id,
+            )
         )
+        original = result.scalar_one_or_none()
         if not original:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if original.status == "voided":
             raise HTTPException(status_code=400, detail="Cannot credit a voided invoice")
 
-        # Build credit note line items
         if body.line_items:
             li_dicts = [li.model_dump(mode="json") for li in body.line_items]
             subtotal = sum(
@@ -269,10 +269,9 @@ def create_credit_note(
         )
         session.add(cn)
 
-        # Void original if fully credited
         if abs(total) >= original.total_zar:
             original.status = "voided"
 
-        session.flush()
-        session.refresh(cn)
+        await session.flush()
+        await session.refresh(cn)
         return InvoiceRead.model_validate(cn)
