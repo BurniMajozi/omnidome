@@ -455,3 +455,74 @@ export interface FeatureFlags {
   notifications: { enabled: boolean; push: boolean; sms: boolean; email: boolean };
   offline: { enabled: boolean };
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// IoT
+// ════════════════════════════════════════════════════════════════════════
+
+export interface IoTDevice {
+  id: string;
+  name: string;
+  type: string;
+  domain: string;
+  manufacturer?: string;
+  model?: string;
+  firmwareVersion?: string;
+  status: 'online' | 'offline' | 'unavailable';
+  roomId?: string;
+  roomName?: string;
+  attributes?: Record<string, any>;
+  lastSeen?: string;
+  createdAt: string;
+}
+
+export interface IoTRoom {
+  id: string;
+  name: string;
+  icon?: string;
+  deviceCount: number;
+  description?: string;
+  createdAt: string;
+}
+
+export interface IoTSensorReading {
+  id: string;
+  sensorId: string;
+  sensorName?: string;
+  sensorType?: string;
+  value: number;
+  unit?: string;
+  recordedAt: string;
+}
+
+export interface IoTScene {
+  id: string;
+  name: string;
+  icon?: string;
+  description?: string;
+  deviceCount: number;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface IoTAlert {
+  id: string;
+  type: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  message: string;
+  deviceId?: string;
+  deviceName?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface IoTEvent {
+  id: string;
+  eventType: string;
+  deviceId?: string;
+  deviceName?: string;
+  description: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+}

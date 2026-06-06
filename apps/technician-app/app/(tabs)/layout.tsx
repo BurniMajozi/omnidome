@@ -1,7 +1,7 @@
 "use client";
 
 import { Tabs } from 'expo-router';
-import { Wrench, TrendingUp, User } from 'lucide-react';
+import { Wrench, TrendingUp, User, Cpu } from 'lucide-react';
 
 export default function TabLayout() {
   return (
@@ -43,6 +43,13 @@ export default function TabLayout() {
         options={{
           title: 'Profile',
           tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="site-iot"
+        options={{
+          title: 'Site IoT',
+          tabBarIcon: ({ color, size }) => <Cpu size={size} color={color} />,
         }}
       />
     </Tabs>

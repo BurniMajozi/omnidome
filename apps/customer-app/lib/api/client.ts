@@ -18,6 +18,7 @@ import type {
   ABTest, ABTestCreate, ABTestResults,
   Dashboard, DashboardCreate, DashboardTemplate,
   RealtimeMetrics,
+  IoTDevice, IoTRoom, IoTSensorReading, IoTScene, IoTAlert, IoTEvent,
 } from './types';
 
 export interface ApiResponse<T> {
@@ -388,6 +389,86 @@ class ApiClient {
         decision,
       }),
     });
+  }
+
+  // IoT — Devices
+  async getIoTDevices(params?: { roomId?: string; domain?: string; status?: string }) {
+    const qs = new URLSearchParams(params as Record<string, string>).toString();
+    return this.request<IoTDevice[]>(`/api/iot/devices${qs ? '?' + qs : ''}`);
+  }
+
+  async getIoTDevice(id: string) {
+    return this.request<IoTDevice>(`/api/iot/devices/${id}`);
+  }
+
+  async controlDevice(id: string, domain: string, service: string, service_data?: Record<string, any>) {
+    return this.request(`/api/iot/devices/${id}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ domain, service, ...(service_data ? { service_data } : {}) }),
+    });
+  }
+
+  // IoT — Rooms
+  async getIoTRooms() {
+    return this.request<IoTRoom[]>('/api/iot/rooms');
+  }
+
+  async getIoTRoom(id: string) {
+    return this.request<IoTRoom>(`/api/iot/rooms/${id}`);
+  }
+
+  async getRoomDevices(roomId: string) {
+    return this.request<IoTDevice[]>(`/api/iot/rooms/${roomId}/devices`);
+  }
+
+  // IoT — Cameras
+  async getIoTCameras() {
+    return this.request<IoTDevice[]>('/api/iot/cameras');
+  }
+
+  async getCameraSnapshot(cameraId: string) {
+    return this.request<{ imageUrl: string; capturedAt: string }>(`/api/iot/cameras/${cameraId}/snapshot`);
+  }
+
+  // IoT — Sensors
+  async getIoTSensors() {
+    return this.request<IoTDevice[]>('/api/iot/sensors');
+  }
+
+  async getSensorCurrent(sensorId: string) {
+    return this.request<IoTSensorReading>(`/api/iot/sensors/${sensorId}/current`);
+  }
+
+  async getSensorReadings(sensorId: string, from?: string, to?: string, limit?: number) {
+    const qs = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries({ from, to, limit: limit?.toString() }).filter(([, v]) => v != undefined) as [string, string][]
+      )
+    ).toString();
+    return this.request<IoTSensorReading[]>(`/api/iot/sensors/${sensorId}/readings${qs ? '?' + qs : ''}`);
+  }
+
+  // IoT — Scenes
+  async getIoTScenes() {
+    return this.request<IoTScene[]>('/api/iot/scenes');
+  }
+
+  async activateScene(sceneId: string) {
+    return this.request(`/api/iot/scenes/${sceneId}/activate`, { method: 'POST' });
+  }
+
+  // IoT — Alerts & Events
+  async getIoTAlerts() {
+    return this.request<IoTAlert[]>('/api/iot/alerts');
+  }
+
+  async getIoTEvents(params?: { deviceId?: string; eventType?: string; limit?: number }) {
+    const qs = new URLSearchParams(
+      Object.fromEntries(
+        Object.entries(params ?? {}).filter(([, v]) => v != undefined) as [string, string][]
+      )
+    ).toString();
+    return this.request<IoTEvent[]>(`/api/iot/events${qs ? '?' + qs : ''}`);
   }
 }
 

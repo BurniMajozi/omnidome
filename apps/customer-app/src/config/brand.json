@@ -1,0 +1,27 @@
+{
+  "appName": "OmniDome",
+  "logo": "/logo.svg",
+  "favicon": "/favicon.ico",
+  "colors": {
+    "primary": "#2563eb",
+    "primaryDark": "#1d4ed8",
+    "secondary": "#7c3aed",
+    "accent": "#f59e0b",
+    "background": "#0f172a",
+    "surface": "#1e293b",
+    "text": "#f8fafc",
+    "textSecondary": "#94a3b8",
+    "error": "#ef4444",
+    "success": "#22c55e",
+    "warning": "#f59e0b"
+  },
+  "fonts": {
+    "heading": "Inter",
+    "body": "Inter"
+  },
+  "contact": {
+    "phone": "0800 000 000",
+    "email": "support@omnidome.co.za",
+    "website": "https://omnidome.co.za"
+  }
+}
