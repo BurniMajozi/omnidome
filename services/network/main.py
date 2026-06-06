@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import FastAPI, Depends
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import AuthContext, get_auth_context
 from services.network.database import init_tables
 
@@ -40,6 +41,8 @@ app = FastAPI(
 )
 
 guard = EntitlementGuard(module_id="network")
+
+configure_production(app)
 
 
 @app.on_event("startup")

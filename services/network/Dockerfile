@@ -1,25 +1,34 @@
-FROM python:3.11-slim
+FROM python:3.12-slim AS builder
 
-# Playwright system deps commented out for now (uncomment when enabling browser adapters)
-# RUN apt-get update && apt-get install -y \
-#     libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-#     libxkbcommon0 libxcomposite1 libxdamage1 libxext6 libxfixes3 \
-#     libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2 \
-#     && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
+WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
 COPY services/network/requirements.txt ./services/network/requirements.txt
-ENV PIP_DEFAULT_TIMEOUT=300
-ENV PIP_RETRIES=5
-RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r services/network/requirements.txt
-# RUN playwright install chromium --with-deps
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/network/requirements.txt
+
+FROM python:3.12-slim
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
+WORKDIR /app
+
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
 
 COPY services/network/ ./services/network/
 COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN chown -R appuser:appuser /app /home/appuser
+
+USER appuser
+
 EXPOSE 8005
 
-CMD ["python", "services/network/main.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')" || exit 1
+
+CMD ["uvicorn", "services.network.main:app", "--host", "0.0.0.0", "--port", "8005", "--workers", "2"]

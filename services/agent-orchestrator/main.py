@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 
 app = FastAPI(
     title="OmniDome Agent Orchestrator",
@@ -21,6 +22,8 @@ guard = EntitlementGuard(
     module_id="agents",
     public_paths={"/health", "/docs", "/openapi.json"},
 )
+
+configure_production(app)
 
 app.add_middleware(
     CORSMiddleware,

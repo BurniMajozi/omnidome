@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.billing.database import init_tables
 from services.billing.routes.invoices import router as invoices_router
 from services.billing.routes.payments import router as payments_router
@@ -37,6 +38,8 @@ guard = EntitlementGuard(
     module_id="billing",
     public_paths={"/payments/paystack/webhook"},
 )
+
+configure_production(app)
 
 
 @app.on_event("startup")

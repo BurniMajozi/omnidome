@@ -8,6 +8,7 @@ import logging
 from sqlalchemy import select, desc
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 
 from services.call_center.database import Agent, Script, CallSession, get_session, init_tables
@@ -21,6 +22,8 @@ from services.call_center.deepgram_service import (
 
 app = FastAPI(title="CoreConnect Call Center Service", version="0.2.0")
 guard = EntitlementGuard(module_id="call_center")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

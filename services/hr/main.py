@@ -8,11 +8,14 @@ import httpx
 from sqlalchemy import select, desc
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 from services.hr.database import get_session, init_tables, Employee, LeaveRequest, PerformanceReview
 
 app = FastAPI(title="CoreConnect HR Service", version="0.1.0")
 guard = EntitlementGuard(module_id="hr")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

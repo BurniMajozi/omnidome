@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.rbac import has_permission, has_role
 from services.common.db import get_async_session
 from services.common.rate_limiter import RateLimiter
@@ -25,6 +26,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="OmniDome Admin Service", version="1.0.0")
 guard = EntitlementGuard(module_name="admin")
+
+configure_production(app)
 
 # Rate limiter for auth-sensitive endpoints (10 req/min per IP)
 _auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)

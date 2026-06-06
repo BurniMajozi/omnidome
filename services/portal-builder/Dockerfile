@@ -3,8 +3,8 @@ FROM python:3.12-slim AS builder
 WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
-COPY services/communication/requirements.txt ./services/communication/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/communication/requirements.txt
+COPY services/portal-builder/requirements.txt ./services/portal-builder/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/portal-builder/requirements.txt
 
 FROM python:3.12-slim
 
@@ -15,7 +15,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH
 
-COPY services/communication/ ./services/communication/
+COPY services/portal-builder/ ./services/portal-builder/
 COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app
@@ -26,9 +26,9 @@ RUN chown -R appuser:appuser /app /home/appuser
 
 USER appuser
 
-EXPOSE 8020
+EXPOSE 8019
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')" || exit 1
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8019/health')" || exit 1
 
-CMD ["uvicorn", "services.communication.main:app", "--host", "0.0.0.0", "--port", "8020", "--workers", "2"]
+CMD ["uvicorn", "services.portal_builder.main:app", "--host", "0.0.0.0", "--port", "8019", "--workers", "2"]

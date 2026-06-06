@@ -21,7 +21,7 @@ from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id, AuthContext
+from services.common.middleware import configure_production
 from services.common.db import get_async_session
 
 logger = logging.getLogger("retention")
@@ -34,6 +34,8 @@ app = FastAPI(
 )
 guard = EntitlementGuard(module_id="retention")
 
+configure_production(app)
+
 
 @app.on_event("startup")
 async def startup() -> None:
@@ -42,18 +44,10 @@ async def startup() -> None:
 
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
-    return await guard.middleware(request, call_next)
+    configure_production(app)
 
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ── Model path ────────────────────────────────────────────────────────
+    # ── Model path ────────────────────────────────────────────────────────
 
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/app/models"))
 MODEL_DIR.mkdir(parents=True, exist_ok=True)

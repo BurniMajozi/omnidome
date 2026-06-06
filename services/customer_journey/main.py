@@ -10,6 +10,7 @@ import os
 from fastapi import FastAPI
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.customer_journey.database import init_tables
 from services.customer_journey.routes import router as journey_router
 from services.customer_journey.store_routes import router as store_router
@@ -23,6 +24,8 @@ app = FastAPI(
     description="Unified fiber customer lifecycle — coverage, orders, delivery, technician, promotions, 360",
 )
 guard = EntitlementGuard(module_id="customer_journey")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

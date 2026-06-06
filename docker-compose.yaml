@@ -332,8 +332,10 @@ services:
       - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
     ports:
       - "8000:8000"
-    volumes:
-      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
 
   web:
     build:
@@ -428,6 +430,76 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  customer_journey:
+    build:
+      context: .
+      dockerfile: services/customer_journey/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8022:8022"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  billing_collections:
+    build:
+      context: .
+      dockerfile: services/billing_collections/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8023:8023"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  fno_intelligence:
+    build:
+      context: .
+      dockerfile: services/fno_intelligence/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+    ports:
+      - "8024:8024"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  customer-portal:
+    build:
+      context: .
+      dockerfile: apps/customer-portal/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
+    ports:
+      - "3001:3001"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
 
 
 volumes:

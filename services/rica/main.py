@@ -10,12 +10,14 @@ import os
 from sqlalchemy import select, desc
 
 from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+from services.common.middleware import configure_production
 from services.rica.database import get_session, init_tables
 from sqlalchemy.ext.asyncio import AsyncSession
 
 app = FastAPI(title="CoreConnect RICA Service", version="0.1.0")
 guard = EntitlementGuard(module_id="rica", public_paths={"/callback"})
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

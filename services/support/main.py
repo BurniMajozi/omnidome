@@ -17,10 +17,13 @@ from pydantic import BaseModel, Field
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.support.database import Ticket, TicketReply, get_session, init_tables
 
 app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

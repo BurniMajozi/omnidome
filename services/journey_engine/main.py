@@ -59,7 +59,7 @@ from services.journey_engine.models import (
 )
 from services.journey_engine.rule_engine import ATTRIBUTE_TYPES
 from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+from services.common.middleware import configure_production
 from services.journey_engine.lifecycle_routes import router as lifecycle_router
 
 app = FastAPI(
@@ -69,6 +69,8 @@ app = FastAPI(
 )
 
 guard = EntitlementGuard(module_id="journey_engine")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

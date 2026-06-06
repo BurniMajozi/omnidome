@@ -26,6 +26,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 from services.finance.database import (
     get_session, init_tables,
@@ -43,6 +44,8 @@ app = FastAPI(
 )
 
 guard = EntitlementGuard(module_id="finance")
+
+configure_production(app)
 
 # ── Billing service URL for cross-service integration ──────────────────
 BILLING_SERVICE_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")

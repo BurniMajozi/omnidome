@@ -6,12 +6,14 @@ from datetime import datetime, date
 import logging
 from decimal import Decimal
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 from services.inventory.database import get_session, init_tables, Product, Warehouse, InventoryLevel, StockMovement
 
 app = FastAPI(title="CoreConnect Inventory Service", version="0.2.0")
 guard = EntitlementGuard(module_id="inventory")
 
+configure_production(app)
 
 @app.get("/health", tags=["Health"])
 async def health():

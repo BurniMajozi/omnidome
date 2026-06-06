@@ -49,7 +49,7 @@ from services.lifecycle.models import (
     LifecycleSummary,
 )
 from services.common.entitlements import EntitlementGuard
-from services.common.auth import get_current_tenant_id
+from services.common.middleware import configure_production
 
 app = FastAPI(
     title="OmniDome Lifecycle Service",
@@ -59,18 +59,12 @@ app = FastAPI(
 
 guard = EntitlementGuard(module_id="lifecycle")
 
+configure_production(app)
+
 
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "service": "lifecycle"}
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.middleware("http")

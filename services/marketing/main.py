@@ -19,9 +19,12 @@ from sqlalchemy import text
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 from services.common.db import get_engine
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 
 app = FastAPI(title="OmniDome Marketing Service", version="1.0.0")
 guard = EntitlementGuard(module_id="marketing")
+
+configure_production(app)
 
 
 @app.on_event("startup")

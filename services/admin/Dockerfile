@@ -1,18 +1,34 @@
-FROM python:3.11-slim
+FROM python:3.12-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
 COPY services/admin/requirements.txt ./services/admin/requirements.txt
-ENV PIP_DEFAULT_TIMEOUT=300
-ENV PIP_RETRIES=5
-RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host pypi.python.org --trusted-host files.pythonhosted.org -r services/admin/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/admin/requirements.txt
+
+FROM python:3.12-slim
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
+WORKDIR /app
+
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
 
 COPY services/admin/ ./services/admin/
 COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+RUN chown -R appuser:appuser /app /home/appuser
+
+USER appuser
 
 EXPOSE 8013
 
-CMD ["python", "services/admin/main.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8013/health')" || exit 1
+
+CMD ["uvicorn", "services.admin.main:app", "--host", "0.0.0.0", "--port", "8013", "--workers", "2"]

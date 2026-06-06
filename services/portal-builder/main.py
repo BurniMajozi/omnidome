@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from services.common.entitlements import EntitlementGuard
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import Base as CommonBase, session_scope
+from services.common.middleware import add_exception_handlers
 
 # ── App ────────────────────────────────────────────────────────────────
 
@@ -38,6 +39,8 @@ guard = EntitlementGuard(
     module_id="portal-builder",
     public_paths={"/health", "/docs", "/openapi.json", "/api/v1/portal/public"},
 )
+
+add_exception_handlers(app)
 
 app.add_middleware(
     CORSMiddleware,

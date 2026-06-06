@@ -1,14 +1,34 @@
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+COPY services/common/requirements.txt ./services/common/requirements.txt
+COPY services/lifecycle/requirements.txt ./services/lifecycle/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/lifecycle/requirements.txt
+
 FROM python:3.12-slim
+
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
 WORKDIR /app
 
-COPY services/common/requirements.txt /tmp/common-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/common-requirements.txt
+COPY --from=builder /root/.local /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
 
-COPY services/lifecycle/requirements.txt /tmp/lifecycle-requirements.txt
-RUN pip install --no-cache-dir -r /tmp/lifecycle-requirements.txt
+COPY services/lifecycle/ ./services/lifecycle/
+COPY services/common/ ./services/common/
 
-COPY services/common /app/services/common
-COPY services/lifecycle /app/services/lifecycle
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
-CMD ["uvicorn", "services.lifecycle.main:app", "--host", "0.0.0.0", "--port", "8018"]
+RUN chown -R appuser:appuser /app /home/appuser
+
+USER appuser
+
+EXPOSE 8018
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8018/health')" || exit 1
+
+CMD ["uvicorn", "services.lifecycle.main:app", "--host", "0.0.0.0", "--port", "8018", "--workers", "2"]

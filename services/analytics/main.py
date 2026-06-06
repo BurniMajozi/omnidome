@@ -5,10 +5,13 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 
 app = FastAPI(title="CoreConnect AI Analytics Service", version="0.1.0")
 guard = EntitlementGuard(module_id="analytics")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

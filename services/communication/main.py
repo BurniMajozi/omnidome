@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 
 app = FastAPI(
     title="OmniDome Communication Service",
@@ -22,13 +23,7 @@ guard = EntitlementGuard(
     public_paths={"/health", "/docs", "/openapi.json", "/api/v1/public"},
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv("CORS_ORIGINS", "http://localhost:3000").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_production(app)
 
 
 @app.on_event("startup")

@@ -5,6 +5,7 @@ import os
 
 from fastapi import FastAPI
 
+from services.common.middleware import configure_production
 from services.fno_intelligence.database import init_tables
 from services.fno_intelligence.routes import router
 
@@ -16,6 +17,8 @@ app = FastAPI(
     version="1.0.0",
     description="FNO browser automation, data extraction, competitive intelligence, and operational automation.",
 )
+
+configure_production(app)
 
 app.include_router(router, prefix="/api/fno")
 

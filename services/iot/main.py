@@ -10,11 +10,14 @@ import uuid
 from datetime import datetime
 import logging
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
 from services.iot.database import get_session, init_tables, IoTDevice, SignalHistory, IoTCommand
 
 app = FastAPI(title="CoreConnect IoT Service", version="0.2.0")
 guard = EntitlementGuard(module_id="iot")
+
+configure_production(app)
 
 
 @app.get("/health", tags=["Health"])

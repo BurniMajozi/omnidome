@@ -14,6 +14,7 @@ from starlette.responses import Response
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_engine
 from services.common.metrics import setup_metrics
+from services.common.middleware import add_exception_handlers
 
 logger = logging.getLogger("gateway")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -69,6 +70,7 @@ rate_limiter = RateLimiter()
 
 app = FastAPI(title="OmniDome Gateway", version="1.0.0")
 setup_metrics(app, service_name="gateway")
+add_exception_handlers(app)
 
 cors_origins = ["http://localhost:3000"]
 extra_origins = os.getenv("CORS_ORIGINS")

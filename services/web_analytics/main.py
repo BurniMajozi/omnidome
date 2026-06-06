@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from user_agents import parse as parse_ua
 
+from services.common.middleware import configure_production
 from services.web_analytics.database import get_session, init_tables
 from services.web_analytics.models import (
     ClickEvent,
@@ -26,13 +27,7 @@ from services.web_analytics.models import (
 
 app = FastAPI(title="OmniDome Web Analytics", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_production(app)
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +755,11 @@ async def analytics_realtime(session: AsyncSession = Depends(get_session)):
 @app.get("/")
 async def root():
     return {"message": "OmniDome Web Analytics Service is active"}
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "web_analytics"}
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import get_current_tenant_id
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.billing_collections.database import get_session, init_tables
 from services.billing_collections.models import (
     Base,
@@ -52,6 +53,8 @@ app = FastAPI(
 
 guard = EntitlementGuard(module_id="billing_collections")
 
+configure_production(app)
+
 BILLING_SERVICE_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
 FINANCE_SERVICE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
 
@@ -60,6 +63,11 @@ FINANCE_SERVICE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
 async def startup():
     guard.ensure_startup()
     await init_tables()
+
+
+@app.get("/health", tags=["Health"])
+async def health():
+    return {"status": "ok", "service": "billing_collections"}
 
 
 @app.middleware("http")

@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from services.common.entitlements import EntitlementGuard
+from services.common.middleware import configure_production
 from services.crm.database import init_tables
 from services.crm.routes.customers import router as customers_router
 from services.crm.routes.leads import router as leads_router
@@ -30,6 +31,8 @@ app = FastAPI(
 )
 
 guard = EntitlementGuard(module_id="crm")
+
+configure_production(app)
 
 
 @app.on_event("startup")
