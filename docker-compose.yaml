@@ -486,21 +486,5 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  customer-portal:
-    build:
-      context: .
-      dockerfile: apps/customer-portal/Dockerfile
-    env_file:
-      - .env
-    environment:
-      - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
-    ports:
-      - "3001:3001"
-    depends_on:
-      gateway:
-        condition: service_healthy
-    restart: unless-stopped
-
-
 volumes:
   postgres_data:

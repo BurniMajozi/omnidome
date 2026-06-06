@@ -577,25 +577,5 @@ services:
           memory: 512M
           cpus: '1.0'
 
-  customer-portal:
-    build:
-      context: .
-      dockerfile: apps/customer-portal/Dockerfile
-    env_file:
-      - .env
-    environment:
-      - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
-    ports:
-      - "3001:3001"
-    depends_on:
-      gateway:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '1.0'
-
 volumes:
   postgres_data:

@@ -52,7 +52,9 @@ curl http://localhost:8000/health
 | Billing Collections | 8023 | services/billing_collections/Dockerfile |
 | FNO Intelligence | 8024 | services/fno_intelligence/Dockerfile |
 | Admin Dashboard | 3000 | apps/web/Dockerfile |
-| Customer Portal | 3001 | apps/customer-portal/Dockerfile |
+| Customer App | 3001 | Standalone (EAS Build) |
+| Technician App | 3002 | Standalone (EAS Build) |
+| Field Sales App | 3003 | Standalone (EAS Build) |
 
 ## Production Checklist
 
