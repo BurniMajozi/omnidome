@@ -48,13 +48,13 @@ class Deal(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
-    contact_id = Column(UUID(as_uuid=True), nullable=False)  # customer_id in the old schema
+    contact_id = Column(UUID(as_uuid=True), nullable=False)
     lead_id = Column(UUID(as_uuid=True))
     agent_id = Column(UUID(as_uuid=True), index=True)
     stage_id = Column(UUID(as_uuid=True), ForeignKey("deal_stages.id"))
-    package_id = Column(UUID(as_uuid=True))
+    package_id = Column(UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"))
     name = Column(String(500), nullable=False)
-    amount = Column(Numeric(14, 2))  # legacy alias for value_zar
+    amount = Column(Numeric(14, 2))
     value_zar = Column(Numeric(14, 2), nullable=False, default=0)
     status = Column(String(20), nullable=False, default="OPEN")
     close_date = Column(Date)
@@ -78,7 +78,7 @@ class Quote(Base):
     customer_id = Column(UUID(as_uuid=True), nullable=False)
     lead_id = Column(UUID(as_uuid=True))
     agent_id = Column(UUID(as_uuid=True))
-    package_id = Column(UUID(as_uuid=True))
+    package_id = Column(UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"))
     items = Column(JSONB)
     total_monthly = Column(Numeric(14, 2), nullable=False, default=0)
     total_once_off = Column(Numeric(14, 2), nullable=False, default=0)

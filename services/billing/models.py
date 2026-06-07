@@ -102,12 +102,64 @@ class Invoice(Base):
     payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     dunning_actions: Mapped[list["DunningAction"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     subscription: Mapped[Optional["Subscription"]] = relationship(back_populates="invoices")
+    line_items: Mapped[list["InvoiceLine"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_invoices_tenant_status", "tenant_id", "status"),
         Index("ix_invoices_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_invoices_tenant_number", "tenant_id", "number", unique=True),
         Index("ix_invoices_subscription", "subscription_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Invoice Line Item (structured replacement for JSONB line_items)
+# ---------------------------------------------------------------------------
+
+class InvoiceLine(Base):
+    __tablename__ = "invoice_lines"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    # Product reference
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+    )
+    product_sku: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Line details
+    description: Mapped[str] = mapped_column(String(500), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    unit_price_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    discount_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    vat_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    total_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # Line type
+    line_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="plan"
+    )  # plan, hardware, installation, delivery, vas, discount
+
+    # Period (for recurring charges)
+    period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    invoice: Mapped["Invoice"] = relationship(back_populates="line_items")
+
+    __table_args__ = (
+        Index("ix_invoice_lines_tenant", "tenant_id"),
+        Index("ix_invoice_lines_product", "product_id"),
+        Index("ix_invoice_lines_type", "tenant_id", "line_type"),
     )
 
 
@@ -212,6 +264,9 @@ class Subscription(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     plan: Mapped[str] = mapped_column(String(100), nullable=False)
+    plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("plans.id", ondelete="SET NULL"), nullable=True
+    )
     segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(SUBSCRIPTION_STATUS, nullable=False, default="active")
     billing_interval: Mapped[str] = mapped_column(
@@ -239,6 +294,7 @@ class Subscription(Base):
         Index("ix_subscriptions_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_subscriptions_tenant_status", "tenant_id", "status"),
         Index("ix_subscriptions_tenant_plan", "tenant_id", "plan"),
+        Index("ix_subscriptions_plan_id", "plan_id"),
     )
 
     def get_segment_price(self, segment: str, base_price: Decimal) -> Decimal:

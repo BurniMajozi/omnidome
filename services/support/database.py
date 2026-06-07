@@ -35,6 +35,12 @@ class Ticket(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Product/hardware link
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+    )
+    serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
 
 class TicketReply(Base):
     __tablename__ = "ticket_replies"

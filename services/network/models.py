@@ -104,6 +104,9 @@ class NetworkService(Base):
     fno_order_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     fno_account_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     ont_serial: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Timestamps
     activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -128,6 +131,7 @@ class NetworkService(Base):
         Index("ix_network_services_tenant", "tenant_id"),
         Index("ix_network_services_customer", "tenant_id", "customer_id"),
         Index("ix_network_services_status", "tenant_id", "status"),
+        Index("ix_network_services_product", "product_id"),
     )
 
 

@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, date
 import logging
 from decimal import Decimal
+
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
@@ -86,24 +87,75 @@ async def startup_entitlements() -> None:
 async def entitlement_middleware(request, call_next):
     return await guard.middleware(request, call_next)
 
-# --- Models ---
+# --- Helpers ---
+
+def _calc_margin(cost_price: Decimal, rrp: Decimal) -> float:
+    """Calculate margin percentage from cost and RRP."""
+    if rrp and rrp > 0:
+        return round(float((rrp - cost_price) / rrp * 100), 2)
+    return 0.0
+
+
+# --- Pydantic Models ---
+
 class ProductBase(BaseModel):
     sku: str
     name: str
-    category_id: uuid.UUID
-    cost_price: float
-    rrp: float
+    category_id: Optional[uuid.UUID] = None
+    description: Optional[str] = None
+    barcode: Optional[str] = None
+    unit_of_measure: str = "EA"
+    weight_kg: Optional[Decimal] = None
+    cost_price: Decimal = Decimal("0.00")
+    rrp: Decimal = Decimal("0.00")
 
-class Product(ProductBase):
+
+class ProductCreate(ProductBase):
+    pass
+
+
+class ProductUpdate(BaseModel):
+    sku: Optional[str] = None
+    name: Optional[str] = None
+    category_id: Optional[uuid.UUID] = None
+    description: Optional[str] = None
+    barcode: Optional[str] = None
+    unit_of_measure: Optional[str] = None
+    weight_kg: Optional[Decimal] = None
+    cost_price: Optional[Decimal] = None
+    rrp: Optional[Decimal] = None
+
+
+class ProductResponse(BaseModel):
     id: uuid.UUID
+    tenant_id: uuid.UUID
+    sku: str
+    name: str
+    category_id: Optional[uuid.UUID]
+    description: Optional[str]
+    barcode: Optional[str]
+    unit_of_measure: str
+    weight_kg: Optional[Decimal]
+    cost_price: Decimal
+    rrp: Decimal
     margin_percent: float
     created_at: datetime
 
+    class Config:
+        from_attributes = True
+
+
 class WarehouseCreate(BaseModel):
     name: str
-    location: Optional[str]
+    location: Optional[str] = None
     is_external: bool = False
-    partner_name: Optional[str]
+    partner_name: Optional[str] = None
+
+    @validator("partner_name")
+    def require_partner_name(cls, v, values):
+        if values.get("is_external") and not v:
+            raise ValueError("partner_name is required when is_external=True")
+        return v
 
 class ShipmentCreate(BaseModel):
     origin_warehouse_id: uuid.UUID
@@ -139,23 +191,52 @@ class StockCheckoutRequest(BaseModel):
 async def root():
     return {"message": "CoreConnect Inventory Service is active"}
 
-@app.post("/products", response_model=Product, status_code=status.HTTP_201_CREATED)
-async def create_product(product: ProductBase, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    margin = ((product.rrp - product.cost_price) / product.rrp * 100) if product.rrp > 0 else 0
-    return {
-        "id": uuid.uuid4(),
-        "margin_percent": margin,
-        "created_at": datetime.now(),
-        **product.dict()
-    }
+@app.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+async def create_product(
+    product: ProductCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Create a new product."""
+    p = Product(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        sku=product.sku,
+        name=product.name,
+        category_id=product.category_id,
+        description=product.description,
+        barcode=product.barcode,
+        unit_of_measure=product.unit_of_measure,
+        weight_kg=product.weight_kg,
+        cost_price=product.cost_price,
+        rrp=product.rrp,
+    )
+    db.add(p)
+    await db.flush()
+    await db.refresh(p)
+    return ProductResponse(
+        id=p.id,
+        tenant_id=p.tenant_id,
+        sku=p.sku,
+        name=p.name,
+        category_id=p.category_id,
+        description=p.description,
+        barcode=p.barcode,
+        unit_of_measure=p.unit_of_measure,
+        weight_kg=p.weight_kg,
+        cost_price=p.cost_price,
+        rrp=p.rrp,
+        margin_percent=_calc_margin(p.cost_price, p.rrp),
+        created_at=p.created_at,
+    )
 
 
-@app.get("/products")
+@app.get("/products", response_model=List[ProductResponse])
 async def list_products(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
-    """List all products for tenant"""
+    """List all products for tenant."""
     from sqlalchemy import select
 
     await _ensure_sample_data(tenant_id, db)
@@ -164,27 +245,32 @@ async def list_products(
     )
     products = result.scalars().all()
     return [
-        {
-            "id": str(p.id),
-            "tenant_id": str(p.tenant_id),
-            "sku": p.sku,
-            "name": p.name,
-            "cost_price": float(p.cost_price) if p.cost_price else None,
-            "rrp": float(p.rrp) if p.rrp else None,
-            "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-        }
+        ProductResponse(
+            id=p.id,
+            tenant_id=p.tenant_id,
+            sku=p.sku,
+            name=p.name,
+            category_id=p.category_id,
+            description=p.description,
+            barcode=p.barcode,
+            unit_of_measure=p.unit_of_measure,
+            weight_kg=p.weight_kg,
+            cost_price=p.cost_price,
+            rrp=p.rrp,
+            margin_percent=_calc_margin(p.cost_price, p.rrp),
+            created_at=p.created_at,
+        )
         for p in products
     ]
 
 
-@app.get("/products/{product_id}")
+@app.get("/products/{product_id}", response_model=ProductResponse)
 async def get_product(
     product_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
-    """Get a single product by ID"""
+    """Get a single product by ID."""
     from sqlalchemy import select
 
     result = await db.execute(
@@ -196,26 +282,31 @@ async def get_product(
     p = result.scalar_one_or_none()
     if not p:
         raise HTTPException(status_code=404, detail="Product not found")
-    return {
-        "id": str(p.id),
-        "tenant_id": str(p.tenant_id),
-        "sku": p.sku,
-        "name": p.name,
-        "cost_price": float(p.cost_price) if p.cost_price else None,
-        "rrp": float(p.rrp) if p.rrp else None,
-        "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
-        "created_at": p.created_at.isoformat() if p.created_at else None,
-    }
+    return ProductResponse(
+        id=p.id,
+        tenant_id=p.tenant_id,
+        sku=p.sku,
+        name=p.name,
+        category_id=p.category_id,
+        description=p.description,
+        barcode=p.barcode,
+        unit_of_measure=p.unit_of_measure,
+        weight_kg=p.weight_kg,
+        cost_price=p.cost_price,
+        rrp=p.rrp,
+        margin_percent=_calc_margin(p.cost_price, p.rrp),
+        created_at=p.created_at,
+    )
 
 
-@app.put("/products/{product_id}")
+@app.put("/products/{product_id}", response_model=ProductResponse)
 async def update_product(
     product_id: uuid.UUID,
-    body: ProductBase,
+    body: ProductUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
-    """Update a product"""
+    """Update a product."""
     from sqlalchemy import select
 
     result = await db.execute(
@@ -234,16 +325,21 @@ async def update_product(
 
     await db.flush()
     await db.refresh(p)
-    return {
-        "id": str(p.id),
-        "tenant_id": str(p.tenant_id),
-        "sku": p.sku,
-        "name": p.name,
-        "cost_price": float(p.cost_price) if p.cost_price else None,
-        "rrp": float(p.rrp) if p.rrp else None,
-        "margin_percent": round(float((p.rrp - p.cost_price) / p.rrp * 100), 2) if p.rrp and p.rrp > 0 else 0,
-        "created_at": p.created_at.isoformat() if p.created_at else None,
-    }
+    return ProductResponse(
+        id=p.id,
+        tenant_id=p.tenant_id,
+        sku=p.sku,
+        name=p.name,
+        category_id=p.category_id,
+        description=p.description,
+        barcode=p.barcode,
+        unit_of_measure=p.unit_of_measure,
+        weight_kg=p.weight_kg,
+        cost_price=p.cost_price,
+        rrp=p.rrp,
+        margin_percent=_calc_margin(p.cost_price, p.rrp),
+        created_at=p.created_at,
+    )
 
 
 @app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)

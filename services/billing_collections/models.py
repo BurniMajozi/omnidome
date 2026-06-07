@@ -526,7 +526,9 @@ class ProductMovement(Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
 
     # Product
-    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
     product_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     imei: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
@@ -534,7 +536,7 @@ class ProductMovement(Base):
 
     # Movement details
     movement_type: Mapped[str] = mapped_column(PRODUCT_MOVEMENT_TYPE, nullable=False)
-    from_location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # warehouse, customer, courier, depot
+    from_location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     to_location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     from_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     to_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -544,9 +546,13 @@ class ProductMovement(Base):
     condition_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Related entities
-    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
+    )
     delivery_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    technician_visit_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    technician_visit_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("technician_visits.id", ondelete="SET NULL"), nullable=True
+    )
     return_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     # Financial

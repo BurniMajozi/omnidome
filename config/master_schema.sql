@@ -1140,3 +1140,16 @@ CREATE TABLE call_sessions (
 
 CREATE INDEX idx_call_sessions_tenant ON call_sessions(tenant_id);
 CREATE INDEX idx_call_sessions_agent ON call_sessions(agent_id);
+
+CREATE TABLE dashboards (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    widget_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_template BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_dashboards_tenant_template ON dashboards(tenant_id, is_template);

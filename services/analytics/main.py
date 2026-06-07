@@ -41,6 +41,13 @@ configure_production(app)
 
 @app.on_event("startup")
 async def startup() -> None:
+    try:
+        from services.common.db import engine
+        from services.analytics.models import AnalyticsBase
+        async with engine.begin() as conn:
+            await conn.run_sync(AnalyticsBase.metadata.create_all)
+    except Exception as e:
+        pass
     guard.ensure_startup()
 
 

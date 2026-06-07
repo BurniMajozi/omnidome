@@ -47,7 +47,7 @@ class JournalEntry(Base):
     reference: Mapped[Optional[str]] = mapped_column(String(100))
     description: Mapped[Optional[str]] = mapped_column(Text)
     source: Mapped[Optional[str]] = mapped_column(
-        String(50), comment="e.g. BILLING, MANUAL, PAYROLL, ADJUSTMENT",
+        String(50), comment="e.g. BILLING, MANUAL, PAYROLL, ADJUSTMENT, INVENTORY, COGS, STOCK_ADJUSTMENT",
     )
     source_id: Mapped[Optional[str]] = mapped_column(
         String(100), comment="ID of the source document (invoice, payment, etc.)",
