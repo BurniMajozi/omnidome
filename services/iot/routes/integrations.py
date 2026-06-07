@@ -459,6 +459,30 @@ async def sync_devices(
                         if attributes.get("model"):
                             existing_device.model = str(attributes["model"])
 
+                        # Auto-link to inventory product by serial/mac
+                        if not existing_device.product_id:
+                            serial = (
+                                attributes.get("serial_number")
+                                or attributes.get("serial")
+                                or existing_device.serial_number
+                            )
+                            mac = attributes.get("mac_address") or attributes.get("mac")
+                            if serial or mac:
+                                from services.inventory.database import Product as InvProduct
+                                product_lookup = await session.execute(
+                                    select(InvProduct).where(
+                                        InvProduct.tenant_id == ctx.tenant_id,
+                                        (
+                                            (serial is not None) & (InvProduct.barcode == serial)
+                                        ) | (
+                                            (mac is not None) & (InvProduct.barcode == mac)
+                                        ),
+                                    ).limit(1)
+                                )
+                                matched = product_lookup.scalar_one_or_none()
+                                if matched:
+                                    existing_device.product_id = matched.id
+
                         devices_updated += 1
                     else:
                         # Create new device

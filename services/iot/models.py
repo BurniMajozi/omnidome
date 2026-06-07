@@ -110,6 +110,11 @@ class IoTDevice(Base):
     friendly_name: Mapped[str] = mapped_column(String(255), nullable=False)
     device_type: Mapped[str] = mapped_column(DEVICE_TYPE, nullable=False, index=True)
 
+    # Inventory link (optional — for devices that are also tracked inventory items)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+    )
+
     # Device metadata
     manufacturer: Mapped[Optional[str]] = mapped_column(String(128))
     model: Mapped[Optional[str]] = mapped_column(String(128))
@@ -150,6 +155,7 @@ class IoTDevice(Base):
 
     __table_args__ = (
         Index("ix_iot_devices_tenant_ha_entity", "tenant_id", "ha_entity_id", unique=True),
+        Index("ix_iot_devices_product", "product_id"),
     )
 
 

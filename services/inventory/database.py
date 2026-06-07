@@ -41,6 +41,13 @@ class Product(Base):
     inventory_levels = relationship("InventoryLevel", back_populates="product", cascade="all, delete-orphan")
     stock_movements = relationship("StockMovement", back_populates="product", cascade="all, delete-orphan")
 
+    # Cross-service: IoT devices linked to this product (lazy import to avoid circular deps)
+    @property
+    def iot_devices(self):
+        """Lazy-load IoT devices linked to this product. Requires active DB session."""
+        from services.iot.models import IoTDevice
+        return IoTDevice.__table__.c.product_id  # FK reference for manual queries
+
 
 class Warehouse(Base):
     __tablename__ = "warehouses"

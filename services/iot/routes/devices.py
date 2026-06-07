@@ -45,6 +45,7 @@ class DeviceCreate(BaseModel):
     device_type: str = Field(..., description=f"One of: {', '.join(DEVICE_TYPES)}")
     integration_id: Optional[uuid.UUID] = None
     room_id: Optional[uuid.UUID] = None
+    product_id: Optional[uuid.UUID] = Field(None, description="Linked inventory product ID")
     manufacturer: Optional[str] = Field(None, max_length=128)
     model: Optional[str] = Field(None, max_length=128)
     sw_version: Optional[str] = Field(None, max_length=64)
@@ -63,6 +64,7 @@ class DeviceUpdate(BaseModel):
     device_type: Optional[str] = Field(None, description=f"One of: {', '.join(DEVICE_TYPES)}")
     integration_id: Optional[uuid.UUID] = None
     room_id: Optional[uuid.UUID] = None
+    product_id: Optional[uuid.UUID] = Field(None, description="Linked inventory product ID")
     manufacturer: Optional[str] = Field(None, max_length=128)
     model: Optional[str] = Field(None, max_length=128)
     sw_version: Optional[str] = Field(None, max_length=64)
@@ -84,6 +86,7 @@ class DeviceRead(BaseModel):
     tenant_id: uuid.UUID
     integration_id: Optional[uuid.UUID]
     room_id: Optional[uuid.UUID]
+    product_id: Optional[uuid.UUID]
     ha_entity_id: str
     ha_domain: str
     friendly_name: str
@@ -198,6 +201,7 @@ async def list_devices(
     ha_domain: Optional[str] = Query(None, description="Filter by HA domain"),
     search: Optional[str] = Query(None, description="Search by friendly name or entity ID"),
     is_controllable: Optional[bool] = Query(None, description="Filter by controllability"),
+    product_id: Optional[uuid.UUID] = Query(None, description="Filter by linked inventory product"),
 ):
     """List IoT devices with optional filters and pagination."""
     async with get_session() as session:
@@ -215,6 +219,8 @@ async def list_devices(
             stmt = stmt.where(IoTDevice.ha_domain == ha_domain)
         if is_controllable is not None:
             stmt = stmt.where(IoTDevice.is_controllable == is_controllable)
+        if product_id:
+            stmt = stmt.where(IoTDevice.product_id == product_id)
         if search:
             search_term = f"%{search}%"
             stmt = stmt.where(
@@ -309,6 +315,7 @@ async def register_device(
             device_type=body.device_type,
             integration_id=body.integration_id,
             room_id=body.room_id,
+            product_id=body.product_id,
             manufacturer=body.manufacturer,
             model=body.model,
             sw_version=body.sw_version,
