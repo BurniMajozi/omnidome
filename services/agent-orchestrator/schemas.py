@@ -14,6 +14,10 @@ class AgentInvokeRequest(BaseModel):
     message: str = Field(..., min_length=1)
     context: Dict[str, Any] = Field(default_factory=dict)
     tenant_id: Optional[uuid.UUID] = None
+    conversation_id: Optional[uuid.UUID] = Field(
+        None,
+        description="Existing conversation ID to continue. If omitted, a new conversation is created."
+    )
 
 
 class AgentInvokeResponse(BaseModel):

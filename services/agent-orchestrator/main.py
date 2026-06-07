@@ -37,6 +37,12 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
+    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+        from agent_orchestrator.conversation.models import Base as ConvBase
+        from services.common.db import get_engine
+        engine = get_engine()
+        ConvBase.metadata.create_all(bind=engine)
+        logger.info("Agent orchestrator conversation tables ensured")
 
 
 @app.middleware("http")

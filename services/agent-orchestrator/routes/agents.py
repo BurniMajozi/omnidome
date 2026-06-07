@@ -1,4 +1,4 @@
-"""Agent invocation routes."""
+"""Agent invocation routes — with conversation persistence."""
 
 import uuid
 import logging
@@ -6,15 +6,91 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.crm.database import get_session
 from agent_orchestrator.agents import Agent
 from agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
+from agent_orchestrator.conversation.models import (
+    AgentConversation,
+    AgentMessage,
+    AgentAction,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# ---------------------------------------------------------------------------
+# Helper: persist messages to a conversation
+# ---------------------------------------------------------------------------
+
+async def _persist_messages(
+    session,
+    conversation_id: uuid.UUID,
+    agent_type: str,
+    user_message: str,
+    assistant_content: str,
+    tool_calls: list,
+):
+    """Persist user message, tool calls, and assistant response to the conversation."""
+    # User message
+    user_msg = AgentMessage(
+        conversation_id=conversation_id,
+        role="user",
+        content=user_message,
+    )
+    session.add(user_msg)
+
+    # Tool call messages (if any)
+    for tc in tool_calls:
+        tool_msg = AgentMessage(
+            conversation_id=conversation_id,
+            role="tool",
+            content=str(tc.get("result", "")),
+            tool_calls=[{
+                "name": tc.get("name", ""),
+                "arguments": tc.get("arguments", {}),
+            }],
+            tool_results=[tc.get("result", {})],
+        )
+        session.add(tool_msg)
+
+        # Also persist to AgentAction for audit trail
+        action = AgentAction(
+            conversation_id=conversation_id,
+            agent_type=agent_type,
+            tool_name=tc.get("name", ""),
+            tool_input=tc.get("arguments", {}),
+            tool_output=tc.get("result", {}),
+            success=tc.get("result", {}).get("success", True) if isinstance(tc.get("result"), dict) else True,
+        )
+        session.add(action)
+
+    # Assistant response
+    assistant_msg = AgentMessage(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=assistant_content,
+    )
+    session.add(assistant_msg)
+
+    # Update conversation timestamp
+    conv_result = await session.execute(
+        select(AgentConversation).where(AgentConversation.id == conversation_id)
+    )
+    conv = conv_result.scalar_one_or_none()
+    if conv:
+        conv.updated_at = __import__("datetime").datetime.now(
+            tz=__import__("datetime").timezone.utc
+        )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/agents — List agents
+# ---------------------------------------------------------------------------
 
 @router.get("", response_model=list[AgentInfo])
 async def list_agents():
@@ -54,12 +130,63 @@ async def list_agents():
     return agents
 
 
+# ---------------------------------------------------------------------------
+# POST /api/agents/invoke — Synchronous agent invocation with persistence
+# ---------------------------------------------------------------------------
+
 @router.post("/invoke", response_model=AgentInvokeResponse)
 async def invoke_agent(
     body: AgentInvokeRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Synchronous agent invocation. Waits for full response."""
+    """Synchronous agent invocation. Waits for full response.
+
+    If conversation_id is provided, the agent loads history from that conversation
+    and appends new messages to it. If not provided, a new conversation is created.
+    """
+    conversation_id = body.conversation_id
+
+    async with get_session() as session:
+        # Load history if continuing a conversation
+        history = None
+        if conversation_id:
+            # Verify conversation exists and belongs to tenant
+            conv_result = await session.execute(
+                select(AgentConversation).where(
+                    AgentConversation.id == conversation_id,
+                    AgentConversation.tenant_id == ctx.tenant_id,
+                )
+            )
+            conv = conv_result.scalar_one_or_none()
+            if not conv:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+
+            # Load message history
+            msg_result = await session.execute(
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id == conversation_id)
+                .order_by(AgentMessage.created_at.asc())
+            )
+            messages = msg_result.scalars().all()
+            history = [
+                {"role": m.role, "content": m.content or ""}
+                for m in messages
+                if m.role in ("user", "assistant")
+            ]
+
+        # Create new conversation if not continuing
+        if not conversation_id:
+            conv = AgentConversation(
+                tenant_id=ctx.tenant_id,
+                agent_type=body.agent_type,
+                channel="api",
+                context=body.context,
+            )
+            session.add(conv)
+            await session.flush()
+            conversation_id = conv.id
+
+    # Run the agent (outside the DB session to avoid long-held locks)
     agent = Agent(
         agent_type=body.agent_type,
         tenant_id=body.tenant_id or ctx.tenant_id,
@@ -68,15 +195,33 @@ async def invoke_agent(
 
     result = await agent.run(
         user_message=body.message,
+        history=history,
+        conversation_id=conversation_id,
     )
 
+    # Persist messages
+    async with get_session() as session:
+        await _persist_messages(
+            session=session,
+            conversation_id=conversation_id,
+            agent_type=body.agent_type,
+            user_message=body.message,
+            assistant_content=result["content"],
+            tool_calls=result.get("tool_calls", []),
+        )
+        await session.flush()
+
     return AgentInvokeResponse(
-        conversation_id=uuid.uuid4(),
+        conversation_id=conversation_id,
         message=result["content"],
         tool_calls=result.get("tool_calls", []),
         agent_type=body.agent_type,
     )
 
+
+# ---------------------------------------------------------------------------
+# POST /api/agents/invoke/stream — Streaming agent invocation
+# ---------------------------------------------------------------------------
 
 @router.post("/invoke/stream")
 async def invoke_agent_stream(

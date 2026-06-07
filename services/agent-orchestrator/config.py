@@ -51,6 +51,56 @@ class Settings(BaseSettings):
     finance_service_url: str = "http://finance:8015"
     call_center_service_url: str = "http://call_center:8007"
 
+    # Agent-to-tool mapping — controls which tools each agent type can use.
+    # Keys are agent types, values are lists of tool name patterns.
+    # Supports exact names and prefix wildcards (e.g., "crm.*" matches all crm tools).
+    agent_tool_map: dict = {
+        "domebot": [
+            "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details", "crm.get_customer_360_cx",
+            "crm.get_customer_360_cvm",
+            "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts",
+            "network.check_coverage", "network.get_service_status",
+            "support.create_ticket",
+            "sales.get_pipeline",
+        ],
+        "churnguard": [
+            "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
+            "retention.get_predictions", "retention.get_cases",
+            "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts", "billing.list_transfers",
+            "sales.get_pipeline",
+        ],
+        "provisionbot": [
+            "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details",
+            "network.check_coverage", "network.get_service_status",
+            "sales.get_pipeline",
+            "support.create_ticket",
+            "billing.list_billing_accounts",
+        ],
+        "insightbot": [
+            "analytics.get_executive_summary",
+            "retention.get_predictions", "retention.get_cases",
+            "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts", "billing.list_transfers",
+            "network.get_service_status",
+            "call_center.get_intelligence",
+            "sales.get_pipeline",
+            "finance.get_financial_summary",
+            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
+        ],
+        "supportbot": [
+            "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details", "crm.get_customer_360_cx",
+            "support.create_ticket",
+            "network.get_service_status",
+            "call_center.get_intelligence",
+        ],
+    }
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

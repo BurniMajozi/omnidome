@@ -504,55 +504,20 @@ def list_tools() -> List[Dict[str, Any]]:
 
 
 def get_tools_for_agent(agent_type: str) -> List[Tool]:
-    """Return the subset of tools available to a given agent_type."""
-    agent_tool_map = {
-        "domebot": [
-            "crm.get_customer", "crm.list_customers",
-            "crm.get_customer_360_details", "crm.get_customer_360_cx",
-            "crm.get_customer_360_cvm",
-            "billing.get_balance", "billing.get_invoice",
-            "billing.list_billing_accounts",
-            "network.check_coverage", "network.get_service_status",
-            "support.create_ticket",
-            "sales.get_pipeline",
-        ],
-        "churnguard": [
-            "crm.get_customer", "crm.list_customers",
-            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
-            "retention.get_predictions", "retention.get_cases",
-            "billing.get_balance", "billing.get_invoice",
-            "billing.list_billing_accounts", "billing.list_transfers",
-            "sales.get_pipeline",
-        ],
-        "provisionbot": [
-            "crm.get_customer", "crm.list_customers",
-            "crm.get_customer_360_details",
-            "network.check_coverage", "network.get_service_status",
-            "sales.get_pipeline",
-            "support.create_ticket",
-            "billing.list_billing_accounts",
-        ],
-        "insightbot": [
-            "analytics.get_executive_summary",
-            "retention.get_predictions", "retention.get_cases",
-            "billing.get_balance", "billing.get_invoice",
-            "billing.list_billing_accounts", "billing.list_transfers",
-            "network.get_service_status",
-            "call_center.get_intelligence",
-            "sales.get_pipeline",
-            "finance.get_financial_summary",
-            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
-        ],
-        "supportbot": [
-            "crm.get_customer", "crm.list_customers",
-            "crm.get_customer_360_details", "crm.get_customer_360_cx",
-            "support.create_ticket",
-            "network.get_service_status",
-            "call_center.get_intelligence",
-        ],
-    }
-    tool_names = agent_tool_map.get(agent_type, [])
-    return [t for t in ALL_TOOLS if t.name in tool_names]
+    """Return the subset of tools available to a given agent_type.
+
+    Uses the agent_tool_map from config.settings. Supports exact tool names
+    and prefix wildcards (e.g., 'crm.*' matches all crm tools).
+    """
+    import fnmatch
+    tool_names = settings.agent_tool_map.get(agent_type, [])
+    result = []
+    for t in ALL_TOOLS:
+        for pattern in tool_names:
+            if fnmatch.fnmatch(t.name, pattern):
+                result.append(t)
+                break
+    return result
 
 
 # Alias for backward compatibility with agents.py
