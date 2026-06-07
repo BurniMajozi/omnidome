@@ -216,6 +216,7 @@ class Product(Base):
     technician_stocks = relationship("TechnicianStock", back_populates="product", cascade="all, delete-orphan")
     purchase_order_items = relationship("PurchaseOrderItem", back_populates="product")
     goods_receipt_items = relationship("GoodsReceiptItem", back_populates="product")
+    package_items = relationship("PackageItem", back_populates="product", cascade="all, delete-orphan")
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -223,16 +224,21 @@ class Product(Base):
 # ════════════════════════════════════════════════════════════════════════
 
 class PricingRule(Base):
-    """Markdowns, promotional prices, clearance, bundle pricing per product."""
+    """Markdowns, promotional prices, clearance, bundle pricing per product or package."""
     __tablename__ = "inventory_pricing_rules"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    product_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=False
+
+    # Target: either a product or a package (one must be set)
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=True
+    )
+    package_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_packages.id", ondelete="CASCADE"), nullable=True
     )
 
-    name: Mapped[str] = mapped_column(String(200), nullable=False)  # "Black Friday 2026", "Clearance Q1"
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     pricing_type: Mapped[str] = mapped_column(PRICING_TYPE, nullable=False, default="base")
 
     # Price override
@@ -248,7 +254,7 @@ class PricingRule(Base):
     # Scope
     min_quantity: Mapped[int] = mapped_column(Integer, default=1)
     max_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # residential, business, enterprise
+    segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Priority (higher = takes precedence)
     priority: Mapped[int] = mapped_column(Integer, default=0)
@@ -258,10 +264,132 @@ class PricingRule(Base):
 
     # Relationships
     product = relationship("Product", back_populates="pricing_rules")
+    package = relationship("Package", back_populates="pricing_rules")
 
     __table_args__ = (
         Index("ix_pricing_rules_tenant_product", "tenant_id", "product_id"),
+        Index("ix_pricing_rules_tenant_package", "tenant_id", "package_id"),
         Index("ix_pricing_rules_valid", "valid_from", "valid_to"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PACKAGE (Bundle) — sellable product that contains multiple hardware items
+# ════════════════════════════════════════════════════════════════════════
+
+PACKAGE_TYPE = SAEnum(
+    "fibre_bundle",      # Fibre package with router, ONT, etc.
+    "lte_bundle",        # LTE package with router, SIM, etc.
+    "hardware_only",     # Standalone hardware (no service)
+    "add_on",            # Add-on to existing package (WiFi extender, camera)
+    "promotional",       # Promotional bundle (discounted hardware + service)
+    name="package_type", create_type=True,
+)
+
+
+class Package(Base):
+    """A sellable package/bundle that contains one or more hardware products.
+
+    Examples:
+    - "Fibre 100Mbps Home Bundle" → ONT + Router + WiFi Extender
+    - "LTE Starter Kit" → LTE Router + SIM Card
+    - "Standalone Router" → Just the router (no service)
+    - "WiFi Extender Add-on" → Single add-on item
+
+    A package has its own SKU, pricing, and hierarchy placement.
+    When sold, the technician dispatches the constituent items from van stock.
+    """
+    __tablename__ = "inventory_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Hierarchy placement (optional — packages can live in the hierarchy)
+    service_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_service_types.id", ondelete="SET NULL"), nullable=True
+    )
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_product_categories.id", ondelete="SET NULL"), nullable=True
+    )
+    range_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_product_ranges.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Package identity
+    sku: Mapped[str] = mapped_column(String(100), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    package_type: Mapped[str] = mapped_column(PACKAGE_TYPE, nullable=False, default="fibre_bundle")
+
+    # Pricing (package-level, may differ from sum of parts)
+    cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    rrp: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_sellable_standalone: Mapped[bool] = mapped_column(Boolean, default=True)
+    # If False, this package can only be added to an order as part of another package
+
+    # Versioning (product development — track changes to package contents)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    effective_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Null effective_to = current version
+
+    # Metadata
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    service_type = relationship("ServiceType")
+    category = relationship("ProductCategory")
+    range = relationship("ProductRange")
+    items = relationship("PackageItem", back_populates="package", cascade="all, delete-orphan")
+    pricing_rules = relationship("PricingRule", back_populates="package", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "sku", "version", name="uq_package_tenant_sku_version"),
+        Index("ix_packages_tenant_type", "tenant_id", "package_type"),
+        Index("ix_packages_hierarchy", "service_type_id", "category_id", "range_id"),
+        Index("ix_packages_effective", "effective_from", "effective_to"),
+    )
+
+
+class PackageItem(Base):
+    """Constituent items within a package — many-to-many with quantity.
+
+    Example: "Fibre 100Mbps Home Bundle" contains:
+    - 1x ONT (product_id: xxx, quantity: 1, is_required: true)
+    - 1x Router (product_id: yyy, quantity: 1, is_required: true)
+    - 1x WiFi Extender (product_id: zzz, quantity: 1, is_required: false) — optional add-on
+    """
+    __tablename__ = "inventory_package_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    package_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_packages.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=False
+    )
+
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
+    is_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    # If False, this item is optional (customer can choose to include/exclude)
+
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    package = relationship("Package", back_populates="items")
+    product = relationship("Product", back_populates="package_items")
+
+    __table_args__ = (
+        UniqueConstraint("package_id", "product_id", name="uq_package_item"),
+        Index("ix_package_items_product", "product_id"),
     )
 
 
