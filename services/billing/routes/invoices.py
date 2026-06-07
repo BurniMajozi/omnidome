@@ -107,6 +107,8 @@ async def generate_invoices(
             inv = Invoice(
                 tenant_id=ctx.tenant_id,
                 customer_id=sub.customer_id,
+                billing_account_id=sub.billing_account_id,
+                property_id=sub.property_id,
                 subscription_id=sub.id,
                 number=number,
                 status="draft",

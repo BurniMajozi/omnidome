@@ -57,6 +57,8 @@ async def create_subscription(
         sub = Subscription(
             tenant_id=ctx.tenant_id,
             customer_id=body.customer_id,
+            billing_account_id=body.billing_account_id,
+            property_id=body.property_id,
             plan=body.plan,
             segment=body.segment,
             status="trial" if trial_ends_at else "active",
@@ -101,6 +103,8 @@ async def create_prorated_subscription(
         sub = Subscription(
             tenant_id=ctx.tenant_id,
             customer_id=body.customer_id,
+            billing_account_id=body.billing_account_id,
+            property_id=body.property_id,
             plan=body.plan,
             segment=body.segment,
             status="active",
@@ -122,6 +126,8 @@ async def create_prorated_subscription(
         inv = Invoice(
             tenant_id=ctx.tenant_id,
             customer_id=body.customer_id,
+            billing_account_id=body.billing_account_id,
+            property_id=body.property_id,
             subscription_id=sub.id,
             number=number,
             status="draft",
@@ -356,6 +362,8 @@ async def generate_invoice(
         inv = Invoice(
             tenant_id=ctx.tenant_id,
             customer_id=sub.customer_id,
+            billing_account_id=sub.billing_account_id,
+            property_id=sub.property_id,
             subscription_id=sub.id,
             number=number,
             status="draft",

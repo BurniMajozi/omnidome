@@ -329,6 +329,11 @@ class PaymentArrangement(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    billing_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Links to BillingAccount for company/multi-property arrangements"
+    )
     total_owed_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     installment_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     installments_count: Mapped[int] = mapped_column(Integer, nullable=False)

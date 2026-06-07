@@ -345,6 +345,8 @@ class CreateSubscriptionRequest(BaseModel):
 
 class ProratedSubscriptionRequest(BaseModel):
     customer_id: uuid.UUID
+    billing_account_id: Optional[uuid.UUID] = None
+    property_id: Optional[uuid.UUID] = None
     plan: str
     start_date: date
     billing_anchor: date
