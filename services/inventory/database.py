@@ -1,12 +1,21 @@
-"""Inventory service database layer — SQLAlchemy async models and session management."""
+"""Inventory service database layer — SQLAlchemy async models and session management.
 
+Full stock pipeline:
+  Supplier → PurchaseOrder → GoodsReceipt → Warehouse → TechnicianStock → Customer
+  Product hierarchy: ServiceType → Category → Range → Product (SKU)
+  Pricing: base cost, markup, markdowns, promotional pricing
+  Visibility: StockMovement audit trail across all pipeline stages
+"""
 import uuid
 from datetime import datetime, date
 from decimal import Decimal
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import (
+    Boolean, Date, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, Numeric,
+    String, Text, UniqueConstraint, func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -17,88 +26,671 @@ class Base(DeclarativeBase):
     pass
 
 
+# ════════════════════════════════════════════════════════════════════════
+# ENUMERIES
+# ════════════════════════════════════════════════════════════════════════
+
+MOVEMENT_TYPE = SAEnum(
+    "purchase_receipt",      # Supplier → Warehouse (goods received)
+    "warehouse_transfer",    # Warehouse → Warehouse
+    "technician_dispatch",   # Warehouse → Technician (van stock)
+    "technician_return",     # Technician → Warehouse (unused stock)
+    "customer_dispatch",     # Technician → Customer (installation)
+    "customer_return",       # Customer → Technician/Warehouse (RMA)
+    "adjustment",            # Inventory adjustment (count, damage, etc.)
+    "write_off",             # Stock written off
+    name="stock_movement_type", create_type=True,
+)
+
+PO_STATUS = SAEnum(
+    "draft", "submitted", "approved", "partially_received", "received", "cancelled",
+    name="po_status", create_type=True,
+)
+
+GR_STATUS = SAEnum(
+    "pending", "received", "inspected", "accepted", "rejected", "partially_accepted",
+    name="gr_status", create_type=True,
+)
+
+TECH_STOCK_STATUS = SAEnum(
+    "in_transit", "with_technician", "returned", "consumed",
+    name="tech_stock_status", create_type=True,
+)
+
+PRICING_TYPE = SAEnum(
+    "base", "markup", "markdown", "promotional", "clearance", "bundle",
+    name="pricing_type", create_type=True,
+)
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 3-LEVEL PRODUCT HIERARCHY: Service → Category → Range → SKU
+# ════════════════════════════════════════════════════════════════════════
+
+class ServiceType(Base):
+    """Level 1: Main service offering (Fibre, LTE, 5G, Fixed Wireless)."""
+    __tablename__ = "inventory_service_types"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)  # fibre, lte, 5g, fw
+    name: Mapped[str] = mapped_column(String(200), nullable=False)  # "Fibre", "LTE", "5G"
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    icon: Mapped[Optional[str]] = mapped_column(String(64))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    categories = relationship("ProductCategory", back_populates="service_type", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_service_type_tenant_code"),
+    )
+
+
+class ProductCategory(Base):
+    """Level 2: Billing category within a service (Prepaid Fibre, Postpaid Fibre)."""
+    __tablename__ = "inventory_product_categories"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    service_type_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_service_types.id", ondelete="CASCADE"), nullable=False
+    )
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)  # prepaid_fibre, postpaid_fibre
+    name: Mapped[str] = mapped_column(String(200), nullable=False)  # "Prepaid Fibre", "Postpaid Fibre"
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    service_type = relationship("ServiceType", back_populates="categories")
+    ranges = relationship("ProductRange", back_populates="category", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_prod_category_tenant_code"),
+    )
+
+
+class ProductRange(Base):
+    """Level 3: Speed/download range within a category (10Mbps, 50Mbps, 100Mbps, 1Gbps)."""
+    __tablename__ = "inventory_product_ranges"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_product_categories.id", ondelete="CASCADE"), nullable=False
+    )
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)  # 10mbps, 50mbps, 1gbps
+    name: Mapped[str] = mapped_column(String(200), nullable=False)  # "10 Mbps", "100 Mbps", "1 Gbps"
+    description: Mapped[Optional[str]] = mapped_column(Text)
+
+    # Speed profile
+    download_speed_mbps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    upload_speed_mbps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    is_symmetrical: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    category = relationship("ProductCategory", back_populates="ranges")
+    products = relationship("Product", back_populates="range")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_prod_range_tenant_code"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PRODUCT (SKU Level)
+# ════════════════════════════════════════════════════════════════════════
+
 class Product(Base):
+    """Level 4: Individual SKU (10/10 symmetrical ONT, 10/5 asymmetric router)."""
     __tablename__ = "inventory_products"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Hierarchy links
+    range_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_product_ranges.id", ondelete="SET NULL"), nullable=True
+    )
+    category_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_product_categories.id", ondelete="SET NULL"), nullable=True
+    )
+    service_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_service_types.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # SKU identity
     sku: Mapped[str] = mapped_column(String(100), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     barcode: Mapped[Optional[str]] = mapped_column(String(64), index=True)
     unit_of_measure: Mapped[str] = mapped_column(String(20), default="EA")
     weight_kg: Mapped[Optional[Decimal]] = mapped_column(Numeric(8, 3))
+
+    # Supplier link
+    preferred_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_suppliers.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Pricing (base)
     cost_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     rrp: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    markup_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), default=Decimal("0.00"))
+
+    # Status
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_serialized: Mapped[bool] = mapped_column(Boolean, default=False)  # track individual serial numbers
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "sku", name="uq_inventory_products_tenant_sku"),
     )
 
     # Relationships
+    range = relationship("ProductRange", back_populates="products")
+    category = relationship("ProductCategory")
+    service_type = relationship("ServiceType")
+    preferred_supplier = relationship("Supplier", back_populates="products")
     inventory_levels = relationship("InventoryLevel", back_populates="product", cascade="all, delete-orphan")
     stock_movements = relationship("StockMovement", back_populates="product", cascade="all, delete-orphan")
-
-    # Cross-service: IoT devices linked to this product (lazy import to avoid circular deps)
-    @property
-    def iot_devices(self):
-        """Lazy-load IoT devices linked to this product. Requires active DB session."""
-        from services.iot.models import IoTDevice
-        return IoTDevice.__table__.c.product_id  # FK reference for manual queries
+    pricing_rules = relationship("PricingRule", back_populates="product", cascade="all, delete-orphan")
+    technician_stocks = relationship("TechnicianStock", back_populates="product", cascade="all, delete-orphan")
+    purchase_order_items = relationship("PurchaseOrderItem", back_populates="product")
+    goods_receipt_items = relationship("GoodsReceiptItem", back_populates="product")
 
 
-class Warehouse(Base):
-    __tablename__ = "warehouses"
+# ════════════════════════════════════════════════════════════════════════
+# PRICING ENGINE
+# ════════════════════════════════════════════════════════════════════════
+
+class PricingRule(Base):
+    """Markdowns, promotional prices, clearance, bundle pricing per product."""
+    __tablename__ = "inventory_pricing_rules"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=False
+    )
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)  # "Black Friday 2026", "Clearance Q1"
+    pricing_type: Mapped[str] = mapped_column(PRICING_TYPE, nullable=False, default="base")
+
+    # Price override
+    price_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    discount_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+    markup_pct: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2), nullable=True)
+
+    # Validity
+    valid_from: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Scope
+    min_quantity: Mapped[int] = mapped_column(Integer, default=1)
+    max_quantity: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # residential, business, enterprise
+
+    # Priority (higher = takes precedence)
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    product = relationship("Product", back_populates="pricing_rules")
+
+    __table_args__ = (
+        Index("ix_pricing_rules_tenant_product", "tenant_id", "product_id"),
+        Index("ix_pricing_rules_valid", "valid_from", "valid_to"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# SUPPLIER
+# ════════════════════════════════════════════════════════════════════════
+
+class Supplier(Base):
+    """Supplier/vendor for stock procurement."""
+    __tablename__ = "inventory_suppliers"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)  # huawei, tp_link, fs_com
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    contact_person: Mapped[Optional[str]] = mapped_column(String(200))
+    email: Mapped[Optional[str]] = mapped_column(String(255))
+    phone: Mapped[Optional[str]] = mapped_column(String(30))
+    address: Mapped[Optional[str]] = mapped_column(Text)
+    tax_id: Mapped[Optional[str]] = mapped_column(String(50))
+    payment_terms: Mapped[Optional[str]] = mapped_column(String(100))  # "Net 30", "Net 60"
+    lead_time_days: Mapped[int] = mapped_column(Integer, default=7)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    products = relationship("Product", back_populates="preferred_supplier")
+    purchase_orders = relationship("PurchaseOrder", back_populates="supplier")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_supplier_tenant_code"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# PURCHASE ORDER (Finance places order)
+# ════════════════════════════════════════════════════════════════════════
+
+class PurchaseOrder(Base):
+    """Purchase order for stock procurement — created by finance."""
+    __tablename__ = "inventory_purchase_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_suppliers.id", ondelete="RESTRICT"), nullable=False
+    )
+    warehouse_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_warehouses.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    po_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(PO_STATUS, nullable=False, default="draft")
+
+    # Totals
+    subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    tax_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    total_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+
+    # Dates
+    order_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    expected_delivery: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Actor
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    supplier = relationship("Supplier", back_populates="purchase_orders")
+    warehouse = relationship("Warehouse", back_populates="purchase_orders")
+    items = relationship("PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan")
+    goods_receipts = relationship("GoodsReceipt", back_populates="purchase_order")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "po_number", name="uq_po_tenant_number"),
+        Index("ix_po_tenant_status", "tenant_id", "status"),
+        Index("ix_po_supplier", "supplier_id"),
+    )
+
+
+class PurchaseOrderItem(Base):
+    """Line items on a purchase order."""
+    __tablename__ = "inventory_purchase_order_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    po_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_purchase_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    quantity_ordered: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_received: Mapped[int] = mapped_column(Integer, default=0)
+    unit_cost_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    total_cost_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    purchase_order = relationship("PurchaseOrder", back_populates="items")
+    product = relationship("Product", back_populates="purchase_order_items")
+
+    __table_args__ = (
+        Index("ix_poi_po", "po_id"),
+        Index("ix_poi_product", "product_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# GOODS RECEIPT (Stock controller receives from supplier)
+# ════════════════════════════════════════════════════════════════════════
+
+class GoodsReceipt(Base):
+    """Goods receipt — stock controller receives stock from supplier into warehouse."""
+    __tablename__ = "inventory_goods_receipts"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    po_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_purchase_orders.id", ondelete="SET NULL"), nullable=True
+    )
+    warehouse_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_warehouses.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    gr_number: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(GR_STATUS, nullable=False, default="pending")
+
+    # Receipt details
+    received_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    inspected_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    inspected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Supplier delivery
+    supplier_delivery_note: Mapped[Optional[str]] = mapped_column(String(100))
+    supplier_invoice_number: Mapped[Optional[str]] = mapped_column(String(100))
+
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    purchase_order = relationship("PurchaseOrder", back_populates="goods_receipts")
+    warehouse = relationship("Warehouse", back_populates="goods_receipts")
+    items = relationship("GoodsReceiptItem", back_populates="goods_receipt", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "gr_number", name="uq_gr_tenant_number"),
+        Index("ix_gr_tenant_status", "tenant_id", "status"),
+    )
+
+
+class GoodsReceiptItem(Base):
+    """Line items on a goods receipt."""
+    __tablename__ = "inventory_goods_receipt_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    gr_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_goods_receipts.id", ondelete="CASCADE"), nullable=False
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="RESTRICT"), nullable=False
+    )
+
+    quantity_ordered: Mapped[int] = mapped_column(Integer, default=0)
+    quantity_received: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity_accepted: Mapped[int] = mapped_column(Integer, default=0)
+    quantity_rejected: Mapped[int] = mapped_column(Integer, default=0)
+
+    unit_cost_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+
+    # Serialized items
+    serial_numbers: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    goods_receipt = relationship("GoodsReceipt", back_populates="items")
+    product = relationship("Product", back_populates="goods_receipt_items")
+
+    __table_args__ = (
+        Index("ix_gri_gr", "gr_id"),
+        Index("ix_gri_product", "product_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# WAREHOUSE
+# ════════════════════════════════════════════════════════════════════════
+
+class Warehouse(Base):
+    __tablename__ = "inventory_warehouses"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     location: Mapped[Optional[str]] = mapped_column(String(255))
     is_external: Mapped[bool] = mapped_column(Boolean, default=False)
     partner_name: Mapped[Optional[str]] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    inventory_levels = relationship("InventoryLevel", back_populates="warehouse", cascade="all, delete-orphan")
+    purchase_orders = relationship("PurchaseOrder", back_populates="warehouse")
+    goods_receipts = relationship("GoodsReceipt", back_populates="warehouse")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_warehouse_tenant_code"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# INVENTORY LEVEL (per warehouse)
+# ════════════════════════════════════════════════════════════════════════
 
 class InventoryLevel(Base):
     __tablename__ = "inventory_levels"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    warehouse_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("warehouses.id", ondelete="CASCADE"))
-    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"))
-    soh: Mapped[int] = mapped_column(Integer, default=0)
-    sit: Mapped[int] = mapped_column(Integer, default=0)
-    allocated: Mapped[int] = mapped_column(Integer, default=0)
+    warehouse_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_warehouses.id", ondelete="CASCADE")
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE")
+    )
+
+    soh: Mapped[int] = mapped_column(Integer, default=0)          # Stock on hand
+    sit: Mapped[int] = mapped_column(Integer, default=0)          # Stock in transit
+    allocated: Mapped[int] = mapped_column(Integer, default=0)     # Allocated to orders
+    reserved: Mapped[int] = mapped_column(Integer, default=0)      # Reserved (safety stock)
+    available: Mapped[int] = mapped_column(Integer, default=0)     # soh - allocated - reserved
     min_threshold: Mapped[int] = mapped_column(Integer, default=10)
+    max_threshold: Mapped[Optional[int]] = mapped_column(Integer, default=100)
+    reorder_point: Mapped[int] = mapped_column(Integer, default=20)
+    reorder_quantity: Mapped[int] = mapped_column(Integer, default=50)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (UniqueConstraint("warehouse_id", "product_id"),)
-
     # Relationships
     product = relationship("Product", back_populates="inventory_levels")
+    warehouse = relationship("Warehouse", back_populates="inventory_levels")
+
+    __table_args__ = (
+        UniqueConstraint("warehouse_id", "product_id"),
+        Index("ix_inv_level_tenant_product", "tenant_id", "product_id"),
+        Index("ix_inv_level_low_stock", "tenant_id", "available", "reorder_point"),
+    )
 
 
-class StockMovement(Base):
-    __tablename__ = "stock_movements"
+# ════════════════════════════════════════════════════════════════════════
+# TECHNICIAN STOCK (Van Stock)
+# ════════════════════════════════════════════════════════════════════════
+
+class TechnicianStock(Base):
+    """Stock assigned to a technician's van — for field installations and safety stock."""
+    __tablename__ = "inventory_technician_stocks"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    product_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("inventory_products.id"))
-    from_warehouse_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("warehouses.id"))
-    to_warehouse_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("warehouses.id"))
+    technician_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=False
+    )
+    warehouse_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_warehouses.id", ondelete="SET NULL"), nullable=True
+    )
+
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    safety_stock: Mapped[int] = mapped_column(Integer, default=0)  # minimum to keep in van
+    status: Mapped[str] = mapped_column(TECH_STOCK_STATUS, nullable=False, default="with_technician")
+
+    # Dispatch tracking
+    dispatched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatched_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    returned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Serialized items
+    serial_numbers: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Relationships
+    product = relationship("Product", back_populates="technician_stocks")
+
+    __table_args__ = (
+        Index("ix_tech_stock_tenant_tech", "tenant_id", "technician_id"),
+        Index("ix_tech_stock_product", "product_id"),
+        Index("ix_tech_stock_status", "status"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# STOCK MOVEMENT (Full pipeline audit trail)
+# ════════════════════════════════════════════════════════════════════════
+
+class StockMovement(Base):
+    """Audit trail for every stock movement across the entire pipeline.
+
+    Pipeline stages:
+      Supplier → (purchase_receipt) → Warehouse
+      Warehouse → (warehouse_transfer) → Warehouse
+      Warehouse → (technician_dispatch) → Technician
+      Technician → (technician_return) → Warehouse
+      Technician → (customer_dispatch) → Customer
+      Customer → (customer_return) → Technician/Warehouse
+      Any → (adjustment/write_off) → Adjustment
+    """
+    __tablename__ = "inventory_stock_movements"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id"), nullable=False
+    )
+
+    movement_type: Mapped[str] = mapped_column(MOVEMENT_TYPE, nullable=False)
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    movement_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    reference_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+
+    # Source / Destination
+    from_location_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # supplier, warehouse, technician, customer
+    from_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    to_location_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    to_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # References
+    po_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_purchase_orders.id", ondelete="SET NULL"), nullable=True
+    )
+    gr_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_goods_receipts.id", ondelete="SET NULL"), nullable=True
+    )
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    technician_visit_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Actor
+    performed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    performed_by_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # stock_controller, finance, technician, system
+
+    # Serialized items
+    serial_numbers: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
     product = relationship("Product", back_populates="stock_movements")
 
+    __table_args__ = (
+        Index("ix_stock_move_tenant", "tenant_id", "created_at"),
+        Index("ix_stock_move_product", "product_id", "created_at"),
+        Index("ix_stock_move_type", "movement_type"),
+        Index("ix_stock_move_from", "from_location_type", "from_location_id"),
+        Index("ix_stock_move_to", "to_location_type", "to_location_id"),
+    )
 
-# ── Session factory ────────────────────────────────────────────────────
+
+# ════════════════════════════════════════════════════════════════════════
+# STOCK PIPELINE VISIBILITY (Dashboard/Aggregation)
+# ════════════════════════════════════════════════════════════════════════
+
+class StockPipelineSnapshot(Base):
+    """Aggregated stock pipeline visibility — refreshed periodically for dashboards.
+
+    Shows stock at each pipeline stage per product per tenant.
+    """
+    __tablename__ = "inventory_pipeline_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE"), nullable=False
+    )
+    warehouse_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_warehouses.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Pipeline stage quantities
+    at_supplier: Mapped[int] = mapped_column(Integer, default=0)       # Ordered, not yet received
+    in_transit: Mapped[int] = mapped_column(Integer, default=0)         # Received, not yet inspected
+    in_warehouse: Mapped[int] = mapped_column(Integer, default=0)       # Available in warehouse
+    with_technicians: Mapped[int] = mapped_column(Integer, default=0)   # Dispatched to vans
+    at_customer: Mapped[int] = mapped_column(Integer, default=0)        # Installed at customer
+    in_return: Mapped[int] = mapped_column(Integer, default=0)          # RMA / return pipeline
+
+    # Financial
+    total_value_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+
+    # Snapshot metadata
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    product = relationship("Product")
+
+    __table_args__ = (
+        Index("ix_pipeline_tenant_date", "tenant_id", "snapshot_date"),
+        Index("ix_pipeline_product", "product_id"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# SESSION FACTORY
+# ════════════════════════════════════════════════════════════════════════
 
 _session_factory: Optional[async_sessionmaker] = None
 
