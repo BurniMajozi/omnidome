@@ -1,7 +1,7 @@
 "use client";
 
 import { Tabs } from 'expo-router';
-import { Target, Users, TrendingUp, DollarSign, Home } from 'lucide-react';
+import { Target, Users, TrendingUp, DollarSign, Home, Bot } from 'lucide-react';
 
 export default function TabLayout() {
   return (
@@ -55,8 +55,15 @@ export default function TabLayout() {
       <Tabs.Screen
         name="property-iot"
         options={{
-          title: 'Property IoT',
+          title: "Property IoT",
           tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="assistant"
+        options={{
+          title: "AI Assist",
+          tabBarIcon: ({ color, size }) => <Bot size={size} color={color} />,
         }}
       />
     </Tabs>

@@ -15,6 +15,7 @@ const navItems = [
   { href: "/billing", label: "Billing", icon: CreditCard },
   { href: "/store", label: "Store", icon: ShoppingBag },
   { href: "/support", label: "Support", icon: HeadphonesIcon },
+  { href: "/assistant", label: "AI Assistant", icon: Sparkles },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/ab-testing", label: "A/B Tests", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
