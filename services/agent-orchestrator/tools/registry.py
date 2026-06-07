@@ -349,6 +349,139 @@ ALL_TOOLS: List[Tool] = [
         method="GET",
         service_url=settings.call_center_service_url,
     ),
+    # ── Customer 360 (CRM aggregation) ─────────────────────────────────────
+    Tool(
+        name="crm.get_customer_360_details",
+        description="Get full customer details: identity, properties, billing accounts, subscriptions, payment methods, handover history. Returns Tab 1 of the Customer 360 view.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer",
+                },
+            },
+            required=["customer_id"],
+        ),
+        endpoint="/customers/{customer_id}/360/details",
+        method="GET",
+        service_url=settings.crm_service_url,
+        required_params=["customer_id"],
+        timeout=15,
+    ),
+    Tool(
+        name="crm.get_customer_360_cx",
+        description="Get customer experience data: orders, deliveries, technician visits, support tickets, activity timeline, NPS score. Returns Tab 2 (CX) of the Customer 360 view.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer",
+                },
+            },
+            required=["customer_id"],
+        ),
+        endpoint="/customers/{customer_id}/360/cx",
+        method="GET",
+        service_url=settings.crm_service_url,
+        required_params=["customer_id"],
+        timeout=15,
+    ),
+    Tool(
+        name="crm.get_customer_360_crm",
+        description="Get CRM/sales data: leads, deals, quotes, commissions, segments, tags, notes, lifecycle stage. Returns Tab 3 (CRM) of the Customer 360 view.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer",
+                },
+            },
+            required=["customer_id"],
+        ),
+        endpoint="/customers/{customer_id}/360/crm",
+        method="GET",
+        service_url=settings.crm_service_url,
+        required_params=["customer_id"],
+        timeout=15,
+    ),
+    Tool(
+        name="crm.get_customer_360_cvm",
+        description="Get customer value management data: MRR, ARR, LTV, churn risk, health score, invoices, payments, usage, customer tier. Returns Tab 4 (CVM) of the Customer 360 view.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer",
+                },
+            },
+            required=["customer_id"],
+        ),
+        endpoint="/customers/{customer_id}/360/cvm",
+        method="GET",
+        service_url=settings.crm_service_url,
+        required_params=["customer_id"],
+        timeout=15,
+    ),
+    # ── Billing Accounts ───────────────────────────────────────────────────
+    Tool(
+        name="billing.list_billing_accounts",
+        description="List billing accounts for a customer or company. Billing accounts are top-level billing entities that group subscriptions and invoices.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer (optional if company_id is provided)",
+                },
+                "company_id": {
+                    "type": "string",
+                    "description": "UUID of the company (optional if customer_id is provided)",
+                },
+            },
+        ),
+        endpoint="/billing-accounts",
+        method="GET",
+        service_url=settings.billing_service_url,
+        timeout=10,
+    ),
+    Tool(
+        name="billing.get_billing_account",
+        description="Get a specific billing account by ID with full details including balance, payment terms, and dunning stage.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "account_id": {
+                    "type": "string",
+                    "description": "UUID of the billing account",
+                },
+            },
+            required=["account_id"],
+        ),
+        endpoint="/billing-accounts/{account_id}",
+        method="GET",
+        service_url=settings.billing_service_url,
+        required_params=["account_id"],
+        timeout=10,
+    ),
+    # ── Subscription Transfers ─────────────────────────────────────────────
+    Tool(
+        name="billing.list_transfers",
+        description="List subscription transfers for a customer. Transfers track tenant-to-tenant handovers at a property.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "customer_id": {
+                    "type": "string",
+                    "description": "UUID of the customer (as from or to)",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Filter by transfer status: pending, in_progress, approved, completed, cancelled, disputed",
+                },
+            },
+        ),
+        endpoint="/transfers",
+        method="GET",
+        service_url=settings.billing_service_url,
+        timeout=10,
+    ),
 ]
 
 
@@ -375,34 +508,44 @@ def get_tools_for_agent(agent_type: str) -> List[Tool]:
     agent_tool_map = {
         "domebot": [
             "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details", "crm.get_customer_360_cx",
+            "crm.get_customer_360_cvm",
             "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts",
             "network.check_coverage", "network.get_service_status",
             "support.create_ticket",
             "sales.get_pipeline",
         ],
         "churnguard": [
             "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
             "retention.get_predictions", "retention.get_cases",
             "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts", "billing.list_transfers",
             "sales.get_pipeline",
         ],
         "provisionbot": [
             "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details",
             "network.check_coverage", "network.get_service_status",
             "sales.get_pipeline",
             "support.create_ticket",
+            "billing.list_billing_accounts",
         ],
         "insightbot": [
             "analytics.get_executive_summary",
             "retention.get_predictions", "retention.get_cases",
             "billing.get_balance", "billing.get_invoice",
+            "billing.list_billing_accounts", "billing.list_transfers",
             "network.get_service_status",
             "call_center.get_intelligence",
             "sales.get_pipeline",
             "finance.get_financial_summary",
+            "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
         ],
         "supportbot": [
             "crm.get_customer", "crm.list_customers",
+            "crm.get_customer_360_details", "crm.get_customer_360_cx",
             "support.create_ticket",
             "network.get_service_status",
             "call_center.get_intelligence",
@@ -410,6 +553,15 @@ def get_tools_for_agent(agent_type: str) -> List[Tool]:
     }
     tool_names = agent_tool_map.get(agent_type, [])
     return [t for t in ALL_TOOLS if t.name in tool_names]
+
+
+# Alias for backward compatibility with agents.py
+filter_for_agent = get_tools_for_agent
+
+
+def to_openai_format(tools: list) -> list:
+    """Convert a list of Tool objects to OpenAI/Ollama tool format."""
+    return [t.to_schema() for t in tools]
 
 
 async def execute_tool(tool_name: str, params: Dict[str, Any], tenant_id: str = "", user_id: str = "") -> Dict[str, Any]:
