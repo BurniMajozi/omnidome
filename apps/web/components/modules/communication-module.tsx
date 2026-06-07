@@ -45,7 +45,9 @@ import {
   MonitorSpeaker,
   PanelLeft,
   X,
+  Sparkles,
 } from "lucide-react"
+import { AgentChannel } from "@/components/modules/agent-channel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -1017,6 +1019,24 @@ export function CommunicationModule() {
     closePanel()
   }
 
+  const handleApprovalAction = async (approvalId: string, action: "approve" | "reject") => {
+    const newStatus = action === "approve" ? "approved" : "rejected"
+    setApprovals((prev) =>
+      prev.map((a) => (a.id === approvalId ? { ...a, status: newStatus } : a)),
+    )
+    if (isUuid(approvalId)) {
+      await patchJson("/api/approvals", { id: approvalId, status: newStatus })
+    }
+    addActivity({
+      id: `activity-${Date.now()}-approval-${action}`,
+      type: "approval",
+      title: `Approval ${action}d`,
+      actor: currentUserName,
+      time: "just now",
+      meta: approvalId,
+    })
+  }
+
   const handleKanbanDrop = (column: "upcoming" | "in-progress" | "completed", payload?: string) => {
     if (!payload) return
     const [type, id] = payload.split(":")
@@ -1429,6 +1449,16 @@ export function CommunicationModule() {
                 Chat
               </TabsTrigger>
               <TabsTrigger
+                value="agents"
+                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
+              >
+                <Bot className="h-4 w-4 mr-2" />
+                Agent Channel
+                <Badge variant="secondary" className="ml-2 h-5 bg-cyan-500/20 text-cyan-400 text-xs">
+                  AI
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger
                 value="tasks"
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
               >
@@ -1626,49 +1656,108 @@ export function CommunicationModule() {
             </div>
           </TabsContent>
 
-          {/* Tasks Tab */}
+          {/* Agent Channel Tab — AI agents with full OmniDome context */}
+          <TabsContent value="agents" className="flex-1 m-0 overflow-hidden">
+            <AgentChannel
+              context={{ source: "communication_module" }}
+              onCreateTask={(task) => {
+                // Add task to the tasks list when agent creates one
+                const newTask: Task = {
+                  id: `task-${Date.now()}`,
+                  title: task.title,
+                  assignee: "Unassigned",
+                  avatar: "NA",
+                  status: "todo",
+                  priority: task.priority as Task["priority"],
+                  dueDate: "No due date",
+                }
+                setTasks((prev) => [newTask, ...prev])
+                addActivity({
+                  id: `activity-${Date.now()}-agent-task`,
+                  type: "task",
+                  title: `Agent created task: ${task.title}`,
+                  actor: "AI Agent",
+                  time: "just now",
+                  meta: task.priority,
+                })
+              }}
+            />
+          </TabsContent>
+
+          {/* Tasks Tab — with agent assistance */}
           <TabsContent value="tasks" className="flex-1 m-0 overflow-hidden">
-            <ScrollArea className="h-full">
-              <div className="p-4">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-foreground">Team Tasks</h3>
-                  <Button size="sm" className="h-8" onClick={() => openPanel("add-task")}>
-                    <Plus className="h-4 w-4 mr-1" />
-                    New Task
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {tasks.map((task) => (
-                    <div
-                      key={task.id}
-                      className="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3 hover:bg-secondary/50 transition-colors"
-                    >
-                      {taskStatusIcons[task.status]}
-                      <div className="flex-1 min-w-0">
-                        <p
-                          className={cn(
-                            "text-sm font-medium",
-                            task.status === "done" && "line-through text-muted-foreground",
-                          )}
+            <div className="flex h-full">
+              {/* Task list */}
+              <div className="flex-1 flex flex-col min-w-0">
+                <ScrollArea className="flex-1">
+                  <div className="p-4">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-semibold text-foreground">Team Tasks</h3>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 gap-1"
+                          onClick={() => setActiveTab("agents")}
                         >
-                          {task.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <Avatar className="h-5 w-5">
-                            <AvatarFallback className="text-[10px] bg-primary/20 text-primary">
-                              {task.avatar}
-                            </AvatarFallback>
-                          </Avatar>
-                          <span className="text-xs text-muted-foreground">{task.assignee}</span>
+                          <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                          Ask Agent
+                        </Button>
+                        <Button size="sm" className="h-8" onClick={() => openPanel("add-task")}>
+                          <Plus className="h-4 w-4 mr-1" />
+                          New Task
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Agent suggestion banner */}
+                    <div className="mb-4 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3">
+                      <div className="flex items-start gap-2">
+                        <Bot className="h-4 w-4 text-cyan-400 mt-0.5" />
+                        <div className="flex-1">
+                          <p className="text-xs font-medium text-cyan-400">Agent Assistance Available</p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            Agents can help with tasks using full OmniDome context — customer data, network status, billing info, and more.
+                            Go to the <strong>Agent Channel</strong> tab or click &quot;Ask Agent&quot; to get started.
+                          </p>
                         </div>
                       </div>
-                      <Badge className={cn("text-xs", priorityColors[task.priority])}>{task.priority}</Badge>
-                      <span className="text-xs text-muted-foreground">{task.dueDate}</span>
                     </div>
-                  ))}
-                </div>
+
+                    <div className="space-y-2">
+                      {tasks.map((task) => (
+                        <div
+                          key={task.id}
+                          className="flex items-center gap-3 rounded-lg border border-border bg-secondary/30 p-3 hover:bg-secondary/50 transition-colors"
+                        >
+                          {taskStatusIcons[task.status]}
+                          <div className="flex-1 min-w-0">
+                            <p
+                              className={cn(
+                                "text-sm font-medium",
+                                task.status === "done" && "line-through text-muted-foreground",
+                              )}
+                            >
+                              {task.title}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              <Avatar className="h-5 w-5">
+                                <AvatarFallback className="text-[10px] bg-primary/20 text-primary">
+                                  {task.avatar}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="text-xs text-muted-foreground">{task.assignee}</span>
+                            </div>
+                          </div>
+                          <Badge className={cn("text-xs", priorityColors[task.priority])}>{task.priority}</Badge>
+                          <span className="text-xs text-muted-foreground">{task.dueDate}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </ScrollArea>
               </div>
-            </ScrollArea>
+            </div>
           </TabsContent>
 
           {/* Leads Tab */}
@@ -1770,11 +1859,20 @@ export function CommunicationModule() {
                       </p>
                       {approval.status === "pending" && (
                         <div className="flex gap-2 mt-3">
-                          <Button size="sm" className="flex-1 bg-green-600 hover:bg-green-700">
+                          <Button
+                            size="sm"
+                            className="flex-1 bg-green-600 hover:bg-green-700"
+                            onClick={() => handleApprovalAction(approval.id, "approve")}
+                          >
                             <CheckCircle2 className="h-4 w-4 mr-1" />
                             Approve
                           </Button>
-                          <Button size="sm" variant="destructive" className="flex-1">
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            className="flex-1"
+                            onClick={() => handleApprovalAction(approval.id, "reject")}
+                          >
                             <AlertCircle className="h-4 w-4 mr-1" />
                             Reject
                           </Button>
