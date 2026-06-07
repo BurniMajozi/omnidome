@@ -27,6 +27,8 @@ const nextConfig = {
       { source: '/svc/analytics/:path*',    destination: 'http://localhost:8011/:path*' },
       { source: '/svc/retention/:path*',    destination: 'http://localhost:8012/:path*' },
       { source: '/svc/admin/:path*',        destination: 'http://localhost:8013/:path*' },
+      { source: '/svc/communication/:path*', destination: 'http://localhost:8020/:path*' },
+      { source: '/svc/agents/:path*',       destination: 'http://localhost:8021/:path*' },
     ]
   },
 }

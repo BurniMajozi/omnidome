@@ -3,8 +3,8 @@ FROM python:3.12-slim AS builder
 WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
-COPY services/agent-orchestrator/requirements.txt ./services/agent-orchestrator/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/agent-orchestrator/requirements.txt
+COPY services/agent_orchestrator/requirements.txt ./services/agent_orchestrator/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/agent_orchestrator/requirements.txt
 
 FROM python:3.12-slim
 
@@ -15,7 +15,7 @@ WORKDIR /app
 COPY --from=builder /root/.local /home/appuser/.local
 ENV PATH=/home/appuser/.local/bin:$PATH
 
-COPY services/agent-orchestrator/ ./services/agent-orchestrator/
+COPY services/agent_orchestrator/ ./services/agent_orchestrator/
 COPY services/common/ ./services/common/
 
 ENV PYTHONPATH=/app

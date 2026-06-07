@@ -248,7 +248,7 @@ services:
   agent-orchestrator:
     build:
       context: .
-      dockerfile: services/agent-orchestrator/Dockerfile
+      dockerfile: services/agent_orchestrator/Dockerfile
     env_file:
       - .env
     environment:
@@ -345,6 +345,7 @@ services:
       - .env
     environment:
       - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
     ports:
       - "3000:3000"
     depends_on:
@@ -355,6 +356,7 @@ services:
       - rica
       - network
       - gateway
+      - agent-orchestrator
 
   portal:
     image: nginx:alpine

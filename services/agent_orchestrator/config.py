@@ -22,12 +22,14 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     # Model routing — maps agent_type -> (primary_model, fallback_model)
+    # Keys match the canonical agent_type values used by frontend and routes:
+    #   customer_facing, retention, provisioning, executive, support
     model_routes: dict = {
-        "domebot": ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
-        "churnguard": ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
-        "provisionbot": ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
-        "insightbot": ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
-        "supportbot": ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "customer_facing": ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "retention":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
+        "provisioning":   ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "executive":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
+        "support":        ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
     }
 
     # Tool settings
@@ -52,10 +54,11 @@ class Settings(BaseSettings):
     call_center_service_url: str = "http://call_center:8007"
 
     # Agent-to-tool mapping — controls which tools each agent type can use.
-    # Keys are agent types, values are lists of tool name patterns.
+    # Keys are agent type names, matching model_routes and frontend AGENT_CATALOG.
+    # Values are lists of tool name patterns.
     # Supports exact names and prefix wildcards (e.g., "crm.*" matches all crm tools).
     agent_tool_map: dict = {
-        "domebot": [
+        "customer_facing": [
             "crm.get_customer", "crm.list_customers",
             "crm.get_customer_360_details", "crm.get_customer_360_cx",
             "crm.get_customer_360_cvm",
@@ -65,7 +68,7 @@ class Settings(BaseSettings):
             "support.create_ticket",
             "sales.get_pipeline",
         ],
-        "churnguard": [
+        "retention": [
             "crm.get_customer", "crm.list_customers",
             "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
             "retention.get_predictions", "retention.get_cases",
@@ -73,7 +76,7 @@ class Settings(BaseSettings):
             "billing.list_billing_accounts", "billing.list_transfers",
             "sales.get_pipeline",
         ],
-        "provisionbot": [
+        "provisioning": [
             "crm.get_customer", "crm.list_customers",
             "crm.get_customer_360_details",
             "network.check_coverage", "network.get_service_status",
@@ -81,7 +84,7 @@ class Settings(BaseSettings):
             "support.create_ticket",
             "billing.list_billing_accounts",
         ],
-        "insightbot": [
+        "executive": [
             "analytics.get_executive_summary",
             "retention.get_predictions", "retention.get_cases",
             "billing.get_balance", "billing.get_invoice",
@@ -92,7 +95,7 @@ class Settings(BaseSettings):
             "finance.get_financial_summary",
             "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
         ],
-        "supportbot": [
+        "support": [
             "crm.get_customer", "crm.list_customers",
             "crm.get_customer_360_details", "crm.get_customer_360_cx",
             "support.create_ticket",

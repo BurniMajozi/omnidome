@@ -10,9 +10,9 @@ from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import get_session
-from agent_orchestrator.agents import Agent
-from agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
-from agent_orchestrator.conversation.models import (
+from services.agent_orchestrator.agents import Agent
+from services.agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
+from services.agent_orchestrator.conversation.models import (
     AgentConversation,
     AgentMessage,
     AgentAction,
@@ -229,7 +229,7 @@ async def invoke_agent_stream(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Streaming agent invocation — returns SSE stream."""
-    from agent_orchestrator.llm import llm_client
+    from services.agent_orchestrator.llm import llm_client
 
     async def event_stream():
         agent = Agent(

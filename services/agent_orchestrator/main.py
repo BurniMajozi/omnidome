@@ -4,13 +4,18 @@ AI agent runtime for OmniDome. Wraps microservice APIs as agent tools.
 Port: 8021 | Module: agents
 """
 
+import logging
 import os
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+
+logger = logging.getLogger("agent_orchestrator")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(
     title="OmniDome Agent Orchestrator",
@@ -38,7 +43,7 @@ app.add_middleware(
 async def startup() -> None:
     guard.ensure_startup()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
-        from agent_orchestrator.conversation.models import Base as ConvBase
+        from services.agent_orchestrator.conversation.models import Base as ConvBase
         from services.common.db import get_engine
         engine = get_engine()
         ConvBase.metadata.create_all(bind=engine)
@@ -65,9 +70,9 @@ async def health_check():
 # Route registration
 # ---------------------------------------------------------------------------
 
-from agent_orchestrator.routes.agents import router as agents_router
-from agent_orchestrator.routes.conversations import router as conversations_router
-from agent_orchestrator.routes.tools import router as tools_router
+from services.agent_orchestrator.routes.agents import router as agents_router
+from services.agent_orchestrator.routes.conversations import router as conversations_router
+from services.agent_orchestrator.routes.tools import router as tools_router
 
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(conversations_router, prefix="/api/conversations")

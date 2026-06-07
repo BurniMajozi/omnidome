@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from agent_orchestrator.llm import llm_client
-from agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.llm import llm_client
+from services.agent_orchestrator.tools import tool_registry
 
 logger = logging.getLogger(__name__)
 

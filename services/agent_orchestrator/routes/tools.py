@@ -6,8 +6,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from services.common.auth import AuthContext, get_auth_context
-from agent_orchestrator.tools import tool_registry
-from agent_orchestrator.schemas import ToolInfo, ToolInvokeRequest, ToolInvokeResponse
+from services.agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.schemas import ToolInfo, ToolInvokeRequest, ToolInvokeResponse
 
 logger = logging.getLogger(__name__)
 
