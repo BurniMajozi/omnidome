@@ -82,6 +82,19 @@ class Invoice(Base):
     subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="SET NULL"), nullable=True, index=True
     )
+
+    # Billing account (for company/multi-property billing)
+    billing_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Links to BillingAccount — the entity responsible for payment"
+    )
+
+    # Property reference (which address this invoice is for)
+    property_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
+        comment="Links to CRM Property — the physical address being billed"
+    )
     number: Mapped[str] = mapped_column(String(50), nullable=False)
     status: Mapped[str] = mapped_column(INVOICE_STATUS, nullable=False, default="draft")
     subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
@@ -109,6 +122,8 @@ class Invoice(Base):
         Index("ix_invoices_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_invoices_tenant_number", "tenant_id", "number", unique=True),
         Index("ix_invoices_subscription", "subscription_id"),
+        Index("ix_invoices_billing_account", "billing_account_id"),
+        Index("ix_invoices_property", "property_id"),
     )
 
 
@@ -172,6 +187,80 @@ class InvoiceSequence(Base):
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     last_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+# ---------------------------------------------------------------------------
+# Billing Account (top-level billing entity)
+# ---------------------------------------------------------------------------
+
+class BillingAccount(Base):
+    """Top-level billing entity that groups subscriptions and invoices.
+
+    A BillingAccount can be owned by either:
+    - A customer (individual or household)
+    - A company (corporate account paying for employees)
+
+    This decouples billing from the CRM Customer model, allowing:
+    - Company billing: one BillingAccount for the company, with subscriptions
+      for multiple employees at multiple properties
+    - Multiple properties: one BillingAccount per customer, with subscriptions
+      at different addresses
+    - Account handover: BillingAccount transfers from one customer to another
+      at the same property without losing billing history
+    """
+    __tablename__ = "billing_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    # Ownership — exactly one of these should be set
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
+        comment="Individual customer owner (mutually exclusive with company_id)"
+    )
+    company_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
+        comment="Company owner for corporate billing (mutually exclusive with customer_id)"
+    )
+
+    # Display
+    account_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    account_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # "John Smith", "Acme Corp - Employee Accounts"
+
+    # Billing settings
+    billing_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payment_terms: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # "Net 30", "Net 60", "Monthly in advance"
+    credit_limit_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    auto_debit: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Status
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="active"
+    )
+    # active, suspended, closed, collections
+
+    # Dunning
+    dunning_stage: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # "none", "reminder", "warning", "pre_legal", "legal"
+    last_dunning_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Metadata
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_billing_accounts_tenant", "tenant_id"),
+        Index("ix_billing_accounts_tenant_customer", "tenant_id", "customer_id"),
+        Index("ix_billing_accounts_tenant_company", "tenant_id", "company_id"),
+        Index("ix_billing_accounts_tenant_status", "tenant_id", "status"),
+        Index("ix_billing_accounts_number", "tenant_id", "account_number", unique=True),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +352,19 @@ class Subscription(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
-    plan: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    # Billing account (replaces direct customer billing for company/multi-property)
+    billing_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="SET NULL"),
+        nullable=True, index=True,
+        comment="Links to BillingAccount for company/multi-property billing"
+    )
+
+    # Property reference (which address this subscription serves)
+    property_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
+        comment="Links to CRM Property — the physical address being serviced"
+    )
     plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("plans.id", ondelete="SET NULL"), nullable=True
     )
@@ -289,12 +390,15 @@ class Subscription(Base):
 
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="subscription")
     usage_records: Mapped[list["SubscriptionUsage"]] = relationship(back_populates="subscription", cascade="all, delete-orphan")
+    billing_account: Mapped[Optional["BillingAccount"]] = relationship("BillingAccount")
 
     __table_args__ = (
         Index("ix_subscriptions_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_subscriptions_tenant_status", "tenant_id", "status"),
         Index("ix_subscriptions_tenant_plan", "tenant_id", "plan"),
         Index("ix_subscriptions_plan_id", "plan_id"),
+        Index("ix_subscriptions_billing_account", "billing_account_id"),
+        Index("ix_subscriptions_property", "property_id"),
     )
 
     def get_segment_price(self, segment: str, base_price: Decimal) -> Decimal:
@@ -351,6 +455,139 @@ class SubscriptionUsage(Base):
         Index("ix_subscription_usage_unbilled", "subscription_id", "billed_invoice_id"),
     )
 
+
+# ---------------------------------------------------------------------------
+# Subscription Transfer (tenant-to-tenant handover)
+# ---------------------------------------------------------------------------
+
+TRANSFER_STATUS = SAEnum(
+    "pending", "in_progress", "approved", "completed", "cancelled", "disputed",
+    name="transfer_status", create_type=True,
+)
+
+TRANSFER_TRIGGER = SAEnum(
+    "tenant_move_out",      # Tenant leaving, new tenant moving in
+    "lease_renewal",        # Same tenant, new lease term
+    "owner_take_back",      # Owner reclaiming property
+    "new_tenant",           # New tenant, no previous tenant
+    "account_correction",   # Admin correction
+    name="transfer_trigger", create_type=True,
+)
+
+
+class SubscriptionTransfer(Base):
+    """Tracks the transfer of a subscription from one customer to another at a property.
+
+    This is the billing-side counterpart to CRM's AccountHandover. It handles:
+    - Prorated billing for the outgoing tenant (final invoice)
+    - Prorated billing for the incoming tenant (first invoice)
+    - Equipment transfer or return
+    - Deposit transfer between tenants
+    - Service continuity (no gap in service)
+
+    Unlike cancellation + new signup, a transfer:
+    - Preserves the subscription ID and service history
+    - Keeps the same property/installation
+    - Avoids re-installation costs
+    - Maintains the FNO service reference
+    """
+    __tablename__ = "subscription_transfers"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    # The subscription being transferred
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+
+    # Property reference
+    property_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True,
+        comment="Links to CRM Property"
+    )
+
+    # From / To customers
+    from_customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True,
+        comment="Outgoing customer (FK to CRM customers.id)"
+    )
+    to_customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True,
+        comment="Incoming customer (FK to CRM customers.id)"
+    )
+
+    # Billing accounts
+    from_billing_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+    to_billing_account_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Transfer details
+    status: Mapped[str] = mapped_column(TRANSFER_STATUS, nullable=False, default="pending")
+    trigger: Mapped[str] = mapped_column(TRANSFER_TRIGGER, nullable=False, default="tenant_move_out")
+
+    # Proration
+    transfer_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # The date when the transfer takes effect
+    from_prorated_amount_zar: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"),
+        comment="Final prorated charge for outgoing tenant"
+    )
+    to_prorated_amount_zar: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"),
+        comment="First prorated charge for incoming tenant"
+    )
+
+    # Equipment handling
+    equipment_transfers: Mapped[bool] = mapped_column(Boolean, default=True)
+    # If True, ONT/router stays (typical for fibre)
+    # If False, equipment is returned (typical for LTE)
+    equipment_condition: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    equipment_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Financial settlement
+    deposit_transfer_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    outstanding_balance_zar: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2), default=Decimal("0.00"),
+        comment="Outstanding balance settled before transfer"
+    )
+    settlement_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("invoices.id", ondelete="SET NULL"), nullable=True,
+        comment="Final invoice for outgoing tenant"
+    )
+
+    # FNO continuity
+    fno_service_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Preserved across transfer to avoid FNO re-provisioning
+
+    # Actor
+    initiated_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    initiated_by_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # customer, landlord, agent, admin
+
+    # Dates
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_sub_transfer_tenant_status", "tenant_id", "status"),
+        Index("ix_sub_transfer_subscription", "subscription_id"),
+        Index("ix_sub_transfer_from", "from_customer_id"),
+        Index("ix_sub_transfer_to", "to_customer_id"),
+        Index("ix_sub_transfer_property", "property_id"),
+        Index("ix_sub_transfer_date", "transfer_date"),
+    )
 
 # ---------------------------------------------------------------------------
 # Cancellation Request

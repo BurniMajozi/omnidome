@@ -220,11 +220,112 @@ class DunningActionRead(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Billing Account schemas
+# ---------------------------------------------------------------------------
+
+class BillingAccountCreate(BaseModel):
+    customer_id: Optional[uuid.UUID] = None
+    company_id: Optional[uuid.UUID] = None
+    account_number: str
+    account_name: Optional[str] = None
+    billing_email: Optional[str] = None
+    payment_method: Optional[str] = None
+    payment_terms: Optional[str] = None
+    credit_limit_zar: Optional[Decimal] = None
+    auto_debit: bool = False
+
+
+class BillingAccountRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    customer_id: Optional[uuid.UUID] = None
+    company_id: Optional[uuid.UUID] = None
+    account_number: str
+    account_name: Optional[str] = None
+    billing_email: Optional[str] = None
+    payment_method: Optional[str] = None
+    payment_terms: Optional[str] = None
+    credit_limit_zar: Optional[Decimal] = None
+    auto_debit: bool
+    status: str
+    dunning_stage: Optional[str] = None
+    last_dunning_at: Optional[datetime] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Subscription Transfer schemas
+# ---------------------------------------------------------------------------
+
+class SubscriptionTransferCreate(BaseModel):
+    subscription_id: uuid.UUID
+    property_id: Optional[uuid.UUID] = None
+    from_customer_id: uuid.UUID
+    to_customer_id: uuid.UUID
+    from_billing_account_id: Optional[uuid.UUID] = None
+    to_billing_account_id: Optional[uuid.UUID] = None
+    trigger: str = "tenant_move_out"
+    transfer_date: date = Field(default_factory=date.today)
+    equipment_transfers: bool = True
+    equipment_condition: Optional[str] = None
+    equipment_notes: Optional[str] = None
+    deposit_transfer_zar: Optional[Decimal] = None
+    initiated_by: Optional[uuid.UUID] = None
+    initiated_by_type: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class SubscriptionTransferRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    subscription_id: uuid.UUID
+    property_id: Optional[uuid.UUID] = None
+    from_customer_id: uuid.UUID
+    to_customer_id: uuid.UUID
+    from_billing_account_id: Optional[uuid.UUID] = None
+    to_billing_account_id: Optional[uuid.UUID] = None
+    status: str
+    trigger: str
+    transfer_date: date
+    from_prorated_amount_zar: Decimal
+    to_prorated_amount_zar: Decimal
+    equipment_transfers: bool
+    equipment_condition: Optional[str] = None
+    equipment_notes: Optional[str] = None
+    deposit_transfer_zar: Optional[Decimal] = None
+    outstanding_balance_zar: Decimal
+    settlement_invoice_id: Optional[uuid.UUID] = None
+    fno_service_reference: Optional[str] = None
+    initiated_by: Optional[uuid.UUID] = None
+    initiated_by_type: Optional[str] = None
+    requested_at: datetime
+    approved_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TransferApprovalRequest(BaseModel):
+    approved: bool
+    notes: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
 # Subscription schemas
 # ---------------------------------------------------------------------------
 
 class CreateSubscriptionRequest(BaseModel):
     customer_id: uuid.UUID
+    billing_account_id: Optional[uuid.UUID] = None
+    property_id: Optional[uuid.UUID] = None
     plan: str
     segment: Optional[str] = None
     billing_interval: str = "monthly"
@@ -280,6 +381,8 @@ class SubscriptionRead(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
     customer_id: uuid.UUID
+    billing_account_id: Optional[uuid.UUID] = None
+    property_id: Optional[uuid.UUID] = None
     plan: str
     segment: Optional[str] = None
     status: str
