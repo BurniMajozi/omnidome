@@ -16,6 +16,7 @@ from services.crm.routes.customers import router as customers_router
 from services.crm.routes.leads import router as leads_router
 from services.crm.routes.notes_tags import router as notes_tags_router
 from services.crm.routes.segments import router as segments_router
+from services.crm.routes.customer_360 import router as customer_360_router
 
 logger = logging.getLogger("crm")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -65,6 +66,7 @@ app.include_router(customers_router)
 app.include_router(leads_router)
 app.include_router(notes_tags_router)
 app.include_router(segments_router)
+app.include_router(customer_360_router)
 
 
 # ---------------------------------------------------------------------------
