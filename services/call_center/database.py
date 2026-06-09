@@ -27,6 +27,8 @@ class Agent(Base):
     daily_sales: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     mttr_minutes: Mapped[float] = mapped_column(Numeric(5, 2), default=0)
     csat_score: Mapped[float] = mapped_column(Numeric(3, 2), default=0)
+    skills: Mapped[Optional[str]] = mapped_column(JSON, default=list)  # ["sales", "support", "billing"]
+    max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -51,14 +53,64 @@ class CallSession(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
     agent_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("call_center_agents.id", ondelete="CASCADE"))
     customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    direction: Mapped[str] = mapped_column(String(10), default="INBOUND")  # INBOUND, OUTBOUND
+    queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
     start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
     sentiment_score: Mapped[Optional[float]] = mapped_column(Numeric(4, 2))
     recording_url: Mapped[Optional[str]] = mapped_column(String(500))
     transcript: Mapped[Optional[str]] = mapped_column(Text)
+    # Whisper AI live transcription
+    live_transcript: Mapped[Optional[str]] = mapped_column(Text)
+    # Call outcome
+    outcome: Mapped[Optional[str]] = mapped_column(String(50))  # RESOLVED, ESCALATED, CALLBACK, SALE, NO_ANSWER, ABANDONED
+    notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ── Call Queue ──────────────────────────────────────────────────────────
+
+class CallQueue(Base):
+    __tablename__ = "call_queues"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    direction: Mapped[str] = mapped_column(String(10), nullable=False)  # INBOUND, OUTBOUND
+    category: Mapped[str] = mapped_column(String(50), nullable=False)  # SALES, SUPPORT, BILLING, GENERAL
+    # Routing
+    routing_strategy: Mapped[str] = mapped_column(String(30), default="ROUND_ROBIN")  # ROUND_ROBIN, SKILL_BASED, LEAST_BUSY, PRIORITY
+    priority: Mapped[int] = mapped_column(Integer, default=5)  # 1=highest, 10=lowest
+    max_wait_seconds: Mapped[int] = mapped_column(Integer, default=300)
+    # Skills required for this queue
+    required_skills: Mapped[Optional[str]] = mapped_column(JSON, default=list)
+    # Stats (updated in real-time)
+    active_calls: Mapped[int] = mapped_column(Integer, default=0)
+    queued_calls: Mapped[int] = mapped_column(Integer, default=0)
+    avg_wait_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    abandoned_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Status
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE")  # ACTIVE, PAUSED, CLOSED
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ── Whisper AI Session ──────────────────────────────────────────────────
+
+class WhisperSession(Base):
+    __tablename__ = "whisper_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    call_session_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("call_sessions.id", ondelete="CASCADE"))
+    agent_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("call_center_agents.id", ondelete="CASCADE"))
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE")  # ACTIVE, PAUSED, STOPPED
+    language: Mapped[str] = mapped_column(String(10), default="en")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
 # ── Session factory ────────────────────────────────────────────────────
