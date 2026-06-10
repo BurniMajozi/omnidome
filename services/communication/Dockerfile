@@ -1,34 +1,24 @@
-FROM python:3.12-slim AS builder
-
-WORKDIR /build
-
-COPY services/common/requirements.txt ./services/common/requirements.txt
-COPY services/communication/requirements.txt ./services/communication/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/communication/requirements.txt
-
-FROM python:3.12-slim
-
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY --from=builder /root/.local /home/appuser/.local
-ENV PATH=/home/appuser/.local/bin:$PATH
+COPY services/common/requirements.txt /tmp/common-reqs.txt
+RUN pip install --no-cache-dir -r /tmp/common-reqs.txt
 
-COPY services/communication/ ./services/communication/
-COPY services/common/ ./services/common/
+COPY services/common/requirements.txt /common/requirements.txt
+COPY services/communication/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
+COPY services/common/ /app/services/common/
+COPY services/communication/ /app/services/communication/
 
-RUN chown -R appuser:appuser /app /home/appuser
-
-USER appuser
+ENV PYTHONPATH=/app:/app/services
+ENV MODULE_ID=communication
+ENV SERVICE_PORT=8020
 
 EXPOSE 8020
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/health')" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8020/health', timeout=5)" || exit 1
 
 CMD ["uvicorn", "services.communication.main:app", "--host", "0.0.0.0", "--port", "8020", "--workers", "2"]

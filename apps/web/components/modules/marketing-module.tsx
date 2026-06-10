@@ -36,8 +36,9 @@ import {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const platformIcons: Record<string, React.ComponentType<{ className?: string }>> = {
-  twitter, instagram, facebook, linkedin, tiktok, whatsapp: MessageCircle,
-  youtube, pinterest: Pin, threads: AtSign, bluesky: Cloud, telegram: Send,
+  twitter: Twitter, instagram: Instagram, facebook: Facebook, linkedin: Linkedin,
+  tiktok: Video, whatsapp: MessageCircle,
+  youtube: Youtube, pinterest: Image, threads: AtSign, bluesky: Globe, telegram: Send,
   snapchat: Image, googlebusiness: Globe, other: Globe,
 }
 

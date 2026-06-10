@@ -1970,6 +1970,8 @@ export function TalentModule() {
                         cx="50%"
                         cy="50%"
                         labelLine={false}
+                        dataKey="value"
+                      />
                       <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
                     </PieChart>
                   </ResponsiveContainer>

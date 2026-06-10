@@ -47,20 +47,22 @@ export function ActivityFeed() {
   return (
     <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
       <h3 className="mb-4 text-base font-semibold text-foreground sm:text-lg">Recent Activity</h3>
-      <div className="space-y-4">
+      <div className="relative border-l border-primary/20 pl-4 ml-3 space-y-5">
         {activities.map((activity) => (
-          <div key={activity.id} className="flex items-start gap-3">
-            <Avatar className="h-8 w-8">
+          <div key={activity.id} className="relative flex items-start gap-3 rounded-lg border border-border bg-secondary/20 p-3 hover:bg-secondary/45 transition-colors">
+            {/* Dot indicator on timeline */}
+            <div className="absolute -left-[22px] top-4 h-2.5 w-2.5 rounded-full bg-primary border-2 border-card" />
+            <Avatar className="h-8 w-8 shrink-0">
               <AvatarImage src={`/.jpg?height=32&width=32&query=${activity.user}`} />
-              <AvatarFallback className="text-xs">{activity.avatar}</AvatarFallback>
+              <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">{activity.avatar}</AvatarFallback>
             </Avatar>
             <div className="flex-1 space-y-1">
-              <p className="text-sm text-foreground">
-                <span className="font-medium">{activity.user}</span>{" "}
+              <p className="text-sm text-foreground leading-snug">
+                <span className="font-semibold">{activity.user}</span>{" "}
                 <span className="text-muted-foreground">{activity.action}</span>{" "}
-                <span className="font-medium text-primary">{activity.target}</span>
+                <span className="inline-block rounded bg-primary/10 px-1.5 py-0.5 text-xs font-semibold text-primary">{activity.target}</span>
               </p>
-              <p className="text-xs text-muted-foreground">{activity.time}</p>
+              <p className="text-[10px] font-medium text-muted-foreground">{activity.time}</p>
             </div>
           </div>
         ))}

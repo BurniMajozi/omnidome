@@ -35,8 +35,8 @@ function emptyRule(group = 0): Partial<JourneyRule> {
   return {
     journey_id: "",
     rule_group: group,
-    attribute: "risk_score",
-    operator: "gte",
+    attribute: "none",
+    operator: "none",
     value: { value: 70, type: "number" },
     is_active: true,
     sort_order: 0,
@@ -140,34 +140,48 @@ function RuleEditor({
   return (
     <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/30 p-2">
       <Select
-        value={rule.attribute}
-        onValueChange={(val) => onChange({ ...rule, attribute: val, value: { value: "", type: "string" } })}
+        value={rule.attribute || "none"}
+        onValueChange={(val) => onChange({ ...rule, attribute: val === "none" ? "" : val, value: { value: "", type: "string" } })}
       >
         <SelectTrigger className="h-7 w-32 text-xs">
-          <SelectValue />
+          <SelectValue placeholder="Select attribute..." />
         </SelectTrigger>
         <SelectContent>
-          {attributes.map((a) => (
-            <SelectItem key={a.name} value={a.name} className="text-xs">
-              {a.name}
+          <SelectItem value="none">Select attribute...</SelectItem>
+          {attributes.length > 0 ? (
+            attributes.map((a) => (
+              <SelectItem key={a.name} value={a.name} className="text-xs">
+                {a.name}
+              </SelectItem>
+            ))
+          ) : (
+            <SelectItem value="loading-attributes" disabled className="text-xs">
+              No attributes loaded
             </SelectItem>
-          ))}
+          )}
         </SelectContent>
       </Select>
 
       <Select
-        value={rule.operator}
-        onValueChange={(val) => onChange({ ...rule, operator: val })}
+        value={rule.operator || "none"}
+        onValueChange={(val) => onChange({ ...rule, operator: val === "none" ? "" : val })}
       >
         <SelectTrigger className="h-7 w-24 text-xs">
-          <SelectValue />
+          <SelectValue placeholder="Select op..." />
         </SelectTrigger>
         <SelectContent>
-          {allowedOps.map((o) => (
-            <SelectItem key={o.op} value={o.op} className="text-xs">
-              {o.label}
+          <SelectItem value="none">Select op...</SelectItem>
+          {allowedOps.length > 0 ? (
+            allowedOps.map((o) => (
+              <SelectItem key={o.op} value={o.op} className="text-xs">
+                {o.label}
+              </SelectItem>
+            ))
+          ) : (
+            <SelectItem value="loading-operators" disabled className="text-xs">
+              No operators loaded
             </SelectItem>
-          ))}
+          )}
         </SelectContent>
       </Select>
 
@@ -236,11 +250,17 @@ function OfferConfig({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {offerTypes.map((t) => (
-                <SelectItem key={t.type} value={t.type} className="text-xs">
-                  {t.label}
+              {offerTypes.length > 0 ? (
+                offerTypes.map((t) => (
+                  <SelectItem key={t.type} value={t.type} className="text-xs">
+                    {t.label}
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="loading-offer-types" disabled className="text-xs">
+                  No offer types loaded
                 </SelectItem>
-              ))}
+              )}
             </SelectContent>
           </Select>
         </div>
@@ -407,37 +427,50 @@ function JourneyBuilder({
         <div>
           <Label className="text-xs">Primary Offer</Label>
           <Select
-            value={form.offer_id || ""}
-            onValueChange={(val) => setForm({ ...form, offer_id: val })}
+            value={form.offer_id || "none"}
+            onValueChange={(val) => setForm({ ...form, offer_id: val === "none" ? "" : val })}
           >
             <SelectTrigger className="h-8 text-sm">
               <SelectValue placeholder="Select offer..." />
             </SelectTrigger>
             <SelectContent>
-              {offers.map((o) => (
-                <SelectItem key={o.id} value={o.id} className="text-xs">
-                  {o.name} ({o.offer_type})
+              <SelectItem value="none">Select offer...</SelectItem>
+              {offers.length > 0 ? (
+                offers.map((o) => (
+                  <SelectItem key={o.id} value={o.id} className="text-xs">
+                    {o.name} ({o.offer_type})
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="loading-offers" disabled className="text-xs">
+                  No offers loaded
                 </SelectItem>
-              ))}
+              )}
             </SelectContent>
           </Select>
         </div>
         <div>
           <Label className="text-xs">Fallback Offer</Label>
           <Select
-            value={form.fallback_offer_id || ""}
-            onValueChange={(val) => setForm({ ...form, fallback_offer_id: val })}
+            value={form.fallback_offer_id || "none"}
+            onValueChange={(val) => setForm({ ...form, fallback_offer_id: val === "none" ? "" : val })}
           >
             <SelectTrigger className="h-8 text-sm">
               <SelectValue placeholder="Optional fallback..." />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">None</SelectItem>
-              {offers.map((o) => (
-                <SelectItem key={o.id} value={o.id} className="text-xs">
-                  {o.name} ({o.offer_type})
+              <SelectItem value="none">None</SelectItem>
+              {offers.length > 0 ? (
+                offers.map((o) => (
+                  <SelectItem key={o.id} value={o.id} className="text-xs">
+                    {o.name} ({o.offer_type})
+                  </SelectItem>
+                ))
+              ) : (
+                <SelectItem value="loading-fallback-offers" disabled className="text-xs">
+                  No offers loaded
                 </SelectItem>
-              ))}
+              )}
             </SelectContent>
           </Select>
         </div>
@@ -462,32 +495,45 @@ function JourneyBuilder({
           </Button>
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-4">
           {Object.entries(groups).map(([groupId, { rules: groupRules, indices }]) => (
-            <div key={groupId} className="rounded-lg border border-border bg-secondary/20 p-3">
+            <div key={groupId} className="relative rounded-lg border border-border bg-secondary/20 p-3">
+              {/* OR Connector indicator between groups */}
+              {Number(groupId) > 0 && (
+                <div className="absolute -top-3.5 left-6 rounded-md bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-500 border border-amber-500/30">
+                  OR
+                </div>
+              )}
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-muted-foreground">
-                  Rule Group {Number(groupId) + 1}
+                <span className="text-xs font-semibold text-foreground">
+                  Condition Group {Number(groupId) + 1}
                 </span>
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-5 text-xs gap-1"
+                  className="h-5 text-xs gap-1 hover:text-primary"
                   onClick={() => addRule(Number(groupId))}
                 >
-                  <Plus className="h-3 w-3" /> Add Condition
+                  <Plus className="h-3 w-3" /> Add Condition (AND)
                 </Button>
               </div>
-              <div className="space-y-1.5">
+              <div className="relative pl-4 border-l-2 border-primary/20 space-y-2">
                 {groupRules.map((r, gi) => (
-                  <RuleEditor
-                    key={indices[gi]}
-                    rule={r}
-                    onChange={(updated) => updateRule(indices[gi], updated)}
-                    onRemove={() => removeRule(indices[gi])}
-                    attributes={attributes}
-                    operators={operators}
-                  />
+                  <div key={indices[gi]} className="relative">
+                    {/* AND text between adjacent items in a group */}
+                    {gi > 0 && (
+                      <div className="absolute -top-1.5 -left-7 scale-90 rounded bg-primary/10 px-1 text-[9px] font-bold text-primary border border-primary/20">
+                        AND
+                      </div>
+                    )}
+                    <RuleEditor
+                      rule={r}
+                      onChange={(updated) => updateRule(indices[gi], updated)}
+                      onRemove={() => removeRule(indices[gi])}
+                      attributes={attributes}
+                      operators={operators}
+                    />
+                  </div>
                 ))}
               </div>
             </div>
@@ -524,14 +570,12 @@ export function JourneyBuilderDashboard() {
   const [attributes, setAttributes] = useState<AttributeDef[]>([])
   const [operators, setOperators] = useState<OperatorDef[]>([])
   const [offerTypes, setOfferTypes] = useState<OfferTypeDef[]>([])
-  const [loading, setLoading] = useState(true)
-
-  // Builder state
-  const [editingJourney, setEditingJourney] = useState<Partial<Journey> | null>(null)
-  const [editingOffer, setEditingOffer] = useState<Partial<Offer> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [isOffline, setIsOffline] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
+    setError(null)
     try {
       const [jData, oData, aData, fData, rData] = await Promise.all([
         journeyApi.listJourneys(TENANT_ID),
@@ -547,12 +591,26 @@ export function JourneyBuilderDashboard() {
       setOfferTypes(aData.offer_types || [])
       setFunnel(fData.funnel || [])
       setRoi(rData.roi || [])
-    } catch (err) {
+      setIsOffline(false)
+    } catch (err: any) {
       console.error("Failed to load journey data:", err)
+      setError("Retention journey service is currently unreachable. Operating in offline simulation mode.")
+      setIsOffline(true)
+      // Fallback fallback mock data
+      setJourneys([])
+      setOffers([])
+      setAttributes([])
+      setOperators([])
+      setOfferTypes([])
+      setFunnel([])
+      setRoi([])
     } finally {
       setLoading(false)
     }
   }, [])
+
+  const [editingJourney, setEditingJourney] = useState<Partial<Journey> | null>(null)
+  const [editingOffer, setEditingOffer] = useState<Partial<Offer> | null>(null)
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -676,7 +734,22 @@ export function JourneyBuilderDashboard() {
           <Target className="h-5 w-5 text-primary" />
           <h2 className="text-lg font-semibold">Retention Journey Engine</h2>
         </div>
+        {isOffline && (
+          <Badge variant="outline" className="bg-amber-500/10 text-amber-500 border-amber-500/20 text-xs">
+            Offline Mode
+          </Badge>
+        )}
       </div>
+
+      {error && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-500">
+          <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold">Service Connection Warning</p>
+            <p className="text-xs text-amber-500/80">{error}</p>
+          </div>
+        </div>
+      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-secondary">
