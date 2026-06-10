@@ -19,7 +19,7 @@ import {
   ShieldAlert, ShieldX, Star, Target, TrendingUp, Truck, Upload, UserCheck,
   Users, XCircle, Zap, AlertCircle, Scale, Landmark, BadgeCheck, BadgeAlert,
   BadgeMinus, FileWarning, FileCheck, Activity, Gavel, DoorOpen, Car,
-  PlaneTakeoff, Users2, Coins, Banknote, CircleDollarSign, HandCoins,
+  PlaneTakeoff, Users2, Coins, Banknote, CircleDollarSign, HandCoins, Radio,
 } from "lucide-react"
 import {
   getComplianceOverview, listContracts, getExpiringContracts, listTaxReturns,
@@ -759,7 +759,7 @@ export default function ComplianceModule() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <Broadcast className="h-4 w-4 text-blue-400" /> ICASA Submissions
+                  <Radio className="h-4 w-4 text-blue-400" /> ICASA Submissions
                 </CardTitle>
               </CardHeader>
               <CardContent>
