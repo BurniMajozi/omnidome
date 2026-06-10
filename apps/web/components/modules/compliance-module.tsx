@@ -29,13 +29,17 @@ import {
   listComplianceScores, calculateAllScores, listObligations, listEserviceSubmissions,
   listFinancialScenarios, listIcasaSubmissions, listDsar, getDsarDashboard,
   listBreaches, getBreachDashboard, listFundingOpportunities, matchFundingByScore,
-  listCipcFilings, listBylawObligations,
+  listCipcFilings, listBylawObligations, uploadDocument, fetchUrlDocument,
+  listDocuments, getDocumentDetail, reprocessDocument, linkDocumentToContract,
+  getDocumentStats,
   type ComplianceOverview, type Contract, type BreachRegister, type ComplianceScore,
   type PopiDsar, type HsIncident, type TaxReturn, type BbbeeScorecard,
   type LeaveApplication, type VehicleRegistration, type ForeignWorkerPermit,
   type TravelReadiness, type DrBcpPlan, type ComplianceObligation,
   type EserviceSubmission, type IcasaSubmission, type FundingOpportunity,
+  type DocumentUploadResult, type UrlFetchResult, type DocumentRecord,
 } from "@/lib/compliance-api"
+import DocumentUploadZone from "@/components/modules/document-upload-zone"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR SYSTEM
@@ -985,6 +989,9 @@ export default function ComplianceModule() {
             title="Operations"
             subtitle="DR/BCP, Compliance Scores, e-Services, Documents"
           />
+
+          {/* Document Upload Zone */}
+          <DocumentUploadZone compact />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* DR/BCP */}

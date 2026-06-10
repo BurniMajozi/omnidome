@@ -38,6 +38,7 @@ from services.compliance.routes.operations import (
 from services.compliance.routes.compliance import (
     icasa_router, popi_router, rica_router, breach_router, funding_router,
 )
+from services.compliance.routes.documents import router as documents_router
 
 # Contracts & SLAs
 app.include_router(contracts_router, prefix="/api/v1")
@@ -68,6 +69,9 @@ app.include_router(popi_router, prefix="/api/v1")
 app.include_router(rica_router, prefix="/api/v1")
 app.include_router(breach_router, prefix="/api/v1")
 app.include_router(funding_router, prefix="/api/v1")
+
+# Document Understanding: Upload, Fetch, OCR, Extract
+app.include_router(documents_router, prefix="/api/v1")
 
 
 # ── Health ──────────────────────────────────────────────────────────────

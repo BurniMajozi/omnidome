@@ -537,3 +537,159 @@ export async function listBylawObligations(params?: { municipality?: string }) {
   if (params?.municipality) q.set("municipality", params.municipality)
   return fetchCompliance<{ items: { id: number; municipality: string; title: string; status: string }[] }>(`/bylaw/obligations?${q}`)
 }
+
+// ── Document Upload & Understanding ─────────────────────────────────────
+
+export interface DocumentUploadResult {
+  status: string
+  document_id: number
+  understanding: {
+    doc_id: string
+    title: string
+    source: string
+    format: string
+    document_type: string
+    compliance_category: string
+    confidence: number
+    page_count: number
+    file_size_bytes: number
+    content_hash: string
+    entities: { label: string; value: string; confidence: number }[]
+    financials: { amount: number; currency: string; line_item: string; context: string }[]
+    links: { url: string; anchor: string; type: string }[]
+    dates: string[]
+    references: string[]
+    markdown_preview: string
+    processing_time_ms: number
+    errors: string[]
+  }
+}
+
+export interface UrlFetchResult {
+  status: string
+  url: string
+  crawl: boolean
+  documents_found: number
+  documents: {
+    document_id: number
+    source: string
+    format: string
+    document_type: string
+    confidence: number
+    entities_count: number
+    links_count: number
+    processing_time_ms: number
+  }[]
+}
+
+export interface DocumentRecord {
+  id: number
+  title: string
+  document_type: string
+  file_path: string
+  file_size: number
+  mime_type: string
+  contract_id: number | null
+  tags: string
+  uploaded_by: string
+  created_at: string | null
+  ocr_text?: string
+  extracted_data?: Record<string, unknown>
+  financial_summary?: Record<string, unknown>
+}
+
+export async function uploadDocument(
+  file: File,
+  options?: { docTypeHint?: string; contractId?: number; process?: boolean },
+): Promise<DocumentUploadResult> {
+  const formData = new FormData()
+  formData.append("file", file)
+  formData.append("tenant_id", TENANT_ID)
+  if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
+  if (options?.contractId) formData.append("contract_id", String(options.contractId))
+  if (options?.process !== undefined) formData.append("process", String(options.process))
+
+  const res = await fetch(`${API_BASE}/documents/upload`, {
+    method: "POST",
+    headers: { "x-tenant-id": TENANT_ID },
+    cache: "no-store",
+    body: formData,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`Document upload error ${res.status}: ${body}`)
+  }
+  return res.json()
+}
+
+export async function fetchUrlDocument(
+  url: string,
+  options?: { docTypeHint?: string; crawl?: boolean; maxDepth?: number },
+): Promise<UrlFetchResult> {
+  const formData = new FormData()
+  formData.append("url", url)
+  formData.append("tenant_id", TENANT_ID)
+  if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
+  if (options?.crawl !== undefined) formData.append("crawl", String(options.crawl))
+  if (options?.maxDepth !== undefined) formData.append("max_depth", String(options.maxDepth))
+
+  const res = await fetch(`${API_BASE}/documents/fetch-url`, {
+    method: "POST",
+    headers: { "x-tenant-id": TENANT_ID },
+    cache: "no-store",
+    body: formData,
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => "")
+    throw new Error(`URL fetch error ${res.status}: ${body}`)
+  }
+  return res.json()
+}
+
+export async function listDocuments(params?: {
+  documentType?: string
+  contractId?: number
+  page?: number
+  pageSize?: number
+}) {
+  const q = new URLSearchParams()
+  q.set("tenant_id", TENANT_ID)
+  if (params?.documentType) q.set("document_type", params.documentType)
+  if (params?.contractId) q.set("contract_id", String(params.contractId))
+  if (params?.page) q.set("page", String(params.page))
+  if (params?.pageSize) q.set("page_size", String(params.pageSize))
+  return fetchCompliance<{ items: DocumentRecord[]; page: number; page_size: number }>(`/documents/?${q}`)
+}
+
+export async function getDocumentDetail(docId: number): Promise<DocumentRecord> {
+  return fetchCompliance<DocumentRecord>(`/documents/${docId}?tenant_id=${TENANT_ID}`)
+}
+
+export async function reprocessDocument(docId: number, docTypeHint?: string) {
+  const q = new URLSearchParams()
+  q.set("tenant_id", TENANT_ID)
+  if (docTypeHint) q.set("doc_type_hint", docTypeHint)
+  return fetchCompliance<{ status: string; document_id: number; entities_found: number }>(
+    `/documents/${docId}/reprocess?${q}`,
+    { method: "POST" },
+  )
+}
+
+export async function linkDocumentToContract(docId: number, contractId: number) {
+  const formData = new FormData()
+  formData.append("contract_id", String(contractId))
+  return fetchCompliance<{ status: string; document_id: number; contract_id: number }>(
+    `/documents/${docId}/link-contract?tenant_id=${TENANT_ID}`,
+    { method: "POST", body: formData },
+  )
+}
+
+export async function getDocumentStats() {
+  return fetchCompliance<{
+    total_documents: number
+    by_type: Record<string, number>
+    with_financials: number
+    with_entities: number
+    total_size_bytes: number
+  }>(`/documents/stats/summary?tenant_id=${TENANT_ID}`)
+}
