@@ -26,6 +26,7 @@ from services.network.routes.coverage import router as coverage_router
 from services.network.routes.performance import router as performance_router
 from services.network.routes.notifications import router as notifications_router
 from services.network.routes.devices import router as devices_router
+from services.network.routes.topology import router as topology_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +73,7 @@ app.include_router(coverage_router)
 app.include_router(performance_router)
 app.include_router(notifications_router)
 app.include_router(devices_router)
+app.include_router(topology_router)
 
 
 # ---------------------------------------------------------------------------

@@ -582,3 +582,482 @@ class RadiusAccounting(Base):
         Index("ix_ra_active", "tenant_id", "acct_stop_time"),
         # acct_stop_time IS NULL = active session
     )
+
+
+# ---------------------------------------------------------------------------
+# Network Typography — geographic hierarchy
+# ---------------------------------------------------------------------------
+
+class NetworkRegion(Base):
+    """Top-level network region (e.g. 'Gauteng North', 'Western Cape Metro')."""
+
+    __tablename__ = "network_regions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Bounding box
+    bbox_north: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    bbox_south: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    bbox_east: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    bbox_west: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nr_tenant_code", "tenant_id", "code", unique=True),
+        Index("ix_nr_tenant_active", "tenant_id", "is_active"),
+    )
+
+
+class NetworkMetro(Base):
+    """Metro area within a region (e.g. 'Johannesburg', 'Cape Town')."""
+
+    __tablename__ = "network_metros"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    region_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_regions.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    city: Mapped[str] = mapped_column(String(100), nullable=False)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nm_tenant_region", "tenant_id", "region_id"),
+        Index("ix_nm_tenant_code", "tenant_id", "code", unique=True),
+    )
+
+
+class NetworkArea(Base):
+    """Network area within a metro (e.g. 'Sandton', 'Rondebosch')."""
+
+    __tablename__ = "network_areas"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    metro_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_metros.id", ondelete="CASCADE"), nullable=False,
+    )
+    fno_provider: Mapped[Optional[str]] = mapped_column(FNO_PROVIDER, nullable=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(20), nullable=False)
+    suburb: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    city: Mapped[str] = mapped_column(String(100), nullable=False)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    postal_codes: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+
+    # Coverage status
+    coverage_status: Mapped[str] = mapped_column(String(30), default="planned")
+    # planned, under_construction, available, expanding
+    technology: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    max_speed_mbps: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # GPS centroid
+    centroid_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    centroid_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_na_tenant_metro", "tenant_id", "metro_id"),
+        Index("ix_na_tenant_code", "tenant_id", "code", unique=True),
+        Index("ix_na_fno", "tenant_id", "fno_provider"),
+        Index("ix_na_suburb", "tenant_id", "suburb"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Network Topology — fiber infrastructure
+# ---------------------------------------------------------------------------
+
+TOPOLOGY_ELEMENT_TYPE = SAEnum(
+    "olt", "splitter", "distribution_point", "access_point",
+    "fiber_cable", "splice_closure", "patch_panel", "ont",
+    name="topology_element_type", create_type=True,
+)
+
+TOPOLOGY_STATUS = SAEnum(
+    "planned", "under_construction", "active", "maintenance", "decommissioned",
+    name="topology_status", create_type=True,
+)
+
+
+class NetworkTopologyElement(Base):
+    """Physical network infrastructure elements: OLTs, splitters, cables, etc."""
+
+    __tablename__ = "network_topology_elements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    area_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_areas.id", ondelete="SET NULL"), nullable=True,
+    )
+    fno_provider: Mapped[Optional[str]] = mapped_column(FNO_PROVIDER, nullable=True)
+
+    element_type: Mapped[str] = mapped_column(TOPOLOGY_ELEMENT_TYPE, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    code: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Location
+    address: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Capacity
+    total_ports: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    used_ports: Mapped[int] = mapped_column(Integer, default=0)
+    available_ports: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Splitter-specific
+    splitter_ratio: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # 1:8, 1:16, 1:32, 1:64
+
+    # OLT-specific
+    olt_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    olt_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Status
+    status: Mapped[str] = mapped_column(TOPOLOGY_STATUS, nullable=False, default="planned")
+
+    # Parent element (for hierarchical topology)
+    parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_topology_elements.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    # Metadata
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nte_tenant_type", "tenant_id", "element_type"),
+        Index("ix_nte_tenant_area", "tenant_id", "area_id"),
+        Index("ix_nte_tenant_code", "tenant_id", "code", unique=True),
+        Index("ix_nte_fno", "tenant_id", "fno_provider"),
+        Index("ix_nte_parent", "parent_id"),
+        Index("ix_nte_status", "tenant_id", "status"),
+    )
+
+
+class NetworkTopologyLink(Base):
+    """Links between topology elements (fiber cables, logical connections)."""
+
+    __tablename__ = "network_topology_links"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    from_element_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_topology_elements.id", ondelete="CASCADE"), nullable=False,
+    )
+    to_element_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_topology_elements.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    link_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # fiber_cable, logical_link, patch_cable
+
+    # Fiber-specific
+    fiber_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fiber_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # single_mode, multi_mode
+    length_meters: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+
+    status: Mapped[str] = mapped_column(TOPOLOGY_STATUS, nullable=False, default="active")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_ntl_tenant_from", "tenant_id", "from_element_id"),
+        Index("ix_ntl_tenant_to", "tenant_id", "to_element_id"),
+        Index("ix_ntl_type", "tenant_id", "link_type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bandwidth Usage Tracking
+# ---------------------------------------------------------------------------
+
+class BandwidthUsage(Base):
+    """Bandwidth usage per service per time period (from RADIUS accounting or SNMP)."""
+
+    __tablename__ = "bandwidth_usage"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    # Time period
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(10), nullable=False, default="daily")
+    # hourly, daily, weekly, monthly
+
+    # Traffic
+    download_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    upload_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    total_bytes: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Computed
+    download_gb: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+    upload_gb: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+    total_gb: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+
+    # Peak speeds during period
+    peak_download_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    peak_upload_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    avg_download_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    avg_upload_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # Source
+    source: Mapped[str] = mapped_column(String(30), default="radius")
+    # radius, snmp, tr069, estimated
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_bw_tenant_service", "tenant_id", "service_id"),
+        Index("ix_bw_tenant_period", "tenant_id", "period_start"),
+        Index("ix_bw_service_period", "service_id", "period_start"),
+        UniqueConstraint("service_id", "period_start", "period_type", name="uq_bw_service_period"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# FNO SLA Compliance Tracking
+# ---------------------------------------------------------------------------
+
+FNO_SLA_METRIC = SAEnum(
+    "install_time_days", "repair_time_hours", "uptime_pct",
+    "response_time_hours", "resolution_rate_pct",
+    name="fno_sla_metric", create_type=True,
+)
+
+
+class FNOSLATarget(Base):
+    """SLA targets agreed with each FNO provider."""
+
+    __tablename__ = "fno_sla_targets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    fno_provider: Mapped[str] = mapped_column(FNO_PROVIDER, nullable=False)
+
+    metric: Mapped[str] = mapped_column(FNO_SLA_METRIC, nullable=False)
+    target_value: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+    unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    # days, hours, percent
+
+    # Penalty for breach
+    penalty_per_breach_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    penalty_cap_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_fno_sla_tenant_fno", "tenant_id", "fno_provider"),
+        Index("ix_fno_sla_metric", "tenant_id", "fno_provider", "metric"),
+        UniqueConstraint("tenant_id", "fno_provider", "metric", "effective_from", name="uq_fno_sla_target"),
+    )
+
+
+class FNOSLAMeasurement(Base):
+    """Actual SLA measurements per FNO per period."""
+
+    __tablename__ = "fno_sla_measurements"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    fno_provider: Mapped[str] = mapped_column(FNO_PROVIDER, nullable=False)
+    sla_target_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fno_sla_targets.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    metric: Mapped[str] = mapped_column(FNO_SLA_METRIC, nullable=False)
+
+    # Measurement period
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(10), nullable=False, default="monthly")
+    # weekly, monthly, quarterly
+
+    # Actual value
+    actual_value: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+    target_value: Mapped[float] = mapped_column(Numeric(10, 4), nullable=False)
+
+    # Breach detection
+    is_breach: Mapped[bool] = mapped_column(Boolean, default=False)
+    breach_severity: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    deviation_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
+
+    # Sample
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Number of tickets/orders measured
+
+    # Penalty
+    penalty_applied_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_fno_sla_m_tenant_fno", "tenant_id", "fno_provider"),
+        Index("ix_fno_sla_m_period", "tenant_id", "period_start"),
+        Index("ix_fno_sla_m_breach", "tenant_id", "is_breach"),
+        UniqueConstraint("fno_provider", "metric", "period_start", "period_type", name="uq_fno_sla_measurement"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Device Configuration (TR-069 / MikroTik stubs)
+# ---------------------------------------------------------------------------
+
+class DeviceConfigTemplate(Base):
+    """Reusable configuration templates for network devices."""
+
+    __tablename__ = "device_config_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    device_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # ont, router, gateway, access_point
+
+    # Template config (device-specific JSON)
+    config_template: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+    # Protocol
+    config_protocol: Mapped[str] = mapped_column(String(20), default="tr069")
+    # tr069, mikrotik_api, ssh, snmp_set
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_dct_tenant_type", "tenant_id", "device_type"),
+        Index("ix_dct_active", "tenant_id", "is_active"),
+    )
+
+
+class DeviceConfigPush(Base):
+    """Tracks configuration push operations to devices."""
+
+    __tablename__ = "device_config_pushes"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="CASCADE"), nullable=False,
+    )
+    template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("device_config_templates.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    # What was pushed
+    config_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    config_protocol: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # Result
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # pending, in_progress, completed, failed, rolled_back
+    result_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Timing
+    pushed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Who pushed
+    pushed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_dcp_tenant_device", "tenant_id", "device_id"),
+        Index("ix_dcp_status", "tenant_id", "status"),
+        Index("ix_dcp_pending", "tenant_id", "status", "created_at"),
+    )
