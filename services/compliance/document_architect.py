@@ -371,10 +371,11 @@ def extract_financials(text: str) -> list[ExtractedFinancial]:
 
     for i, line in enumerate(lines):
         amounts = re.findall(r'R\s*([\d,]+\.?\d*)', line)
-        # Also find plain large numbers (5+ digits) that look like amounts
+        # Also find plain large numbers with commas (e.g. 150,000) — but not pure digit strings (IDs, phone numbers)
         if not amounts:
             plain = re.findall(r'\b([\d,]{5,}(?:\.\d{2})?)\b', line)
-            amounts = plain
+            # Filter: must contain a comma or decimal to be a financial amount
+            amounts = [p for p in plain if ',' in p or '.' in p]
         for amt_str in amounts:
             try:
                 amount = float(amt_str.replace(",", ""))
