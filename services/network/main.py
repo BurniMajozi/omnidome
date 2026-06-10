@@ -23,6 +23,9 @@ from services.network.routes.radius import router as radius_router
 from services.network.routes.fno import router as fno_router
 from services.network.routes.services import router as services_router
 from services.network.routes.coverage import router as coverage_router
+from services.network.routes.performance import router as performance_router
+from services.network.routes.notifications import router as notifications_router
+from services.network.routes.devices import router as devices_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +69,9 @@ app.include_router(services_router)
 app.include_router(radius_router)
 app.include_router(fno_router)
 app.include_router(coverage_router)
+app.include_router(performance_router)
+app.include_router(notifications_router)
+app.include_router(devices_router)
 
 
 # ---------------------------------------------------------------------------

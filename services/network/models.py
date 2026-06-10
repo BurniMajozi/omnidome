@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     func,
@@ -272,4 +273,312 @@ class AutomationJob(Base):
     __table_args__ = (
         Index("ix_automation_jobs_tenant", "tenant_id"),
         Index("ix_automation_jobs_status", "tenant_id", "status"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Network Performance Monitoring
+# ---------------------------------------------------------------------------
+
+METRIC_TYPE = SAEnum(
+    "latency_ms", "jitter_ms", "packet_loss_pct", "download_mbps",
+    "upload_mbps", "signal_dbm", "snr_db", "ont_cpu_pct", "ont_mem_pct",
+    "router_cpu_pct", "router_mem_pct", "wifi_clients", "uptime_seconds",
+    name="metric_type", create_type=True,
+)
+
+ALERT_SEVERITY = SAEnum(
+    "info", "warning", "critical", "emergency",
+    name="alert_severity", create_type=True,
+)
+
+NOTIFICATION_CHANNEL = SAEnum(
+    "email", "sms", "push", "webhook", "in_app",
+    name="notification_channel", create_type=True,
+)
+
+NOTIFICATION_STATUS = SAEnum(
+    "pending", "sent", "failed", "read", "dismissed",
+    name="notification_status", create_type=True,
+)
+
+
+class NetworkPerformanceMetric(Base):
+    """Time-series performance metrics collected from network devices and probes."""
+
+    __tablename__ = "network_performance_metrics"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=False,
+    )
+    device_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    metric_type: Mapped[str] = mapped_column(METRIC_TYPE, nullable=False)
+    metric_value: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    unit: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # Source of the metric
+    source: Mapped[str] = mapped_column(String(30), default="probe")
+    # probe, snmp, tr069, radius, speed_test, fno_api
+
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True,
+    )
+
+    __table_args__ = (
+        Index("ix_npm_tenant_service", "tenant_id", "service_id"),
+        Index("ix_npm_tenant_type_time", "tenant_id", "metric_type", "collected_at"),
+        Index("ix_npm_service_time", "service_id", "collected_at"),
+    )
+
+
+class NetworkSLAProfile(Base):
+    """SLA targets per service or FNO provider."""
+
+    __tablename__ = "network_sla_profiles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+    # Scope: either per-service or per-FNO (service_id NULL = FNO-wide)
+    service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=True,
+    )
+    fno_provider: Mapped[Optional[str]] = mapped_column(FNO_PROVIDER, nullable=True)
+
+    # SLA targets
+    target_latency_ms: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
+    target_jitter_ms: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
+    target_packet_loss_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 4), nullable=True)
+    target_download_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    target_upload_mbps: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    target_uptime_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    target_mttr_minutes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Evaluation window
+    evaluation_window_hours: Mapped[int] = mapped_column(Integer, default=720)
+    # 30 days default
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nsla_tenant", "tenant_id", "is_active"),
+        Index("ix_nsla_service", "service_id"),
+        Index("ix_nsla_fno", "tenant_id", "fno_provider"),
+    )
+
+
+class NetworkSLABreach(Base):
+    """Records SLA violations for reporting and FNO accountability."""
+
+    __tablename__ = "network_sla_breaches"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    sla_profile_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_sla_profiles.id", ondelete="CASCADE"), nullable=False,
+    )
+    service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=True,
+    )
+
+    metric_type: Mapped[str] = mapped_column(METRIC_TYPE, nullable=False)
+    target_value: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    actual_value: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False)
+    severity: Mapped[str] = mapped_column(ALERT_SEVERITY, nullable=False)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    acknowledged_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nslab_tenant", "tenant_id", "severity"),
+        Index("ix_nslab_service", "service_id"),
+        Index("ix_nslab_open", "tenant_id", "resolved_at"),
+        Index("ix_nslab_profile", "sla_profile_id"),
+    )
+
+
+class NetworkDevice(Base):
+    """Physical network devices per service: ONT, router, gateway, switch."""
+
+    __tablename__ = "network_devices"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    device_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # ont, router, gateway, switch, access_point, media_converter
+
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    serial_number: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    mac_address: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    firmware_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Management
+    management_ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    management_protocol: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # snmp, tr069, ssh, telnet, http
+
+    # Status
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    # active, offline, error, provisioning, decommissioned
+    last_seen: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Inventory link
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    # Config snapshot (last known good config)
+    config_snapshot: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nd_tenant_service", "tenant_id", "service_id"),
+        Index("ix_nd_serial", "serial_number"),
+        Index("ix_nd_mac", "mac_address"),
+        Index("ix_nd_status", "tenant_id", "status"),
+        Index("ix_nd_product", "product_id"),
+    )
+
+
+class NetworkNotification(Base):
+    """Notifications dispatched for network events: outages, SLA breaches, maintenance."""
+
+    __tablename__ = "network_notifications"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=True,
+    )
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # What triggered it
+    trigger_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # fno_outage, sla_breach, maintenance, device_offline, speed_degradation,
+    # billing_suspend, billing_reinstate, fault_reported
+    trigger_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # FK to the source record (sla_breach_id, fno_status_id, etc.)
+
+    severity: Mapped[str] = mapped_column(ALERT_SEVERITY, nullable=False, default="info")
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Delivery
+    channel: Mapped[str] = mapped_column(NOTIFICATION_CHANNEL, nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    # email address, phone number, device token, webhook URL
+    status: Mapped[str] = mapped_column(NOTIFICATION_STATUS, nullable=False, default="pending")
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    read_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Retry
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, default=3)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_nn_tenant", "tenant_id", "status"),
+        Index("ix_nn_service", "service_id"),
+        Index("ix_nn_customer", "customer_id"),
+        Index("ix_nn_trigger", "trigger_type", "trigger_id"),
+        Index("ix_nn_pending", "tenant_id", "status", "retry_count"),
+    )
+
+
+class RadiusAccounting(Base):
+    """RADIUS accounting records (radacct) for session tracking."""
+
+    __tablename__ = "radius_accounting"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    radius_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("radius_accounts.id", ondelete="CASCADE"), nullable=False,
+    )
+
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    nas_ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    nas_port_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    framed_ip_address: Mapped[Optional[str]] = mapped_column(String(45), nullable=True)
+    calling_station_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    called_station_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+
+    # Session timing
+    acct_start_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    acct_stop_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    acct_session_time: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # seconds
+
+    # Traffic
+    acct_input_octets: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    acct_output_octets: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    acct_input_packets: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    acct_output_packets: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Termination cause
+    acct_terminate_cause: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # User-Request, Lost-Carrier, Idle-Timeout, Session-Timeout, Admin-Reset, etc.
+
+    # Authentic
+    acct_authentic: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # RADIUS, Local, Remote
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False,
+    )
+
+    __table_args__ = (
+        Index("ix_ra_tenant_account", "tenant_id", "radius_account_id"),
+        Index("ix_ra_session", "session_id"),
+        Index("ix_ra_start", "acct_start_time"),
+        Index("ix_ra_active", "tenant_id", "acct_stop_time"),
+        # acct_stop_time IS NULL = active session
     )

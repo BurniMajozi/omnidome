@@ -436,7 +436,7 @@ async def control_device(
                 detail=f"Home Assistant service call failed: {exc}",
             ) from exc
         finally:
-            await ha_client.close()
+            await ha_client.aclose()
 
 
 @router.post("/{device_id}/sync", response_model=DeviceSyncResponse)
@@ -508,7 +508,7 @@ async def sync_device(
                 detail=f"Home Assistant sync failed: {exc}",
             ) from exc
         finally:
-            await ha_client.close()
+            await ha_client.aclose()
 
 
 @router.get("/{device_id}/state", response_model=DeviceStateResponse)
@@ -554,4 +554,4 @@ async def get_device_state(
                 detail=f"Home Assistant state query failed: {exc}",
             ) from exc
         finally:
-            await ha_client.close()
+            await ha_client.aclose()

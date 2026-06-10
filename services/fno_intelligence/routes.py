@@ -436,3 +436,509 @@ async def list_reports(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db
     result = await db.execute(query.order_by(desc(FNOReport.created_at)))
     reports = result.scalars().all()
     return [{"id": str(r.id), "type": r.report_type, "title": r.title, "created_at": r.created_at.isoformat(), "pdf": r.pdf_path} for r in reports]
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 8. KML COVERAGE IMPORT
+# ════════════════════════════════════════════════════════════════════════
+
+from fastapi import UploadFile, File, Form, BackgroundTasks
+from services.fno_intelligence.models import (
+    FNOKMLImport,
+    NetworkFaultReport,
+    NetworkFaultUpdate,
+)
+
+
+class KMLImportResponse(BaseModel):
+    id: str
+    fno_name: str
+    file_name: str
+    status: str
+    total_features: int = 0
+    imported_features: int = 0
+
+
+@router.post("/kml-imports", response_model=KMLImportResponse)
+async def upload_kml(
+    background_tasks: BackgroundTasks,
+    fno_name: str = Form(...),
+    fno_portal: str = Form(...),
+    file: UploadFile = File(...),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Upload a KML/KMZ file for bulk coverage area import."""
+    import os
+    import aiofiles
+
+    # Save file
+    upload_dir = f"/opt/data/uploads/kml/{tenant_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+    file_path = f"{upload_dir}/{file.filename}"
+
+    content = await file.read()
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(content)
+
+    # Create import record
+    kml_import = FNOKMLImport(
+        tenant_id=tenant_id,
+        fno_name=fno_name,
+        fno_portal=fno_portal,
+        file_name=file.filename,
+        file_size_bytes=len(content),
+        file_path=file_path,
+        status="uploaded",
+    )
+    db.add(kml_import)
+    await db.flush()
+
+    # Process in background
+    background_tasks.add_task(_process_kml_import, kml_import.id)
+
+    return KMLImportResponse(
+        id=str(kml_import.id),
+        fno_name=fno_name,
+        file_name=file.filename,
+        status="uploaded",
+    )
+
+
+async def _process_kml_import(import_id: uuid.UUID):
+    """Background task to parse KML and import coverage areas."""
+    from services.fno_intelligence.database import get_session as _get_session
+    from services.fno_intelligence.models import FNONetworkCoverage
+
+    async with _get_session() as session:
+        import_record = await session.get(FNOKMLImport, import_id)
+        if not import_record:
+            return
+
+        import_record.status = "parsing"
+        await session.flush()
+
+        try:
+            # Parse KML
+            try:
+                from pykml import parser as kml_parser
+                from lxml import etree
+
+                with open(import_record.file_path, "rb") as f:
+                    root = kml_parser.parse(f).getroot()
+
+                features = []
+                # Extract Placemarks
+                for placemark in root.iter("{http://www.opengis.net/kml/2.2}Placemark"):
+                    name_elem = placemark.find("{http://www.opengis.net/kml/2.2}name")
+                    name = name_elem.text if name_elem is not None else "Unknown"
+
+                    desc_elem = placemark.find("{http://www.opengis.net/kml/2.2}description")
+                    description = desc_elem.text if desc_elem is not None else ""
+
+                    # Extract polygon coordinates
+                    coords_elem = placemark.find(
+                        ".//{http://www.opengis.net/kml/2.2}coordinates"
+                    )
+                    coords_text = coords_elem.text.strip() if coords_elem is not None else ""
+
+                    # Extract extended data (custom FNO fields)
+                    ext_data = {}
+                    for data_elem in placemark.iter("{http://www.opengis.net/kml/2.2}Data"):
+                        data_name = data_elem.get("name", "")
+                        value_elem = data_elem.find("{http://www.opengis.net/kml/2.2}value")
+                        if value_elem is not None and value_elem.text:
+                            ext_data[data_name] = value_elem.text
+
+                    features.append({
+                        "name": name,
+                        "description": description,
+                        "coords": coords_text,
+                        "extended": ext_data,
+                    })
+
+            except ImportError:
+                # Fallback: basic XML parsing without pykml
+                import xml.etree.ElementTree as ET
+
+                tree = ET.parse(import_record.file_path)
+                root = tree.getroot()
+                ns = {"kml": "http://www.opengis.net/kml/2.2"}
+
+                features = []
+                for placemark in root.findall(".//kml:Placemark", ns):
+                    name_elem = placemark.find("kml:name", ns)
+                    name = name_elem.text if name_elem is not None else "Unknown"
+                    features.append({
+                        "name": name,
+                        "description": "",
+                        "coords": "",
+                        "extended": {},
+                    })
+
+            import_record.total_features = len(features)
+
+            # Import coverage areas
+            imported = 0
+            skipped = 0
+
+            for feature in features:
+                # Check for duplicate
+                existing = await session.execute(
+                    select(FNONetworkCoverage).where(
+                        FNONetworkCoverage.tenant_id == import_record.tenant_id,
+                        FNONetworkCoverage.fno_name == import_record.fno_name,
+                        FNONetworkCoverage.area_name == feature["name"],
+                    )
+                )
+                if existing.scalar_one_or_none():
+                    skipped += 1
+                    continue
+
+                ext = feature.get("extended", {})
+                coverage = FNONetworkCoverage(
+                    tenant_id=import_record.tenant_id,
+                    fno_name=import_record.fno_name,
+                    fno_portal=import_record.fno_portal,
+                    area_name=feature["name"],
+                    suburb=ext.get("suburb"),
+                    city=ext.get("city", "Unknown"),
+                    province=ext.get("province"),
+                    technology=ext.get("technology"),
+                    max_speed_mbps=int(ext["max_speed_mbps"]) if ext.get("max_speed_mbps") else None,
+                    status=ext.get("status", "available"),
+                    source_job_id=None,
+                    source_url=f"kml://{import_record.file_name}",
+                )
+                session.add(coverage)
+                imported += 1
+
+            import_record.imported_features = imported
+            import_record.skipped_features = skipped
+            import_record.status = "imported" if imported > 0 else "partial"
+            import_record.processed_at = datetime.utcnow()
+
+        except Exception as e:
+            import_record.status = "failed"
+            import_record.error_message = str(e)
+
+        await session.flush()
+
+
+@router.get("/kml-imports")
+async def list_kml_imports(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    fno_name: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    """List KML import history."""
+    query = select(FNOKMLImport).where(FNOKMLImport.tenant_id == tenant_id)
+    if fno_name:
+        query = query.where(FNOKMLImport.fno_name == fno_name)
+    if status:
+        query = query.where(FNOKMLImport.status == status)
+    result = await db.execute(query.order_by(desc(FNOKMLImport.created_at)))
+    imports = result.scalars().all()
+    return [{
+        "id": str(i.id), "fno_name": i.fno_name, "file_name": i.file_name,
+        "status": i.status, "total": i.total_features, "imported": i.imported_features,
+        "skipped": i.skipped_features, "created_at": i.created_at.isoformat(),
+    } for i in imports]
+
+
+@router.get("/kml-imports/{import_id}")
+async def get_kml_import(
+    import_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get KML import details."""
+    import_record = await session.get(FNOKMLImport, import_id)
+    if not import_record or import_record.tenant_id != tenant_id:
+        raise HTTPException(404, "Import not found")
+    return {
+        "id": str(import_record.id), "fno_name": import_record.fno_name,
+        "file_name": import_record.file_name, "status": import_record.status,
+        "total": import_record.total_features, "imported": import_record.imported_features,
+        "skipped": import_record.skipped_features, "error": import_record.error_message,
+        "created_at": import_record.created_at.isoformat(),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 9. FAULT REPORTING
+# ════════════════════════════════════════════════════════════════════════
+
+class FaultReportCreate(BaseModel):
+    source: str = "customer"
+    fno_name: str
+    fno_portal: Optional[str] = None
+    fno_account_number: Optional[str] = None
+    service_id: Optional[str] = None
+    area_name: Optional[str] = None
+    suburb: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    postal_code: Optional[str] = None
+    fault_type: str
+    severity: str = "medium"
+    title: str
+    description: Optional[str] = None
+    fault_started_at: Optional[datetime] = None
+
+
+class FaultReportUpdate(BaseModel):
+    status: Optional[str] = None
+    severity: Optional[str] = None
+    fno_ticket_reference: Optional[str] = None
+    resolution_notes: Optional[str] = None
+    message: Optional[str] = None
+
+
+@router.post("/faults")
+async def create_fault_report(
+    payload: FaultReportCreate,
+    background_tasks: BackgroundTasks,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Create a fault report and optionally auto-create a support ticket + notify affected customers."""
+    fault = NetworkFaultReport(
+        tenant_id=tenant_id,
+        source=payload.source,
+        fno_name=payload.fno_name,
+        fno_portal=payload.fno_portal,
+        fno_account_number=payload.fno_account_number,
+        service_id=uuid.UUID(payload.service_id) if payload.service_id else None,
+        area_name=payload.area_name,
+        suburb=payload.suburb,
+        city=payload.city,
+        province=payload.province,
+        postal_code=payload.postal_code,
+        fault_type=payload.fault_type,
+        severity=payload.severity,
+        title=payload.title,
+        description=payload.description,
+        fault_started_at=payload.fault_started_at,
+    )
+    db.add(fault)
+    await db.flush()
+
+    # Auto-create support ticket for high/critical severity
+    if payload.severity in ("high", "critical"):
+        background_tasks.add_task(
+            _auto_create_support_ticket, fault.id, tenant_id
+        )
+
+    # Notify affected customers in the same area
+    background_tasks.add_task(
+        _notify_affected_customers, fault.id, tenant_id
+    )
+
+    return {"id": str(fault.id), "status": fault.status, "severity": fault.severity}
+
+
+async def _auto_create_support_ticket(fault_id: uuid.UUID, tenant_id: uuid.UUID):
+    """Auto-create a support ticket for high-severity faults."""
+    from services.fno_intelligence.database import get_session as _get_session
+    import httpx
+
+    async with _get_session() as session:
+        fault = await session.get(NetworkFaultReport, fault_id)
+        if not fault:
+            return
+
+        support_url = "http://support:8008"
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{support_url}/api/support/tickets",
+                    json={
+                        "title": f"[AUTO] {fault.title}",
+                        "description": fault.description or f"Auto-created from fault report {fault.fault_type}",
+                        "priority": "high" if fault.severity == "critical" else "medium",
+                        "category": "network_fault",
+                        "source": "fno_intelligence",
+                    },
+                    headers={"x-tenant-id": str(tenant_id)},
+                )
+                if resp.status_code == 200:
+                    ticket_data = resp.json()
+                    fault.internal_ticket_id = uuid.UUID(ticket_data.get("id", ticket_data.get("ticket_id")))
+                    fault.status = "acknowledged"
+                    await session.flush()
+        except Exception as e:
+            import logging
+            logging.getLogger("fno_intelligence").error(f"Auto ticket creation failed: {e}")
+
+
+async def _notify_affected_customers(fault_id: uuid.UUID, tenant_id: uuid.UUID):
+    """Notify customers in the affected area about a fault."""
+    from services.fno_intelligence.database import get_session as _get_session
+    from services.network.models import NetworkService
+
+    async with _get_session() as session:
+        fault = await session.get(NetworkFaultReport, fault_id)
+        if not fault:
+            return
+
+        # Find services in the affected area
+        svc_query = select(NetworkService).where(
+            NetworkService.tenant_id == tenant_id,
+            NetworkService.fno_provider == fault.fno_name.lower(),
+            NetworkService.status == "active",
+        )
+        if fault.city:
+            svc_query = svc_query.where(NetworkService.city.ilike(f"%{fault.city}%"))
+        if fault.postal_code:
+            svc_query = svc_query.where(NetworkService.postal_code == fault.postal_code)
+
+        services = (await session.execute(svc_query)).scalars().all()
+
+        # Create notifications (in production, would dispatch via email/SMS/push)
+        from services.network.models import NetworkNotification
+        for svc in services:
+            notification = NetworkNotification(
+                tenant_id=tenant_id,
+                service_id=svc.id,
+                customer_id=svc.customer_id,
+                trigger_type="fno_outage",
+                trigger_id=fault.id,
+                severity=fault.severity,
+                title=f"Network Issue: {fault.title}",
+                message=fault.description or f"A {fault.fault_type} issue has been reported in {fault.area_name or fault.city}.",
+                channel="in_app",
+                recipient=str(svc.customer_id),
+            )
+            session.add(notification)
+
+        await session.flush()
+
+
+@router.get("/faults")
+async def list_fault_reports(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    fno_name: Optional[str] = None,
+    city: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = 0,
+):
+    """List fault reports with filters."""
+    query = select(NetworkFaultReport).where(NetworkFaultReport.tenant_id == tenant_id)
+    if status:
+        query = query.where(NetworkFaultReport.status == status)
+    if severity:
+        query = query.where(NetworkFaultReport.severity == severity)
+    if fno_name:
+        query = query.where(NetworkFaultReport.fno_name == fno_name)
+    if city:
+        query = query.where(NetworkFaultReport.city.ilike(f"%{city}%"))
+    result = await db.execute(
+        query.order_by(desc(NetworkFaultReport.created_at)).limit(limit).offset(offset)
+    )
+    faults = result.scalars().all()
+    return [{
+        "id": str(f.id), "fno": f.fno_name, "type": f.fault_type,
+        "severity": f.severity, "status": f.status, "title": f.title,
+        "city": f.city, "created_at": f.created_at.isoformat(),
+    } for f in faults]
+
+
+@router.get("/faults/{fault_id}")
+async def get_fault_report(
+    fault_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get fault report details with update history."""
+    fault = await db.get(NetworkFaultReport, fault_id)
+    if not fault or fault.tenant_id != tenant_id:
+        raise HTTPException(404, "Fault report not found")
+
+    updates_result = await db.execute(
+        select(NetworkFaultUpdate)
+        .where(NetworkFaultUpdate.fault_id == fault_id)
+        .order_by(NetworkFaultUpdate.created_at)
+    )
+    updates = updates_result.scalars().all()
+
+    return {
+        "id": str(fault.id), "fno": fault.fno_name, "type": fault.fault_type,
+        "severity": fault.severity, "status": fault.status, "title": fault.title,
+        "description": fault.description, "area": fault.area_name, "city": fault.city,
+        "fno_ticket": fault.fno_ticket_reference, "internal_ticket": str(fault.internal_ticket_id) if fault.internal_ticket_id else None,
+        "created_at": fault.created_at.isoformat(),
+        "updates": [{"type": u.update_type, "message": u.message, "created_at": u.created_at.isoformat()} for u in updates],
+    }
+
+
+@router.put("/faults/{fault_id}")
+async def update_fault_report(
+    fault_id: uuid.UUID,
+    payload: FaultReportUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update fault report status and add audit trail entry."""
+    fault = await db.get(NetworkFaultReport, fault_id)
+    if not fault or fault.tenant_id != tenant_id:
+        raise HTTPException(404, "Fault report not found")
+
+    old_status = fault.status
+
+    if payload.status:
+        fault.status = payload.status
+    if payload.severity:
+        fault.severity = payload.severity
+    if payload.fno_ticket_reference:
+        fault.fno_ticket_reference = payload.fno_ticket_reference
+    if payload.resolution_notes:
+        fault.resolution_notes = payload.resolution_notes
+        fault.resolved_at = datetime.utcnow()
+
+    # Add audit trail entry
+    update = NetworkFaultUpdate(
+        fault_id=fault_id,
+        tenant_id=tenant_id,
+        update_type="status_change" if payload.status else "comment",
+        message=payload.message or f"Status: {old_status} → {fault.status}",
+        old_status=old_status,
+        new_status=fault.status,
+    )
+    db.add(update)
+    await db.flush()
+
+    return {"id": str(fault.id), "status": fault.status}
+
+
+@router.post("/faults/{fault_id}/escalate")
+async def escalate_fault(
+    fault_id: uuid.UUID,
+    message: str = "",
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Escalate a fault report."""
+    fault = await db.get(NetworkFaultReport, fault_id)
+    if not fault or fault.tenant_id != tenant_id:
+        raise HTTPException(404, "Fault report not found")
+
+    fault.status = "escalated"
+    fault.severity = "critical" if fault.severity != "critical" else fault.severity
+
+    update = NetworkFaultUpdate(
+        fault_id=fault_id,
+        tenant_id=tenant_id,
+        update_type="escalation",
+        message=message or "Fault escalated",
+        old_status="investigating",
+        new_status="escalated",
+    )
+    db.add(update)
+    await db.flush()
+
+    return {"id": str(fault.id), "status": "escalated"}

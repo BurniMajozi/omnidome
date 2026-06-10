@@ -373,7 +373,7 @@ async def test_connection(
                 message=f"Connection failed: {exc}",
             )
         finally:
-            await ha_client.close()
+            await ha_client.aclose()
 
 
 @router.post("/{integration_id}/sync", response_model=SyncResponse)
@@ -561,7 +561,7 @@ async def sync_devices(
                 detail=f"Device sync failed: {exc}",
             ) from exc
         finally:
-            await ha_client.close()
+            await ha_client.aclose()
 
 
 @router.get("/{integration_id}/health", response_model=HealthResponse)
@@ -605,7 +605,7 @@ async def integration_health(
                 integration.last_error = str(exc)
                 await session.flush()
         finally:
-            await ha_client.close()
+            await ha_client.aclose()
 
         return HealthResponse(
             integration_id=integration_id,
@@ -682,4 +682,4 @@ async def discover_devices(
                 detail=f"Device discovery failed: {exc}",
             ) from exc
         finally:
-            await ha_client.close()
+            await ha_client.aclose()

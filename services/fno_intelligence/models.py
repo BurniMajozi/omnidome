@@ -699,3 +699,163 @@ class FNOReport(Base):
         Index("ix_fno_report_tenant_type", "tenant_id", "report_type"),
         Index("ix_fno_report_scheduled", "is_scheduled", "next_scheduled_at"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 6. KML COVERAGE IMPORT
+# ════════════════════════════════════════════════════════════════════════
+
+KML_IMPORT_STATUS = SAEnum(
+    "uploaded", "parsing", "imported", "failed", "partial",
+    name="kml_import_status", create_type=True,
+)
+
+
+class FNOKMLImport(Base):
+    """Tracks KML/KMZ file uploads from FNOs for coverage area bulk import."""
+
+    __tablename__ = "fno_kml_imports"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+
+    # File info
+    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+
+    # Processing
+    status: Mapped[str] = mapped_column(KML_IMPORT_STATUS, nullable=False, default="uploaded")
+    total_features: Mapped[int] = mapped_column(Integer, default=0)
+    imported_features: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_features: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Bounding box from KML
+    bbox_north: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    bbox_south: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    bbox_east: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    bbox_west: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Who uploaded
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_fno_kml_tenant_fno", "tenant_id", "fno_name"),
+        Index("ix_fno_kml_status", "tenant_id", "status"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 7. FAULT REPORTING
+# ════════════════════════════════════════════════════════════════════════
+
+FAULT_STATUS = SAEnum(
+    "submitted", "acknowledged", "investigating", "escalated",
+    "resolved", "closed", "rejected",
+    name="fault_status", create_type=True,
+)
+
+FAULT_SEVERITY = SAEnum(
+    "low", "medium", "high", "critical",
+    name="fault_severity", create_type=True,
+)
+
+FAULT_SOURCE = SAEnum(
+    "customer", "fno_portal", "network_monitor", "field_tech", "system",
+    name="fault_source", create_type=True,
+)
+
+
+class NetworkFaultReport(Base):
+    """Fault reports linked to FNO, area, and optionally a specific service."""
+
+    __tablename__ = "network_fault_reports"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    # Who reported
+    source: Mapped[str] = mapped_column(FAULT_SOURCE, nullable=False)
+    reported_by_customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    reported_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # FNO context
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_portal: Mapped[Optional[str]] = mapped_column(FNO_PORTAL, nullable=True)
+    fno_account_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Affected service (if known)
+    service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Location
+    area_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    suburb: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+
+    # Fault details
+    fault_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # outage, slow_speed, intermittent, no_signal, hardware, other
+    severity: Mapped[str] = mapped_column(FAULT_SEVERITY, nullable=False, default="medium")
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Status tracking
+    status: Mapped[str] = mapped_column(FAULT_STATUS, nullable=False, default="submitted")
+    fno_ticket_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    internal_ticket_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Resolution
+    resolution_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    # Timestamps
+    fault_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_nfr_tenant_status", "tenant_id", "status"),
+        Index("ix_nfr_tenant_fno", "tenant_id", "fno_name"),
+        Index("ix_nfr_tenant_severity", "tenant_id", "severity"),
+        Index("ix_nfr_service", "service_id"),
+        Index("ix_nfr_area", "tenant_id", "city", "suburb"),
+        Index("ix_nfr_postal", "postal_code"),
+    )
+
+
+class NetworkFaultUpdate(Base):
+    """Updates/comments on a fault report (audit trail)."""
+
+    __tablename__ = "network_fault_updates"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fault_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("network_fault_reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+
+    update_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # status_change, comment, escalation, fno_response, resolution
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    old_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    new_status: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_nfu_fault", "fault_id", "created_at"),
+    )

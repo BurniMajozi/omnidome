@@ -733,7 +733,61 @@ async def get_customer_360(
     )
     active_call = active_result.scalars().first()
     customer_data["active_call"] = _session_to_dict(active_call) if active_call else None
-    
+
+    # 6. Network — active services + device status + recent performance
+    network_url = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            # Get active network services for this customer
+            svc_resp = await client.get(
+                f"{network_url}/api/network/services",
+                params={"customer_id": str(customer_id), "status": "active", "page_size": 10},
+                headers={"x-tenant-id": str(tenant_id)},
+            )
+            if svc_resp.status_code == 200:
+                services_data = svc_resp.json()
+                customer_data["network"] = {
+                    "active_services": services_data.get("items", []),
+                    "service_count": services_data.get("total", 0),
+                }
+
+                # For the first active service, get devices and recent metrics
+                services_list = services_data.get("items", [])
+                if services_list:
+                    first_svc_id = services_list[0].get("id")
+                    if first_svc_id:
+                        # Get devices
+                        dev_resp = await client.get(
+                            f"{network_url}/api/network/devices",
+                            params={"service_id": first_svc_id, "page_size": 20},
+                            headers={"x-tenant-id": str(tenant_id)},
+                        )
+                        if dev_resp.status_code == 200:
+                            customer_data["network"]["devices"] = dev_resp.json().get("items", [])
+
+                        # Get recent performance metrics (last hour)
+                        from datetime import datetime, timedelta, timezone
+                        from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+                        met_resp = await client.get(
+                            f"{network_url}/api/network/performance/metrics",
+                            params={
+                                "service_id": first_svc_id,
+                                "from_time": from_time,
+                                "limit": 20,
+                            },
+                            headers={"x-tenant-id": str(tenant_id)},
+                        )
+                        if met_resp.status_code == 200:
+                            customer_data["network"]["recent_metrics"] = met_resp.json()
+
+                        # Check for active FNO outages affecting this service
+                        fno_provider = services_list[0].get("fno_provider")
+                        if fno_provider:
+                            # This would call FNO Intelligence service in production
+                            customer_data["network"]["fno_provider"] = fno_provider
+    except Exception as e:
+        logger.warning(f"Network fetch failed for customer 360: {e}")
+
     return customer_data
 
 

@@ -609,3 +609,112 @@ class ABTestAssignment(JourneyBase):
         Index("ix_ab_test_assignments_test_customer", "ab_test_id", "customer_id", unique=True),
     )
 
+
+# ---------------------------------------------------------------------------
+# Cancellation Workflow — bridges journey outcome to network termination
+# ---------------------------------------------------------------------------
+
+CANCELLATION_WORKFLOW_STATUS = SAEnum(
+    "pending", "fno_cancellation_submitted", "fno_cancellation_confirmed",
+    "router_return_requested", "router_return_completed", "service_terminated",
+    "completed", "failed", "cancelled",
+    name="cancellation_workflow_status", create_type=True,
+)
+
+ROUTER_RETURN_STATUS = SAEnum(
+    "not_required", "pending", "scheduled", "collected", "returned", "lost", "written_off",
+    name="router_return_status", create_type=True,
+)
+
+
+class CancellationWorkflow(Base):
+    """Tracks the full cancellation workflow from journey outcome to service termination.
+
+    Triggered when:
+    1. Customer rejects all retention offers (journey outcome = 'rejected')
+    2. Customer proceeds with cancellation after offer expires
+    3. Admin manually initiates cancellation
+    """
+
+    __tablename__ = "cancellation_workflows"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+    customer_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, index=True
+    )
+
+    # Source
+    cancel_event_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cancel_events.id", ondelete="SET NULL"), nullable=True
+    )
+    journey_outcome_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("journey_outcomes.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Service being cancelled
+    service_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="CASCADE"), nullable=False
+    )
+    subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # FNO context
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_account_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fno_service_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Workflow status
+    status: Mapped[str] = mapped_column(
+        CANCELLATION_WORKFLOW_STATUS, nullable=False, default="pending"
+    )
+
+    # FNO cancellation order
+    fno_cancellation_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fno_orders.id", ondelete="SET NULL"), nullable=True
+    )
+    fno_cancellation_submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fno_cancellation_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    fno_cancellation_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+
+    # Router/ONT return
+    router_return_status: Mapped[str] = mapped_column(
+        ROUTER_RETURN_STATUS, nullable=False, default="not_required"
+    )
+    router_device_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    router_serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    router_return_scheduled_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    router_return_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    router_return_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Financial
+    early_termination_fee_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    deposit_forfeited_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+    final_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+    # Termination
+    service_terminated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    workflow_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Notes
+    cancellation_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_cwf_tenant_status", "tenant_id", "status"),
+        Index("ix_cwf_customer", "tenant_id", "customer_id"),
+        Index("ix_cwf_service", "service_id"),
+        Index("ix_cwf_fno", "tenant_id", "fno_name"),
+        Index("ix_cwf_pending", "tenant_id", "status", "created_at"),
+    )
+

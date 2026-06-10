@@ -79,7 +79,7 @@ class HARestClient:
             )
         return self._client
 
-    async def close(self):
+    async def aclose(self):
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 

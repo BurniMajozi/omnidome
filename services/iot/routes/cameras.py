@@ -133,7 +133,7 @@ async def get_camera_snapshot(
         ha_client = await _get_ha_client(session, ctx.tenant_id)
 
     image_bytes = await ha_client.get_camera_image(device.ha_entity_id)
-    await ha_client.close()
+    await ha_client.aclose()
 
     content_type = "image/jpeg"
     if device.attributes and isinstance(device.attributes, dict):
@@ -169,7 +169,7 @@ async def get_camera_stream(
         ha_client = await _get_ha_client(session, ctx.tenant_id)
 
     stream_url = await ha_client.get_camera_stream(device.ha_entity_id)
-    await ha_client.close()
+    await ha_client.aclose()
 
     return {
         "camera_id": str(device.id),

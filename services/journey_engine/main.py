@@ -671,6 +671,265 @@ async def respond_to_offer(
     }
 
 
+# ---------------------------------------------------------------------------
+# Cancellation Workflow — triggered when customer rejects retention offer
+# ---------------------------------------------------------------------------
+
+from services.journey_engine.models import CancellationWorkflow
+
+
+@app.post("/cancellation-workflows")
+async def create_cancellation_workflow(
+    data: CancelWorkflowCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_db),
+):
+    """Create a cancellation workflow to terminate a service after retention failure."""
+    # 1. Load the cancel event
+    cancel_event = await session.get(CancelEvent, uuid.UUID(data.cancel_event_id))
+    if not cancel_event:
+        raise HTTPException(404, "Cancel event not found")
+
+    # 2. Find the active network service for this customer
+    from services.network.models import NetworkService
+    svc_query = select(NetworkService).where(
+        NetworkService.tenant_id == cancel_event.tenant_id,
+        NetworkService.customer_id == cancel_event.customer_id,
+        NetworkService.status.in_(("active", "provisioning")),
+    ).order_by(NetworkService.created_at.desc())
+    svc_result = await session.execute(svc_query)
+    service = svc_result.scalar_one_or_none()
+    if not service:
+        raise HTTPException(404, "No active network service found for this customer")
+
+    # 3. Find router device for return tracking
+    from services.network.models import NetworkDevice
+    dev_query = select(NetworkDevice).where(
+        NetworkDevice.service_id == service.id,
+        NetworkDevice.device_type.in_(("router", "gateway")),
+    )
+    dev_result = await session.execute(dev_query)
+    router_device = dev_result.scalar_one_or_none()
+
+    # 4. Create workflow
+    workflow = CancellationWorkflow(
+        tenant_id=cancel_event.tenant_id,
+        customer_id=cancel_event.customer_id,
+        cancel_event_id=cancel_event.id,
+        service_id=service.id,
+        fno_name=service.fno_provider,
+        fno_account_number=service.fno_account_id,
+        fno_service_reference=service.service_reference,
+        status="pending",
+        router_device_id=router_device.id if router_device else None,
+        router_serial_number=router_device.serial_number if router_device else None,
+        router_return_status="pending" if router_device else "not_required",
+        cancellation_reason=cancel_event.cancel_reason_detail or cancel_event.cancel_reason,
+    )
+    session.add(workflow)
+    await session.flush()
+
+    # 5. Trigger FNO cancellation in background
+    background_tasks.add_task(
+        _execute_fno_cancellation,
+        workflow.id,
+        service.id,
+        cancel_event.tenant_id,
+    )
+
+    return {
+        "workflow_id": str(workflow.id),
+        "service_id": str(service.id),
+        "fno_name": service.fno_provider,
+        "status": "pending",
+        "router_return_required": router_device is not None,
+    }
+
+
+class CancelWorkflowCreate(BaseModel):
+    cancel_event_id: str
+    reason: Optional[str] = None
+
+
+async def _execute_fno_cancellation(workflow_id: uuid.UUID, service_id: uuid.UUID, tenant_id: uuid.UUID):
+    """Background task: submit FNO cancellation order and update workflow."""
+    from services.journey_engine.database import get_session as _get_session
+    from services.network.models import NetworkService, FNOOrder
+
+    async with _get_session() as session:
+        workflow = await session.get(CancellationWorkflow, workflow_id)
+        service = await session.get(NetworkService, service_id)
+        if not workflow or not service:
+            return
+
+        workflow.status = "fno_cancellation_submitted"
+        workflow.fno_cancellation_submitted_at = datetime.now(timezone.utc)
+
+        # Create FNO cancellation order
+        fno_order = FNOOrder(
+            tenant_id=tenant_id,
+            service_id=service_id,
+            fno_provider=service.fno_provider,
+            order_type="cancellation",
+            status="submitted",
+            request_payload={
+                "fno_account_id": service.fno_account_id,
+                "service_reference": service.service_reference,
+                "reason": workflow.cancellation_reason,
+                "workflow_id": str(workflow_id),
+            },
+        )
+        session.add(fno_order)
+        await session.flush()
+
+        workflow.fno_cancellation_order_id = fno_order.id
+        await session.flush()
+
+        # TODO: In production, call FNO adapter to submit cancellation
+        # adapter = FNOFactory.get_adapter(service.fno_provider, config)
+        # result = await adapter.cancel_order(service.fno_account_id)
+
+
+@app.get("/cancellation-workflows")
+async def list_cancellation_workflows(
+    tenant_id: str = Query(...),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    customer_id: Optional[str] = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    """List cancellation workflows."""
+    query = select(CancellationWorkflow).where(
+        CancellationWorkflow.tenant_id == uuid.UUID(tenant_id)
+    )
+    if status_filter:
+        query = query.where(CancellationWorkflow.status == status_filter)
+    if customer_id:
+        query = query.where(CancellationWorkflow.customer_id == uuid.UUID(customer_id))
+    result = await session.execute(query.order_by(CancellationWorkflow.created_at.desc()))
+    workflows = result.scalars().all()
+    return [{
+        "id": str(w.id), "customer_id": str(w.customer_id),
+        "fno_name": w.fno_name, "status": w.status,
+        "router_return_status": w.router_return_status,
+        "created_at": w.created_at.isoformat(),
+    } for w in workflows]
+
+
+@app.get("/cancellation-workflows/{workflow_id}")
+async def get_cancellation_workflow(
+    workflow_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+):
+    """Get cancellation workflow details."""
+    workflow = await session.get(CancellationWorkflow, workflow_id)
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+    return {
+        "id": str(workflow.id), "customer_id": str(workflow.customer_id),
+        "service_id": str(workflow.service_id), "fno_name": workflow.fno_name,
+        "status": workflow.status, "fno_cancellation_reference": workflow.fno_cancellation_reference,
+        "router_return_status": workflow.router_return_status,
+        "router_serial": workflow.router_serial_number,
+        "early_termination_fee": float(workflow.early_termination_fee_zar) if workflow.early_termination_fee_zar else None,
+        "created_at": workflow.created_at.isoformat(),
+    }
+
+
+@app.post("/cancellation-workflows/{workflow_id}/confirm-fno")
+async def confirm_fno_cancellation(
+    workflow_id: uuid.UUID,
+    fno_reference: str = Query(...),
+    session: AsyncSession = Depends(get_db),
+):
+    """Confirm FNO cancellation (called by FNO webhook or admin)."""
+    workflow = await session.get(CancellationWorkflow, workflow_id)
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+
+    workflow.status = "fno_cancellation_confirmed"
+    workflow.fno_cancellation_confirmed_at = datetime.now(timezone.utc)
+    workflow.fno_cancellation_reference = fno_reference
+
+    # Update FNO order status
+    if workflow.fno_cancellation_order_id:
+        order = await session.get(FNOOrder, workflow.fno_cancellation_order_id)
+        if order:
+            order.status = "completed"
+            order.completed_date = datetime.now(timezone.utc)
+            order.fno_reference = fno_reference
+
+    await session.flush()
+    return {"id": str(workflow.id), "status": workflow.status, "fno_reference": fno_reference}
+
+
+@app.post("/cancellation-workflows/{workflow_id}/schedule-router-return")
+async def schedule_router_return(
+    workflow_id: uuid.UUID,
+    scheduled_date: datetime = Query(...),
+    notes: Optional[str] = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """Schedule a router/ONT collection."""
+    workflow = await session.get(CancellationWorkflow, workflow_id)
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+
+    workflow.router_return_status = "scheduled"
+    workflow.router_return_scheduled_date = scheduled_date
+    if notes:
+        workflow.router_return_notes = notes
+
+    await session.flush()
+    return {"id": str(workflow.id), "router_return_status": "scheduled", "scheduled_date": scheduled_date.isoformat()}
+
+
+@app.post("/cancellation-workflows/{workflow_id}/complete-router-return")
+async def complete_router_return(
+    workflow_id: uuid.UUID,
+    notes: Optional[str] = None,
+    session: AsyncSession = Depends(get_db),
+):
+    """Mark router/ONT as returned and complete the workflow."""
+    workflow = await session.get(CancellationWorkflow, workflow_id)
+    if not workflow:
+        raise HTTPException(404, "Workflow not found")
+
+    now = datetime.now(timezone.utc)
+    workflow.router_return_status = "returned"
+    workflow.router_return_completed_at = now
+    workflow.status = "router_return_completed"
+    if notes:
+        workflow.router_return_notes = notes
+
+    # Terminate the network service
+    from services.network.models import NetworkService, RadiusAccount
+    service = await session.get(NetworkService, workflow.service_id)
+    if service and service.status != "terminated":
+        service.status = "terminated"
+        service.terminated_at = now
+        workflow.service_terminated_at = now
+
+        # Disable RADIUS
+        radius_query = select(RadiusAccount).where(RadiusAccount.service_id == workflow.service_id)
+        radius_result = await session.execute(radius_query)
+        radius = radius_result.scalar_one_or_none()
+        if radius:
+            radius.status = "disabled"
+
+    # Check if workflow is fully complete
+    if workflow.status == "router_return_completed" and workflow.service_terminated_at:
+        workflow.status = "completed"
+        workflow.workflow_completed_at = now
+
+    await session.flush()
+    return {
+        "id": str(workflow.id),
+        "router_return_status": "returned",
+        "service_terminated": True,
+        "workflow_status": workflow.status,
+    }
+
+
 
 # ---------------------------------------------------------------------------
 # Customer Snapshot Sync (from CRM)

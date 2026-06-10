@@ -295,7 +295,7 @@ async def activate_scene(
                     detail=f"Home Assistant scene.turn_on failed: {exc}",
                 ) from exc
             finally:
-                await ha_client.close()
+                await ha_client.aclose()
 
         # Update activation metadata
         scene.activation_count += 1
