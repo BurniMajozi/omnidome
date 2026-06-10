@@ -1,714 +1,1070 @@
-"""Compliance service database layer — SQLAlchemy async models and session management.
-
-Central entity: Contract — all contracts (FNO, supplier, customer, employee) are stored
-and managed here. SLAs, ICASA lodgments, RICA requirements, and POPI data requests
-are all linked to contracts.
-
-Covers:
-- Contract management (FNO, supplier, customer, employee, partner contracts)
-- SLA management (tied to contracts, auto-breach detection)
-- ICASA regulations (product/promotion lodgment, regulatory changes, announcements)
-- POPI Act compliance (data subject access requests, anonymization, breach notification)
-- RICA compliance (identity verification storage for regulatory purposes)
-- ICASA web scraper (regulation changes, announcements, tariff filings)
 """
+OmniDome Compliance Service v2 — Database Models
+Covers: Tax, H&S, CIPC, Bylaw, BBBEE, Leave, Vehicles, Foreign Workers,
+        Travel, DR/BCP, Document Understanding, e-Services Gateway,
+        Compliance Scoring, Contract Management, SLA, ICASA, POPI, RICA,
+        Funding Opportunities
+"""
+from __future__ import annotations
 
-import uuid
-from datetime import datetime, date
-from typing import AsyncGenerator, Optional
+import enum
+from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Decimal, Enum as SAEnum, ForeignKey, Index,
-    Integer, Numeric, String, Text, UniqueConstraint, func,
+    Boolean, Column, Date, DateTime, Enum, Float, ForeignKey,
+    Index, Integer, Numeric, String, Text, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
-from services.common.db import get_async_engine
+from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.sql import func
 
 
 class Base(DeclarativeBase):
     pass
 
 
-# ---------------------------------------------------------------------------
-# Enums
-# ---------------------------------------------------------------------------
+# ── Enums ──────────────────────────────────────────────────────────────
 
-CONTRACT_TYPE = SAEnum(
-    "fno", "supplier", "customer", "employee", "partner", "service_level",
-    "interconnect", "infrastructure", "maintenance", "other",
-    name="contract_type", create_type=True,
-)
-
-CONTRACT_STATUS = SAEnum(
-    "draft", "pending_review", "pending_approval", "active", "suspended",
-    "expired", "terminated", "renewed", "cancelled",
-    name="contract_status", create_type=True,
-)
-
-CONTRACT_PRIORITY = SAEnum(
-    "critical", "high", "medium", "low",
-    name="contract_priority", create_type=True,
-)
-
-SLA_STATUS = SAEnum(
-    "active", "breached", "at_risk", "met", "expired", "pending",
-    name="sla_status", create_type=True,
-)
-
-ICASA_DOCUMENT_TYPE = SAEnum(
-    "regulation", "guideline", "notice", "tariff_filing", "license",
-    "complaint_ruling", "market_review", "annual_report", "amendment",
-    name="icasa_document_type", create_type=True,
-)
-
-ICASA_LODGE_STATUS = SAEnum(
-    "draft", "submitted", "acknowledged", "approved", "rejected", "withdrawn",
-    name="icasa_lodge_status", create_type=True,
-)
-
-POPI_REQUEST_TYPE = SAEnum(
-    "access", "correction", "deletion", "objection", "consent_withdrawal",
-    name="popi_request_type", create_type=True,
-)
-
-POPI_REQUEST_STATUS = SAEnum(
-    "submitted", "acknowledged", "in_progress", "fulfilled", "rejected", "escalated",
-    name="popi_request_status", create_type=True,
-)
-
-BREACH_STATUS = SAEnum(
-    "detected", "assessed", "notified_icasa", "notified_subjects", "resolved", "closed",
-    name="breach_status", create_type=True,
-)
-
-VERIFICATION_STATUS = SAEnum(
-    "pending", "in_progress", "completed", "failed", "expired", "cancelled",
-    name="verification_status", create_type=True,
-)
-
-CONSENT_STATUS = SAEnum(
-    "granted", "denied", "withdrawn", "expired",
-    name="consent_status", create_type=True,
-)
-
-RETENTION_POLICY = SAEnum(
-    "rica_5year", "contract_life", "financial_7year", "popi_limited", "custom",
-    name="retention_policy", create_type=True,
-)
+class ContractType(enum.Enum):
+    fno = "fno"
+    supplier = "supplier"
+    customer = "customer"
+    employee = "employee"
+    partner = "partner"
+    service_level = "service_level"
+    interconnect = "interconnect"
+    infrastructure = "infrastructure"
+    maintenance = "maintenance"
 
 
-# ---------------------------------------------------------------------------
-# 1. CONTRACTS (central entity)
-# ---------------------------------------------------------------------------
+class ContractStatus(enum.Enum):
+    draft = "draft"
+    active = "active"
+    expired = "expired"
+    terminated = "terminated"
+    suspended = "suspended"
+
+
+class TaxType(enum.Enum):
+    vat = "vat"
+    paye = "paye"
+    uif = "uif"
+    sdl = "sdl"
+    income_tax = "income_tax"
+    provisional_tax = "provisional_tax"
+    customs = "customs"
+    excise = "excise"
+
+
+class TaxReturnStatus(enum.Enum):
+    pending = "pending"
+    submitted = "submitted"
+    assessed = "assessed"
+    paid = "paid"
+    overdue = "overdue"
+    disputed = "disputed"
+
+
+class HsIncidentType(enum.Enum):
+    injury = "injury"
+    illness = "illness"
+    near_miss = "near_miss"
+    fatality = "fatality"
+    property_damage = "property_damage"
+    environmental = "environmental"
+
+
+class HsSeverity(enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
+
+
+class BbbeeLevel(enum.Enum):
+    level_1 = "level_1"
+    level_2 = "level_2"
+    level_3 = "level_3"
+    level_4 = "level_4"
+    level_5 = "level_5"
+    level_6 = "level_6"
+    level_7 = "level_7"
+    level_8 = "level_8"
+    non_compliant = "non_compliant"
+
+
+class LeaveType(enum.Enum):
+    annual = "annual"
+    sick = "sick"
+    family_responsibility = "family_responsibility"
+    maternity = "maternity"
+    parental = "parental"
+    study = "study"
+    unpaid = "unpaid"
+
+
+class LeaveStatus(enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    cancelled = "cancelled"
+    taken = "taken"
+
+
+class VehicleStatus(enum.Enum):
+    active = "active"
+    suspended = "suspended"
+    scrapped = "scrapped"
+    sold = "sold"
+
+
+class PermitType(enum.Enum):
+    general_work = "general_work"
+    critical_skills = "critical_skills"
+    intra_company = "intra_company"
+    corporate = "corporate"
+    study = "study"
+    spousal = "spousal"
+    refugee = "refugee"
+
+
+class PermitStatus(enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    expired = "expired"
+    revoked = "revoked"
+
+
+class VisaType(enum.Enum):
+    tourist = "tourist"
+    business = "business"
+    transit = "transit"
+    diplomatic = "diplomatic"
+    work = "work"
+    study = "study"
+
+
+class VisaStatus(enum.Enum):
+    not_started = "not_started"
+    in_progress = "in_progress"
+    approved = "approved"
+    rejected = "rejected"
+    expired = "expired"
+
+
+class DrBcpStatus(enum.Enum):
+    draft = "draft"
+    in_review = "in_review"
+    approved = "approved"
+    tested = "tested"
+    failed = "failed"
+    archived = "archived"
+
+
+class ComplianceCategory(enum.Enum):
+    tax = "tax"
+    health_safety = "health_safety"
+    cipc = "cipc"
+    bylaw = "bylaw"
+    bbbee = "bbbee"
+    leave = "leave"
+    vehicle = "vehicle"
+    foreign_worker = "foreign_worker"
+    travel = "travel"
+    dr_bcp = "dr_bcp"
+    contract = "contract"
+    sla = "sla"
+    icasa = "icasa"
+    popi = "popi"
+    rica = "rica"
+
+
+class ComplianceStatus(enum.Enum):
+    compliant = "compliant"
+    non_compliant = "non_compliant"
+    at_risk = "at_risk"
+    pending_review = "pending_review"
+    exempt = "exempt"
+
+
+class EservicePlatform(enum.Enum):
+    sars_efiling = "sars_efiling"
+    sars_easyfile = "sars_easyfile"
+    cipc = "cipc"
+    dti = "dti"
+    eservices_gov = "eservices_gov"
+    dol = "dol"
+    dha = "dha"
+    natis = "natis"
+    bbbee_commission = "bbbee_commission"
+    municipal = "municipal"
+
+
+class EserviceSubmissionStatus(enum.Enum):
+    draft = "draft"
+    submitted = "submitted"
+    acknowledged = "acknowledged"
+    approved = "approved"
+    rejected = "rejected"
+    error = "error"
+
+
+class DocumentType(enum.Enum):
+    contract = "contract"
+    tax_return = "tax_return"
+    hs_report = "hs_report"
+    cipc_filing = "cipc_filing"
+    bbbee_certificate = "bbbee_certificate"
+    permit = "permit"
+    visa = "visa"
+    dr_plan = "dr_plan"
+    bcp_plan = "bcp_plan"
+    financial_statement = "financial_statement"
+    invoice = "invoice"
+    policy = "policy"
+    other = "other"
+
+
+# ── 1. Contract Management ─────────────────────────────────────────────
 
 class Contract(Base):
-    """Central contract record — all contracts across OmniDome.
-
-    Types:
-    - fno: Fibre Network Operator agreements (Vumatel, Openserve, etc.)
-    - supplier: Hardware/software suppliers
-    - customer: Customer service agreements
-    - employee: Employment contracts
-    - partner: Partnership/reseller agreements
-    - service_level: Internal SLA agreements
-    - interconnect: Interconnection agreements
-    - infrastructure: Infrastructure leases
-    - maintenance: Maintenance contracts
-    """
-
-    __tablename__ = "contracts"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    # Contract identity
-    contract_number: Mapped[str] = mapped_column(String(100), nullable=False)
-    contract_type: Mapped[str] = mapped_column(CONTRACT_TYPE, nullable=False)
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(CONTRACT_STATUS, nullable=False, default="draft")
-    priority: Mapped[str] = mapped_column(CONTRACT_PRIORITY, default="medium")
-
-    # Counterparty
-    counterparty_name: Mapped[str] = mapped_column(String(300), nullable=False)
-    counterparty_registration: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    counterparty_contact_person: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    counterparty_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    counterparty_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-
-    # Internal owner
-    internal_owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    internal_department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Dates
-    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    renewal_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    termination_notice_days: Mapped[int] = mapped_column(Integer, default=30)
-    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    # Financial
-    contract_value_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
-    currency: Mapped[str] = mapped_column(String(3), default="ZAR")
-    payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    # "Net 30", "Net 60", "Monthly in advance"
-
-    # ICASA compliance
-    icasa_registration_required: Mapped[bool] = mapped_column(Boolean, default=False)
-    icasa_registration_number: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    icasa_compliance_status: Mapped[str] = mapped_column(String(20), default="pending")
-    # pending, compliant, non_compliant, exempt
-
-    # RICA requirements
-    rica_data_retention_required: Mapped[bool] = mapped_column(Boolean, default=True)
-    rica_retention_years: Mapped[int] = mapped_column(Integer, default=5)
-    rica_data_deletion_scheduled: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Document storage
-    contract_document_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    supporting_documents: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # [{"name": "signed_contract.pdf", "path": "/docs/...", "uploaded_at": "..."}]
-
-    # Versioning
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    parent_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
-    )
-    is_latest_version: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    # Notes
-    internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    termination_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Audit
-    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    # Relationships
-    slas = relationship("ContractSLA", back_populates="contract", cascade="all, delete-orphan")
-    icasa_lodgments = relationship("IcasaLodgment", back_populates="contract", cascade="all, delete-orphan")
-    popi_requests = relationship("PopiDataRequest", back_populates="contract", cascade="all, delete-orphan")
-    verifications = relationship("RicaVerification", back_populates="contract", cascade="all, delete-orphan")
-
+    __tablename__ = "compliance_contracts"
     __table_args__ = (
-        Index("ix_contract_tenant_type", "tenant_id", "contract_type"),
-        Index("ix_contract_tenant_status", "tenant_id", "status"),
-        Index("ix_contract_tenant_number", "tenant_id", "contract_number", unique=True),
-        Index("ix_contract_expiry", "tenant_id", "expiry_date"),
-        Index("ix_contract_counterparty", "tenant_id", "counterparty_name"),
-        Index("ix_contract_icasa", "tenant_id", "icasa_compliance_status"),
-        Index("ix_contract_rica", "tenant_id", "rica_data_deletion_scheduled"),
+        Index("ix_contract_type_status", "contract_type", "status"),
+        Index("ix_contract_expiry", "expiry_date"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    contract_number = Column(String(100), unique=True, nullable=False, index=True)
+    title = Column(String(500), nullable=False)
+    contract_type = Column(Enum(ContractType), nullable=False)
+    status = Column(Enum(ContractStatus), default=ContractStatus.draft, nullable=False)
 
-# ---------------------------------------------------------------------------
-# 2. CONTRACT SLAs
-# ---------------------------------------------------------------------------
+    counterparty_name = Column(String(300), nullable=False)
+    counterparty_registration = Column(String(100))
+    counterparty_contact = Column(String(200))
+    counterparty_email = Column(String(200))
+
+    effective_date = Column(Date, nullable=False)
+    expiry_date = Column(Date)
+    renewal_date = Column(Date)
+    auto_renew = Column(Boolean, default=False)
+    renewal_notice_days = Column(Integer, default=30)
+
+    value_zar = Column(Numeric(15, 2))
+    payment_terms = Column(String(200))
+    currency = Column(String(3), default="ZAR")
+
+    compliance_score = Column(Float, default=0.0)
+    risk_rating = Column(String(20), default="medium")
+
+    parent_contract_id = Column(Integer, ForeignKey("compliance_contracts.id"))
+    parent = relationship("Contract", remote_side=[id], backref="amendments")
+
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now(), nullable=False)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+    slas = relationship("ContractSLA", back_populates="contract", cascade="all, delete-orphan")
+    documents = relationship("ComplianceDocument", back_populates="contract", cascade="all, delete-orphan")
+    audit_logs = relationship("ContractAuditLog", back_populates="contract", cascade="all, delete-orphan")
+    icasa_submissions = relationship("IcasaSubmission", back_populates="contract")
+    popi_requests = relationship("PopiDataAccessRequest", back_populates="contract")
+
+
+# ── 2. Contract SLA ────────────────────────────────────────────────────
 
 class ContractSLA(Base):
-    """SLA clauses tied to contracts.
+    __tablename__ = "compliance_contract_slas"
+    __table_args__ = (Index("ix_contract_sla_contract", "contract_id"),)
 
-    Each contract can have multiple SLA metrics (uptime, response time,
-    installation time, etc.) with targets and automated breach detection.
-    """
-
-    __tablename__ = "contract_slas"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
-
-    # SLA definition
-    name: Mapped[str] = mapped_column(String(300), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    sla_type: Mapped[str] = mapped_column(String(30), nullable=False)
-    # uptime, response_time, resolution_time, installation_time, availability
-
-    # Target
-    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    target_unit: Mapped[str] = mapped_column(String(20), nullable=False)
-    # percent, hours, days, minutes
-
-    # Thresholds
-    warning_threshold_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
-    breach_threshold_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
-
-    # Measurement
-    measurement_method: Mapped[str] = mapped_column(String(30), default="automatic")
-    measurement_frequency: Mapped[str] = mapped_column(String(20), default="daily")
-
-    # Status
-    current_status: Mapped[str] = mapped_column(SLA_STATUS, default="pending")
-    current_value: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-
-    # Penalty
-    penalty_clause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    penalty_amount_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
-
-    # Effective period
-    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    id = Column(Integer, primary_key=True, index=True)
+    contract_id = Column(Integer, ForeignKey("compliance_contracts.id"), nullable=False)
+    name = Column(String(200), nullable=False)
+    metric = Column(String(100), nullable=False)
+    target_value = Column(Numeric(10, 4), nullable=False)
+    unit = Column(String(50))
+    measurement_frequency = Column(String(50), default="monthly")
+    penalty_type = Column(String(50))
+    penalty_amount = Column(Numeric(12, 2))
+    effective_date = Column(Date, nullable=False)
+    expiry_date = Column(Date)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
     contract = relationship("Contract", back_populates="slas")
+    measurements = relationship("SlaMeasurement", back_populates="sla", cascade="all, delete-orphan")
 
+
+class SlaMeasurement(Base):
+    __tablename__ = "compliance_sla_measurements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sla_id = Column(Integer, ForeignKey("compliance_contract_slas.id"), nullable=False)
+    measured_value = Column(Numeric(10, 4), nullable=False)
+    is_breach = Column(Boolean, default=False)
+    breach_severity = Column(String(20))
+    measured_at = Column(DateTime, default=func.now(), nullable=False)
+    notes = Column(Text)
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+    sla = relationship("ContractSLA", back_populates="measurements")
+
+
+# ── 3. Tax Compliance ──────────────────────────────────────────────────
+
+class TaxRegistration(Base):
+    __tablename__ = "compliance_tax_registrations"
+    __table_args__ = (Index("ix_tax_reg_tenant_type", "tenant_id", "tax_type"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    tax_type = Column(Enum(TaxType), nullable=False)
+    registration_number = Column(String(100), nullable=False)
+    status = Column(String(50), default="active")
+    registered_date = Column(Date)
+    last_filed = Column(Date)
+    next_due = Column(Date)
+    sars_reference = Column(String(100))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+class TaxReturn(Base):
+    __tablename__ = "compliance_tax_returns"
     __table_args__ = (
-        Index("ix_csla_tenant_contract", "tenant_id", "contract_id"),
-        Index("ix_csla_tenant_status", "tenant_id", "current_status"),
-        Index("ix_csla_breach", "tenant_id", "current_status", "contract_id"),
+        Index("ix_tax_return_period", "tax_type", "period_start", "period_end"),
+        Index("ix_tax_return_status", "status"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    tax_type = Column(Enum(TaxType), nullable=False)
+    registration_id = Column(Integer, ForeignKey("compliance_tax_registrations.id"))
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    status = Column(Enum(TaxReturnStatus), default=TaxReturnStatus.pending, nullable=False)
+    amount_payable = Column(Numeric(15, 2))
+    amount_refund = Column(Numeric(15, 2))
+    submission_date = Column(Date)
+    sars_assessment_date = Column(Date)
+    payment_date = Column(Date)
+    sars_reference = Column(String(100))
+    filing_reference = Column(String(100))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-class ContractSLAMeasurement(Base):
-    """SLA measurement records per contract SLA."""
 
-    __tablename__ = "contract_sla_measurements"
+# ── 4. Health & Safety ─────────────────────────────────────────────────
 
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    sla_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contract_slas.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
+class HsRiskAssessment(Base):
+    __tablename__ = "compliance_hs_risk_assessments"
+    __table_args__ = (Index("ix_hs_risk_status", "status"),)
 
-    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    period_type: Mapped[str] = mapped_column(String(10), nullable=False, default="daily")
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(300), nullable=False)
+    location = Column(String(300))
+    assessor = Column(String(200))
+    assessment_date = Column(Date, nullable=False)
+    review_date = Column(Date)
+    status = Column(String(50), default="active")
+    overall_risk_score = Column(Float)
+    findings = Column(Text)
+    recommendations = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-    actual_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    is_breach: Mapped[bool] = mapped_column(Boolean, default=False)
-    deviation_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
-    sample_count: Mapped[int] = mapped_column(Integer, default=0)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+class HsIncident(Base):
+    __tablename__ = "compliance_hs_incidents"
     __table_args__ = (
-        Index("ix_cslam_tenant_sla", "tenant_id", "sla_id"),
-        Index("ix_cslam_period", "tenant_id", "period_start"),
-        Index("ix_cslam_breach", "tenant_id", "is_breach"),
+        Index("ix_hs_incident_date", "incident_date"),
+        Index("ix_hs_incident_severity", "severity"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    incident_number = Column(String(100), unique=True, nullable=False)
+    incident_type = Column(Enum(HsIncidentType), nullable=False)
+    severity = Column(Enum(HsSeverity), nullable=False)
+    incident_date = Column(DateTime, nullable=False)
+    reported_date = Column(DateTime, default=func.now())
+    location = Column(String(300))
+    description = Column(Text, nullable=False)
+    root_cause = Column(Text)
+    corrective_action = Column(Text)
+    preventive_action = Column(Text)
+    persons_involved = Column(Text)
+    coida_reported = Column(Boolean, default=False)
+    coida_reference = Column(String(100))
+    status = Column(String(50), default="open")
+    closed_date = Column(DateTime)
+    risk_assessment_id = Column(Integer, ForeignKey("compliance_hs_risk_assessments.id"))
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-# ---------------------------------------------------------------------------
-# 3. ICASA PRODUCT/PROMOTION LODGMENT
-# ---------------------------------------------------------------------------
 
-class IcasaLodgment(Base):
-    """Tracks lodgment of new products and promotions with ICASA.
+# ── 5. CIPC Compliance ─────────────────────────────────────────────────
 
-    Linked to the contract that governs the product/promotion.
-    ICASA requires ISPs to lodge certain products and promotions.
-    """
-
-    __tablename__ = "icasa_lodgments"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
-    )
-
-    # Product info
-    product_name: Mapped[str] = mapped_column(String(500), nullable=False)
-    product_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # new_product, promotion, tariff_change, service_modification
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Link to inventory
-    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    # Lodgment details
-    status: Mapped[str] = mapped_column(ICASA_LODGE_STATUS, nullable=False, default="draft")
-    icasa_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    lodgment_method: Mapped[str] = mapped_column(String(30), default="portal")
-
-    # Documents
-    supporting_documents: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-
-    # Timeline
-    prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Response
-    icasa_feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Assignment
-    prepared_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    submitted_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    contract = relationship("Contract", back_populates="icasa_lodgments")
-
+class CipcFiling(Base):
+    __tablename__ = "compliance_cipc_filings"
     __table_args__ = (
-        Index("ix_il_tenant_status", "tenant_id", "status"),
-        Index("ix_il_tenant_contract", "tenant_id", "contract_id"),
-        Index("ix_il_tenant_product", "tenant_id", "product_id"),
+        Index("ix_cipc_filing_year", "financial_year_end"),
+        Index("ix_cipc_filing_status", "status"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    filing_type = Column(String(100), nullable=False)
+    financial_year_end = Column(Date, nullable=False)
+    status = Column(String(50), default="pending")
+    due_date = Column(Date, nullable=False)
+    filed_date = Column(Date)
+    cipc_reference = Column(String(100))
+    fee_amount = Column(Numeric(12, 2))
+    fee_paid = Column(Boolean, default=False)
+    confirmation_number = Column(String(100))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-# ---------------------------------------------------------------------------
-# 4. ICASA REGULATIONS (scraped)
-# ---------------------------------------------------------------------------
 
-class IcasaRegulation(Base):
-    """ICASA regulations, guidelines, and announcements scraped from icasa.org.za."""
+# ── 6. Bylaw Compliance ────────────────────────────────────────────────
 
-    __tablename__ = "icasa_regulations"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    document_type: Mapped[str] = mapped_column(ICASA_DOCUMENT_TYPE, nullable=False)
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    icasa_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    source_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    document_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-
-    published_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    comment_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    full_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    key_points: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    affected_areas: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    impact_level: Mapped[str] = mapped_column(String(20), default="unknown")
-    impact_assessment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-
-    is_new: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
-    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
+class BylawObligation(Base):
+    __tablename__ = "compliance_bylaw_obligations"
     __table_args__ = (
-        Index("ix_ir_tenant_type", "tenant_id", "document_type"),
-        Index("ix_ir_tenant_new", "tenant_id", "is_new"),
-        Index("ix_ir_tenant_impact", "tenant_id", "impact_level"),
-        Index("ix_ir_effective", "effective_date"),
+        Index("ix_bylaw_municipality", "municipality"),
+        Index("ix_bylaw_status", "status"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    municipality = Column(String(200), nullable=False)
+    bylaw_reference = Column(String(200), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    category = Column(String(100))
+    status = Column(Enum(ComplianceStatus), default=ComplianceStatus.pending_review)
+    compliance_date = Column(Date)
+    next_review_date = Column(Date)
+    responsible_person = Column(String(200))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-# ---------------------------------------------------------------------------
-# 5. ICASA SCRAPER LOG
-# ---------------------------------------------------------------------------
 
-class IcasaScrapeLog(Base):
-    """Log of ICASA website scrapes."""
+# ── 7. BBBEE Compliance ────────────────────────────────────────────────
 
-    __tablename__ = "icasa_scrape_logs"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    scrape_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="success")
-    items_found: Mapped[int] = mapped_column(Integer, default=0)
-    items_new: Mapped[int] = mapped_column(Integer, default=0)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+class BbbeeScorecard(Base):
+    __tablename__ = "compliance_bbbee_scorecards"
     __table_args__ = (
-        Index("ix_isl_tenant_type", "tenant_id", "scrape_type"),
-        Index("ix_isl_tenant_status", "tenant_id", "status"),
+        Index("ix_bbbee_scorecard_year", "financial_year"),
+        Index("ix_bbbee_scorecard_level", "overall_level"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    financial_year = Column(String(20), nullable=False)
+    overall_level = Column(Enum(BbbeeLevel), nullable=False)
+    overall_score = Column(Numeric(6, 2), nullable=False)
 
-# ---------------------------------------------------------------------------
-# 6. POPI DATA SUBJECT ACCESS REQUESTS
-# ---------------------------------------------------------------------------
+    ownership_score = Column(Numeric(6, 2), default=0)
+    management_control_score = Column(Numeric(6, 2), default=0)
+    skills_development_score = Column(Numeric(6, 2), default=0)
+    enterprise_supplier_dev_score = Column(Numeric(6, 2), default=0)
+    socio_economic_dev_score = Column(Numeric(6, 2), default=0)
 
-class PopiDataRequest(Base):
-    """Data Subject Access Requests per POPI Act Section 23-25.
+    black_ownership_pct = Column(Numeric(5, 2))
+    black_female_ownership_pct = Column(Numeric(5, 2))
+    black_youth_ownership_pct = Column(Numeric(5, 2))
+    black_disabled_ownership_pct = Column(Numeric(5, 2))
 
-    Linked to the contract that governs the data processing.
-    ICASA requires these be fulfilled within 30 days.
-    """
+    certificate_number = Column(String(100))
+    certificate_issue_date = Column(Date)
+    certificate_expiry_date = Column(Date)
+    verification_agency = Column(String(200))
+    verification_agency_reference = Column(String(100))
+    is_verified = Column(Boolean, default=False)
+    status = Column(String(50), default="draft")
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-    __tablename__ = "popi_data_requests"
 
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
+# ── 8. Leave Management ────────────────────────────────────────────────
+
+class LeaveApplication(Base):
+    __tablename__ = "compliance_leave_applications"
+    __table_args__ = (
+        Index("ix_leave_employee", "employee_id"),
+        Index("ix_leave_status", "status"),
+        Index("ix_leave_dates", "start_date", "end_date"),
     )
 
-    # Who made the request
-    requested_by_customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    requested_by_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(String(100), nullable=False, index=True)
+    employee_name = Column(String(200), nullable=False)
+    leave_type = Column(Enum(LeaveType), nullable=False)
+    status = Column(Enum(LeaveStatus), default=LeaveStatus.pending, nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    days_requested = Column(Numeric(5, 1), nullable=False)
+    days_approved = Column(Numeric(5, 1))
+    reason = Column(Text)
+    approver_id = Column(String(100))
+    approver_name = Column(String(200))
+    approved_date = Column(DateTime)
+    rejection_reason = Column(Text)
+    half_day = Column(Boolean, default=False)
+    half_day_am = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-    request_type: Mapped[str] = mapped_column(POPI_REQUEST_TYPE, nullable=False)
-    status: Mapped[str] = mapped_column(POPI_REQUEST_STATUS, nullable=False, default="submitted")
 
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    requested_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+class LeaveBalance(Base):
+    __tablename__ = "compliance_leave_balances"
+    __table_args__ = (
+        UniqueConstraint("employee_id", "leave_type", "year", name="uq_leave_balance"),
+    )
 
-    # Timeline (POPI requires response within 30 days)
-    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(String(100), nullable=False, index=True)
+    leave_type = Column(Enum(LeaveType), nullable=False)
+    year = Column(Integer, nullable=False)
+    entitlement_days = Column(Numeric(5, 1), nullable=False)
+    carried_over_days = Column(Numeric(5, 1), default=0)
+    taken_days = Column(Numeric(5, 1), default=0)
+    pending_days = Column(Numeric(5, 1), default=0)
+    available_days = Column(Numeric(5, 1), default=0)
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-    response_method: Mapped[str] = mapped_column(String(30), default="secure_portal")
-    response_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    reported_to_icasa: Mapped[bool] = mapped_column(Boolean, default=False)
-    icasa_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+# ── 9. Vehicle Registration ────────────────────────────────────────────
 
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+class VehicleRegistration(Base):
+    __tablename__ = "compliance_vehicle_registrations"
+    __table_args__ = (
+        Index("ix_vehicle_reg_number", "registration_number"),
+        Index("ix_vehicle_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    registration_number = Column(String(50), unique=True, nullable=False)
+    vin = Column(String(50))
+    engine_number = Column(String(50))
+    make = Column(String(100))
+    model = Column(String(100))
+    year = Column(Integer)
+    color = Column(String(50))
+    vehicle_type = Column(String(50))
+    status = Column(Enum(VehicleStatus), default=VehicleStatus.active)
+    license_expiry = Column(Date)
+    license_renewed_date = Column(Date)
+    roadworthy_expiry = Column(Date)
+    insurance_expiry = Column(Date)
+    insurance_provider = Column(String(200))
+    assigned_driver = Column(String(200))
+    assigned_employee_id = Column(String(100))
+    natis_reference = Column(String(100))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 10. Foreign Worker Permits ─────────────────────────────────────────
+
+class ForeignWorkerPermit(Base):
+    __tablename__ = "compliance_foreign_worker_permits"
+    __table_args__ = (
+        Index("ix_fwp_employee", "employee_id"),
+        Index("ix_fwp_status", "status"),
+        Index("ix_fwp_expiry", "expiry_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(String(100), nullable=False, index=True)
+    employee_name = Column(String(200), nullable=False)
+    nationality = Column(String(100), nullable=False)
+    passport_number = Column(String(100))
+    permit_type = Column(Enum(PermitType), nullable=False)
+    permit_number = Column(String(100))
+    status = Column(Enum(PermitStatus), default=PermitStatus.pending)
+    issue_date = Column(Date)
+    expiry_date = Column(Date)
+    dha_reference = Column(String(100))
+    critical_skill_area = Column(String(200))
+    job_title = Column(String(200))
+    employer_name = Column(String(200))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 11. Travel Readiness ───────────────────────────────────────────────
+
+class TravelReadiness(Base):
+    __tablename__ = "compliance_travel_readiness"
+    __table_args__ = (
+        Index("ix_travel_employee", "employee_id"),
+        Index("ix_travel_destination", "destination_country"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    employee_id = Column(String(100), nullable=False, index=True)
+    employee_name = Column(String(200), nullable=False)
+    destination_country = Column(String(100), nullable=False)
+    destination_city = Column(String(100))
+    purpose = Column(Text)
+    departure_date = Column(Date)
+    return_date = Column(Date)
+    visa_type = Column(Enum(VisaType))
+    visa_status = Column(Enum(VisaStatus), default=VisaStatus.not_started)
+    visa_reference = Column(String(100))
+    visa_expiry = Column(Date)
+    passport_number = Column(String(100))
+    passport_expiry = Column(Date)
+    travel_insurance_provider = Column(String(200))
+    travel_insurance_policy = Column(String(100))
+    travel_insurance_expiry = Column(Date)
+    vaccinations_required = Column(Text)
+    vaccinations_completed = Column(Text)
+    risk_assessment_done = Column(Boolean, default=False)
+    emergency_contact = Column(String(200))
+    overall_status = Column(String(50), default="pending")
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 12. DR/BCP ─────────────────────────────────────────────────────────
+
+class DrBcpPlan(Base):
+    __tablename__ = "compliance_dr_bcp_plans"
+    __table_args__ = (
+        Index("ix_dr_bcp_status", "status"),
+        Index("ix_dr_bcp_type", "plan_type"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_name = Column(String(300), nullable=False)
+    plan_type = Column(String(50), nullable=False)
+    status = Column(Enum(DrBcpStatus), default=DrBcpStatus.draft)
+    version = Column(String(20), default="1.0")
+    owner = Column(String(200))
+    scope = Column(Text)
+    objectives = Column(Text)
+    risk_assessment = Column(Text)
+    impact_analysis = Column(Text)
+    recovery_strategy = Column(Text)
+    rto_hours = Column(Numeric(6, 2))
+    rpo_hours = Column(Numeric(6, 2))
+    communication_plan = Column(Text)
+    escalation_matrix = Column(Text)
+    vendor_contacts = Column(Text)
+    last_test_date = Column(Date)
+    next_test_date = Column(Date)
+    test_results = Column(Text)
+    gaps_identified = Column(Text)
+    remediation_plan = Column(Text)
+    approved_by = Column(String(200))
+    approved_date = Column(Date)
+    review_frequency_months = Column(Integer, default=12)
+    next_review_date = Column(Date)
+    document_path = Column(String(500))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+class DrBcpAssessment(Base):
+    __tablename__ = "compliance_dr_bcp_assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_id = Column(Integer, ForeignKey("compliance_dr_bcp_plans.id"), nullable=False)
+    assessment_date = Column(Date, nullable=False)
+    assessor = Column(String(200))
+    readiness_score = Column(Float)
+    infrastructure_score = Column(Float)
+    data_protection_score = Column(Float)
+    communication_score = Column(Float)
+    staff_awareness_score = Column(Float)
+    vendor_readiness_score = Column(Float)
+    overall_rating = Column(String(20))
+    findings = Column(Text)
+    recommendations = Column(Text)
+    action_items = Column(Text)
+    next_assessment_date = Column(Date)
+    created_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 13. Compliance Scoring & Obligations ───────────────────────────────
+
+class ComplianceScore(Base):
+    __tablename__ = "compliance_scores"
+    __table_args__ = (Index("ix_cs_tenant_date", "tenant_id", "calculated_at"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(Enum(ComplianceCategory), nullable=False)
+    score = Column(Float, nullable=False)
+    weight = Column(Float, default=1.0)
+    status = Column(Enum(ComplianceStatus), nullable=False)
+    issues_count = Column(Integer, default=0)
+    critical_issues = Column(Integer, default=0)
+    details = Column(Text)
+    calculated_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+class ComplianceObligation(Base):
+    __tablename__ = "compliance_obligations"
+    __table_args__ = (
+        Index("ix_obligation_category", "category"),
+        Index("ix_obligation_due", "due_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(Enum(ComplianceCategory), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    regulatory_reference = Column(String(300))
+    frequency = Column(String(50))
+    due_date = Column(Date)
+    status = Column(Enum(ComplianceStatus), default=ComplianceStatus.pending_review)
+    responsible_person = Column(String(200))
+    responsible_department = Column(String(200))
+    evidence_required = Column(Text)
+    evidence_provided = Column(Text)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 14. e-Services Gateway ─────────────────────────────────────────────
+
+class EserviceSubmission(Base):
+    __tablename__ = "compliance_eservice_submissions"
+    __table_args__ = (
+        Index("ix_eservice_platform", "platform"),
+        Index("ix_eservice_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(Enum(EservicePlatform), nullable=False)
+    form_name = Column(String(300), nullable=False)
+    form_reference = Column(String(200))
+    status = Column(Enum(EserviceSubmissionStatus), default=EserviceSubmissionStatus.draft)
+    submission_data = Column(Text)
+    response_data = Column(Text)
+    submission_date = Column(DateTime)
+    response_date = Column(DateTime)
+    reference_number = Column(String(200))
+    error_message = Column(Text)
+    retry_count = Column(Integer, default=0)
+    max_retries = Column(Integer, default=3)
+    obligation_id = Column(Integer, ForeignKey("compliance_obligations.id"))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 15. Document Understanding ─────────────────────────────────────────
+
+class ComplianceDocument(Base):
+    __tablename__ = "compliance_documents"
+    __table_args__ = (
+        Index("ix_compliance_doc_type", "document_type"),
+        Index("ix_compliance_doc_contract", "contract_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(500), nullable=False)
+    document_type = Column(Enum(DocumentType), nullable=False)
+    file_path = Column(String(500))
+    file_size = Column(Integer)
+    mime_type = Column(String(100))
+    contract_id = Column(Integer, ForeignKey("compliance_contracts.id"))
+    ocr_text = Column(Text)
+    extracted_data = Column(Text)
+    financial_summary = Column(Text)
+    tags = Column(String(500))
+    version = Column(String(20), default="1.0")
+    is_confidential = Column(Boolean, default=False)
+    uploaded_by = Column(String(200))
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+    contract = relationship("Contract", back_populates="documents")
+
+
+# ── 16. Financial Scenario Planning ────────────────────────────────────
+
+class FinancialScenario(Base):
+    __tablename__ = "compliance_financial_scenarios"
+    __table_args__ = (Index("ix_fs_type", "scenario_type"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(300), nullable=False)
+    scenario_type = Column(String(100), nullable=False)
+    description = Column(Text)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    assumptions = Column(Text)
+    revenue_projections = Column(Text)
+    expense_projections = Column(Text)
+    cash_flow_projections = Column(Text)
+    compliance_cost_impact = Column(Numeric(15, 2))
+    funding_eligibility = Column(Text)
+    funding_opportunities = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 17. ICASA ──────────────────────────────────────────────────────────
+
+class IcasaSubmission(Base):
+    __tablename__ = "compliance_icasa_submissions"
+    __table_args__ = (
+        Index("ix_icasa_sub_type", "submission_type"),
+        Index("ix_icasa_sub_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    submission_type = Column(String(100), nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    contract_id = Column(Integer, ForeignKey("compliance_contracts.id"))
+    status = Column(String(50), default="draft")
+    icasa_reference = Column(String(100))
+    submission_date = Column(Date)
+    response_date = Column(Date)
+    approval_date = Column(Date)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+    contract = relationship("Contract", back_populates="icasa_submissions")
+
+
+class IcasaScrapeJob(Base):
+    __tablename__ = "compliance_icasa_scrape_jobs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_name = Column(String(200), nullable=False)
+    source_url = Column(String(500), nullable=False)
+    status = Column(String(50), default="pending")
+    last_run = Column(DateTime)
+    next_run = Column(DateTime)
+    changes_detected = Column(Integer, default=0)
+    last_changes = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+class IcasaRegulationChange(Base):
+    __tablename__ = "compliance_icasa_regulation_changes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    scrape_job_id = Column(Integer, ForeignKey("compliance_icasa_scrape_jobs.id"))
+    title = Column(String(500), nullable=False)
+    description = Column(Text)
+    regulation_reference = Column(String(200))
+    change_type = Column(String(100))
+    effective_date = Column(Date)
+    impact_level = Column(String(20))
+    impact_assessment = Column(Text)
+    action_required = Column(Text)
+    action_taken = Column(Text)
+    status = Column(String(50), default="identified")
+    detected_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 18. POPI Act ───────────────────────────────────────────────────────
+
+class PopiDataAccessRequest(Base):
+    __tablename__ = "compliance_popi_dsar"
+    __table_args__ = (
+        Index("ix_popi_dsar_status", "status"),
+        Index("ix_popi_dsar_due", "due_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    request_reference = Column(String(100), unique=True, nullable=False)
+    data_subject_name = Column(String(200), nullable=False)
+    data_subject_email = Column(String(200))
+    data_subject_phone = Column(String(50))
+    request_type = Column(String(100), nullable=False)
+    description = Column(Text)
+    contract_id = Column(Integer, ForeignKey("compliance_contracts.id"))
+    status = Column(String(50), default="received")
+    received_date = Column(DateTime, default=func.now())
+    due_date = Column(DateTime, nullable=False)
+    completed_date = Column(DateTime)
+    response_sent = Column(Boolean, default=False)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
     contract = relationship("Contract", back_populates="popi_requests")
 
-    __table_args__ = (
-        Index("ix_pdr_tenant_status", "tenant_id", "status"),
-        Index("ix_pdr_tenant_due", "tenant_id", "due_date"),
-        Index("ix_pdr_overdue", "tenant_id", "status", "due_date"),
-    )
+
+class PopiAnonymizationLog(Base):
+    __tablename__ = "compliance_popi_anonymization_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    table_name = Column(String(100), nullable=False)
+    record_id = Column(Integer, nullable=False)
+    field_name = Column(String(100), nullable=False)
+    anonymization_method = Column(String(100))
+    reason = Column(Text)
+    performed_at = Column(DateTime, default=func.now())
+    performed_by = Column(String(200))
+    tenant_id = Column(String(100), nullable=False, index=True)
 
 
-# ---------------------------------------------------------------------------
-# 7. DATA BREACH REGISTER
-# ---------------------------------------------------------------------------
+class PopiConsentRecord(Base):
+    __tablename__ = "compliance_popi_consent_records"
 
-class DataBreachRecord(Base):
-    """Data breach register per POPI Act Section 22."""
-
-    __tablename__ = "data_breach_records"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
-    )
-
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    severity: Mapped[str] = mapped_column(String(20), default="medium")
-    status: Mapped[str] = mapped_column(BREACH_STATUS, nullable=False, default="detected")
-
-    affected_data_subjects_count: Mapped[int] = mapped_column(Integer, default=0)
-    affected_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    icasa_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    subjects_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    icasa_notification_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    remediation_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    reported_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    handled_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_dbr_tenant_status", "tenant_id", "status"),
-        Index("ix_dbr_tenant_severity", "tenant_id", "severity"),
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    data_subject_id = Column(String(100), nullable=False)
+    data_subject_name = Column(String(200))
+    purpose = Column(Text, nullable=False)
+    consent_given = Column(Boolean, nullable=False)
+    consent_date = Column(DateTime, nullable=False)
+    consent_method = Column(String(100))
+    withdrawal_date = Column(DateTime)
+    expiry_date = Column(DateTime)
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
 
-# ---------------------------------------------------------------------------
-# 8. RICA VERIFICATION STORAGE
-# ---------------------------------------------------------------------------
+# ── 19. RICA ───────────────────────────────────────────────────────────
 
 class RicaVerification(Base):
-    """RICA identity verification storage for regulatory compliance.
-
-    NOTE: We do NOT use the RICA database directly. We store verification
-    results for our own regulatory compliance purposes only.
-    Per ICASA regulations, RICA data must be retained for 5 years minimum.
-    """
-
-    __tablename__ = "rica_verifications"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
-    )
-    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    # Verification
-    job_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
-    smile_job_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    verification_type: Mapped[str] = mapped_column(String(30), default="DOCUMENT_VERIFICATION")
-    status: Mapped[str] = mapped_column(VERIFICATION_STATUS, default="pending")
-    result_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    result_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    full_response: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
-
-    # Identity (stored for regulatory compliance only)
-    id_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    id_type: Mapped[str] = mapped_column(String(20), default="sa_id")
-    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-
-    # ICASA compliance
-    icasa_registration_required: Mapped[bool] = mapped_column(Boolean, default=True)
-    icasa_registration_status: Mapped[str] = mapped_column(String(20), default="pending")
-    re_verification_required: Mapped[bool] = mapped_column(Boolean, default=False)
-    re_verification_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Data retention (ICASA requires 5 years minimum)
-    retention_policy: Mapped[str] = mapped_column(RETENTION_POLICY, default="rica_5year")
-    retention_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    data_deletion_scheduled: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Anonymization (POPI compliance when retention expires)
-    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
-    anonymized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # Audit
-    verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    contract = relationship("Contract", back_populates="verifications")
-
+    __tablename__ = "compliance_rica_verifications"
     __table_args__ = (
-        Index("ix_rv_tenant_contract", "tenant_id", "contract_id"),
-        Index("ix_rv_tenant_customer", "tenant_id", "customer_id"),
-        Index("ix_rv_tenant_status", "tenant_id", "status"),
-        Index("ix_rv_job_id", "job_id"),
-        Index("ix_rv_retention", "tenant_id", "retention_until"),
-        Index("ix_rv_reverify", "tenant_id", "re_verification_due"),
+        Index("ix_rica_id_hash", "id_number_hash"),
+        Index("ix_rica_status", "status"),
     )
 
-
-# ---------------------------------------------------------------------------
-# 9. CONTRACT DOCUMENTS
-# ---------------------------------------------------------------------------
-
-class ContractDocument(Base):
-    """Documents attached to contracts — signed copies, amendments, etc."""
-
-    __tablename__ = "contract_documents"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
-
-    document_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # signed_contract, amendment, renewal, termination_notice, icasa_filing, sla_report
-    name: Mapped[str] = mapped_column(String(300), nullable=False)
-    description: Optional[str] = mapped_column(Text, nullable=True)
-    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
-    file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    mime_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Versioning
-    version: Mapped[int] = mapped_column(Integer, default=1)
-    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    # Audit
-    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index("ix_cd_tenant_contract", "tenant_id", "contract_id"),
-        Index("ix_cd_tenant_type", "tenant_id", "document_type"),
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    id_number_hash = Column(String(128), nullable=False, index=True)
+    id_type = Column(String(50), nullable=False)
+    full_name = Column(String(200))
+    status = Column(String(50), default="pending")
+    verification_date = Column(DateTime)
+    expiry_date = Column(DateTime)
+    source = Column(String(100))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
 
-# ---------------------------------------------------------------------------
-# 10. CONTRACT NOTES / AUDIT LOG
-# ---------------------------------------------------------------------------
+# ── 20. Contract Audit Log ─────────────────────────────────────────────
 
 class ContractAuditLog(Base):
-    """Audit trail for all contract changes."""
-
-    __tablename__ = "contract_audit_logs"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contract_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
-
-    action: Mapped[str] = mapped_column(String(50), nullable=False)
-    # created, updated, status_changed, approved, terminated, renewed, sla_breach, icasa_lodged
-    field_changed: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    performed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
+    __tablename__ = "compliance_contract_audit_logs"
     __table_args__ = (
-        Index("ix_cal_tenant_contract", "tenant_id", "contract_id"),
-        Index("ix_cal_tenant_action", "tenant_id", "action"),
-        Index("ix_cal_created", "tenant_id", "created_at"),
+        Index("ix_audit_contract", "contract_id"),
+        Index("ix_audit_created", "created_at"),
     )
 
+    id = Column(Integer, primary_key=True, index=True)
+    contract_id = Column(Integer, ForeignKey("compliance_contracts.id"), nullable=False)
+    action = Column(String(100), nullable=False)
+    field_name = Column(String(100))
+    old_value = Column(Text)
+    new_value = Column(Text)
+    performed_by = Column(String(200))
+    performed_at = Column(DateTime, default=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
-# ---------------------------------------------------------------------------
-# Session factory
-# ---------------------------------------------------------------------------
-
-_session_factory: Optional[async_sessionmaker] = None
-
-
-def _get_session_factory() -> async_sessionmaker:
-    global _session_factory
-    if _session_factory is None:
-        engine = get_async_engine()
-        _session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    return _session_factory
+    contract = relationship("Contract", back_populates="audit_logs")
 
 
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    factory = _get_session_factory()
-    async with factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
+# ── 21. Breach Register ────────────────────────────────────────────────
+
+class BreachRegister(Base):
+    __tablename__ = "compliance_breach_register"
+    __table_args__ = (
+        Index("ix_breach_severity", "severity"),
+        Index("ix_breach_status", "status"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    breach_number = Column(String(100), unique=True, nullable=False)
+    title = Column(String(500), nullable=False)
+    description = Column(Text, nullable=False)
+    category = Column(Enum(ComplianceCategory), nullable=False)
+    severity = Column(String(20), nullable=False)
+    status = Column(String(50), default="identified")
+    identified_date = Column(DateTime, default=func.now())
+    reported_date = Column(DateTime)
+    resolved_date = Column(DateTime)
+    root_cause = Column(Text)
+    corrective_action = Column(Text)
+    icasa_notified = Column(Boolean, default=False)
+    icasa_notification_date = Column(DateTime)
+    icasa_reference = Column(String(100))
+    popi_commission_notified = Column(Boolean, default=False)
+    popi_notification_date = Column(DateTime)
+    financial_impact = Column(Numeric(15, 2))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
 
 
-async def init_tables():
-    engine = get_async_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+# ── 22. Funding Opportunities ──────────────────────────────────────────
+
+class FundingOpportunity(Base):
+    __tablename__ = "compliance_funding_opportunities"
+    __table_args__ = (
+        Index("ix_funding_status", "status"),
+        Index("ix_funding_deadline", "application_deadline"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(500), nullable=False)
+    description = Column(Text)
+    source = Column(String(300))
+    source_url = Column(String(500))
+    funding_type = Column(String(100))
+    min_compliance_score = Column(Float)
+    max_funding_amount = Column(Numeric(15, 2))
+    currency = Column(String(3), default="ZAR")
+    eligibility_criteria = Column(Text)
+    required_bbbee_level = Column(Enum(BbbeeLevel))
+    application_deadline = Column(Date)
+    status = Column(String(50), default="identified")
+    applied_date = Column(Date)
+    approval_date = Column(Date)
+    amount_awarded = Column(Numeric(15, 2))
+    notes = Column(Text)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    tenant_id = Column(String(100), nullable=False, index=True)
