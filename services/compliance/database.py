@@ -1,11 +1,15 @@
 """Compliance service database layer — SQLAlchemy async models and session management.
 
+Central entity: Contract — all contracts (FNO, supplier, customer, employee) are stored
+and managed here. SLAs, ICASA lodgments, RICA requirements, and POPI data requests
+are all linked to contracts.
+
 Covers:
-- RICA identity verification (extended from existing)
-- Contact management (customer PII, consent, data retention)
-- POPI Act compliance (data subject access requests, anonymization, breach notification)
+- Contract management (FNO, supplier, customer, employee, partner contracts)
+- SLA management (tied to contracts, auto-breach detection)
 - ICASA regulations (product/promotion lodgment, regulatory changes, announcements)
-- SLA management (internal + regulatory SLAs)
+- POPI Act compliance (data subject access requests, anonymization, breach notification)
+- RICA compliance (identity verification storage for regulatory purposes)
 - ICASA web scraper (regulation changes, announcements, tariff filings)
 """
 
@@ -14,8 +18,8 @@ from datetime import datetime, date
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Enum as SAEnum, ForeignKey, Index,
-    Integer, Numeric, String, Text, UniqueConstraint,
+    Boolean, Date, DateTime, Decimal, Enum as SAEnum, ForeignKey, Index,
+    Integer, Numeric, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -32,20 +36,37 @@ class Base(DeclarativeBase):
 # Enums
 # ---------------------------------------------------------------------------
 
-VERIFICATION_STATUS = SAEnum(
-    "pending", "in_progress", "completed", "failed", "expired", "cancelled",
-    name="verification_status", create_type=True,
+CONTRACT_TYPE = SAEnum(
+    "fno", "supplier", "customer", "employee", "partner", "service_level",
+    "interconnect", "infrastructure", "maintenance", "other",
+    name="contract_type", create_type=True,
 )
 
-CONSENT_STATUS = SAEnum(
-    "granted", "denied", "withdrawn", "expired",
-    name="consent_status", create_type=True,
+CONTRACT_STATUS = SAEnum(
+    "draft", "pending_review", "pending_approval", "active", "suspended",
+    "expired", "terminated", "renewed", "cancelled",
+    name="contract_status", create_type=True,
 )
 
-CONSENT_PURPOSE = SAEnum(
-    "rica_verification", "marketing", "credit_check", "data_sharing",
-    "analytics", "service_delivery", "legal_compliance",
-    name="consent_purpose", create_type=True,
+CONTRACT_PRIORITY = SAEnum(
+    "critical", "high", "medium", "low",
+    name="contract_priority", create_type=True,
+)
+
+SLA_STATUS = SAEnum(
+    "active", "breached", "at_risk", "met", "expired", "pending",
+    name="sla_status", create_type=True,
+)
+
+ICASA_DOCUMENT_TYPE = SAEnum(
+    "regulation", "guideline", "notice", "tariff_filing", "license",
+    "complaint_ruling", "market_review", "annual_report", "amendment",
+    name="icasa_document_type", create_type=True,
+)
+
+ICASA_LODGE_STATUS = SAEnum(
+    "draft", "submitted", "acknowledged", "approved", "rejected", "withdrawn",
+    name="icasa_lodge_status", create_type=True,
 )
 
 POPI_REQUEST_TYPE = SAEnum(
@@ -63,384 +84,241 @@ BREACH_STATUS = SAEnum(
     name="breach_status", create_type=True,
 )
 
-BREACH_SEVERITY = SAEnum(
-    "low", "medium", "high", "critical",
-    name="breach_severity", create_type=True,
+VERIFICATION_STATUS = SAEnum(
+    "pending", "in_progress", "completed", "failed", "expired", "cancelled",
+    name="verification_status", create_type=True,
 )
 
-ICASA_DOCUMENT_TYPE = SAEnum(
-    "regulation", "guideline", "notice", "tariff_filing", "license",
-    "complaint_ruling", "market_review", "annual_report", "amendment",
-    name="icasa_document_type", create_type=True,
+CONSENT_STATUS = SAEnum(
+    "granted", "denied", "withdrawn", "expired",
+    name="consent_status", create_type=True,
 )
 
-ICASA_LODGE_STATUS = SAEnum(
-    "draft", "submitted", "acknowledged", "approved", "rejected", "withdrawn",
-    name="icasa_lodge_status", create_type=True,
-)
-
-SLA_TYPE = SAEnum(
-    "internal", "regulatory", "customer", "fno",
-    name="sla_type", create_type=True,
-)
-
-SLA_STATUS = SAEnum(
-    "active", "breached", "at_risk", "met", "expired",
-    name="sla_status", create_type=True,
-)
-
-DATA_RETENTION_POLICY = SAEnum(
-    "rica_5year", "popi_limited", "financial_7year", "marketing_3year",
-    "support_2year", "network_1year", "custom",
-    name="data_retention_policy", create_type=True,
-)
-
-ANONYMIZATION_METHOD = SAEnum(
-    "pseudonymization", "generalization", "noise_addition", "k_anonymity",
-    "full_deletion", "masking",
-    name="anonymization_method", create_type=True,
+RETENTION_POLICY = SAEnum(
+    "rica_5year", "contract_life", "financial_7year", "popi_limited", "custom",
+    name="retention_policy", create_type=True,
 )
 
 
 # ---------------------------------------------------------------------------
-# 1. Contact Management (extended RICA + PII)
+# 1. CONTRACTS (central entity)
 # ---------------------------------------------------------------------------
 
-class ComplianceContact(Base):
-    """Extended contact record with full PII management for RICA + POPI compliance.
+class Contract(Base):
+    """Central contract record — all contracts across OmniDome.
 
-    Stores customer identity data with consent tracking, data retention policies,
-    and anonymization status. This is the central record for all personal data
-    held about a customer — used for RICA verification, POPI access requests,
-    and data retention enforcement.
+    Types:
+    - fno: Fibre Network Operator agreements (Vumatel, Openserve, etc.)
+    - supplier: Hardware/software suppliers
+    - customer: Customer service agreements
+    - employee: Employment contracts
+    - partner: Partnership/reseller agreements
+    - service_level: Internal SLA agreements
+    - interconnect: Interconnection agreements
+    - infrastructure: Infrastructure leases
+    - maintenance: Maintenance contracts
     """
 
-    __tablename__ = "compliance_contacts"
+    __tablename__ = "contracts"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    customer_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    # Link to CRM customer
 
-    # Identity (encrypted at rest in production)
-    id_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    id_type: Mapped[str] = mapped_column(String(20), default="sa_id")
-    # sa_id, passport, asylum_permit
-    first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    # Contract identity
+    contract_number: Mapped[str] = mapped_column(String(100), nullable=False)
+    contract_type: Mapped[str] = mapped_column(CONTRACT_TYPE, nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(CONTRACT_STATUS, nullable=False, default="draft")
+    priority: Mapped[str] = mapped_column(CONTRACT_PRIORITY, default="medium")
 
-    # Contact details
-    phone_primary: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    phone_secondary: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Counterparty
+    counterparty_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    counterparty_registration: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    counterparty_contact_person: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    counterparty_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    counterparty_phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
-    # Address (linked to CRM Property)
-    property_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    postal_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    # Internal owner
+    internal_owner_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    internal_department: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-    # RICA status
-    rica_status: Mapped[str] = mapped_column(String(20), default="unverified")
-    # unverified, pending, verified, failed, expired
-    rica_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    rica_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    # RICA verification expires — must re-verify per ICASA regulations
+    # Dates
+    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    expiry_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    renewal_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    termination_notice_days: Mapped[int] = mapped_column(Integer, default=30)
+    auto_renew: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Data retention
-    retention_policy: Mapped[str] = mapped_column(DATA_RETENTION_POLICY, default="rica_5year")
-    retention_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    data_deletion_scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Financial
+    contract_value_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR")
+    payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # "Net 30", "Net 60", "Monthly in advance"
 
-    # Anonymization
-    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
-    anonymized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    anonymization_method: Mapped[Optional[str]] = mapped_column(ANONYMIZATION_METHOD, nullable=True)
+    # ICASA compliance
+    icasa_registration_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    icasa_registration_number: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    icasa_compliance_status: Mapped[str] = mapped_column(String(20), default="pending")
+    # pending, compliant, non_compliant, exempt
 
-    # Access control
-    last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_accessed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    # RICA requirements
+    rica_data_retention_required: Mapped[bool] = mapped_column(Boolean, default=True)
+    rica_retention_years: Mapped[int] = mapped_column(Integer, default=5)
+    rica_data_deletion_scheduled: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Document storage
+    contract_document_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    supporting_documents: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # [{"name": "signed_contract.pdf", "path": "/docs/...", "uploaded_at": "..."}]
+
+    # Versioning
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
+    )
+    is_latest_version: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Notes
+    internal_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    termination_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Audit
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     # Relationships
-    consents = relationship("ComplianceConsent", back_populates="contact", cascade="all, delete-orphan")
-    popi_requests = relationship("PopiDataRequest", back_populates="contact", cascade="all, delete-orphan")
+    slas = relationship("ContractSLA", back_populates="contract", cascade="all, delete-orphan")
+    icasa_lodgments = relationship("IcasaLodgment", back_populates="contract", cascade="all, delete-orphan")
+    popi_requests = relationship("PopiDataRequest", back_populates="contract", cascade="all, delete-orphan")
+    verifications = relationship("RicaVerification", back_populates="contract", cascade="all, delete-orphan")
 
     __table_args__ = (
-        Index("ix_cc_tenant_customer", "tenant_id", "customer_id"),
-        Index("ix_cc_tenant_rica", "tenant_id", "rica_status"),
-        Index("ix_cc_id_number", "id_number"),
-        Index("ix_cc_retention", "tenant_id", "retention_until"),
-        Index("ix_cc_anonymized", "tenant_id", "is_anonymized"),
+        Index("ix_contract_tenant_type", "tenant_id", "contract_type"),
+        Index("ix_contract_tenant_status", "tenant_id", "status"),
+        Index("ix_contract_tenant_number", "tenant_id", "contract_number", unique=True),
+        Index("ix_contract_expiry", "tenant_id", "expiry_date"),
+        Index("ix_contract_counterparty", "tenant_id", "counterparty_name"),
+        Index("ix_contract_icasa", "tenant_id", "icasa_compliance_status"),
+        Index("ix_contract_rica", "tenant_id", "rica_data_deletion_scheduled"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 2. Consent Management (POPI Act)
+# 2. CONTRACT SLAs
 # ---------------------------------------------------------------------------
 
-class ComplianceConsent(Base):
-    """Tracks customer consent for data processing per POPI Act Section 11.
+class ContractSLA(Base):
+    """SLA clauses tied to contracts.
 
-    Each consent record represents a specific purpose for which the customer
-    has granted or withdrawn consent. Required for lawful processing of personal
-    information under POPI.
+    Each contract can have multiple SLA metrics (uptime, response time,
+    installation time, etc.) with targets and automated breach detection.
     """
 
-    __tablename__ = "compliance_consents"
+    __tablename__ = "contract_slas"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contact_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("compliance_contacts.id", ondelete="CASCADE"), nullable=False, index=True,
+    contract_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
     )
 
-    purpose: Mapped[str] = mapped_column(CONSENT_PURPOSE, nullable=False)
-    status: Mapped[str] = mapped_column(CONSENT_STATUS, nullable=False, default="granted")
-
-    # Consent details
-    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    withdrawn_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # How consent was collected
-    collection_method: Mapped[str] = mapped_column(String(50), default="web_form")
-    # web_form, phone, in_person, api, imported
-    collection_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    # "Customer signed up via web portal on 2024-01-15"
-
-    # Proof
-    consent_record_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    # Path to signed consent form / recording reference
-    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
-    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Versioning
-    consent_version: Mapped[str] = mapped_column(String(20), default="1.0")
-    privacy_policy_version: Mapped[str] = mapped_column(String(20), default="1.0")
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    contact = relationship("ComplianceContact", back_populates="consents")
-
-    __table_args__ = (
-        Index("ix_consent_tenant_contact", "tenant_id", "contact_id"),
-        Index("ix_consent_tenant_purpose", "tenant_id", "purpose"),
-        Index("ix_consent_status", "tenant_id", "status"),
-        Index("ix_consent_expires", "tenant_id", "expires_at"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# 3. POPI Data Subject Access Requests
-# ---------------------------------------------------------------------------
-
-class PopiDataRequest(Base):
-    """Data Subject Access Requests (DSAR) per POPI Act Section 23-25.
-
-    Tracks all requests from data subjects to access, correct, or delete
-    their personal information. ICASA requires these be fulfilled within
-    30 days (or 60 days with valid extension).
-    """
-
-    __tablename__ = "popi_data_requests"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contact_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("compliance_contacts.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
-
-    request_type: Mapped[str] = mapped_column(POPI_REQUEST_TYPE, nullable=False)
-    status: Mapped[str] = mapped_column(POPI_REQUEST_STATUS, nullable=False, default="submitted")
-
-    # Request details
+    # SLA definition
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    requested_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # ["identity", "contact", "financial", "network_usage", "marketing"]
+    sla_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    # uptime, response_time, resolution_time, installation_time, availability
 
-    # Timeline (POPI requires response within 30 days)
-    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Target
+    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    target_unit: Mapped[str] = mapped_column(String(20), nullable=False)
+    # percent, hours, days, minutes
 
-    # Response
-    response_method: Mapped[str] = mapped_column(String(30), default="secure_portal")
-    # secure_portal, email, physical, api
-    response_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Thresholds
+    warning_threshold_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    breach_threshold_pct: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
 
-    # ICASA reporting
-    reported_to_icasa: Mapped[bool] = mapped_column(Boolean, default=False)
-    icasa_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Assignment
-    assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    contact = relationship("ComplianceContact", back_populates="popi_requests")
-
-    __table_args__ = (
-        Index("ix_pdr_tenant_status", "tenant_id", "status"),
-        Index("ix_pdr_tenant_due", "tenant_id", "due_date"),
-        Index("ix_pdr_tenant_type", "tenant_id", "request_type"),
-        Index("ix_pdr_overdue", "tenant_id", "status", "due_date"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# 4. Data Breach Register (POPI Act Section 22)
-# ---------------------------------------------------------------------------
-
-class DataBreachRecord(Base):
-    """Data breach register per POPI Act Section 22.
-
-    Records all personal data breaches. ICASA must be notified of breaches
-    "as soon as reasonably possible" if it affects customer data.
-    """
-
-    __tablename__ = "data_breach_records"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    # Breach details
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    severity: Mapped[str] = mapped_column(BREACH_SEVERITY, nullable=False, default="medium")
-    status: Mapped[str] = mapped_column(BREACH_STATUS, nullable=False, default="detected")
-
-    # Impact assessment
-    affected_contacts_count: Mapped[int] = mapped_column(Integer, default=0)
-    affected_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # ["id_numbers", "contact_details", "financial", "network_usage"]
-    data_volume_estimate: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Timeline
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    icasa_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    subjects_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # ICASA notification
-    icasa_notification_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    icasa_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Remediation
-    remediation_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    lessons_learned: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Assignment
-    reported_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    handled_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_dbr_tenant_status", "tenant_id", "status"),
-        Index("ix_dbr_tenant_severity", "tenant_id", "severity"),
-        Index("ix_dbr_detected", "tenant_id", "detected_at"),
-        Index("ix_dbr_icasa", "tenant_id", "icasa_notified_at"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# 5. ICASA Regulations & Announcements (scraped)
-# ---------------------------------------------------------------------------
-
-class IcasaRegulation(Base):
-    """ICASA regulations, guidelines, and announcements scraped from icasa.org.za.
-
-    Tracks regulatory changes that affect ISP operations including:
-    - Type approval requirements
-    - Numbering regulations
-    - Consumer protection rules
-    - Tariff filing requirements
-    - License conditions
-    """
-
-    __tablename__ = "icasa_regulations"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    # Document info
-    document_type: Mapped[str] = mapped_column(ICASA_DOCUMENT_TYPE, nullable=False)
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    icasa_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    # ICASA reference number
-
-    # Source
-    source_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    document_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
-    # Link to PDF/document on ICASA website
-
-    # Dates
-    published_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    comment_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    # Content
-    full_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    key_points: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # ["Point 1", "Point 2"]
-    affected_areas: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # ["type_approval", "numbering", "consumer_protection", "tariffs"]
-
-    # Impact assessment
-    impact_level: Mapped[str] = mapped_column(String(20), default="unknown")
-    # critical, high, medium, low, none, unknown
-    impact_assessment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    required_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    # Measurement
+    measurement_method: Mapped[str] = mapped_column(String(30), default="automatic")
+    measurement_frequency: Mapped[str] = mapped_column(String(20), default="daily")
 
     # Status
-    is_new: Mapped[bool] = mapped_column(Boolean, default=True)
-    is_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
-    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_status: Mapped[str] = mapped_column(SLA_STATUS, default="pending")
+    current_value: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+
+    # Penalty
+    penalty_clause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    penalty_amount_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2), nullable=True)
+
+    # Effective period
+    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    contract = relationship("Contract", back_populates="slas")
+
     __table_args__ = (
-        Index("ix_ir_tenant_type", "tenant_id", "document_type"),
-        Index("ix_ir_tenant_new", "tenant_id", "is_new"),
-        Index("ix_ir_tenant_impact", "tenant_id", "impact_level"),
-        Index("ix_ir_effective", "effective_date"),
-        Index("ix_ir_scraped", "tenant_id", "scraped_at"),
+        Index("ix_csla_tenant_contract", "tenant_id", "contract_id"),
+        Index("ix_csla_tenant_status", "tenant_id", "current_status"),
+        Index("ix_csla_breach", "tenant_id", "current_status", "contract_id"),
+    )
+
+
+class ContractSLAMeasurement(Base):
+    """SLA measurement records per contract SLA."""
+
+    __tablename__ = "contract_sla_measurements"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    sla_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contract_slas.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_type: Mapped[str] = mapped_column(String(10), nullable=False, default="daily")
+
+    actual_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    is_breach: Mapped[bool] = mapped_column(Boolean, default=False)
+    deviation_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
+    sample_count: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_cslam_tenant_sla", "tenant_id", "sla_id"),
+        Index("ix_cslam_period", "tenant_id", "period_start"),
+        Index("ix_cslam_breach", "tenant_id", "is_breach"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 6. ICASA Product/Promotion Lodgment
+# 3. ICASA PRODUCT/PROMOTION LODGMENT
 # ---------------------------------------------------------------------------
 
-class IcasaProductLodgment(Base):
+class IcasaLodgment(Base):
     """Tracks lodgment of new products and promotions with ICASA.
 
-    ICASA requires ISPs to lodge certain products and promotions before
-    they can be offered to consumers. This tracks the lodgment process.
+    Linked to the contract that governs the product/promotion.
+    ICASA requires ISPs to lodge certain products and promotions.
     """
 
-    __tablename__ = "icasa_product_lodgments"
+    __tablename__ = "icasa_lodgments"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
+    )
 
     # Product info
     product_name: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -450,17 +328,14 @@ class IcasaProductLodgment(Base):
 
     # Link to inventory
     product_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    # Link to inventory_products
 
     # Lodgment details
     status: Mapped[str] = mapped_column(ICASA_LODGE_STATUS, nullable=False, default="draft")
     icasa_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     lodgment_method: Mapped[str] = mapped_column(String(30), default="portal")
-    # portal, email, physical
 
     # Documents
     supporting_documents: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
-    # [{"name": "tariff_sheet.pdf", "path": "/docs/..."}, ...]
 
     # Timeline
     prepared_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -480,158 +355,68 @@ class IcasaProductLodgment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    contract = relationship("Contract", back_populates="icasa_lodgments")
+
     __table_args__ = (
-        Index("ix_ipl_tenant_status", "tenant_id", "status"),
-        Index("ix_ipl_tenant_type", "tenant_id", "product_type"),
-        Index("ix_ipl_tenant_product", "tenant_id", "product_id"),
-        Index("ix_ipl_submitted", "tenant_id", "submitted_at"),
+        Index("ix_il_tenant_status", "tenant_id", "status"),
+        Index("ix_il_tenant_contract", "tenant_id", "contract_id"),
+        Index("ix_il_tenant_product", "tenant_id", "product_id"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 7. SLA Management (internal + regulatory)
+# 4. ICASA REGULATIONS (scraped)
 # ---------------------------------------------------------------------------
 
-class ComplianceSLA(Base):
-    """SLA management for both internal operations and regulatory requirements.
+class IcasaRegulation(Base):
+    """ICASA regulations, guidelines, and announcements scraped from icasa.org.za."""
 
-    Covers:
-    - Internal SLAs (ticket response, installation times)
-    - Regulatory SLAs (ICASA complaint handling, POPI response times)
-    - Customer SLAs (service uptime, support response)
-    - FNO SLAs (provisioning times, fault repair)
-    """
-
-    __tablename__ = "compliance_slas"
+    __tablename__ = "icasa_regulations"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
 
-    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    document_type: Mapped[str] = mapped_column(ICASA_DOCUMENT_TYPE, nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    sla_type: Mapped[str] = mapped_column(SLA_TYPE, nullable=False)
+    icasa_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    document_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
-    # Target
-    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    target_unit: Mapped[str] = mapped_column(String(20), nullable=False)
-    # hours, days, percent, minutes
+    published_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    effective_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    comment_deadline: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    # Measurement
-    measurement_method: Mapped[str] = mapped_column(String(50), default="automatic")
-    # automatic, manual, hybrid
-    measurement_frequency: Mapped[str] = mapped_column(String(20), default="daily")
-    # real_time, hourly, daily, weekly, monthly
+    full_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    key_points: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    affected_areas: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    impact_level: Mapped[str] = mapped_column(String(20), default="unknown")
+    impact_assessment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    required_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
 
-    # Thresholds
-    warning_threshold: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-    # e.g. 80% of target = warning
-    breach_threshold: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-    # e.g. 100% of target = breach
-
-    # Status
-    current_status: Mapped[str] = mapped_column(SLA_STATUS, default="active")
-    current_value: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
-
-    # Regulatory reference
-    regulatory_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
-    # "ICASA Code of Conduct Regulation 12", "POPI Act Section 23"
-
-    # Effective period
-    effective_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    effective_to: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_new: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_reviewed: Mapped[bool] = mapped_column(Boolean, default=False)
+    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index("ix_csla_tenant_type", "tenant_id", "sla_type"),
-        Index("ix_csla_tenant_status", "tenant_id", "current_status"),
-        Index("ix_csla_tenant_active", "tenant_id", "is_active"),
-        Index("ix_csla_effective", "tenant_id", "effective_from"),
-    )
-
-
-class ComplianceSLAMeasurement(Base):
-    """SLA measurement records for tracking compliance over time."""
-
-    __tablename__ = "compliance_sla_measurements"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    sla_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("compliance_slas.id", ondelete="CASCADE"), nullable=False, index=True,
-    )
-
-    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    period_type: Mapped[str] = mapped_column(String(10), nullable=False, default="daily")
-
-    actual_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    target_value: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    is_breach: Mapped[bool] = mapped_column(Boolean, default=False)
-    deviation_pct: Mapped[Optional[float]] = mapped_column(Numeric(8, 4), nullable=True)
-
-    sample_count: Mapped[int] = mapped_column(Integer, default=0)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        Index("ix_cslam_tenant_sla", "tenant_id", "sla_id"),
-        Index("ix_cslam_period", "tenant_id", "period_start"),
-        Index("ix_cslam_breach", "tenant_id", "is_breach"),
+        Index("ix_ir_tenant_type", "tenant_id", "document_type"),
+        Index("ix_ir_tenant_new", "tenant_id", "is_new"),
+        Index("ix_ir_tenant_impact", "tenant_id", "impact_level"),
+        Index("ix_ir_effective", "effective_date"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 8. Data Retention Schedule
-# ---------------------------------------------------------------------------
-
-class DataRetentionSchedule(Base):
-    """Data retention schedules per POPI Act and ICASA requirements.
-
-    POPI requires personal information only be kept as long as necessary
-    for the purpose for which it was collected. ICASA has specific retention
-    requirements for RICA data (5 years minimum).
-    """
-
-    __tablename__ = "data_retention_schedules"
-
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-
-    data_category: Mapped[str] = mapped_column(String(100), nullable=False)
-    # rica_identity, call_records, billing, network_usage, marketing, support
-    retention_period_months: Mapped[int] = mapped_column(Integer, nullable=False)
-    legal_basis: Mapped[str] = mapped_column(String(200), nullable=False)
-    # "ICASA Regulation 12(3)", "POPI Act Section 14", "Tax Act Section 29"
-
-    # Enforcement
-    auto_delete: Mapped[bool] = mapped_column(Boolean, default=False)
-    anonymize_instead: Mapped[bool] = mapped_column(Boolean, default=True)
-    anonymization_method: Mapped[Optional[str]] = mapped_column(ANONYMIZATION_METHOD, nullable=True)
-
-    # Status
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    last_enforced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    records_affected: Mapped[int] = mapped_column(Integer, default=0)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        Index("ix_drs_tenant_category", "tenant_id", "data_category", unique=True),
-        Index("ix_drs_tenant_active", "tenant_id", "is_active"),
-    )
-
-
-# ---------------------------------------------------------------------------
-# 9. ICASA Scraper Log
+# 5. ICASA SCRAPER LOG
 # ---------------------------------------------------------------------------
 
 class IcasaScrapeLog(Base):
-    """Log of ICASA website scrapes for audit trail."""
+    """Log of ICASA website scrapes."""
 
     __tablename__ = "icasa_scrape_logs"
 
@@ -639,50 +424,144 @@ class IcasaScrapeLog(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
 
     scrape_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    # regulations, announcements, tariffs, license_updates
     source_url: Mapped[str] = mapped_column(String(1000), nullable=False)
-
-    # Results
     status: Mapped[str] = mapped_column(String(20), default="success")
-    # success, partial, failed
     items_found: Mapped[int] = mapped_column(Integer, default=0)
     items_new: Mapped[int] = mapped_column(Integer, default=0)
-    items_updated: Mapped[int] = mapped_column(Integer, default=0)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    # Timing
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("ix_isl_tenant_type", "tenant_id", "scrape_type"),
         Index("ix_isl_tenant_status", "tenant_id", "status"),
-        Index("ix_isl_started", "tenant_id", "started_at"),
     )
 
 
 # ---------------------------------------------------------------------------
-# 10. RICA Verification (extended from existing RicaVerification)
+# 6. POPI DATA SUBJECT ACCESS REQUESTS
+# ---------------------------------------------------------------------------
+
+class PopiDataRequest(Base):
+    """Data Subject Access Requests per POPI Act Section 23-25.
+
+    Linked to the contract that governs the data processing.
+    ICASA requires these be fulfilled within 30 days.
+    """
+
+    __tablename__ = "popi_data_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    # Who made the request
+    requested_by_customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    requested_by_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    request_type: Mapped[str] = mapped_column(POPI_REQUEST_TYPE, nullable=False)
+    status: Mapped[str] = mapped_column(POPI_REQUEST_STATUS, nullable=False, default="submitted")
+
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requested_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+
+    # Timeline (POPI requires response within 30 days)
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    response_method: Mapped[str] = mapped_column(String(30), default="secure_portal")
+    response_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    reported_to_icasa: Mapped[bool] = mapped_column(Boolean, default=False)
+    icasa_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    contract = relationship("Contract", back_populates="popi_requests")
+
+    __table_args__ = (
+        Index("ix_pdr_tenant_status", "tenant_id", "status"),
+        Index("ix_pdr_tenant_due", "tenant_id", "due_date"),
+        Index("ix_pdr_overdue", "tenant_id", "status", "due_date"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 7. DATA BREACH REGISTER
+# ---------------------------------------------------------------------------
+
+class DataBreachRecord(Base):
+    """Data breach register per POPI Act Section 22."""
+
+    __tablename__ = "data_breach_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
+    )
+
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    severity: Mapped[str] = mapped_column(String(20), default="medium")
+    status: Mapped[str] = mapped_column(BREACH_STATUS, nullable=False, default="detected")
+
+    affected_data_subjects_count: Mapped[int] = mapped_column(Integer, default=0)
+    affected_data_categories: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    assessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    icasa_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    subjects_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    icasa_notification_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    remediation_actions: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True)
+    root_cause: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    reported_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    handled_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_dbr_tenant_status", "tenant_id", "status"),
+        Index("ix_dbr_tenant_severity", "tenant_id", "severity"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. RICA VERIFICATION STORAGE
 # ---------------------------------------------------------------------------
 
 class RicaVerification(Base):
-    """Extended RICA verification record with full audit trail.
+    """RICA identity verification storage for regulatory compliance.
 
-    Replaces the existing RicaVerification in services/rica/database.py.
-    Adds ICASA compliance fields, re-verification tracking, and
-    cross-reference to compliance_contacts.
+    NOTE: We do NOT use the RICA database directly. We store verification
+    results for our own regulatory compliance purposes only.
+    Per ICASA regulations, RICA data must be retained for 5 years minimum.
     """
 
     __tablename__ = "rica_verifications"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
-    contact_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("compliance_contacts.id", ondelete="SET NULL"), nullable=True
+    contract_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="SET NULL"), nullable=True,
     )
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     # Verification
     job_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
@@ -693,17 +572,27 @@ class RicaVerification(Base):
     result_message: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     full_response: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
 
-    # Identity data
+    # Identity (stored for regulatory compliance only)
     id_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    id_type: Mapped[str] = mapped_column(String(20), default="sa_id")
     first_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     last_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # ICASA compliance
     icasa_registration_required: Mapped[bool] = mapped_column(Boolean, default=True)
     icasa_registration_status: Mapped[str] = mapped_column(String(20), default="pending")
-    # pending, registered, failed
     re_verification_required: Mapped[bool] = mapped_column(Boolean, default=False)
     re_verification_due: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Data retention (ICASA requires 5 years minimum)
+    retention_policy: Mapped[str] = mapped_column(RETENTION_POLICY, default="rica_5year")
+    retention_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_deletion_scheduled: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Anonymization (POPI compliance when retention expires)
+    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=False)
+    anonymized_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Audit
     verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
@@ -712,12 +601,84 @@ class RicaVerification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    contract = relationship("Contract", back_populates="verifications")
+
     __table_args__ = (
-        Index("ix_rv_tenant_contact", "tenant_id", "contact_id"),
+        Index("ix_rv_tenant_contract", "tenant_id", "contract_id"),
+        Index("ix_rv_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_rv_tenant_status", "tenant_id", "status"),
         Index("ix_rv_job_id", "job_id"),
-        Index("ix_rv_id_number", "id_number"),
+        Index("ix_rv_retention", "tenant_id", "retention_until"),
         Index("ix_rv_reverify", "tenant_id", "re_verification_due"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 9. CONTRACT DOCUMENTS
+# ---------------------------------------------------------------------------
+
+class ContractDocument(Base):
+    """Documents attached to contracts — signed copies, amendments, etc."""
+
+    __tablename__ = "contract_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    contract_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+
+    document_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    # signed_contract, amendment, renewal, termination_notice, icasa_filing, sla_report
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Optional[str] = mapped_column(Text, nullable=True)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    file_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    mime_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
+    # Versioning
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_current: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Audit
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_cd_tenant_contract", "tenant_id", "contract_id"),
+        Index("ix_cd_tenant_type", "tenant_id", "document_type"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# 10. CONTRACT NOTES / AUDIT LOG
+# ---------------------------------------------------------------------------
+
+class ContractAuditLog(Base):
+    """Audit trail for all contract changes."""
+
+    __tablename__ = "contract_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    contract_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("contracts.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+
+    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    # created, updated, status_changed, approved, terminated, renewed, sla_breach, icasa_lodged
+    field_changed: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    old_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    new_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    performed_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_cal_tenant_contract", "tenant_id", "contract_id"),
+        Index("ix_cal_tenant_action", "tenant_id", "action"),
+        Index("ix_cal_created", "tenant_id", "created_at"),
     )
 
 
