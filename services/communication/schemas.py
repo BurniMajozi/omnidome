@@ -34,6 +34,23 @@ class ChannelUpdate(BaseModel):
     is_private: Optional[bool] = None
 
 
+class ChannelPreferenceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: uuid.UUID
+    channel_id: uuid.UUID
+    user_id: uuid.UUID
+    muted: bool
+    pinned: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChannelPreferenceUpdate(BaseModel):
+    muted: Optional[bool] = None
+    pinned: Optional[bool] = None
+
+
 # ── Messages ──────────────────────────────────────────────────────────────
 
 class MessageCreate(BaseModel):
@@ -49,8 +66,13 @@ class MessageRead(BaseModel):
     user_id: uuid.UUID
     content: str
     thread_parent_id: Optional[uuid.UUID]
+    is_pinned: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class MessagePinUpdate(BaseModel):
+    is_pinned: bool
 
 
 class MessageUpdate(BaseModel):
@@ -167,6 +189,41 @@ class EventRead(BaseModel):
     event_type: str
     payload: Dict[str, Any]
     created_at: datetime
+
+
+# ── Communication Sessions ────────────────────────────────────────────────
+
+class CommunicationSessionCreate(BaseModel):
+    channel_id: uuid.UUID
+    session_type: str = Field(..., min_length=1, max_length=30)
+    participants: List[Dict[str, Any]] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    provider_name: Optional[str] = None
+
+
+class CommunicationSessionEnd(BaseModel):
+    status: str = Field(default="ended", min_length=1, max_length=30)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CommunicationSessionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    channel_id: uuid.UUID
+    event_id: Optional[uuid.UUID]
+    session_type: str
+    provider_name: str
+    provider_session_id: Optional[str]
+    status: str
+    started_by: uuid.UUID
+    participants: Dict[str, Any]
+    metadata: Dict[str, Any]
+    started_at: datetime
+    ended_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
 
 
 # ── Module Data ──────────────────────────────────────────────────────────

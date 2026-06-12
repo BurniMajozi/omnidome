@@ -35,6 +35,25 @@ class Channel(Base):
     )
 
 
+class ChannelPreference(Base):
+    __tablename__ = "channel_preferences"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    muted: Mapped[bool] = mapped_column(Boolean, default=False)
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_channel_preferences_user_channel", "tenant_id", "user_id", "channel_id", unique=True),
+    )
+
+
 # ── Message ───────────────────────────────────────────────────────────────
 
 class Message(Base):
@@ -49,6 +68,7 @@ class Message(Base):
     thread_parent_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -155,6 +175,37 @@ class Event(Base):
 
     __table_args__ = (
         Index("ix_events_channel", "channel_id", "event_type", "created_at"),
+    )
+
+
+# ── Communication Session ─────────────────────────────────────────────────
+
+class CommunicationSession(Base):
+    __tablename__ = "communication_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("events.id", ondelete="SET NULL"), nullable=True
+    )
+    session_type: Mapped[str] = mapped_column(String(30), nullable=False)  # chat, voice, video
+    provider_name: Mapped[str] = mapped_column(String(100), nullable=False, default="local")
+    provider_session_id: Mapped[str] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="created")
+    started_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    participants: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_comm_sessions_channel", "channel_id", "session_type", "status"),
+        Index("ix_comm_sessions_tenant", "tenant_id", "started_at"),
     )
 
 

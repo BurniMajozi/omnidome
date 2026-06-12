@@ -66,7 +66,10 @@ from services.communication.routes.tasks import router as tasks_router
 from services.communication.routes.approvals import router as approvals_router
 from services.communication.routes.escalations import router as escalations_router
 from services.communication.routes.events import router as events_router
+from services.communication.routes.sessions import router as sessions_router
 from services.communication.routes.module_data import router as module_data_router
+from services.communication.routes.channel_preferences import router as channel_preferences_router
+from services.communication.routes.messages_state import router as messages_state_router
 
 app.include_router(channels_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
@@ -74,7 +77,10 @@ app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(approvals_router, prefix="/api/v1")
 app.include_router(escalations_router, prefix="/api/v1")
 app.include_router(events_router, prefix="/api/v1")
+app.include_router(sessions_router, prefix="/api/v1")
 app.include_router(module_data_router, prefix="/api/v1")
+app.include_router(channel_preferences_router, prefix="/api/v1")
+app.include_router(messages_state_router, prefix="/api/v1")
 
 
 if __name__ == "__main__":

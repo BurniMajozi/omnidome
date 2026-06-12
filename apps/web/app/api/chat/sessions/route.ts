@@ -3,15 +3,8 @@ import { NextRequest, NextResponse } from "next/server"
 const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://localhost:8020"
 
 async function proxyGet(request: NextRequest) {
-  const channelId = request.nextUrl.searchParams.get("channel_id")
-  if (!channelId) {
-    return NextResponse.json({ error: "channel_id is required" }, { status: 400 })
-  }
-
-  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/messages`)
-  request.nextUrl.searchParams.forEach((value, key) => {
-    if (key !== "channel_id") url.searchParams.set(key, value)
-  })
+  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/sessions`)
+  request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value))
 
   const headers = new Headers()
   for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
@@ -32,26 +25,31 @@ async function proxyGet(request: NextRequest) {
 async function proxyPost(request: NextRequest) {
   const body = await request.json().catch(() => null)
   const channelId = body?.channel_id
+  const sessionType = body?.session_type
   if (!channelId) {
     return NextResponse.json({ error: "channel_id is required" }, { status: 400 })
   }
+  if (!sessionType) {
+    return NextResponse.json({ error: "session_type is required" }, { status: 400 })
+  }
 
-  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/messages`)
   const headers = new Headers()
   for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }
 
-  const response = await fetch(url.toString(), {
+  const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/sessions`, {
     method: "POST",
     headers,
     body: JSON.stringify({
-      content: body?.content ?? "",
-      thread_parent_id: body?.thread_parent_id ?? null,
+      channel_id: channelId,
+      session_type: sessionType,
+      participants: body?.participants ?? [],
+      metadata: body?.metadata ?? {},
+      provider_name: body?.provider_name ?? null,
     }),
   })
-
   const payload = await response.json()
   return NextResponse.json({ data: [payload] }, { status: response.status })
 }

@@ -12,6 +12,7 @@ import {
   Bell,
   Pin,
   MoreHorizontal,
+  Edit3,
   Smile,
   Paperclip,
   Send,
@@ -499,6 +500,8 @@ export function CommunicationModule() {
   const [scheduleFilter, setScheduleFilter] = useState<"hour" | "day" | "week" | "month">("week")
   const [channels, setChannels] = useState<Channel[]>(seedChannels)
   const [messages, setMessages] = useState<Message[]>(seedMessages)
+  const [mutedChannels, setMutedChannels] = useState<string[]>([])
+  const [pinnedChannels, setPinnedChannels] = useState<string[]>([])
   const [loadingChannels, setLoadingChannels] = useState(true)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [tasks, setTasks] = useState<Task[]>(seedTasks)
@@ -551,6 +554,9 @@ export function CommunicationModule() {
   const [escalationSeverity, setEscalationSeverity] = useState<Escalation["severity"]>("medium")
   const [escalationNotes, setEscalationNotes] = useState("")
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [channelMenuId, setChannelMenuId] = useState<string | null>(null)
+  const [mutedChannels, setMutedChannels] = useState<string[]>([])
+  const [pinnedChannels, setPinnedChannels] = useState<string[]>([])
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -701,6 +707,16 @@ export function CommunicationModule() {
     setPanelType(null)
   }
 
+  const persistChannelPreference = async (channelName: string, nextMuted: boolean, nextPinned: boolean) => {
+    const channel = channels.find((item) => item.name === channelName)
+    if (!channel) return
+    await fetch(`/api/chat/channels/${channel.id}/preferences`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ muted: nextMuted, pinned: nextPinned }),
+    })
+  }
+
   const addActivity = (item: ActivityItem) => {
     setActivityItems((prev) => [item, ...prev])
   }
@@ -813,6 +829,23 @@ export function CommunicationModule() {
   }
 
   const handleStartChat = () => {
+    const channelId = activeChannelId
+    if (!channelId) return
+    void postJson("/api/chat/sessions", {
+      channel_id: channelId,
+      session_type: "chat",
+      provider_name: "chat",
+      participants: startChatParticipants
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .map((name) => ({ name })),
+      metadata: {
+        mode: startChatMode,
+        subject: startChatSubject,
+        notes: startChatNotes,
+      },
+    })
     addActivity({
       id: `activity-${Date.now()}`,
       type: "chat",
@@ -826,6 +859,28 @@ export function CommunicationModule() {
     setStartChatParticipants("")
     setStartChatNotes("")
     closePanel()
+  }
+
+  const handleStartCall = (mode: "voice" | "video") => {
+    if (!activeChannelId) return
+    void postJson("/api/chat/sessions", {
+      channel_id: activeChannelId,
+      session_type: mode,
+      provider_name: mode === "voice" ? "call-provider" : "video-provider",
+      participants: [],
+      metadata: {
+        channel_name: activeChannel?.name ?? selectedChannel,
+        channel_id: activeChannelId,
+      },
+    })
+    addActivity({
+      id: `activity-${Date.now()}`,
+      type: "chat",
+      title: mode === "voice" ? "Voice call started" : "Video call started",
+      actor: currentUserName,
+      time: "just now",
+      meta: `#${activeChannel?.name ?? selectedChannel}`,
+    })
   }
 
   const handleAddEvent = () => {
@@ -1198,29 +1253,103 @@ export function CommunicationModule() {
                 {loadingChannels && (
                   <div className="px-2 py-1 text-xs text-muted-foreground">Loading channels...</div>
                 )}
-                {channels.map((channel) => (
-                  <button
-                    key={channel.id}
-                    onClick={() => {
-                      setSelectedChannel(channel.name)
-                      setMobileSidebarOpen(false)
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
-                      selectedChannel === channel.name
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                    )}
-                  >
-                    {channel.isPrivate ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
-                    <span className="flex-1 text-left truncate">{channel.name}</span>
-                    {channel.unread && (
-                      <Badge variant="secondary" className="h-5 min-w-5 bg-primary text-primary-foreground text-xs">
-                        {channel.unread}
-                      </Badge>
-                    )}
-                  </button>
-                ))}
+                {channels.map((channel) => {
+                  const isActive = selectedChannel === channel.name
+                  return (
+                    <div key={channel.id} className="relative">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => {
+                            setSelectedChannel(channel.name)
+                            setMobileSidebarOpen(false)
+                            setChannelMenuId(null)
+                          }}
+                          className={cn(
+                            "flex flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                            isActive
+                              ? "bg-primary/10 text-primary"
+                              : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                          )}
+                        >
+                          {channel.isPrivate ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
+                          <span className="flex-1 truncate text-left">{channel.name}</span>
+                          {channel.unread && (
+                            <Badge variant="secondary" className="h-5 min-w-5 bg-primary text-primary-foreground text-xs">
+                              {channel.unread}
+                            </Badge>
+                          )}
+                        </button>
+                        <DropdownMenu open={channelMenuId === channel.id} onOpenChange={(open) => setChannelMenuId(open ? channel.id : null)}>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                setChannelMenuId(channelMenuId === channel.id ? null : channel.id)
+                              }}
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem
+                              className="gap-2"
+                              onClick={() => {
+                                const nextPinned = !pinnedChannels.includes(channel.name)
+                                const nextMuted = mutedChannels.includes(channel.name)
+                                setPinnedChannels((prev) =>
+                                  nextPinned ? [channel.name, ...prev.filter((item) => item !== channel.name)] : prev.filter((item) => item !== channel.name),
+                                )
+                                void persistChannelPreference(channel.name, nextMuted, nextPinned)
+                              }}
+                            >
+                              <Edit3 className="h-4 w-4" />
+                              {pinnedChannels.includes(channel.name) ? "Unpin" : "Pin"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="gap-2"
+                              onClick={() => {
+                                const nextMuted = !mutedChannels.includes(channel.name)
+                                const nextPinned = pinnedChannels.includes(channel.name)
+                                setMutedChannels((prev) =>
+                                  nextMuted ? [channel.name, ...prev.filter((item) => item !== channel.name)] : prev.filter((item) => item !== channel.name),
+                                )
+                                void persistChannelPreference(channel.name, nextMuted, nextPinned)
+                              }}
+                            >
+                              <Bell className="h-4 w-4" />
+                              {mutedChannels.includes(channel.name) ? "Unmute" : "Mute"}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="gap-2" onClick={() => setSelectedChannel(channel.name)}>
+                              <MessageSquare className="h-4 w-4" />
+                              Focus
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="gap-2">
+                              <Pin className="h-4 w-4" />
+                              Details
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      {(mutedChannels.includes(channel.name) || pinnedChannels.includes(channel.name)) && (
+                        <div className="mt-1 flex items-center gap-2 px-2">
+                          {pinnedChannels.includes(channel.name) && (
+                            <Badge variant="secondary" className="h-5 bg-amber-500/15 text-[10px] text-amber-400">
+                              Pinned
+                            </Badge>
+                          )}
+                          {mutedChannels.includes(channel.name) && (
+                            <Badge variant="secondary" className="h-5 bg-muted text-[10px] text-muted-foreground">
+                              Muted
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
                 <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground">
                   <Plus className="h-4 w-4" />
                   <span>Add Channel</span>
@@ -1405,10 +1534,10 @@ export function CommunicationModule() {
               <MessageSquare className="h-4 w-4 mr-2" />
               Start Chat
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("voice")}>
               <Phone className="h-4 w-4" />
             </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("video")}>
               <Video className="h-4 w-4" />
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -1566,10 +1695,10 @@ export function CommunicationModule() {
                         )}
                       </div>
                       <div className="opacity-0 group-hover:opacity-100 flex items-start gap-1">
-                        <Button variant="ghost" size="icon" className="h-7 w-7">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPanel("add-approval", msg)}>
                           <Smile className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7">
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPanel("add-task", msg)}>
                           <MessageSquare className="h-4 w-4" />
                         </Button>
                         <DropdownMenuTrigger asChild>
@@ -1584,30 +1713,48 @@ export function CommunicationModule() {
                         <ClipboardList className="h-4 w-4" />
                         Create Task
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="gap-2">
+                      <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-event", msg)}>
                         <Reply className="h-4 w-4" />
                         Reply
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="gap-2">
+                      <DropdownMenuItem className="gap-2" onClick={() => setMessageInput(`@${msg.author_name ?? "user"} `)}>
                         <PhoneCall className="h-4 w-4" />
-                        Call
+                        Mention
                       </DropdownMenuItem>
                       <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-event", msg)}>
                         <CalendarPlus className="h-4 w-4" />
                         Schedule
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-approval", msg)}>
+                      <DropdownMenuItem
+                        className="gap-2"
+                        onClick={() => setMessageInput(`Reply to ${msg.author_name ?? "message"}: `)}
+                      >
                         <CheckSquare className="h-4 w-4" />
-                        Create Approval
+                        Reply inline
                       </DropdownMenuItem>
                       <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-escalation", msg)}>
                         <Flag className="h-4 w-4" />
                         Escalate
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="gap-2">
+                      <DropdownMenuItem
+                        className="gap-2"
+                        onClick={() =>
+                          {
+                            const nextPinned = !msg.isPinned
+                            setMessages((prev) =>
+                              prev.map((item) => (item.id === msg.id ? { ...item, isPinned: nextPinned } : item)),
+                            )
+                            void fetch(`/api/chat/messages/${msg.id}/pin`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ is_pinned: nextPinned }),
+                            })
+                          }
+                        }
+                      >
                         <Pin className="h-4 w-4" />
-                        Pin Message
+                        {msg.isPinned ? "Unpin Message" : "Pin Message"}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

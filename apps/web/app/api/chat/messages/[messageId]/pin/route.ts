@@ -2,27 +2,19 @@ import { NextRequest, NextResponse } from "next/server"
 
 const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://localhost:8020"
 
-async function proxy(request: NextRequest) {
-  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels`)
-  request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value))
-
+export async function PATCH(request: NextRequest, { params }: { params: { messageId: string } }) {
+  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/messages/${params.messageId}/pin`)
   const headers = new Headers()
   for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }
-
   const response = await fetch(url.toString(), {
-    method: "GET",
+    method: "PATCH",
     headers,
+    body: await request.text(),
     cache: "no-store",
   })
-
   const payload = await response.json()
-  const data = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : []
-  return NextResponse.json({ data }, { status: response.status })
-}
-
-export function GET(request: NextRequest) {
-  return proxy(request)
+  return NextResponse.json(payload, { status: response.status })
 }

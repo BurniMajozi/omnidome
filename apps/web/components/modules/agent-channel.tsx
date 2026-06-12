@@ -5,25 +5,25 @@ import {
   Bot,
   Send,
   Loader2,
-  ChevronDown,
-  CheckCircle2,
   Wrench,
   Sparkles,
   MessageSquare,
   Trash2,
   Plus,
+  MoreHorizontal,
+  Edit3,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import {
   invokeAgent,
   listAgents,
   AGENT_CATALOG,
   type AgentInfo,
-  type AgentInvokeResponse,
 } from "@/lib/orchestrator-api"
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -64,7 +64,6 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null)
   const [inputValue, setInputValue] = useState("")
   const [isSending, setIsSending] = useState(false)
-  const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -278,32 +277,54 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
               const agentInfo = AGENT_CATALOG[conv.agentType]
               const lastMessage = conv.messages[conv.messages.length - 1]
               return (
-                <button
-                  key={conv.id}
-                  onClick={() => setActiveConversationId(conv.id)}
-                  className={cn(
-                    "flex w-full items-start gap-2 rounded-md px-2 py-2 text-left transition-colors",
-                    activeConversationId === conv.id
-                      ? "bg-primary/10 text-primary"
-                      : "text-foreground hover:bg-secondary",
-                  )}
-                >
-                  <span className="mt-0.5 text-sm">{agentInfo.icon}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">{agentInfo.name}</span>
-                      <span className="text-[10px] text-muted-foreground">
-                        {conv.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                      </span>
-                    </div>
-                    {lastMessage && (
-                      <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                        {lastMessage.role === "user" ? "You: " : ""}
-                        {lastMessage.content.slice(0, 40)}
-                      </p>
+                <div key={conv.id} className="flex items-start gap-1">
+                  <button
+                    onClick={() => setActiveConversationId(conv.id)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 text-left transition-colors",
+                      activeConversationId === conv.id
+                        ? "bg-primary/10 text-primary"
+                        : "text-foreground hover:bg-secondary",
                     )}
-                  </div>
-                </button>
+                  >
+                    <span className="mt-0.5 text-sm">{agentInfo.icon}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs font-medium">{agentInfo.name}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {conv.createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      {lastMessage && (
+                        <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
+                          {lastMessage.role === "user" ? "You: " : ""}
+                          {lastMessage.content.slice(0, 40)}
+                        </p>
+                      )}
+                    </div>
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0">
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuItem className="gap-2" onClick={() => setActiveConversationId(conv.id)}>
+                        <MessageSquare className="h-4 w-4" />
+                        Open
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="gap-2">
+                        <Edit3 className="h-4 w-4" />
+                        Rename
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="gap-2 text-red-400">
+                        <Trash2 className="h-4 w-4" />
+                        Close
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               )
             })}
           </div>
