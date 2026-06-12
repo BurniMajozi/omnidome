@@ -25,7 +25,11 @@ app = FastAPI(
 
 guard = EntitlementGuard(
     module_id="agents",
-    public_paths={"/health", "/docs", "/openapi.json", "/.well-known/agent-card.json", "/.well-known/ucp"},
+    public_paths={
+        "/health", "/docs", "/openapi.json",
+        "/.well-known/agent-card.json", "/.well-known/ucp",
+        "/api/protocols/a2ui/validate",
+    },
 )
 
 configure_production(app)
@@ -44,10 +48,20 @@ async def startup() -> None:
     guard.ensure_startup()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         from services.agent_orchestrator.conversation.models import Base as ConvBase
+        from services.agent_orchestrator.protocol_models import (
+            UCPCheckoutSessionRecord,
+            AP2IntentMandateRecord,
+            AP2PaymentMandateRecord,
+            AP2PaymentReceiptRecord,
+        )
         from services.common.db import get_engine
         engine = get_engine()
         ConvBase.metadata.create_all(bind=engine)
-        logger.info("Agent orchestrator conversation tables ensured")
+        UCPCheckoutSessionRecord.metadata.create_all(bind=engine)
+        AP2IntentMandateRecord.metadata.create_all(bind=engine)
+        AP2PaymentMandateRecord.metadata.create_all(bind=engine)
+        AP2PaymentReceiptRecord.metadata.create_all(bind=engine)
+        logger.info("Agent orchestrator conversation + protocol tables ensured")
 
 
 @app.middleware("http")
