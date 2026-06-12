@@ -20,7 +20,6 @@ import {
   Video,
   Phone,
   Users,
-  Star,
   Circle,
   CheckCircle2,
   Clock,
@@ -45,16 +44,18 @@ import {
   Settings,
   MonitorSpeaker,
   PanelLeft,
+  PanelLeftClose,
+  PanelRightClose,
+  MessageCircleMore,
   X,
   Sparkles,
 } from "lucide-react"
-import { AgentChannel } from "@/components/modules/agent-channel"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent } from "@/components/ui/tabs"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -493,8 +494,11 @@ export function CommunicationModule() {
   const [dmExpanded, setDmExpanded] = useState(true)
   const [systemMsgExpanded, setSystemMsgExpanded] = useState(true)
   const [agentMsgExpanded, setAgentMsgExpanded] = useState(true)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [selectedChannel, setSelectedChannel] = useState("sales-team")
   const [messageInput, setMessageInput] = useState("")
+  const [floatingChatOpen, setFloatingChatOpen] = useState(false)
+  const [floatingMessageInput, setFloatingMessageInput] = useState("")
   const [activeTab, setActiveTab] = useState("chat")
   const [scheduleView, setScheduleView] = useState<"kanban" | "timeline" | "todo" | "activity">("kanban")
   const [scheduleFilter, setScheduleFilter] = useState<"hour" | "day" | "week" | "month">("week")
@@ -861,6 +865,16 @@ export function CommunicationModule() {
     closePanel()
   }
 
+  const handleFloatingSend = async () => {
+    const trimmed = floatingMessageInput.trim()
+    if (!trimmed) return
+    setMessageInput(trimmed)
+    setFloatingMessageInput("")
+    setFloatingChatOpen(false)
+    setActiveTab("chat")
+    await handleSend()
+  }
+
   const handleStartCall = (mode: "voice" | "video") => {
     if (!activeChannelId) return
     void postJson("/api/chat/sessions", {
@@ -1216,39 +1230,78 @@ export function CommunicationModule() {
       {/* Sidebar - Channels & DMs */}
       <div
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex w-72 flex-shrink-0 flex-col border-r border-border bg-sidebar transition-transform duration-300 lg:static lg:z-auto lg:w-64 lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex flex-shrink-0 flex-col border-r border-border bg-sidebar transition-all duration-300 lg:static lg:z-auto lg:translate-x-0",
+          sidebarCollapsed ? "w-16" : "w-72",
           mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
         <div className="p-3 border-b border-border">
-          <div className="flex items-center justify-between mb-2 lg:hidden">
+          <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 text-muted-foreground"
-              onClick={() => setMobileSidebarOpen(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground"
+                onClick={() => setSidebarCollapsed((prev) => !prev)}
+              >
+                {sidebarCollapsed ? <PanelRightClose className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground lg:hidden"
+                onClick={() => setMobileSidebarOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input placeholder="Search messages..." className="h-9 bg-secondary pl-9 text-sm" />
-          </div>
+          {!sidebarCollapsed && (
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input placeholder="Search messages..." className="h-9 bg-secondary pl-9 text-sm" />
+            </div>
+          )}
         </div>
-
         <ScrollArea className="flex-1">
           <div className="p-2">
+            <div className={cn("mb-3 grid gap-1", sidebarCollapsed ? "grid-cols-1" : "grid-cols-3")}>
+              {[
+                { value: "chat", icon: MessageSquare, label: "Chat" },
+                { value: "agents", icon: Bot, label: "Agent" },
+                { value: "tasks", icon: ListTodo, label: "Tasks" },
+                { value: "approvals", icon: CheckSquare, label: "Approvals" },
+                { value: "escalations", icon: Flag, label: "Escalations" },
+                { value: "schedule", icon: Calendar, label: "Schedule" },
+              ].map((item) => {
+                const Icon = item.icon
+                return (
+                  <Button
+                    key={item.value}
+                    variant={activeTab === item.value ? "secondary" : "ghost"}
+                    size="sm"
+                    className={cn("h-9 justify-start gap-2", sidebarCollapsed && "justify-center px-0")}
+                    onClick={() => setActiveTab(item.value)}
+                  >
+                    <Icon className="h-4 w-4" />
+                    {!sidebarCollapsed && <span className="text-xs">{item.label}</span>}
+                  </Button>
+                )
+              })}
+            </div>
+            {!sidebarCollapsed && <div className="mb-2 border-t border-border" />}
             {/* Channels Section */}
-            <button
-              onClick={() => setChannelsExpanded(!channelsExpanded)}
-              className="flex w-full items-center gap-1 px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
-            >
-              {channelsExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Channels
-            </button>
-            {channelsExpanded && (
+            {!sidebarCollapsed && (
+              <button
+                onClick={() => setChannelsExpanded(!channelsExpanded)}
+                className="flex w-full items-center gap-1 px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+              >
+                {channelsExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                Channels
+              </button>
+            )}
+            {sidebarCollapsed || channelsExpanded ? (
               <div className="space-y-0.5">
                 {loadingChannels && (
                   <div className="px-2 py-1 text-xs text-muted-foreground">Loading channels...</div>
@@ -1352,20 +1405,22 @@ export function CommunicationModule() {
                 })}
                 <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground">
                   <Plus className="h-4 w-4" />
-                  <span>Add Channel</span>
+                  {!sidebarCollapsed && <span>Add Channel</span>}
                 </button>
               </div>
-            )}
+            ) : null}
 
             {/* Direct Messages Section */}
-            <button
-              onClick={() => setDmExpanded(!dmExpanded)}
-              className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
-            >
-              {dmExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              Direct Messages
-            </button>
-            {dmExpanded && (
+            {!sidebarCollapsed && (
+              <button
+                onClick={() => setDmExpanded(!dmExpanded)}
+                className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
+              >
+                {dmExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                Direct Messages
+              </button>
+            )}
+            {!sidebarCollapsed && dmExpanded && (
               <div className="space-y-0.5">
                 {directMessages.map((dm) => (
                   <button
@@ -1395,18 +1450,20 @@ export function CommunicationModule() {
               </div>
             )}
 
-            <button
-              onClick={() => setSystemMsgExpanded(!systemMsgExpanded)}
-              className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
-            >
-              {systemMsgExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              <Server className="h-3 w-3 mr-1" />
-              System Messages
-              <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-red-500/20 text-red-400 text-[10px]">
-                {systemMessages.filter((m) => !m.read).length}
-              </Badge>
-            </button>
-            {systemMsgExpanded && (
+            {!sidebarCollapsed && (
+              <button
+                onClick={() => setSystemMsgExpanded(!systemMsgExpanded)}
+                className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
+              >
+                {systemMsgExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                <Server className="h-3 w-3 mr-1" />
+                System Messages
+                <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-red-500/20 text-red-400 text-[10px]">
+                  {systemMessages.filter((m) => !m.read).length}
+                </Badge>
+              </button>
+            )}
+            {!sidebarCollapsed && systemMsgExpanded && (
               <div className="space-y-0.5">
                 {systemMessages.map((msg) => (
                   <button
@@ -1530,9 +1587,9 @@ export function CommunicationModule() {
               <PanelLeft className="h-4 w-4 mr-2" />
               Channels
             </Button>
-            <Button size="sm" variant="secondary" className="h-8" onClick={() => openPanel("start-chat")}>
+            <Button size="sm" variant="secondary" className="h-8" onClick={() => setFloatingChatOpen(true)}>
               <MessageSquare className="h-4 w-4 mr-2" />
-              Start Chat
+              Chat
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("voice")}>
               <Phone className="h-4 w-4" />
@@ -1568,75 +1625,6 @@ export function CommunicationModule() {
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <div className="border-b border-border px-4">
-            <TabsList className="h-10 bg-transparent gap-4">
-              <TabsTrigger
-                value="chat"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <MessageSquare className="h-4 w-4 mr-2" />
-                Chat
-              </TabsTrigger>
-              <TabsTrigger
-                value="agents"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <Bot className="h-4 w-4 mr-2" />
-                Agent Channel
-                <Badge variant="secondary" className="ml-2 h-5 bg-cyan-500/20 text-cyan-400 text-xs">
-                  AI
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger
-                value="tasks"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <ListTodo className="h-4 w-4 mr-2" />
-                Tasks
-                <Badge variant="secondary" className="ml-2 h-5 bg-muted text-xs">
-                  {tasks.filter((t) => t.status !== "done").length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger
-                value="leads"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <Star className="h-4 w-4 mr-2" />
-                Leads
-                <Badge variant="secondary" className="ml-2 h-5 bg-muted text-xs">
-                  {leads.length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger
-                value="approvals"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <CheckSquare className="h-4 w-4 mr-2" />
-                Approvals
-                <Badge variant="secondary" className="ml-2 h-5 bg-orange-500/20 text-orange-400 text-xs">
-                  {approvals.filter((a) => a.status === "pending").length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger
-                value="escalations"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <Flag className="h-4 w-4 mr-2" />
-                Escalations
-                <Badge variant="secondary" className="ml-2 h-5 bg-red-500/20 text-red-400 text-xs">
-                  {escalations.length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger
-                value="schedule"
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary rounded-none px-1"
-              >
-                <Calendar className="h-4 w-4 mr-2" />
-                Schedule
-              </TabsTrigger>
-            </TabsList>
-          </div>
-
           {/* Chat Tab - Added context menu to messages */}
           <TabsContent value="chat" className="flex-1 flex flex-col m-0">
             <ScrollArea className="flex-1 p-4">
@@ -1805,30 +1793,12 @@ export function CommunicationModule() {
 
           {/* Agent Channel Tab — AI agents with full OmniDome context */}
           <TabsContent value="agents" className="flex-1 m-0 overflow-hidden">
-            <AgentChannel
-              context={{ source: "communication_module" }}
-              onCreateTask={(task) => {
-                // Add task to the tasks list when agent creates one
-                const newTask: Task = {
-                  id: `task-${Date.now()}`,
-                  title: task.title,
-                  assignee: "Unassigned",
-                  avatar: "NA",
-                  status: "todo",
-                  priority: task.priority as Task["priority"],
-                  dueDate: "No due date",
-                }
-                setTasks((prev) => [newTask, ...prev])
-                addActivity({
-                  id: `activity-${Date.now()}-agent-task`,
-                  type: "task",
-                  title: `Agent created task: ${task.title}`,
-                  actor: "AI Agent",
-                  time: "just now",
-                  meta: task.priority,
-                })
-              }}
-            />
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+              <Bot className="h-10 w-10 text-cyan-400" />
+              <div className="max-w-md">
+                Agent routing belongs in the orchestrator. Use chat to start the conversation and let the system choose the right agent.
+              </div>
+            </div>
           </TabsContent>
 
           {/* Tasks Tab — with agent assistance */}
@@ -2887,6 +2857,56 @@ export function CommunicationModule() {
                   Escalate
                 </Button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button
+        type="button"
+        className="fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90"
+        onClick={() => setFloatingChatOpen((prev) => !prev)}
+      >
+        <MessageCircleMore className="h-6 w-6" />
+      </button>
+
+      {floatingChatOpen && (
+        <div className="fixed bottom-24 right-6 z-50 w-[min(92vw,380px)] rounded-xl border border-border bg-card shadow-xl">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold">Quick Chat</p>
+              <p className="text-xs text-muted-foreground">Compose without leaving the current module.</p>
+            </div>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setFloatingChatOpen(false)}>
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="space-y-3 p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>Orchestrator-managed routing</span>
+              <Badge variant="secondary" className="h-5 bg-muted text-xs">
+                #{activeChannel?.name ?? selectedChannel}
+              </Badge>
+            </div>
+            <Input
+              value={floatingMessageInput}
+              onChange={(e) => setFloatingMessageInput(e.target.value)}
+              placeholder="Write a message..."
+              className="h-10"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault()
+                  void handleFloatingSend()
+                }
+              }}
+            />
+            <div className="flex items-center gap-2">
+              <Button variant="outline" className="flex-1" onClick={() => setActiveTab("agents")}>
+                Agent routing
+              </Button>
+              <Button className="flex-1" onClick={() => void handleFloatingSend()} disabled={!floatingMessageInput.trim()}>
+                Send
+              </Button>
             </div>
           </div>
         </div>
