@@ -634,7 +634,7 @@ export function CRMTab({ customerId }: CRMTabProps) {
                   </TableCell>
                   <TableCell className="text-right text-muted-foreground text-xs">
                     {formatDate(quote.date)}
-                  </td>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

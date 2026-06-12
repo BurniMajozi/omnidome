@@ -46,11 +46,13 @@ curl http://localhost:8000/health
 | Web Analytics | 8016 | services/web_analytics/Dockerfile |
 | Journey Engine | 8017 | services/journey_engine/Dockerfile |
 | Lifecycle | 8018 | services/lifecycle/Dockerfile |
+| Compliance | 8019 | services/compliance/Dockerfile |
 | Communication | 8020 | services/communication/Dockerfile |
-| Agent Orchestrator | 8021 | services/agent-orchestrator/Dockerfile |
+| Agent Orchestrator | 8021 | services/agent_orchestrator/Dockerfile |
 | Customer Journey | 8022 | services/customer_journey/Dockerfile |
 | Billing Collections | 8023 | services/billing_collections/Dockerfile |
 | FNO Intelligence | 8024 | services/fno_intelligence/Dockerfile |
+| Tenant Memory | 8025 | services/tenant_memory/Dockerfile |
 | Admin Dashboard | 3000 | apps/web/Dockerfile |
 | Customer App | 3001 | Standalone (EAS Build) |
 | Technician App | 3002 | Standalone (EAS Build) |

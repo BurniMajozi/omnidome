@@ -32,6 +32,7 @@ export const moduleBySection: Record<string, string> = {
   analytics: "analytics",
   inventory: "inventory",
   iot: "iot",
+  admin: "admin",
 }
 
 export function isModuleEnabled(modules: string[], moduleId: string): boolean {

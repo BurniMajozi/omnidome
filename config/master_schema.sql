@@ -808,6 +808,45 @@ CREATE TABLE audit_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- 13b. TENANT MEMORY
+CREATE TABLE tenant_memory_entries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    source_type VARCHAR(80) NOT NULL,
+    source_id VARCHAR(160),
+    module VARCHAR(80),
+    scope_key VARCHAR(160),
+    title VARCHAR(240) NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT,
+    visibility VARCHAR(20) NOT NULL DEFAULT 'tenant',
+    importance VARCHAR(20) NOT NULL DEFAULT 'normal',
+    tags TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    occurred_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    archived_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CHECK (visibility IN ('private', 'team', 'tenant', 'system')),
+    CHECK (importance IN ('low', 'normal', 'high', 'critical'))
+);
+
+CREATE TABLE tenant_memory_summaries (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    scope_key VARCHAR(160) NOT NULL,
+    module VARCHAR(80),
+    title VARCHAR(240) NOT NULL,
+    summary TEXT NOT NULL,
+    source_entry_ids UUID[] NOT NULL DEFAULT ARRAY[]::UUID[],
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, scope_key)
+);
+
 -- Indexes for Sales performance
 CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id);
 CREATE INDEX idx_deals_tenant ON deals(tenant_id);
@@ -823,6 +862,15 @@ CREATE INDEX idx_tasks_delegate ON tasks(user_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_tenant ON contacts(tenant_id);
 CREATE INDEX idx_services_contact ON services(contact_id);
 CREATE INDEX idx_audit_tenant ON audit_logs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_tenant_time ON tenant_memory_entries(tenant_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_scope ON tenant_memory_entries(tenant_id, scope_key, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_module ON tenant_memory_entries(tenant_id, module, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_tags ON tenant_memory_entries USING gin(tags);
+CREATE INDEX IF NOT EXISTS idx_memory_entries_search ON tenant_memory_entries USING gin (
+    to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))
+);
+CREATE INDEX IF NOT EXISTS idx_memory_summaries_tenant ON tenant_memory_summaries(tenant_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_summaries_module ON tenant_memory_summaries(tenant_id, module, updated_at DESC);
 
 -- Search acceleration indexes (trigram + lower)
 CREATE INDEX IF NOT EXISTS idx_tenants_name_trgm ON tenants USING gin (lower(name) gin_trgm_ops);
@@ -864,7 +912,8 @@ VALUES
     ('inventory', 'Inventory', 'Stock and warehousing', FALSE),
     ('hr', 'HR', 'Staff and talent management', FALSE),
     ('rica', 'RICA', 'Compliance and verification', FALSE),
-    ('marketing', 'Marketing', 'Campaign management, email delivery, and marketing automation', FALSE)
+    ('marketing', 'Marketing', 'Campaign management, email delivery, and marketing automation', FALSE),
+    ('memory', 'Tenant Memory', 'Tenant-scoped operational memory and agent recall', TRUE)
 ON CONFLICT (key) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,
@@ -917,7 +966,10 @@ VALUES
     ('rica.admin', 'Administer RICA'),
     ('marketing.read', 'Read marketing data'),
     ('marketing.write', 'Write marketing data'),
-    ('marketing.admin', 'Administer marketing')
+    ('marketing.admin', 'Administer marketing'),
+    ('memory.read', 'Read tenant memory'),
+    ('memory.write', 'Write tenant memory'),
+    ('memory.admin', 'Administer tenant memory')
 ON CONFLICT (key) DO NOTHING;
 
 INSERT INTO roles (id, tenant_id, name, scope, description, is_system)

@@ -22,9 +22,9 @@ import { PortalModule } from "@/components/modules/portal-module"
 import { AnalyticsModule } from "@/components/modules/analytics-module"
 import { InventoryModule } from "@/components/modules/inventory-module"
 import { IoTModule } from "@/components/modules/iot-module"
+import { AdminModule } from "@/components/modules/admin-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
-import { supabase } from "@/lib/supabase/client"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -45,6 +45,7 @@ const sectionTitles: Record<string, string> = {
   analytics: "Analytics & AI Insights",
   inventory: "Inventory & Stock Management",
   iot: "IoT & Device Management",
+  admin: "Platform Administration",
 }
 
 export default function Dashboard() {
@@ -86,11 +87,6 @@ export default function Dashboard() {
 
   const resolvedSection = allowedSections.includes(activeSection) ? activeSection : "overview"
 
-  useEffect(() => {
-    if (activeSection !== "retention") setRetentionTab(null)
-    if (activeSection !== "portal") setPortalTab(null)
-  }, [activeSection])
-
   const renderModule = () => {
     try {
       switch (resolvedSection) {
@@ -126,6 +122,8 @@ export default function Dashboard() {
           return <InventoryModule />
         case "iot":
           return <IoTModule />
+        case "admin":
+          return <AdminModule />
         case "retention":
           return <RetentionModule activeTabOverride={retentionTab ?? undefined} />
         default:
@@ -147,6 +145,12 @@ export default function Dashboard() {
       setRetentionTab(null)
     }
     setSidebarOpen(false)
+  }
+
+  const handleSectionChange = (section: string) => {
+    setActiveSection(section)
+    if (section !== "retention") setRetentionTab(null)
+    if (section !== "portal") setPortalTab(null)
   }
 
   return (
@@ -176,7 +180,7 @@ export default function Dashboard() {
       <Sidebar
         activeSection={resolvedSection}
         allowedSections={allowedSections}
-        onSectionChange={setActiveSection}
+        onSectionChange={handleSectionChange}
         mobileOpen={sidebarOpen}
         onMobileClose={() => setSidebarOpen(false)}
         onSubSectionSelect={handleSubSectionSelect}

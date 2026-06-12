@@ -35,6 +35,8 @@ SERVICE_ROUTES = {
     "/api/analytics": ("analytics", os.getenv("ANALYTICS_SERVICE_URL", "http://analytics:8011")),
     "/api/retention": ("retention", os.getenv("RETENTION_SERVICE_URL", "http://retention:8012")),
     "/api/admin": ("admin", os.getenv("ADMIN_SERVICE_URL", "http://admin:8013")),
+    "/api/compliance": ("compliance", os.getenv("COMPLIANCE_SERVICE_URL", "http://compliance:8019")),
+    "/api/memory": ("memory", os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")),
     "/api/voice": ("voice", os.getenv("TWILIO_VOICE_FUNCTIONS_URL", "")),
     "/api/sms": ("sms", os.getenv("TWILIO_SMS_FUNCTIONS_URL", "")),
 }

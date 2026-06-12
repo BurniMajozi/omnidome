@@ -25,7 +25,7 @@ app = FastAPI(
 
 guard = EntitlementGuard(
     module_id="agents",
-    public_paths={"/health", "/docs", "/openapi.json"},
+    public_paths={"/health", "/docs", "/openapi.json", "/.well-known/agent-card.json", "/.well-known/ucp"},
 )
 
 configure_production(app)
@@ -72,10 +72,12 @@ async def health_check():
 
 from services.agent_orchestrator.routes.agents import router as agents_router
 from services.agent_orchestrator.routes.conversations import router as conversations_router
+from services.agent_orchestrator.routes.protocols import router as protocols_router
 from services.agent_orchestrator.routes.tools import router as tools_router
 
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(conversations_router, prefix="/api/conversations")
+app.include_router(protocols_router)
 app.include_router(tools_router, prefix="/api/tools")
 
 

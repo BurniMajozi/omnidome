@@ -27,7 +27,7 @@ import {
   BarChart3,
   Boxes,
   Radio,
-  Activity,
+  ServerCog,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -73,6 +73,7 @@ const navItems = [
   { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
   { icon: Boxes, label: "Inventory & Stock", href: "#inventory", section: "inventory" },
   { icon: Radio, label: "IoT & Devices", href: "#iot", section: "iot" },
+  { icon: ServerCog, label: "Admin", href: "#admin", section: "admin" },
 ]
 
 interface SidebarProps {

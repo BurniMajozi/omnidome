@@ -21,6 +21,7 @@ SERVICE_URLS = {
     "finance": os.getenv("FINANCE_SERVICE_URL", "http://finance:8015"),
     "call_center": os.getenv("CALL_CENTER_SERVICE_URL", "http://call_center:8007"),
     "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
+    "memory": os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025"),
 }
 
 
@@ -45,6 +46,12 @@ class Tool:
             return {"success": False, "error": f"Service {self.service} not configured"}
 
         url = f"{base_url}{self.endpoint}"
+        request_input = dict(tool_input)
+        for key, value in list(request_input.items()):
+            placeholder = "{" + key + "}"
+            if placeholder in url:
+                url = url.replace(placeholder, str(value))
+                request_input.pop(key, None)
         headers = {}
         if tenant_id:
             headers["X-Tenant-Id"] = str(tenant_id)
@@ -55,13 +62,20 @@ class Tool:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 if self.method == "GET":
                     # Map tool_input to query params
-                    resp = await client.get(url, params=tool_input, headers=headers)
+                    resp = await client.get(url, params=request_input, headers=headers)
                 elif self.method == "POST":
-                    resp = await client.post(url, json=tool_input, headers=headers)
+                    resp = await client.post(url, json=request_input, headers=headers)
+                elif self.method == "PUT":
+                    body = dict(request_input)
+                    if self.name == "memory.upsert_summary" and "scope_key" not in body:
+                        body["scope_key"] = tool_input.get("scope_key")
+                    resp = await client.put(url, json=body, headers=headers)
+                elif self.method == "PATCH":
+                    resp = await client.patch(url, json=request_input, headers=headers)
                 else:
                     return {"success": False, "error": f"Unsupported method: {self.method}"}
 
-                if resp.status_code == 200:
+                if 200 <= resp.status_code < 300:
                     return {"success": True, "data": resp.json()}
                 else:
                     return {
@@ -241,6 +255,67 @@ class ToolRegistry:
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
+        # Tenant Memory Tools
+        self.register(Tool(
+            name="memory.recall",
+            description="Recall tenant memory summaries and recent entries by module, scope, or search query.",
+            service="memory",
+            method="GET",
+            endpoint="/api/v1/recall",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "module": {"type": "string"},
+                    "scope_key": {"type": "string"},
+                    "q": {"type": "string"},
+                    "limit": {"type": "integer", "default": 10},
+                },
+                "required": [],
+            },
+        ))
+        self.register(Tool(
+            name="memory.write_entry",
+            description="Write tenant memory about an agent decision, user preference, incident, or operational event.",
+            service="memory",
+            method="POST",
+            endpoint="/api/v1/memories",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "source_type": {"type": "string"},
+                    "source_id": {"type": "string"},
+                    "module": {"type": "string"},
+                    "scope_key": {"type": "string"},
+                    "title": {"type": "string"},
+                    "content": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "importance": {"type": "string", "enum": ["low", "normal", "high", "critical"]},
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["source_type", "title", "content"],
+            },
+        ))
+        self.register(Tool(
+            name="memory.upsert_summary",
+            description="Create or update a compact tenant memory summary for a scope key.",
+            service="memory",
+            method="PUT",
+            endpoint="/api/v1/summaries/{scope_key}",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "scope_key": {"type": "string"},
+                    "module": {"type": "string"},
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "source_entry_ids": {"type": "array", "items": {"type": "string"}},
+                    "metadata": {"type": "object"},
+                },
+                "required": ["scope_key", "title", "summary"],
+            },
+        ))
+
     def register(self, tool: Tool):
         self._tools[tool.name] = tool
 
@@ -258,17 +333,20 @@ class ToolRegistry:
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
                 "network_check_coverage", "network_get_service_status",
                 "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
             ],
             "retention": [
                 "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_payment_history",
                 "retention_get_predictions", "retention_get_cases",
                 "analytics_get_executive_summary",
+                "memory.recall", "memory.write_entry", "memory.upsert_summary",
             ],
             "provisioning": [
                 "crm_get_customer", "crm_create_customer",
                 "network_check_coverage", "network_get_service_status",
                 "support_create_ticket",
+                "memory.recall", "memory.write_entry",
             ],
             "executive": [
                 "analytics_get_executive_summary",
@@ -278,12 +356,14 @@ class ToolRegistry:
                 "call_center_get_intelligence",
                 "sales_get_pipeline",
                 "finance_get_financial_summary",
+                "memory.recall", "memory.write_entry", "memory.upsert_summary",
             ],
             "support": [
                 "support_create_ticket", "support_get_tickets",
                 "crm_get_customer", "crm_get_customer_360",
                 "network_run_diagnostics",
                 "call_center_get_intelligence",
+                "memory.recall", "memory.write_entry",
             ],
         }
         allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, [])

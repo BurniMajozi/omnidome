@@ -257,8 +257,47 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - AGENT_ORCHESTRATOR_ENABLE_TELEGRAM=false
     ports:
       - "8021:8021"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  compliance:
+    build:
+      context: .
+      dockerfile: services/compliance/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    ports:
+      - "8019:8019"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  tenant_memory:
+    build:
+      context: .
+      dockerfile: services/tenant_memory/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    ports:
+      - "8025:8025"
     depends_on:
       - db
     volumes:
@@ -345,6 +384,8 @@ services:
       - .env
     environment:
       - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
+      - COMPLIANCE_SERVICE_URL=${COMPLIANCE_SERVICE_URL:-http://compliance:8019}
+      - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
     ports:
       - "3000:3000"
@@ -355,6 +396,8 @@ services:
       - finance
       - rica
       - network
+      - compliance
+      - tenant_memory
       - gateway
       - agent-orchestrator
 

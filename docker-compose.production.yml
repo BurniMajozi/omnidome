@@ -471,7 +471,7 @@ services:
   agent-orchestrator:
     build:
       context: .
-      dockerfile: services/agent-orchestrator/Dockerfile
+      dockerfile: services/agent_orchestrator/Dockerfile
     env_file:
       - .env
     environment:
@@ -480,6 +480,51 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+      - AGENT_ORCHESTRATOR_ENABLE_TELEGRAM=false
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  compliance:
+    build:
+      context: .
+      dockerfile: services/compliance/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
+  tenant_memory:
+    build:
+      context: .
+      dockerfile: services/tenant_memory/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     depends_on:
       db:
@@ -565,6 +610,9 @@ services:
       - .env
     environment:
       - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
+      - COMPLIANCE_SERVICE_URL=${COMPLIANCE_SERVICE_URL:-http://compliance:8019}
+      - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
+      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
     ports:
       - "3000:3000"
     depends_on:

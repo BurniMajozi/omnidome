@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     sales_service_url: str = "http://sales:8002"
     finance_service_url: str = "http://finance:8015"
     call_center_service_url: str = "http://call_center:8007"
+    tenant_memory_service_url: str = "http://tenant_memory:8025"
+    public_agent_url: str = "http://agent-orchestrator:8021"
+    ucp_auto_approve_limit_zar: float = 500.0
+    agent_orchestrator_enable_telegram: bool = False
 
     # Agent-to-tool mapping — controls which tools each agent type can use.
     # Keys are agent type names, matching model_routes and frontend AGENT_CATALOG.

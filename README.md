@@ -22,6 +22,7 @@ services/
   hr/            – Employee management, performance tracking
   inventory/     – Stock & supply chain management
   iot/           – Device telemetry, hardware control
+  tenant_memory/ – Tenant-scoped operational memory and agent recall
   network/       – RADIUS, FNO adapters, provisioning
   retention/     – Churn prediction, retention campaigns
   rica/          – RICA identity verification (Smile ID)
@@ -54,6 +55,8 @@ docker-compose.yaml
 | Analytics | `/services/analytics` | 8011 | Executive insights, AI recommendations |
 | Retention | `/services/retention` | 8012 | Churn prediction, campaign ROI |
 | Admin | `/services/admin` | 8013 | Tenant management, RBAC, module entitlements |
+| Compliance | `/services/compliance` | 8019 | Contracts, POPIA, ICASA, RICA, risk, and regulatory workflows |
+| Tenant Memory | `/services/tenant_memory` | 8025 | Tenant history, summaries, and agent recall |
 | Gateway | `/services/gateway` | 8000 | API gateway / BFF for all services |
 
 ---

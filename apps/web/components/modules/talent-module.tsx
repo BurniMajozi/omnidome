@@ -1971,6 +1971,7 @@ export function TalentModule() {
                         cy="50%"
                         labelLine={false}
                         dataKey="value"
+                        nameKey="department"
                       />
                       <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
                     </PieChart>

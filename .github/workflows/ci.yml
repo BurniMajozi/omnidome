@@ -61,7 +61,7 @@ jobs:
       - name: Check all service Dockerfiles exist
         run: |
           errors=0
-          for svc in crm sales billing finance rica network iot call_center support hr inventory retention marketing admin gateway communication agent-orchestrator journey_engine web_analytics lifecycle; do
+          for svc in crm sales billing finance rica network iot call_center support hr inventory retention marketing admin gateway communication agent_orchestrator compliance tenant_memory journey_engine web_analytics lifecycle customer_journey billing_collections fno_intelligence; do
             if [ ! -f "services/$svc/Dockerfile" ]; then
               echo "❌ Missing: services/$svc/Dockerfile"
               errors=$((errors + 1))

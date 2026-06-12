@@ -11,6 +11,7 @@ from sqlalchemy import select
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import get_session
 from services.agent_orchestrator.agents import Agent
+from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
 from services.agent_orchestrator.conversation.models import (
     AgentConversation,
@@ -238,7 +239,7 @@ async def invoke_agent_stream(
             context=body.context,
         )
         tools = agent.tools
-        tools_for_llm = agent.to_openai_format(tools)
+        tools_for_llm = tool_registry.to_openai_format(tools)
 
         history = body.context.get("history", [])
         messages = agent._build_messages(body.message, history)
