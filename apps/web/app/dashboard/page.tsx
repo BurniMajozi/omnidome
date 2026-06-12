@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
 import { AITaskChat } from "@/components/chat/ai-task-chat"
+import { AGUIChat } from "@/components/chat/ag-ui-chat"
 import { DashboardOverview } from "@/components/modules/dashboard-overview"
 import { SalesModule } from "@/components/modules/sales-module"
 import { CrmModule } from "@/components/modules/crm-module"
@@ -51,13 +52,13 @@ const sectionTitles: Record<string, string> = {
 export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
+  const [chatMode, setChatMode] = useState<"standard" | "agui">("agui")
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [retentionTab, setRetentionTab] = useState<string | null>(null)
   const [portalTab, setPortalTab] = useState<string | null>(null)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
 
   useEffect(() => {
-    // Local development: Authentication check disabled for direct dashboard access
     console.log("Operator Dashboard: Local authentication bypass enabled.")
   }, [])
 
@@ -153,6 +154,16 @@ export default function Dashboard() {
     if (section !== "portal") setPortalTab(null)
   }
 
+  const handleNewTask = () => {
+    setChatMode("standard")
+    setChatOpen(true)
+  }
+
+  const handleNewAgentChat = () => {
+    setChatMode("agui")
+    setChatOpen(true)
+  }
+
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background relative">
       {/* Mobile sidebar backdrop */}
@@ -194,14 +205,20 @@ export default function Dashboard() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header
           title={sectionTitles[resolvedSection] || "Dashboard"}
-          onNewTask={() => setChatOpen(true)}
+          onNewTask={handleNewTask}
+          onNewAgentChat={handleNewAgentChat}
           onMenuToggle={() => setSidebarOpen((prev) => !prev)}
         />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderModule()}</main>
       </div>
 
-      {/* Chat Sidebar */}
-      {chatOpen && <AITaskChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />}
+      {/* Chat Sidebars */}
+      {chatOpen && chatMode === "standard" && (
+        <AITaskChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+      )}
+      {chatOpen && chatMode === "agui" && (
+        <AGUIChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+      )}
     </div>
   )
 }

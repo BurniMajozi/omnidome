@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   KeyRound,
+  Link,
   RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
@@ -19,6 +20,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  listUCPSessions,
+  listIntentMandates,
+  listPaymentMandates,
+  type UCPCheckoutSession,
+  type IntentMandate,
+  type PaymentMandate,
+} from "@/lib/orchestrator-api"
 import { adminApi, type AdminUser, type AuditLogEntry, type CommissionTier, type ModuleCatalogItem, type Tenant } from "@/lib/admin-api"
 
 const fmtDate = (value?: string) => {
@@ -57,6 +66,9 @@ export function AdminModule() {
   const [selectedTenantId, setSelectedTenantId] = useState<string>("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [ucpSessions, setUcpSessions] = useState<UCPCheckoutSession[]>([])
+  const [intentMandates, setIntentMandates] = useState<IntentMandate[]>([])
+  const [paymentMandates, setPaymentMandates] = useState<PaymentMandate[]>([])
 
   const selectedTenant = useMemo(
     () => tenants.find((tenant) => tenant.id === selectedTenantId) || tenants[0],
@@ -67,18 +79,24 @@ export function AdminModule() {
     setLoading(true)
     setError(null)
     try {
-      const [tenantData, moduleData, userData, auditData, tierData] = await Promise.all([
+      const [tenantData, moduleData, userData, auditData, tierData, ucpData, mandateData, paymentData] = await Promise.all([
         adminApi.listTenants(),
         adminApi.listModules(),
         adminApi.listUsers().catch(() => []),
         adminApi.listAuditLog({ limit: 20 }).catch(() => []),
         adminApi.listCommissionTiers().catch(() => []),
+        listUCPSessions(20).catch(() => []),
+        listIntentMandates(20).catch(() => []),
+        listPaymentMandates(20).catch(() => []),
       ])
       setTenants(tenantData)
       setModules(moduleData)
       setUsers(userData)
       setAuditLog(auditData)
       setCommissionTiers(tierData)
+      setUcpSessions(ucpData)
+      setIntentMandates(mandateData)
+      setPaymentMandates(paymentData)
       const tenantId = selectedTenantId || tenantData[0]?.id || ""
       setSelectedTenantId(tenantId)
       if (tenantId) {
@@ -177,6 +195,7 @@ export function AdminModule() {
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
           <TabsTrigger value="commission">Commission</TabsTrigger>
+          <TabsTrigger value="protocols">Protocols</TabsTrigger>
         </TabsList>
 
         <TabsContent value="tenants">
@@ -314,6 +333,133 @@ export function AdminModule() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="protocols">
+          <div className="space-y-6">
+            {/* Protocol summary stats */}
+            <div className="grid gap-4 md:grid-cols-3">
+              <Card>
+                <CardContent className="flex items-center justify-between p-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">UCP Sessions</p>
+                    <p className="text-2xl font-semibold">{ucpSessions.length}</p>
+                  </div>
+                  <Link className="h-5 w-5 text-cyan-400" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center justify-between p-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Intent Mandates</p>
+                    <p className="text-2xl font-semibold">{intentMandates.length}</p>
+                  </div>
+                  <ShieldCheck className="h-5 w-5 text-amber-400" />
+                </CardContent>
+              </Card>
+              <Card>
+                <CardContent className="flex items-center justify-between p-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Payment Mandates</p>
+                    <p className="text-2xl font-semibold">{paymentMandates.length}</p>
+                  </div>
+                  <CircleDollarSign className="h-5 w-5 text-emerald-400" />
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* UCP Checkout Sessions */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><Link className="h-4 w-4" /> UCP Checkout Sessions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {ucpSessions.map((session) => (
+                    <div key={session.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{session.merchant} — {session.purpose}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {session.line_items.length} item(s) • {session.currency} {session.total.toFixed(2)}
+                          </p>
+                        </div>
+                        <Badge variant="outline" className={
+                          session.status === "completed" ? "border-emerald-500/40 text-emerald-400" :
+                          session.status === "requires_approval" ? "border-amber-500/40 text-amber-400" :
+                          session.status === "cancelled" ? "border-red-500/40 text-red-400" :
+                          "border-border text-muted-foreground"
+                        }>
+                          {session.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{session.id}</p>
+                    </div>
+                  ))}
+                  {ucpSessions.length === 0 && <p className="text-sm text-muted-foreground">No UCP checkout sessions.</p>}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* AP2 Intent Mandates */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="h-4 w-4" /> AP2 Intent Mandates</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {intentMandates.map((mandate) => (
+                    <div key={mandate.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{mandate.natural_language_description}</p>
+                          <p className="text-xs text-muted-foreground">
+                            Max: {mandate.currency} {mandate.max_amount.toFixed(2)}
+                            {mandate.merchants.length > 0 && ` • Merchants: ${mandate.merchants.join(", ")}`}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">Expires: {fmtDate(mandate.expires_at)}</p>
+                        </div>
+                        <StatusBadge active={mandate.signed} label={mandate.signed ? "Signed" : "Pending"} />
+                      </div>
+                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
+                    </div>
+                  ))}
+                  {intentMandates.length === 0 && <p className="text-sm text-muted-foreground">No AP2 intent mandates.</p>}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* AP2 Payment Mandates */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2 text-base"><CircleDollarSign className="h-4 w-4" /> AP2 Payment Mandates</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  {paymentMandates.map((mandate) => (
+                    <div key={mandate.id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{mandate.label}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {mandate.merchant_agent} • {mandate.currency} {mandate.amount.toFixed(2)}
+                          </p>
+                        </div>
+                        <Badge variant="outline" className={
+                          mandate.status === "signed" ? "border-emerald-500/40 text-emerald-400" :
+                          "border-amber-500/40 text-amber-400"
+                        }>
+                          {mandate.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
+                    </div>
+                  ))}
+                  {paymentMandates.length === 0 && <p className="text-sm text-muted-foreground">No AP2 payment mandates.</p>}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
       </Tabs>
     </div>
