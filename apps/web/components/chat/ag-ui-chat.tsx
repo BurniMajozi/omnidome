@@ -13,7 +13,7 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
-  Memory,
+  Cpu,
   Play,
   Square,
 } from "lucide-react"
@@ -467,7 +467,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                     key={idx}
                     className="flex items-center gap-2 rounded-md border border-border/50 bg-background/50 px-2.5 py-1.5"
                   >
-                    <Memory className="h-3 w-3 text-purple-400" />
+                    <Cpu className="h-3 w-3 text-purple-400" />
                     <span className="text-xs text-muted-foreground">
                       {mw.status === "written" ? "Written" : "Writing"} — {mw.correlationId?.slice(0, 8)}...
                     </span>

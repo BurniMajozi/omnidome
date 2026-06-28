@@ -5,19 +5,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, CreditCard, ShoppingBag, HeadphonesIcon,
-  Settings, LogOut, Wifi, Bell, Menu, X, User, Zap,
-  FlaskConical, BarChart3,
+  Settings, LogOut, Wifi, Bell, Menu, X, User,
+  BarChart3,
 } from "lucide-react";
 import brandConfig from "@/config/brand.json";
 
+// "AI Assistant" is now embedded inside the Support page — no separate nav item needed.
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/billing", label: "Billing", icon: CreditCard },
   { href: "/store", label: "Store", icon: ShoppingBag },
   { href: "/support", label: "Support", icon: HeadphonesIcon },
-  { href: "/assistant", label: "AI Assistant", icon: Sparkles },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/ab-testing", label: "A/B Tests", icon: FlaskConical },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
