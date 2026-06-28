@@ -3,11 +3,11 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY services/common/requirements.txt /tmp/common-reqs.txt
-RUN pip install --no-cache-dir -r /tmp/common-reqs.txt
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 -r /tmp/common-reqs.txt
 
 COPY services/common/requirements.txt /common/requirements.txt
 COPY services/communication/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 -r /app/requirements.txt
 
 COPY services/common/ /app/services/common/
 COPY services/communication/ /app/services/communication/
