@@ -104,4 +104,4 @@ def setup_metrics(app: FastAPI, service_name: str = "unknown") -> None:
             media_type="text/plain; version=0.0.4",
         )
 
-    logger.info("Prometheus metrics enabled for %s at /metrics", svc)
+    logger.info("Prometheus metrics enabled for %s at /metrics", service_name)
