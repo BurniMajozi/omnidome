@@ -77,7 +77,7 @@ def _async_database_url() -> str:
     url = make_url(_database_url())
     if url.drivername.startswith("postgresql") and "+asyncpg" not in url.drivername:
         url = url.set(drivername="postgresql+asyncpg")
-    return str(url)
+    return url.render_as_string(hide_password=False)
 
 
 @lru_cache

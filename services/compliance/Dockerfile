@@ -1,10 +1,14 @@
 FROM python:3.12-slim AS builder
 
 WORKDIR /app
-COPY services/common/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/common/requirements.txt ./services/common/requirements.txt
+COPY services/compliance/requirements.txt ./services/compliance/requirements.txt
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 -r services/compliance/requirements.txt
 
 FROM python:3.12-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 

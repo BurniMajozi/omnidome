@@ -34,7 +34,7 @@ async def startup() -> None:
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         from services.compliance.database import Base
         from services.common.db import get_async_engine
-        async with (await get_async_engine()).begin() as conn:
+        async with get_async_engine().begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Compliance tables ensured")
 
@@ -48,7 +48,7 @@ from services.compliance.routes.hr_operations import (
     leave_router, vehicle_router, fw_router, travel_router,
 )
 from services.compliance.routes.operations import (
-    dr_router, score_router, eservice_router, doc_router, scenario_router,
+    dr_router, score_router, eservice_router, doc_router,
 )
 from services.compliance.routes.compliance import (
     icasa_router, popi_router, rica_router, breach_router, funding_router,
@@ -71,12 +71,11 @@ app.include_router(vehicle_router, prefix="/api/v1")
 app.include_router(fw_router, prefix="/api/v1")
 app.include_router(travel_router, prefix="/api/v1")
 
-# Operations: DR/BCP, Scoring, e-Services, Documents, Financial Scenarios
+# Operations: DR/BCP, Scoring, e-Services, Documents
 app.include_router(dr_router, prefix="/api/v1")
 app.include_router(score_router, prefix="/api/v1")
 app.include_router(eservice_router, prefix="/api/v1")
 app.include_router(doc_router, prefix="/api/v1")
-app.include_router(scenario_router, prefix="/api/v1")
 
 # Compliance: ICASA, POPI, RICA, Breaches, Funding
 app.include_router(icasa_router, prefix="/api/v1")

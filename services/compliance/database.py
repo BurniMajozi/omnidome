@@ -1000,7 +1000,7 @@ class ContractAuditLog(Base):
     __tablename__ = "compliance_contract_audit_logs"
     __table_args__ = (
         Index("ix_audit_contract", "contract_id"),
-        Index("ix_audit_created", "created_at"),
+        Index("ix_audit_created", "performed_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -1075,5 +1075,4 @@ class FundingOpportunity(Base):
     notes = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-now(), onupdate=func.now())
     tenant_id = Column(String(100), nullable=False, index=True)
