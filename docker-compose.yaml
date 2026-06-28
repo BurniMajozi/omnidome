@@ -429,11 +429,30 @@ services:
       - ./apps/portal:/usr/share/nginx/html/portal
     # Note: We mount root so portal can fetch theme from ../brand_guidelines
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ollama-pull
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+    entrypoint: ["ollama", "pull", "gemma3:4b"]
+    restart: "no"
+
   hermes:
     image: nousresearch/hermes-agent:latest
     container_name: hermes-agent
     restart: unless-stopped
     command: gateway run
+    depends_on:
+      - ollama
     volumes:
       - ./hermes_data:/opt/data
       - ..:/opt/data/workspace
@@ -441,6 +460,10 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USERS}
+      - OBSIDIAN_VAULT_PATH=/opt/data/workspace/omnidome/Hermes-Obsidian
+      - API_SERVER_ENABLED=true
+      - API_SERVER_KEY=${HERMES_API_KEY}
+      - API_SERVER_HOST=0.0.0.0
 
   # ── Journey Engine Service ─────────────────────────────────────────
   journey_engine:
@@ -552,3 +575,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:
