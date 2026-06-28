@@ -1,5 +1,7 @@
 "use client"
 
+import { supabase } from "@/lib/supabase/client"
+
 /**
  * Marketing API client — campaigns, social media, WhatsApp, ads,
  * comment automations, email, and analytics.
@@ -7,19 +9,33 @@
  */
 
 const API_BASE = "/svc/marketing"
-const TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
-async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    headers: { "x-tenant-id": TENANT_ID, "Content-Type": "application/json" },
-    ...init,
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    throw new Error(`Marketing API error ${res.status}: ${body}`)
+async function getTenantId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return (
+    data.session?.user?.user_metadata?.tenant_id ??
+    data.session?.user?.app_metadata?.tenant_id ??
+    FALLBACK_TENANT_ID
+  )
+}
+
+async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
+      headers: { "x-tenant-id": await getTenantId(), "Content-Type": "application/json" },
+      ...init,
+    })
+    if (!res.ok) {
+      console.warn(`Marketing API error ${res.status} for ${path}`)
+      return null
+    }
+    return res.json()
+  } catch (error) {
+    console.warn(`Marketing API unreachable for ${path}`, error)
+    return null
   }
-  return res.json()
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -84,7 +100,7 @@ export interface SocialPost {
 }
 
 export interface SocialPostCreate {
-  account_id: string
+  account_id?: string
   content: string
   media_urls?: string[]
   platforms: string[]

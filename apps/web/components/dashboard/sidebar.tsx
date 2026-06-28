@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { cn } from "@/lib/utils"
 import {
   LayoutDashboard,
@@ -34,7 +35,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
   { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
-  { icon: MessageSquare, label: "Communication", href: "#communication", section: "communication" },
+  { icon: MessageSquare, label: "Communication", href: "/dashboard/comms", section: "communication" },
   { icon: DollarSign, label: "Sales", href: "#sales", section: "sales" },
   { icon: Users, label: "CRM", href: "#crm", section: "crm" },
   { icon: Headset, label: "Service", href: "#service", section: "service" },
@@ -98,13 +99,16 @@ export function Sidebar({
   onSubSectionSelect,
   activeSubSections,
 }: SidebarProps) {
+  const router = useRouter()
   const [collapsed, setCollapsed] = useState(false)
   const isCollapsed = collapsed && !mobileOpen
   const [retentionOpen, setRetentionOpen] = useState(true)
   const [portalOpen, setPortalOpen] = useState(true)
-  const visibleNavItems = navItems.filter((item) =>
-    allowedSections.includes(item.href.replace("#", "")),
-  )
+  const visibleNavItems = navItems.filter((item) => {
+    // Items with real routes (not hash anchors) are always visible
+    if (item.href.startsWith("/")) return true
+    return allowedSections.includes(item.href.replace("#", ""))
+  })
 
   return (
     <aside
@@ -116,7 +120,9 @@ export function Sidebar({
       )}
     >
       <div className="flex h-auto items-center justify-between border-b border-border bg-transparent px-4 py-4">
-        {!isCollapsed && (
+        {isCollapsed ? (
+          <img src="/logo-new.svg" alt="OmniDome Logo" className="h-8 w-8 mx-auto" title="OmniDome" />
+        ) : (
           <div className="flex items-center gap-3 group cursor-pointer">
             <img src="/logo-new.svg" alt="OmniDome Logo" className="h-12 w-12 transition-all group-hover:scale-110" />
             <div className="flex flex-col">
@@ -158,7 +164,7 @@ export function Sidebar({
         </div>
       )}
 
-      <nav className="flex-1 space-y-1.5 overflow-y-auto px-3 py-4 custom-scrollbar">
+      <nav className={cn("flex-1 space-y-1.5 py-4 custom-scrollbar", isCollapsed ? "overflow-hidden px-2" : "overflow-y-auto px-3")}>
         {visibleNavItems.map((item) => {
           const section = item.section ?? item.href.replace("#", "")
           const isActive = activeSection === section
@@ -176,13 +182,21 @@ export function Sidebar({
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => {
+                    // Items with a real path (starts with "/") navigate to that route
+                    if (item.href.startsWith("/")) {
+                      router.push(item.href)
+                      onMobileClose()
+                      return
+                    }
                     onSectionChange(section)
                     if (section === "retention") setRetentionOpen(true)
                     if (section === "portal") setPortalOpen(true)
                     onMobileClose()
                   }}
+                  title={isCollapsed ? item.label : undefined}
                   className={cn(
                     "group flex flex-1 items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold transition-all duration-200 outline-none",
+                    isCollapsed && "justify-center px-2",
                     isActive
                       ? "bg-primary/10 text-primary border border-primary/20"
                       : "text-muted-foreground hover:bg-secondary hover:text-foreground"
@@ -192,7 +206,7 @@ export function Sidebar({
                     "p-1.5 rounded-lg transition-all",
                     isActive ? "bg-primary text-primary-foreground shadow-[0_0_10px_rgba(var(--primary),0.4)]" : "group-hover:text-primary"
                   )}>
-                    <item.icon className="h-4.5 w-4.5 shrink-0" />
+                    <item.icon className="h-[18px] w-[18px] shrink-0" />
                   </div>
                   {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
                   {isActive && !isCollapsed && (
@@ -248,21 +262,21 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-border p-4">
-        <div className={cn("flex items-center gap-3", isCollapsed && "justify-center")}>
-          <Avatar className="h-9 w-9">
+        <div className={cn("flex items-center gap-3", isCollapsed && "flex-col gap-2 justify-center")}>
+          <Avatar className="h-9 w-9" title="Profile">
             <AvatarImage src="/diverse-avatars.png" />
             <AvatarFallback>JD</AvatarFallback>
           </Avatar>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground"
+            title="Settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
           {!isCollapsed && (
-            <div className="flex-1 overflow-hidden">
-              <p className="truncate text-sm font-medium text-foreground">John Doe</p>
-              <p className="truncate text-xs text-muted-foreground">Admin</p>
-            </div>
-          )}
-          {!isCollapsed && (
-            <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-              <Settings className="h-4 w-4" />
-            </Button>
+            <span className="text-xs text-muted-foreground flex-1 truncate">Admin</span>
           )}
         </div>
       </div>

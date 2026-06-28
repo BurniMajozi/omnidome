@@ -318,6 +318,8 @@ export function InventoryModule() {
     return (
         <ModuleLayout
             title="Inventory & Stock Management"
+        icon={<Package className="h-5 w-5" />}
+        subtitle="Stock levels, procurement, warehouse, and asset tracking"
             flashcardKPIs={flashcardKPIs}
             activities={data.activities ?? defaultActivities}
             issues={data.issues ?? defaultIssues}
@@ -329,8 +331,8 @@ export function InventoryModule() {
         >
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Stock by Category */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Stock Levels by Category</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Stock Levels by Category</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={defaultStockByCategoryData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
@@ -348,8 +350,8 @@ export function InventoryModule() {
                 </div>
 
                 {/* Warehouse Distribution */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Stock by Warehouse</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Stock by Warehouse</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
                             <Pie
@@ -374,8 +376,8 @@ export function InventoryModule() {
                 </div>
 
                 {/* Stock Movement Trends */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Stock Movement Trends</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Stock Movement Trends</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <AreaChart data={defaultMovementTrendData}>
                             <defs>
@@ -403,8 +405,8 @@ export function InventoryModule() {
                 </div>
 
                 {/* Sell-Through Rates */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Sell-Through Rate by Product</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Sell-Through Rate by Product</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={defaultSellThruData} layout="vertical">
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />

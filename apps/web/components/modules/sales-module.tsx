@@ -352,6 +352,8 @@ export function SalesModule() {
   return (
     <ModuleLayout
       title="Sales"
+        icon={<Target className="h-5 w-5" />}
+        subtitle="Pipeline management, quotas, forecasting, and deal velocity"
       flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
@@ -364,8 +366,8 @@ export function SalesModule() {
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Revenue & Deals Chart */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Revenue & Deals Trend</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Revenue & Deals Trend</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={salesData}>
@@ -393,8 +395,8 @@ export function SalesModule() {
         </div>
 
         {/* Sales Pipeline */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Sales Pipeline</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Sales Pipeline</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <FunnelChart>
@@ -416,8 +418,8 @@ export function SalesModule() {
       </div>
 
       {/* Top Products */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Top Selling Products</h3>
+      <div className="surface-card p-5">
+        <h3 className="section-title mb-4">Top Selling Products</h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={topProducts} layout="vertical">
@@ -439,7 +441,7 @@ export function SalesModule() {
       </div>
 
       {/* Visual Pipeline Board — Drag & Drop Kanban */}
-      <div className="rounded-xl border border-border bg-card p-5">
+      <div className="surface-card p-5">
         <h3 className="mb-4 text-lg font-semibold text-foreground flex items-center gap-2">
           <Target className="h-5 w-5 text-blue-400" />
           Pipeline Board

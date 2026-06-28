@@ -520,6 +520,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
     return (
         <ModuleLayout
             title="Retention"
+        icon={<Heart className="h-5 w-5" />}
+        subtitle="Churn prevention, win-back campaigns, and loyalty management"
             flashcardKPIs={flashcardKPIsWithIcons}
             activities={activities}
             issues={issues}
@@ -541,8 +543,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                     {/* Charts */}
                     <div className="grid gap-6 lg:grid-cols-2">
                         {/* Churn Trend & Prediction */}
-                        <div className="rounded-xl border border-border bg-card p-5">
-                            <h3 className="mb-4 text-lg font-semibold text-foreground">Churn Rate Trend & Prediction</h3>
+                        <div className="surface-card p-5">
+                            <h3 className="section-title mb-4">Churn Rate Trend & Prediction</h3>
                             <div className="h-64">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <AreaChart data={churnTrendData}>
@@ -571,8 +573,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                         </div>
 
                         {/* Risk Segmentation */}
-                        <div className="rounded-xl border border-border bg-card p-5">
-                            <h3 className="mb-4 text-lg font-semibold text-foreground">Customer Risk Segmentation</h3>
+                        <div className="surface-card p-5">
+                            <h3 className="section-title mb-4">Customer Risk Segmentation</h3>
                             <div className="h-64">
                                 <ResponsiveContainer width="100%" height="100%">
                                     <PieChart>
@@ -606,8 +608,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                     </div>
 
                     {/* Churn Reasons */}
-                    <div className="rounded-xl border border-border bg-card p-5">
-                        <h3 className="mb-4 text-lg font-semibold text-foreground">Churn Reasons Analysis</h3>
+                    <div className="surface-card p-5">
+                        <h3 className="section-title mb-4">Churn Reasons Analysis</h3>
                         <div className="h-64">
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={churnReasons} layout="vertical">
@@ -633,8 +635,8 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                     </div>
 
                     {/* CLV by Segment */}
-                    <div className="rounded-xl border border-border bg-card p-5">
-                        <h3 className="mb-4 text-lg font-semibold text-foreground">Customer Lifetime Value & Retention by Segment</h3>
+                    <div className="surface-card p-5">
+                        <h3 className="section-title mb-4">Customer Lifetime Value & Retention by Segment</h3>
                         <div className="h-64">
                             <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={clvBySegment}>
@@ -668,14 +670,14 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                 </TabsContent>
 
                 <TabsContent value="events" className="space-y-6">
-                    <div className="rounded-xl border border-border bg-card p-5">
-                        <h3 className="mb-4 text-lg font-semibold text-foreground">Retention Events</h3>
+                    <div className="surface-card p-5">
+                        <h3 className="section-title mb-4">Retention Events</h3>
                         <div className="space-y-3">
                             {eventsSafe.map((event) => (
                                 <div key={event.id} className="rounded-lg border border-border bg-secondary/30 p-3">
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <div>
-                                            <p className="text-sm font-semibold text-foreground">{event.type}</p>
+                                            <p className="card-title">{event.type}</p>
                                             <p className="text-xs text-muted-foreground">
                                                 {event.account} - {event.customer} - {event.channel}
                                             </p>
@@ -694,21 +696,21 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                 </TabsContent>
 
                 <TabsContent value="watchlist" className="space-y-6">
-                    <div className="rounded-xl border border-border bg-card p-5">
-                        <h3 className="mb-4 text-lg font-semibold text-foreground">Watchlist</h3>
+                    <div className="surface-card p-5">
+                        <h3 className="section-title mb-4">Watchlist</h3>
                         <div className="space-y-3">
                             {watchlistSafe.map((item) => (
                                 <div key={item.id} className="rounded-lg border border-border bg-secondary/30 p-3">
                                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                                         <div>
-                                            <p className="text-sm font-semibold text-foreground">{item.customer}</p>
+                                            <p className="card-title">{item.customer}</p>
                                             <p className="text-xs text-muted-foreground">
                                                 {item.account} - {item.segment}
                                             </p>
                                             <p className="text-xs text-muted-foreground">Trigger: {item.trigger}</p>
                                         </div>
                                         <div className="flex items-center gap-3 text-xs">
-                                            <Badge className="bg-amber-500/20 text-amber-400">{item.riskScore}</Badge>
+                                            <Badge className="badge-warning">{item.riskScore}</Badge>
                                             <Badge variant="secondary" className="bg-secondary text-foreground">
                                                 {item.status}
                                             </Badge>

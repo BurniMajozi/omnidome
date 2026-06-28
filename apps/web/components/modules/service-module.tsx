@@ -359,6 +359,8 @@ export function ServiceModule() {
   return (
     <ModuleLayout
       title="Service"
+        icon={<Headset className="h-5 w-5" />}
+        subtitle="Tickets, SLAs, field service, and customer satisfaction scores"
       flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
@@ -371,8 +373,8 @@ export function ServiceModule() {
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Ticket Trend */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Daily Ticket Activity</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Daily Ticket Activity</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={ticketTrend}>
@@ -396,8 +398,8 @@ export function ServiceModule() {
         </div>
 
         {/* Tickets by Priority */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Tickets by Priority</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Tickets by Priority</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -430,8 +432,8 @@ export function ServiceModule() {
       </div>
 
       {/* Resolution Time by Priority */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Avg Resolution Time by Priority</h3>
+      <div className="surface-card p-5">
+        <h3 className="section-title mb-4">Avg Resolution Time by Priority</h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={resolutionTime}>

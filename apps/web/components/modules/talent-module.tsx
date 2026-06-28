@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
 import {
   BarChart,
   Bar,
@@ -28,11 +29,13 @@ import {
   Calendar,
   CalendarDays,
   ChevronDown,
+  Download,
   Gift,
   GraduationCap,
   IdCard,
   Laptop,
   LogOut,
+  Plus,
   ShieldCheck,
   Sparkles,
   Users,
@@ -282,7 +285,9 @@ export function TalentModule() {
 
   // ── Schedule state ────────────────────────────────────────────────
   const [schedules, setSchedules] = useState<Schedule[]>([])
-  const [demandForecast, setDemandForecast] = useState<unknown>(null)
+  const [demandForecast, setDemandForecast] = useState<Array<{
+    date: string; day: string; required_staff: number; scheduled_staff: number; gap: number
+  }> | null>(null)
   const [schedLoading, setSchedLoading] = useState(false)
   const [schedError, setSchedError] = useState<string | null>(null)
 
@@ -499,7 +504,7 @@ export function TalentModule() {
         ])
         if (cancelled) return
         setSchedules(scheds)
-        setDemandForecast(forecast)
+        setDemandForecast(forecast as Array<{ date: string; day: string; required_staff: number; scheduled_staff: number; gap: number }> | null)
       } catch (err: unknown) {
         if (!cancelled) setSchedError(err instanceof Error ? err.message : String(err))
       } finally {
@@ -646,7 +651,7 @@ export function TalentModule() {
     } catch { /* ignore */ }
   }
   const handleConfirmSchedule = async (id: string) => {
-    try { await confirmSchedule(id); setSchedules((prev) => prev.map((s) => s.id === id ? { ...s, confirmed: true } : s)) } catch { /* ignore */ }
+    try { await confirmSchedule(id); setSchedules((prev) => prev.map((s) => s.id === id ? { ...s, status: "CONFIRMED" } : s)) } catch { /* ignore */ }
   }
   const handleDeleteSchedule = async (id: string) => {
     try { await deleteSchedule(id); setSchedules((prev) => prev.filter((s) => s.id !== id)) } catch { /* ignore */ }
@@ -831,7 +836,7 @@ export function TalentModule() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   {departmentStaff.map((node) => (
                     <div key={node.department} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-sm font-semibold text-foreground">{node.department}</p>
+                      <p className="card-title">{node.department}</p>
                       <p className="mt-2 text-sm text-muted-foreground">{node.count} people</p>
                     </div>
                   ))}
@@ -956,9 +961,9 @@ export function TalentModule() {
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-3">
                   {[
-                    { label: "Next pay run", value: "Feb 28" },
+                    { label: "Next pay run", value: (() => { const d = new Date(); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0); return last.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) })() },
                     { label: "Employees", value: String(kpiTotal) },
-                    { label: "Estimated total", value: "R 3.9M" },
+                    { label: "Estimated total", value: `R ${(kpiTotal * 16000 / 1_000_000).toFixed(1)}M` },
                   ].map((metric) => (
                     <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
                       <p className="text-xs text-muted-foreground">{metric.label}</p>
@@ -1078,9 +1083,9 @@ export function TalentModule() {
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-3">
                   {[
-                    { label: "Today demand", value: "High" },
-                    { label: "Required coverage", value: "28 agents" },
-                    { label: "Scheduled", value: "26 agents" },
+                    { label: "Today demand", value: (demandForecast?.[0]?.gap ?? 0) > 0 ? "High" : "Covered" },
+                    { label: "Required coverage", value: demandForecast ? `${demandForecast[0]?.required_staff ?? "\u2014"} agents` : "28 agents" },
+                    { label: "Scheduled", value: demandForecast ? `${demandForecast[0]?.scheduled_staff ?? "\u2014"} agents` : "26 agents" },
                   ].map((metric) => (
                     <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
                       <p className="text-xs text-muted-foreground">{metric.label}</p>
@@ -1386,13 +1391,6 @@ export function TalentModule() {
 
       // ── SCHEDULE ──────────────────────────────────────────────────
       case "schedule": {
-        // Derive demand forecast summary
-        const forecastSummary = (() => {
-          if (!demandForecast || typeof demandForecast !== "object") return null
-          const df = demandForecast as Record<string, unknown>
-          return df
-        })()
-
         return (
           <div className="space-y-6">
             {/* Demand forecast summary */}
@@ -1406,21 +1404,35 @@ export function TalentModule() {
               <CardContent>
                 {schedLoading ? (
                   <p className="text-sm text-muted-foreground">Loading forecast…</p>
-                ) : forecastSummary ? (
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    {Object.entries(forecastSummary).slice(0, 6).map(([key, val]) => (
-                      <div key={key} className="rounded-lg border border-border bg-background/40 p-4">
-                        <p className="text-xs text-muted-foreground">{key}</p>
-                        <p className="mt-1 text-lg font-semibold text-foreground">{String(val)}</p>
-                      </div>
-                    ))}
+                ) : demandForecast && demandForecast.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-xs text-muted-foreground">
+                          <th className="py-2 px-3 text-left">Date</th>
+                          <th className="py-2 px-3 text-right">Required</th>
+                          <th className="py-2 px-3 text-right">Scheduled</th>
+                          <th className="py-2 px-3 text-right">Gap</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {demandForecast.slice(0, 7).map((row) => (
+                          <tr key={row.date} className="border-b border-border/50">
+                            <td className="py-2 px-3 text-foreground">{row.date}</td>
+                            <td className="py-2 px-3 text-right text-foreground">{row.required_staff}</td>
+                            <td className="py-2 px-3 text-right text-foreground">{row.scheduled_staff}</td>
+                            <td className={`py-2 px-3 text-right ${row.gap > 0 ? "text-red-400" : "text-emerald-400"}`}>{row.gap > 0 ? `+${row.gap}` : row.gap}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
                 ) : (
                   <div className="grid gap-4 sm:grid-cols-3">
                     {[
-                      { label: "Next 7 days", value: "Forecast available" },
-                      { label: "Required staff/day", value: "28 avg" },
-                      { label: "Scheduled staff/day", value: "26 avg" },
+                      { label: "Next 7 days", value: "No data yet" },
+                      { label: "Required staff/day", value: "—" },
+                      { label: "Scheduled staff/day", value: "—" },
                     ].map((m) => (
                       <div key={m.label} className="rounded-lg border border-border bg-background/40 p-4">
                         <p className="text-xs text-muted-foreground">{m.label}</p>
@@ -1471,13 +1483,13 @@ export function TalentModule() {
                             <td className="py-3 pr-4 text-muted-foreground">{row.shift_start} – {row.shift_end}</td>
                             <td className="py-3 pr-4 text-muted-foreground">{row.department}</td>
                             <td className="py-3 pr-4">
-                              <Badge variant="outline" className={row.confirmed ? "border-emerald-500/40 text-emerald-500" : "border-amber-500/40 text-amber-500"}>
-                                {row.confirmed ? "Confirmed" : "Pending"}
+                              <Badge variant="outline" className={row.status === "CONFIRMED" ? "border-emerald-500/40 text-emerald-500" : "border-amber-500/40 text-amber-500"}>
+                                {row.status === "CONFIRMED" ? "Confirmed" : row.status ?? "Scheduled"}
                               </Badge>
                             </td>
                             <td className="py-3">
                               <div className="flex flex-wrap gap-2">
-                                {!row.confirmed && (
+                                {row.status !== "CONFIRMED" && (
                                   <Button size="sm" variant="outline" onClick={() => handleConfirmSchedule(row.id)}>Confirm</Button>
                                 )}
                                 <Button size="sm" variant="ghost" onClick={() => handleDeleteSchedule(row.id)}>Delete</Button>
@@ -1838,6 +1850,18 @@ export function TalentModule() {
   // ── Main render ────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<UserCog className="h-5 w-5" />}
+        title="Talent & HR"
+        subtitle="Employee management, onboarding, performance, and workforce planning"
+        actions={
+          <>
+            <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" />Export</Button>
+            <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Employee</Button>
+          </>
+        }
+      />
+
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard

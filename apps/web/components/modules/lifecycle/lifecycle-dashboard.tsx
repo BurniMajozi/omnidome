@@ -18,6 +18,7 @@ import { lifecycleApi } from "@/lib/lifecycle-api"
 import type {
   DashboardData, CustomerLifecycle, LifecycleEvent, LifecycleStage, FunnelData,
 } from "@/lib/lifecycle-api"
+import { supabase } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899", "#8b5cf6"]
 
@@ -33,7 +34,7 @@ const STAGE_COLORS: Record<string, string> = {
   "Reactivated": "#14b8a6",
 }
 
-const TENANT_ID = "00000000-0000-0000-0000-000000000001" // TODO: from auth context
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 function formatZAR(n: number): string {
   return `R ${n.toLocaleString("en-ZA", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
@@ -65,6 +66,7 @@ function KPICard({ title, value, subtext, icon, color }: {
 // Main Dashboard
 // ---------------------------------------------------------------------------
 export function LifecycleDashboard() {
+  const [tenantId, setTenantId] = useState(FALLBACK_TENANT_ID)
   const [tab, setTab] = useState("overview")
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
   const [lifecycles, setLifecycles] = useState<CustomerLifecycle[]>([])
@@ -74,28 +76,38 @@ export function LifecycleDashboard() {
   const [filterStage, setFilterStage] = useState<string>("all")
   const [days, setDays] = useState(30)
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
-    try {
-      const [dashData, lcData, evData, stData] = await Promise.all([
-        lifecycleApi.getDashboard(TENANT_ID, days),
-        lifecycleApi.listLifecycles(TENANT_ID, {
-          stage: filterStage === "all" ? undefined : filterStage,
-          page_size: 50,
-        }),
-        lifecycleApi.listEvents(TENANT_ID, undefined, 20),
-        lifecycleApi.ensureStages(TENANT_ID),
-      ])
-      setDashboard(dashData)
-      setLifecycles(lcData.lifecycles || [])
-      setEvents(evData.events || [])
-      setStages(stData.stages || [])
-    } catch (err) {
-      console.error("Failed to load lifecycle data:", err)
-    } finally {
-      setLoading(false)
+  // Resolve tenant ID from Supabase session (falls back to dev default)
+  useEffect(() => {
+    const resolve = (session: Parameters<Parameters<typeof supabase.auth.onAuthStateChange>[0]>[1]) => {
+      setTenantId(
+        session?.user?.user_metadata?.tenant_id ??
+        session?.user?.app_metadata?.tenant_id ??
+        FALLBACK_TENANT_ID
+      )
     }
-  }, [days, filterStage])
+    supabase.auth.getSession().then(({ data }) => resolve(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => resolve(session))
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  const loadData = useCallback(async () => {
+    const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
+    setLoading(true)
+    const [dashData, lcData, evData, stData] = await Promise.all([
+      safe(lifecycleApi.getDashboard(tenantId, days)),
+      safe(lifecycleApi.listLifecycles(tenantId, {
+        stage: filterStage === "all" ? undefined : filterStage,
+        page_size: 50,
+      })),
+      safe(lifecycleApi.listEvents(tenantId, undefined, 20)),
+      safe(lifecycleApi.ensureStages(tenantId)),
+    ])
+    if (dashData) setDashboard(dashData)
+    setLifecycles(lcData?.lifecycles ?? [])
+    setEvents(evData?.events ?? [])
+    setStages(stData?.stages ?? [])
+    setLoading(false)
+  }, [tenantId, days, filterStage])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -194,7 +206,7 @@ export function LifecycleDashboard() {
           />
           <KPICard
             title="Avg Health"
-            value={`${Object.values(dashboard.stages).reduce((s, d) => s + d.avg_health * d.count, 0) / Math.max(1, Object.values(dashboard.stages).reduce((s, d) => s + d.count, 0)).toFixed(0)}%`}
+            value={`${(Object.values(dashboard.stages).reduce((s, d) => s + d.avg_health * d.count, 0) / Math.max(1, Object.values(dashboard.stages).reduce((s, d) => s + d.count, 0))).toFixed(0)}%`}
             subtext="Across all stages"
             icon={<Zap className="h-5 w-5" />}
             color="#14b8a6"

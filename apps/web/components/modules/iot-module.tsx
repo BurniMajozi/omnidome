@@ -22,7 +22,7 @@ import {
     Scatter,
     ZAxis,
 } from "recharts"
-import { Radio, Signal, Thermometer, Zap } from "lucide-react"
+import { Radio, Signal, Thermometer, Zap, Cpu } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 
 // Signal health distribution
@@ -332,6 +332,8 @@ export function IoTModule() {
     return (
         <ModuleLayout
             title="IoT & Device Management"
+        icon={<Cpu className="h-5 w-5" />}
+        subtitle="Device fleet, sensor telemetry, and IoT connectivity status"
             flashcardKPIs={flashcardKPIs}
             activities={data.activities ?? defaultActivities}
             issues={data.issues ?? defaultIssues}
@@ -343,8 +345,8 @@ export function IoTModule() {
         >
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Signal Health Distribution */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Signal Health Distribution</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Signal Health Distribution</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
                             <Pie
@@ -370,8 +372,8 @@ export function IoTModule() {
                 </div>
 
                 {/* Device Types Online/Offline */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Device Status by Type</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Device Status by Type</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={defaultDeviceTypeData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
@@ -388,8 +390,8 @@ export function IoTModule() {
                 </div>
 
                 {/* Signal Trend Over Time */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Signal & Alert Trend (24h)</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Signal & Alert Trend (24h)</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <AreaChart data={defaultSignalTrendData}>
                             <defs>
@@ -413,8 +415,8 @@ export function IoTModule() {
                 </div>
 
                 {/* Remote Command History */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Remote Command History</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Remote Command History</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={defaultCommandHistoryData}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />

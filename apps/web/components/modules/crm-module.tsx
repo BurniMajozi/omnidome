@@ -344,6 +344,8 @@ export function CrmModule() {
   return (
     <ModuleLayout
       title="CRM"
+        icon={<Users className="h-5 w-5" />}
+        subtitle="Customer relationships, pipeline health, and churn analytics"
       flashcardKPIs={flashcardKPIsWithIcons}
       activities={activities}
       issues={issues}
@@ -356,8 +358,8 @@ export function CrmModule() {
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Customer Growth & Churn */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Customer Growth & Churn</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Customer Growth & Churn</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={customerData}>
@@ -381,8 +383,8 @@ export function CrmModule() {
         </div>
 
         {/* Lead Generation & Conversion */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Lead Generation & Conversion</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Lead Generation & Conversion</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={leadData}>
@@ -407,8 +409,8 @@ export function CrmModule() {
       </div>
 
       {/* Customer Segments */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Customer Engagement Score</h3>
+      <div className="surface-card p-5">
+        <h3 className="section-title mb-4">Customer Engagement Score</h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={customerData}>

@@ -48,6 +48,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { PageHeader } from "@/components/ui/page-header"
 import { VoiceAIPanel } from "@/components/modules/voice-ai-panel"
 import {
   listAgents,
@@ -123,8 +124,15 @@ function KpiSection({ agents, sessions, dashboard }: { agents: any; sessions: an
 
     const totalCalls = Array.isArray(sessionList) ? sessionList.length : 0
 
-    const avgWaitSec = dash.avg_wait_seconds ?? dash.avgWait ?? null
-    const avgHandleSec = avgWaitSec ? avgWaitSec * 1.3 : null
+    // avg_wait: average across all inbound queues (dashboard returns per-queue data)
+    const inboundQueues: any[] = dash.inbound?.queues ?? []
+    const waitValues = inboundQueues.map((q: any) => q.avg_wait_seconds).filter((v: any) => v != null)
+    const avgWaitSec = waitValues.length > 0 ? waitValues.reduce((a: number, b: number) => a + b, 0) / waitValues.length : null
+    // avg_handle: derived from completed session durations
+    const completedSessions = Array.isArray(sessionList) ? sessionList.filter((s: any) => s.duration_seconds != null) : []
+    const avgHandleSec = completedSessions.length > 0
+      ? completedSessions.reduce((a: number, s: any) => a + s.duration_seconds, 0) / completedSessions.length
+      : null
 
     setKpis({
       callsToday: totalCalls > 0 ? totalCalls.toLocaleString() : "1,847",
@@ -246,8 +254,8 @@ function OverviewTab() {
       {/* Charts Row */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Call Volume */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Call Volume Trend</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Call Volume Trend</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={callData}>
@@ -271,8 +279,8 @@ function OverviewTab() {
         </div>
 
         {/* Call Type Distribution */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Call Type Distribution</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Call Type Distribution</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -305,8 +313,8 @@ function OverviewTab() {
       </div>
 
       {/* Agent Performance */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h3 className="mb-4 text-lg font-semibold text-foreground">Top Agent Performance</h3>
+      <div className="surface-card p-5">
+        <h3 className="section-title mb-4">Top Agent Performance</h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={agentPerf}>
@@ -441,12 +449,12 @@ function QueuesTab() {
               q.direction === "inbound" ? "bg-emerald-500/10" : "bg-blue-500/10"
             )}>
               {q.direction === "inbound"
-                ? <PhoneIncoming className="h-4.5 w-4.5 text-emerald-400" />
-                : <PhoneOutgoing className="h-4.5 w-4.5 text-blue-400" />
+                ? <PhoneIncoming className="h-[18px] w-[18px] text-emerald-400" />
+                : <PhoneOutgoing className="h-[18px] w-[18px] text-blue-400" />
               }
             </div>
             <div>
-              <p className="text-sm font-semibold text-foreground">{q.name}</p>
+              <p className="card-title">{q.name}</p>
               <p className="text-xs text-muted-foreground">{q.category} · {q.direction}</p>
             </div>
           </div>
@@ -492,19 +500,19 @@ function QueuesTab() {
           <div className="mt-3 grid grid-cols-3 gap-3 rounded-lg border border-border/40 bg-background/40 p-3">
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Service Level</p>
-              <p className="text-sm font-semibold text-foreground">
+              <p className="card-title">
                 {((selectedQueueStats.data.service_level ?? 0.85) * 100).toFixed(1)}%
               </p>
             </div>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Abandoned</p>
-              <p className="text-sm font-semibold text-foreground">
+              <p className="card-title">
                 {selectedQueueStats.data.abandoned_count ?? 0}
               </p>
             </div>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg Handle</p>
-              <p className="text-sm font-semibold text-foreground">
+              <p className="card-title">
                 {Math.round((selectedQueueStats.data.avg_handle_time ?? 330) / 60)}m
               </p>
             </div>
@@ -519,7 +527,7 @@ function QueuesTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-foreground">Queue Management</h3>
+          <h3 className="section-title">Queue Management</h3>
           <p className="text-sm text-muted-foreground">Monitor and manage inbound & outbound call queues</p>
         </div>
         <Button size="sm" onClick={() => setShowCreate(!showCreate)}>
@@ -986,20 +994,20 @@ function Customer360Tab() {
             <CardContent className="space-y-3">
               <div className="rounded-lg border border-border/40 bg-background/40 p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Name</p>
-                <p className="text-sm font-medium text-foreground">{data.name ?? data.fullName ?? "—"}</p>
+                <p className="text-sm font-medium text-foreground">{data.identity?.full_name ?? data.identity?.name ?? "—"}</p>
               </div>
               <div className="rounded-lg border border-border/40 bg-background/40 p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Email</p>
                 <p className="flex items-center gap-1.5 text-sm text-foreground">
                   <Mail className="h-3.5 w-3.5 text-muted-foreground" />
-                  {data.email ?? "—"}
+                  {data.identity?.email ?? "—"}
                 </p>
               </div>
               <div className="rounded-lg border border-border/40 bg-background/40 p-3">
                 <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Phone</p>
                 <p className="flex items-center gap-1.5 text-sm text-foreground">
                   <Phone className="h-3.5 w-3.5 text-muted-foreground" />
-                  {data.phone ?? data.phoneNumber ?? "—"}
+                  {data.identity?.phone ?? data.identity?.mobile ?? "—"}
                 </p>
               </div>
             </CardContent>
@@ -1016,8 +1024,8 @@ function Customer360Tab() {
             <CardContent>
               <ScrollArea className="h-48">
                 <div className="space-y-2">
-                  {(data.subscriptions ?? data.plans ?? []).length > 0 ? (
-                    (data.subscriptions ?? data.plans ?? []).map((sub: any, i: number) => (
+                  {(data.billing?.subscriptions ?? []).length > 0 ? (
+                    (data.billing?.subscriptions ?? []).map((sub: any, i: number) => (
                       <div key={i} className="flex items-center justify-between rounded-lg border border-border/40 bg-background/40 p-3">
                         <div>
                           <p className="text-sm font-medium text-foreground">{sub.name ?? sub.plan ?? `Plan ${i + 1}`}</p>
@@ -1052,8 +1060,8 @@ function Customer360Tab() {
             <CardContent>
               <ScrollArea className="h-48">
                 <div className="space-y-2">
-                  {(data.tickets ?? data.supportTickets ?? []).length > 0 ? (
-                    (data.tickets ?? data.supportTickets ?? []).map((ticket: any, i: number) => (
+                  {(data.support?.open_tickets ?? []).length > 0 ? (
+                    (data.support?.open_tickets ?? []).map((ticket: any, i: number) => (
                       <div key={i} className="rounded-lg border border-border/40 bg-background/40 p-3">
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-medium text-foreground">{ticket.subject ?? ticket.title ?? `Ticket ${i + 1}`}</p>
@@ -1088,8 +1096,8 @@ function Customer360Tab() {
             <CardContent>
               <ScrollArea className="h-48">
                 <div className="space-y-2">
-                  {(data.callHistory ?? data.recentCalls ?? data.calls ?? []).length > 0 ? (
-                    (data.callHistory ?? data.recentCalls ?? data.calls ?? []).map((call: any, i: number) => (
+                  {(data.recent_calls ?? []).length > 0 ? (
+                    (data.recent_calls ?? []).map((call: any, i: number) => (
                       <div key={i} className="flex items-center justify-between rounded-lg border border-border/40 bg-background/40 p-3">
                         <div className="flex items-center gap-2">
                           {call.direction === "inbound" || call.type === "inbound" ? (
@@ -1098,12 +1106,12 @@ function Customer360Tab() {
                             <PhoneOutgoing className="h-4 w-4 text-blue-400" />
                           )}
                           <div>
-                            <p className="text-sm text-foreground">{call.agent ?? call.agent_name ?? "Agent"}</p>
-                            <p className="text-[10px] text-muted-foreground">{call.date ?? call.start_time ?? "—"}</p>
+                            <p className="text-sm text-foreground">{"Agent"}</p>
+                            <p className="text-[10px] text-muted-foreground">{call.start_time ? new Date(call.start_time).toLocaleString("en-ZA", {dateStyle:"short",timeStyle:"short"}) : "—"}</p>
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className="text-xs text-muted-foreground">{call.duration ?? "—"}</p>
+                          <p className="text-xs text-muted-foreground">{call.duration_seconds ? `${Math.floor(call.duration_seconds/60)}m ${call.duration_seconds%60}s` : "—"}</p>
                           {call.outcome && (
                             <Badge variant="outline" className={cn(
                               "text-[10px]",
@@ -1217,6 +1225,18 @@ export function CallCenterModule() {
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<Phone className="h-5 w-5" />}
+        title="Call Center"
+        subtitle="Agent management, queue monitoring, and AI whisper coaching"
+        actions={
+          <>
+            <Button variant="outline" size="sm"><Activity className="h-3.5 w-3.5" />Live Monitor</Button>
+            <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Queue</Button>
+          </>
+        }
+      />
+
       {/* KPI Cards — live data */}
       <KpiSection agents={agents} sessions={sessions} dashboard={dashboard} />
 
@@ -1229,7 +1249,7 @@ export function CallCenterModule() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="mb-4 grid w-full grid-cols-4 bg-background">
+        <TabsList className="mb-4 grid w-full grid-cols-4 bg-muted/30">
           <TabsTrigger value="overview" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <TrendingUp className="h-3.5 w-3.5" />
             Overview
@@ -1243,7 +1263,7 @@ export function CallCenterModule() {
             Whisper AI
           </TabsTrigger>
           <TabsTrigger value="customer360" className="gap-1.5 text-xs data-[state=active]:text-violet-400">
-            <User className="h-3.5 w-3.5" />
+                       <User className="h-3.5 w-3.5" />
             Customer 360
           </TabsTrigger>
         </TabsList>

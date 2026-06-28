@@ -220,7 +220,7 @@ export function DashboardOverview() {
 
       {/* Modules Grid */}
       <div className="mb-6">
-        <h2 className="mb-4 text-lg font-semibold text-foreground">Platform Modules</h2>
+        <h2 className="section-title mb-4">Platform Modules</h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {modulesWithIcons.map((module) => (
             <ModuleCard key={module.title} {...module} />

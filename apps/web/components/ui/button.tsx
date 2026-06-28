@@ -9,15 +9,25 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: 'bg-primary text-primary-foreground hover:bg-primary/90',
+        // Primary action — solid brand colour
+        default: 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90 active:scale-[0.98]',
+        // Hero / call-to-action — gradient with glow
+        cta: 'bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-md shadow-primary/25 hover:opacity-90 active:scale-[0.98] font-semibold',
+        // Destructive action
         destructive:
-          'bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60',
+          'bg-destructive text-white shadow-sm hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60 active:scale-[0.98]',
+        // Ghost destructive — red text, transparent background
+        'ghost-destructive':
+          'text-destructive hover:bg-destructive/10 hover:text-destructive active:scale-[0.98]',
+        // Bordered secondary action
         outline:
-          'border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50',
+          'border border-border bg-background shadow-xs hover:bg-secondary hover:border-primary/40 dark:bg-input/30 dark:border-input dark:hover:bg-input/50 active:scale-[0.98]',
+        // Soft secondary
         secondary:
-          'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+          'bg-secondary text-secondary-foreground hover:bg-secondary/70 active:scale-[0.98]',
+        // Transparent — for icon buttons, table row actions
         ghost:
-          'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
+          'hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 active:scale-[0.98]',
         link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {

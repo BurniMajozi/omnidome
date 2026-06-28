@@ -5,13 +5,27 @@
  * Proxies through Next.js API routes to the Compliance service (port 8019).
  */
 
-const API_BASE = "/svc/compliance"
-const TENANT_ID = "00000000-0000-0000-0000-000000000001"
+import { supabase } from "@/lib/supabase/client"
+
+// Route handler at app/svc/compliance/[...path]/route.ts strips "/svc/compliance/"
+// and forwards the rest to the backend. All backend routes live under /api/v1/.
+const API_BASE = "/svc/compliance/api/v1"
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+async function getTenantId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return (
+    data.session?.user?.user_metadata?.tenant_id ??
+    data.session?.user?.app_metadata?.tenant_id ??
+    FALLBACK_TENANT_ID
+  )
+}
 
 async function fetchCompliance<T>(path: string, init?: RequestInit): Promise<T> {
+  const tenantId = await getTenantId()
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
-    headers: { "x-tenant-id": TENANT_ID, "Content-Type": "application/json" },
+    headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
     ...init,
   })
   if (!res.ok) {
@@ -238,41 +252,10 @@ export interface ComplianceObligation {
 // ── Overview Dashboard ─────────────────────────────────────────────────
 
 export async function getComplianceOverview(): Promise<ComplianceOverview> {
-  const [scores, contracts, dsar, breaches, obligations, tax, hs, funding] = await Promise.all([
-    fetchCompliance<{ items: ComplianceScore[] }>("/scores/"),
-    fetchCompliance<{ items: Contract[]; cutoff: string }>("/contracts/dashboard/expiring?days=90"),
-    fetchCompliance<{ total: number; overdue: number; pending: number; completed: number }>("/popi/dsar/dashboard"),
-    fetchCompliance<{ total: number; open: number; critical: number }>("/breaches/dashboard"),
-    fetchCompliance<{ items: ComplianceObligation[] }>("/scores/obligations?status=pending_review"),
-    fetchCompliance<{ overdue: number; pending: number }>("/tax/dashboard"),
-    fetchCompliance<{ open: number; critical: number }>("/health-safety/dashboard"),
-    fetchCompliance<{ items: FundingOpportunity[] }>("/funding/?status=identified"),
-  ])
-
-  const categories = scores.items.map((s) => ({
-    name: s.category,
-    score: s.score,
-    status: s.status,
-    issues: s.issues_count,
-    critical: s.critical_issues,
-  }))
-
-  const overall_score = categories.length > 0
-    ? Math.round(categories.reduce((sum, c) => sum + c.score, 0) / categories.length)
-    : 0
-
-  return {
-    overall_score,
-    categories,
-    expiring_contracts: contracts.items?.length ?? 0,
-    overdue_dsar: dsar.overdue ?? 0,
-    open_breaches: breaches.open ?? 0,
-    pending_obligations: obligations.items?.length ?? 0,
-    tax_overdue: tax.overdue ?? 0,
-    hs_open_incidents: hs.open ?? 0,
-    bbbee_level: "pending",
-    funding_matched: funding.items?.length ?? 0,
-  }
+  // Single aggregated endpoint — avoids 8 parallel round-trips.
+  // Note: API_BASE already includes /api/v1, but the overview endpoint is
+  // registered at /api/v1/dashboard/overview on the compliance service.
+  return fetchCompliance<ComplianceOverview>("/dashboard/overview")
 }
 
 // ── Contracts & SLAs ───────────────────────────────────────────────────
@@ -604,14 +587,14 @@ export async function uploadDocument(
 ): Promise<DocumentUploadResult> {
   const formData = new FormData()
   formData.append("file", file)
-  formData.append("tenant_id", TENANT_ID)
+  formData.append("tenant_id", await getTenantId())
   if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
   if (options?.contractId) formData.append("contract_id", String(options.contractId))
   if (options?.process !== undefined) formData.append("process", String(options.process))
 
   const res = await fetch(`${API_BASE}/documents/upload`, {
     method: "POST",
-    headers: { "x-tenant-id": TENANT_ID },
+    headers: { "x-tenant-id": await getTenantId() },
     cache: "no-store",
     body: formData,
   })
@@ -628,14 +611,14 @@ export async function fetchUrlDocument(
 ): Promise<UrlFetchResult> {
   const formData = new FormData()
   formData.append("url", url)
-  formData.append("tenant_id", TENANT_ID)
+  formData.append("tenant_id", await getTenantId())
   if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
   if (options?.crawl !== undefined) formData.append("crawl", String(options.crawl))
   if (options?.maxDepth !== undefined) formData.append("max_depth", String(options.maxDepth))
 
   const res = await fetch(`${API_BASE}/documents/fetch-url`, {
     method: "POST",
-    headers: { "x-tenant-id": TENANT_ID },
+    headers: { "x-tenant-id": await getTenantId() },
     cache: "no-store",
     body: formData,
   })
@@ -653,7 +636,7 @@ export async function listDocuments(params?: {
   pageSize?: number
 }) {
   const q = new URLSearchParams()
-  q.set("tenant_id", TENANT_ID)
+  q.set("tenant_id", await getTenantId())
   if (params?.documentType) q.set("document_type", params.documentType)
   if (params?.contractId) q.set("contract_id", String(params.contractId))
   if (params?.page) q.set("page", String(params.page))
@@ -662,12 +645,12 @@ export async function listDocuments(params?: {
 }
 
 export async function getDocumentDetail(docId: number): Promise<DocumentRecord> {
-  return fetchCompliance<DocumentRecord>(`/documents/${docId}?tenant_id=${TENANT_ID}`)
+  return fetchCompliance<DocumentRecord>(`/documents/${docId}?tenant_id=${await getTenantId()}`)
 }
 
 export async function reprocessDocument(docId: number, docTypeHint?: string) {
   const q = new URLSearchParams()
-  q.set("tenant_id", TENANT_ID)
+  q.set("tenant_id", await getTenantId())
   if (docTypeHint) q.set("doc_type_hint", docTypeHint)
   return fetchCompliance<{ status: string; document_id: number; entities_found: number }>(
     `/documents/${docId}/reprocess?${q}`,
@@ -679,7 +662,7 @@ export async function linkDocumentToContract(docId: number, contractId: number) 
   const formData = new FormData()
   formData.append("contract_id", String(contractId))
   return fetchCompliance<{ status: string; document_id: number; contract_id: number }>(
-    `/documents/${docId}/link-contract?tenant_id=${TENANT_ID}`,
+    `/documents/${docId}/link-contract?tenant_id=${await getTenantId()}`,
     { method: "POST", body: formData },
   )
 }
@@ -691,5 +674,5 @@ export async function getDocumentStats() {
     with_financials: number
     with_entities: number
     total_size_bytes: number
-  }>(`/documents/stats/summary?tenant_id=${TENANT_ID}`)
+  }>(`/documents/stats/summary?tenant_id=${await getTenantId()}`)
 }

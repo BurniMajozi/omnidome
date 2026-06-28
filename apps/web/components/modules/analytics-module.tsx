@@ -359,6 +359,8 @@ export function AnalyticsModule() {
     return (
         <ModuleLayout
             title="Analytics & AI Insights"
+        icon={<BarChart3 className="h-5 w-5" />}
+        subtitle="Revenue analytics, AI insights, and platform-wide performance metrics"
             flashcardKPIs={flashcardKPIs}
             activities={data.activities ?? defaultActivities}
             issues={data.issues ?? defaultIssues}
@@ -370,8 +372,8 @@ export function AnalyticsModule() {
         >
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Revenue & Subscriber Trend */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Revenue & Subscriber Growth</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Revenue & Subscriber Growth</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <AreaChart data={defaultRevenueTrendData}>
                             <defs>
@@ -398,8 +400,8 @@ export function AnalyticsModule() {
                 </div>
 
                 {/* Module Health Radar */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Module Health Scores</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Module Health Scores</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <RadarChart data={defaultRadarData}>
                             <PolarGrid stroke="rgba(255,255,255,0.1)" />
@@ -411,8 +413,8 @@ export function AnalyticsModule() {
                 </div>
 
                 {/* Usage-to-Billing Sync */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">Usage-to-Billing Sync Status</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">Usage-to-Billing Sync Status</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <PieChart>
                             <Pie
@@ -437,8 +439,8 @@ export function AnalyticsModule() {
                 </div>
 
                 {/* AI Insight Categories */}
-                <div className="rounded-xl border border-border bg-card p-6">
-                    <h4 className="mb-4 text-sm font-semibold text-foreground">AI Insight Categories</h4>
+                <div className="surface-card p-6">
+                    <h4 className="card-title mb-4">AI Insight Categories</h4>
                     <ResponsiveContainer width="100%" height={300}>
                         <BarChart data={defaultInsightBreakdown} layout="vertical">
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />

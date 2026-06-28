@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
+import { TableShell } from "@/components/ui/table-shell"
+import { ActionBar } from "@/components/ui/action-bar"
 import {
   Receipt,
   CreditCard,
@@ -23,6 +26,7 @@ import {
   Mail,
   Ban,
   RefreshCcw,
+  Plus,
 } from "lucide-react"
 import {
   AreaChart,
@@ -165,7 +169,8 @@ export function BillingModule() {
     collections: defaultCollections,
   })
 
-  const { revenueData, paymentMethodData, agingData, invoices, collections } = data
+  const { revenueData, paymentMethodData, agingData, collections } = data
+  const [localInvoices, setLocalInvoices] = useState(() => data.invoices)
 
   const [activeTab, setActiveTab] = useState("overview")
   const [searchTerm, setSearchTerm] = useState("")
@@ -174,11 +179,11 @@ export function BillingModule() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "paid":
-        return <Badge className="bg-emerald-500/20 text-emerald-400">Paid</Badge>
+        return <Badge className="badge-success">Paid</Badge>
       case "pending":
-        return <Badge className="bg-amber-500/20 text-amber-400">Pending</Badge>
+        return <Badge className="badge-warning">Pending</Badge>
       case "overdue":
-        return <Badge className="bg-red-500/20 text-red-400">Overdue</Badge>
+        return <Badge className="badge-danger">Overdue</Badge>
       default:
         return <Badge variant="secondary">{status}</Badge>
     }
@@ -187,15 +192,15 @@ export function BillingModule() {
   const getCollectionStatus = (status: string) => {
     switch (status) {
       case "new":
-        return <Badge className="bg-blue-500/20 text-blue-400">New</Badge>
+        return <Badge className="badge-info">New</Badge>
       case "in-progress":
-        return <Badge className="bg-amber-500/20 text-amber-400">In Progress</Badge>
+        return <Badge className="badge-warning">In Progress</Badge>
       case "promise-to-pay":
-        return <Badge className="bg-emerald-500/20 text-emerald-400">Promise to Pay</Badge>
+        return <Badge className="badge-success">Promise to Pay</Badge>
       case "escalated":
         return <Badge className="bg-orange-500/20 text-orange-400">Escalated</Badge>
       case "legal":
-        return <Badge className="bg-red-500/20 text-red-400">Legal</Badge>
+        return <Badge className="badge-danger">Legal</Badge>
       default:
         return <Badge variant="secondary">{status}</Badge>
     }
@@ -203,6 +208,18 @@ export function BillingModule() {
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<Receipt className="h-5 w-5" />}
+        title="Billing & Collections"
+        subtitle="Revenue tracking, invoices, and collections management"
+        actions={
+          <>
+            <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" />Export</Button>
+            <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Invoice</Button>
+          </>
+        }
+      />
+
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="border-border bg-card">
@@ -383,75 +400,23 @@ export function BillingModule() {
         </TabsContent>
 
         <TabsContent value="invoices" className="mt-4">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <CardTitle className="text-base">Recent Invoices</CardTitle>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Search invoices..."
-                      className="h-9 w-full bg-secondary pl-9"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                  </div>
-                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
-                    <Filter className="mr-2 h-4 w-4" />
-                    Filter
-                  </Button>
-                  <Button size="sm" className="w-full bg-primary sm:w-auto">
-                    <Download className="mr-2 h-4 w-4" />
-                    Export
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-lg border border-border overflow-x-auto">
-                <table className="w-full min-w-[720px]">
-                  <thead>
-                    <tr className="border-b border-border bg-secondary/50">
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Invoice ID</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Customer</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Amount</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Date</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Method</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Status</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoices.map((invoice) => (
-                      <tr key={invoice.id} className="border-b border-border last:border-0">
-                        <td className="px-4 py-3 text-sm font-medium text-foreground">{invoice.id}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{invoice.customer}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "R --" : formatCurrency(invoice.amount)}</td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{invoice.date}</td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{invoice.method}</td>
-                        <td className="px-4 py-3">{getStatusBadge(invoice.status)}</td>
-                        <td className="px-4 py-3">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreVertical className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem>View Details</DropdownMenuItem>
-                              <DropdownMenuItem>Send Reminder</DropdownMenuItem>
-                              <DropdownMenuItem>Download PDF</DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+          <TableShell
+            title="Invoices"
+            columns={[
+              { key: "id", label: "Invoice ID", inputType: "text", defaultValue: `INV-${Date.now()}` },
+              { key: "customer", label: "Customer", inputType: "text" },
+              { key: "amount", label: "Amount", inputType: "number", render: (v) => formatCurrency(Number(v)) },
+              { key: "date", label: "Date", inputType: "date" },
+              { key: "method", label: "Method", inputType: "select", options: ["Debit Order", "EFT", "Card", "Cash"] },
+              { key: "status", label: "Status", inputType: "select", options: ["paid", "pending", "overdue"], render: (v) => getStatusBadge(String(v)) },
+            ]}
+            data={localInvoices}
+            addLabel="New Invoice"
+            onAdd={(rec) => setLocalInvoices((prev) => [rec, ...prev])}
+            onDelete={(id) => setLocalInvoices((prev) => prev.filter((r) => r.id !== id))}
+            onEdit={(rec) => setLocalInvoices((prev) => prev.map((r) => r.id === rec.id ? rec : r))}
+            searchPlaceholder="Search invoices..."
+          />
         </TabsContent>
 
         <TabsContent value="collections" className="mt-4">
@@ -460,8 +425,8 @@ export function BillingModule() {
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="text-base">Collections Queue</CardTitle>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge className="bg-red-500/20 text-red-400">5 Urgent</Badge>
-                  <Badge className="bg-amber-500/20 text-amber-400">12 Follow-up</Badge>
+                  <Badge className="badge-danger">5 Urgent</Badge>
+                  <Badge className="badge-warning">12 Follow-up</Badge>
                 </div>
               </div>
             </CardHeader>

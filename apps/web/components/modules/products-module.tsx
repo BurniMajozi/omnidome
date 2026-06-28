@@ -1,4 +1,5 @@
 "use client"
+import { TableShell } from "@/components/ui/table-shell"
 
 import { useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -118,6 +119,7 @@ export function ProductsModule() {
   })
 
   const { subscriptionTrend, productMixData, products, bundles } = data
+  const [localProducts, setLocalProducts] = useState(() => products)
 
   const [activeTab, setActiveTab] = useState("overview")
   const [searchTerm, setSearchTerm] = useState("")
@@ -223,7 +225,7 @@ export function ProductsModule() {
             <TabsTrigger value="bundles">Bundles</TabsTrigger>
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
           </TabsList>
-          <Button size="sm" className="bg-primary">
+          <Button variant="default" size="sm" >
             <Plus className="mr-2 h-4 w-4" />
             Add Product
           </Button>
@@ -331,103 +333,27 @@ export function ProductsModule() {
         </TabsContent>
 
         <TabsContent value="products" className="mt-4">
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <CardTitle className="text-base">Product Catalog</CardTitle>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                  <div className="relative w-full sm:w-64">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Search products..."
-                      className="h-9 w-full bg-secondary pl-9"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                    />
-                  </div>
-                  <Button variant="outline" size="sm" className="w-full sm:w-auto">
-                    <Filter className="mr-2 h-4 w-4" />
-                    Filter
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-lg border border-border overflow-x-auto">
-                <table className="w-full min-w-[720px]">
-                  <thead>
-                    <tr className="border-b border-border bg-secondary/50">
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Product</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Category</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Price</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Subscribers</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">MRR</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Status</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {products.map((product) => (
-                      <tr key={product.id} className="border-b border-border last:border-0">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            {getCategoryIcon(product.category)}
-                            <span className="font-medium text-foreground">{product.name}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{product.category}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "R --" : formatCurrency(product.price)}/mo</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "--" : product.subscribers.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "R --" : formatCurrency(product.mrr)}</td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            className={
-                              product.status === "active"
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-amber-500/20 text-amber-400"
-                            }
-                          >
-                            {product.status === "active" ? "Active" : "Draft"}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3">
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreVertical className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem>
-                                <Eye className="mr-2 h-4 w-4" />
-                                View
-                              </DropdownMenuItem>
-                              <DropdownMenuItem>
-                                <Edit className="mr-2 h-4 w-4" />
-                                Edit
-                              </DropdownMenuItem>
-                              <DropdownMenuItem>
-                                <Copy className="mr-2 h-4 w-4" />
-                                Duplicate
-                              </DropdownMenuItem>
-                              <DropdownMenuItem>
-                                <ToggleLeft className="mr-2 h-4 w-4" />
-                                Toggle Status
-                              </DropdownMenuItem>
-                              <DropdownMenuItem className="text-red-400">
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+          <TableShell
+            title="Product Catalog"
+            columns={[
+              { key: "name", label: "Product Name", inputType: "text" },
+              { key: "category", label: "Category", inputType: "select", options: ["Fibre", "Voice", "Mobile", "Business", "IoT"] },
+              { key: "price", label: "Price/mo (R)", inputType: "number", render: (v) => `R ${Number(v).toLocaleString()}` },
+              { key: "subscribers", label: "Subscribers", inputType: "number", render: (v) => Number(v).toLocaleString() },
+              { key: "mrr", label: "MRR (R)", inputType: "number", render: (v) => `R ${Number(v).toLocaleString()}` },
+              { key: "status", label: "Status", inputType: "select", options: ["active", "draft"], render: (v) => (
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v === "active" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+                  {v === "active" ? "Active" : "Draft"}
+                </span>
+              )},
+            ]}
+            data={localProducts}
+            addLabel="New Product"
+            onAdd={(rec) => setLocalProducts((prev) => [rec, ...prev])}
+            onDelete={(id) => setLocalProducts((prev) => prev.filter((r) => r.id !== id))}
+            onEdit={(rec) => setLocalProducts((prev) => prev.map((r) => r.id === rec.id ? rec : r))}
+            searchPlaceholder="Search products..."
+          />
         </TabsContent>
 
         <TabsContent value="bundles" className="mt-4">
@@ -440,7 +366,7 @@ export function ProductsModule() {
                       <h3 className="font-semibold text-foreground">{bundle.name}</h3>
                       <p className="mt-1 text-sm text-muted-foreground">{bundle.products.join(" + ")}</p>
                     </div>
-                    <Badge className="bg-emerald-500/20 text-emerald-400">{bundle.discount} off</Badge>
+                    <Badge className="badge-success">{bundle.discount} off</Badge>
                   </div>
                   <div className="mt-4 flex items-center justify-between">
                     <div>

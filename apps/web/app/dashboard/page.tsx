@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
-import { AITaskChat } from "@/components/chat/ai-task-chat"
 import { AGUIChat } from "@/components/chat/ag-ui-chat"
 import { DashboardOverview } from "@/components/modules/dashboard-overview"
 import { SalesModule } from "@/components/modules/sales-module"
@@ -52,7 +51,6 @@ const sectionTitles: Record<string, string> = {
 export default function Dashboard() {
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
-  const [chatMode, setChatMode] = useState<"standard" | "agui">("agui")
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [retentionTab, setRetentionTab] = useState<string | null>(null)
   const [portalTab, setPortalTab] = useState<string | null>(null)
@@ -154,16 +152,6 @@ export default function Dashboard() {
     if (section !== "portal") setPortalTab(null)
   }
 
-  const handleNewTask = () => {
-    setChatMode("standard")
-    setChatOpen(true)
-  }
-
-  const handleNewAgentChat = () => {
-    setChatMode("agui")
-    setChatOpen(true)
-  }
-
   return (
     <div className="flex h-screen w-full overflow-hidden bg-background relative">
       {/* Mobile sidebar backdrop */}
@@ -175,6 +163,7 @@ export default function Dashboard() {
           onClick={() => setSidebarOpen(false)}
         />
       )}
+
       {/* Flickering Grid Background */}
       <div className="fixed top-0 left-0 z-0 w-full h-full [mask-image:linear-gradient(to_bottom,black_0%,transparent_30%)] pointer-events-none opacity-50">
         <FlickeringGrid
@@ -205,19 +194,42 @@ export default function Dashboard() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header
           title={sectionTitles[resolvedSection] || "Dashboard"}
-          onNewTask={handleNewTask}
-          onNewAgentChat={handleNewAgentChat}
           onMenuToggle={() => setSidebarOpen((prev) => !prev)}
         />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderModule()}</main>
       </div>
 
-      {/* Chat Sidebars */}
-      {chatOpen && chatMode === "standard" && (
-        <AITaskChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
-      )}
-      {chatOpen && chatMode === "agui" && (
+      {/* Agent Chat Right Panel */}
+      {chatOpen && (
         <AGUIChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+      )}
+
+      {/* Floating Agent Chat FAB */}
+      {!chatOpen && (
+        <button
+          onClick={() => setChatOpen(true)}
+          className="fixed bottom-6 right-6 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg shadow-primary/30 transition-all hover:scale-110 hover:shadow-xl hover:shadow-primary/40 active:scale-95"
+          title="Open Agent Chat"
+          aria-label="Open Agent Chat"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-6 w-6"
+          >
+            <path d="M12 8V4H8" />
+            <rect width="16" height="12" x="4" y="8" rx="2" />
+            <path d="M2 14h2" />
+            <path d="M20 14h2" />
+            <path d="M15 13v2" />
+            <path d="M9 13v2" />
+          </svg>
+        </button>
       )}
     </div>
   )

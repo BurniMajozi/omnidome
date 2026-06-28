@@ -37,7 +37,7 @@ export function StatCard({
           <p className="text-xl font-bold text-foreground sm:text-2xl">{displayValue}</p>
         </div>
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 sm:h-10 sm:w-10">
-          <Icon className="h-4.5 w-4.5 text-primary sm:h-5 sm:w-5" />
+          <Icon className="h-[18px] w-[18px] text-primary sm:h-5 sm:w-5" />
         </div>
       </div>
       <div className="mt-3 flex items-center gap-2">

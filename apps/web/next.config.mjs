@@ -27,10 +27,18 @@ const nextConfig = {
       { source: '/svc/analytics/:path*', destination: 'http://localhost:8011/:path*' },
       { source: '/svc/retention/:path*', destination: 'http://localhost:8012/:path*' },
       { source: '/svc/admin/:path*', destination: 'http://localhost:8013/:path*' },
-      { source: '/svc/compliance/:path*', destination: 'http://localhost:8019/:path*' },
+      // NOTE: /svc/compliance is handled by the App Router route handler at
+      // app/svc/compliance/[...path]/route.ts — the rewrite below is intentionally
+      // absent because Next.js route handlers take priority over rewrites.
       { source: '/svc/communication/:path*', destination: 'http://localhost:8020/:path*' },
       { source: '/svc/agents/:path*', destination: 'http://localhost:8021/:path*' },
       { source: '/svc/memory/:path*', destination: 'http://localhost:8025/:path*' },
+      { source: '/svc/marketing/:path*', destination: 'http://localhost:8014/:path*' },
+      { source: '/svc/finance/:path*', destination: 'http://localhost:8015/:path*' },
+      { source: '/svc/web-analytics/:path*', destination: 'http://localhost:8016/:path*' },
+      { source: '/svc/customer-journey/:path*', destination: 'http://localhost:8022/:path*' },
+      { source: '/svc/billing-collections/:path*', destination: 'http://localhost:8023/:path*' },
+      { source: '/svc/fno-intelligence/:path*', destination: 'http://localhost:8024/:path*' },
     ]
   },
 }

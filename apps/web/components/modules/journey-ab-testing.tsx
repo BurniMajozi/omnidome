@@ -146,9 +146,9 @@ function getStatusBadge(status: string) {
         Running
       </Badge>
     case "completed":
-      return <Badge className="bg-blue-500/20 text-blue-400">Completed</Badge>
+      return <Badge className="badge-info">Completed</Badge>
     case "paused":
-      return <Badge className="bg-amber-500/20 text-amber-400">Paused</Badge>
+      return <Badge className="badge-warning">Paused</Badge>
     default:
       return <Badge variant="secondary">{status}</Badge>
   }
@@ -368,7 +368,7 @@ export function JourneyABTesting() {
         </div>
         <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
           <DialogTrigger asChild>
-            <Button size="sm" className="bg-primary">
+            <Button variant="default" size="sm" >
               <FlaskConical className="mr-2 h-4 w-4" />
               New A/B Test
             </Button>

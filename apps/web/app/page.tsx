@@ -985,7 +985,7 @@ export default function LandingPage() {
                                                                         "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br shadow-inner group-hover:scale-105 transition-all duration-300",
                                                                         sol.color
                                                                     )}>
-                                                                        <sol.icon className="h-4.5 w-4.5 text-white" />
+                                                                        <sol.icon className="h-[18px] w-[18px] text-white" />
                                                                     </div>
                                                                     <div>
                                                                         <div className="font-bold text-sm text-foreground group-hover:text-primary transition-colors">

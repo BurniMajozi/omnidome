@@ -285,6 +285,8 @@ export function FinanceModule() {
   return (
     <ModuleLayout
       title="Finance & FP&A"
+        icon={<DollarSign className="h-5 w-5" />}
+        subtitle="Financial planning, P&L, cash flow, and FP&A reporting"
       flashcardKPIs={flashcardKPIs}
       activities={data.activities ?? defaultActivities}
       issues={data.issues ?? defaultIssues}
@@ -315,7 +317,7 @@ export function FinanceModule() {
                   {source}
                 </Badge>
               ))}
-              <Badge className="bg-emerald-500/20 text-emerald-400">Adjustments Enabled</Badge>
+              <Badge className="badge-success">Adjustments Enabled</Badge>
             </CardContent>
           </Card>
           <RevenueRecognitionPanel

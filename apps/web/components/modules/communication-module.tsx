@@ -1,7 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { cn } from "@/lib/utils"
+import { useChannelSocket } from "@/lib/useChannelSocket"
+import { supabase } from "@/lib/supabase/client"
 import {
   Hash,
   Lock,
@@ -559,8 +561,6 @@ export function CommunicationModule() {
   const [escalationNotes, setEscalationNotes] = useState("")
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [channelMenuId, setChannelMenuId] = useState<string | null>(null)
-  const [mutedChannels, setMutedChannels] = useState<string[]>([])
-  const [pinnedChannels, setPinnedChannels] = useState<string[]>([])
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -569,6 +569,62 @@ export function CommunicationModule() {
   const isUuid = (value?: string | null) =>
     !!value &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+
+  // ── Real-time auth token ─────────────────────────────────────────────
+  const [wsToken, setWsToken] = useState<string | null>(null)
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set())
+  const typingClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setWsToken(data.session?.access_token ?? null)
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setWsToken(session?.access_token ?? null)
+    })
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  // ── WebSocket — live message delivery ────────────────────────────────
+  const handleIncomingMessage = useCallback((data: { id: string; user_id: string; content: string; created_at: string; [key: string]: unknown }) => {
+    setMessages((prev) => {
+      // Deduplicate — optimistic messages sent by us are already in state
+      if (prev.some((m) => m.id === data.id)) return prev
+      return [
+        ...prev,
+        {
+          id: data.id,
+          user: data.user_id === "me" ? currentUserName : data.user_id,
+          avatar: data.user_id.slice(0, 2).toUpperCase(),
+          content: data.content,
+          time: new Date(data.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          reactions: [],
+          isPinned: false,
+        },
+      ]
+    })
+  }, [currentUserName])
+
+  const handleTyping = useCallback(({ user_id }: { user_id: string }) => {
+    setTypingUsers((prev) => new Set(prev).add(user_id))
+    // Clear indicator after 3 s of silence
+    const existing = typingClearTimers.current.get(user_id)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      setTypingUsers((prev) => {
+        const next = new Set(prev)
+        next.delete(user_id)
+        return next
+      })
+    }, 3_000)
+    typingClearTimers.current.set(user_id, timer)
+  }, [])
+
+  const { connected: wsConnected, sendTyping } = useChannelSocket(
+    isUuid(activeChannelId) ? activeChannelId : null,
+    wsToken,
+    { onMessage: handleIncomingMessage, onTyping: handleTyping },
+  )
 
   useEffect(() => {
     let isMounted = true
@@ -1571,6 +1627,14 @@ export function CommunicationModule() {
             <div className="flex items-center gap-2">
               <Hash className="h-5 w-5 text-muted-foreground" />
               <h2 className="font-semibold text-foreground">{selectedChannel}</h2>
+              {/* Real-time connection indicator */}
+              <span
+                title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
+                className={cn(
+                  "inline-block h-2 w-2 rounded-full transition-colors",
+                  wsConnected ? "bg-emerald-500 shadow-[0_0_6px_#22c55e]" : "bg-amber-400 animate-pulse",
+                )}
+              />
             </div>
             <Badge variant="outline" className="text-xs">
               <Users className="h-3 w-3 mr-1" />
@@ -1750,6 +1814,22 @@ export function CommunicationModule() {
               </div>
             </ScrollArea>
 
+            {/* Typing indicator */}
+            {typingUsers.size > 0 && (
+              <div className="px-4 pb-1 flex items-center gap-1.5">
+                <span className="flex gap-0.5 items-end h-3">
+                  <span className="w-1 h-1 rounded-full bg-muted-foreground animate-bounce [animation-delay:0ms]" />
+                  <span className="w-1 h-1 rounded-full bg-muted-foreground animate-bounce [animation-delay:150ms]" />
+                  <span className="w-1 h-1 rounded-full bg-muted-foreground animate-bounce [animation-delay:300ms]" />
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {typingUsers.size === 1
+                    ? `${[...typingUsers][0].slice(0, 8)}… is typing`
+                    : `${typingUsers.size} people are typing`}
+                </span>
+              </div>
+            )}
+
             {/* Message Input */}
             <div className="p-4 border-t border-border">
               <div className="rounded-lg border border-border bg-secondary/50 p-2">
@@ -1759,7 +1839,7 @@ export function CommunicationModule() {
                   </Button>
                   <Input
                     value={messageInput}
-                    onChange={(e) => setMessageInput(e.target.value)}
+                    onChange={(e) => { setMessageInput(e.target.value); sendTyping() }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault()
@@ -2556,7 +2636,7 @@ export function CommunicationModule() {
                   {panelType === "add-approval" && "Add Approval"}
                   {panelType === "add-escalation" && "Escalate"}
                 </p>
-                <h3 className="text-lg font-semibold text-foreground">
+                <h3 className="section-title">
                   {panelType === "start-chat" && "Start a conversation"}
                   {panelType === "add-event" && "Schedule an event"}
                   {panelType === "add-task" && "Create a new task"}

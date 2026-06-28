@@ -15,7 +15,9 @@ import {
   BarChart,
   Bar,
 } from "recharts"
-import { Wifi, Activity, AlertTriangle, Zap } from "lucide-react"
+import { Wifi, Activity, AlertTriangle, Zap, Download, RefreshCw } from "lucide-react"
+import { PageHeader } from "@/components/ui/page-header"
+import { Button } from "@/components/ui/button"
 import { useModuleData } from "@/lib/module-data"
 
 const defaultNetworkMetrics = [
@@ -46,6 +48,18 @@ export function NetworkModule() {
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<Wifi className="h-5 w-5" />}
+        title="Network Operations"
+        subtitle="Infrastructure monitoring, node health, and bandwidth analytics"
+        actions={
+          <>
+            <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" />Export Report</Button>
+            <Button variant="cta" size="sm"><RefreshCw className="h-3.5 w-3.5" />Refresh</Button>
+          </>
+        }
+      />
+
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
@@ -85,8 +99,8 @@ export function NetworkModule() {
       {/* Charts */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Bandwidth & Latency */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Bandwidth Usage & Latency</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Bandwidth Usage & Latency</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={networkMetrics}>
@@ -132,8 +146,8 @@ export function NetworkModule() {
         </div>
 
         {/* Node Status */}
-        <div className="rounded-xl border border-border bg-card p-5">
-          <h3 className="mb-4 text-lg font-semibold text-foreground">Node Status by Zone</h3>
+        <div className="surface-card p-5">
+          <h3 className="section-title mb-4">Node Status by Zone</h3>
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={nodeStatus}>
@@ -158,8 +172,8 @@ export function NetworkModule() {
       </div>
 
       {/* Network Performance */}
-      <div className="rounded-xl border border-border bg-card p-5">
-        <h3 className="mb-4 text-lg font-semibold text-foreground">24-Hour Network Performance</h3>
+      <div className="surface-card p-5">
+        <h3 className="section-title mb-4">24-Hour Network Performance</h3>
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={networkMetrics}>

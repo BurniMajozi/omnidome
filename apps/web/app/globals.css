@@ -191,3 +191,256 @@
 .animate-shine-border {
   animation: shine-border var(--duration) infinite linear;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OMNIDOME DESIGN SYSTEM UTILITIES (Tailwind v4 @utility syntax)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--border)) transparent;
+}
+
+/* ── Surfaces ──────────────────────────────────────────────────────────── */
+@utility surface-card {
+  border-radius: 0.75rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--card));
+}
+
+@utility surface-raised {
+  border-radius: 0.75rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--card));
+  box-shadow: 0 4px 24px -4px hsl(var(--foreground) / 0.08);
+}
+
+@utility surface-sunken {
+  border-radius: 0.5rem;
+  background-color: hsl(var(--muted) / 0.4);
+  border: 1px solid hsl(var(--border) / 0.5);
+}
+
+@utility glass {
+  backdrop-filter: blur(12px) saturate(1.4);
+  background-color: hsl(var(--background) / 0.75);
+  border: 1px solid hsl(var(--border) / 0.6);
+}
+
+/* ── Typography ────────────────────────────────────────────────────────── */
+@utility page-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+}
+
+@utility section-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+  letter-spacing: -0.005em;
+}
+
+@utility card-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+@utility label-sm {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: hsl(var(--muted-foreground));
+}
+
+@utility metric-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+}
+
+@utility metric-sm {
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: hsl(var(--foreground));
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Module header layout ──────────────────────────────────────────────── */
+@utility module-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid hsl(var(--border) / 0.6);
+}
+
+@utility module-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* ── KPI Grid & Card ───────────────────────────────────────────────────── */
+@utility kpi-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+}
+
+@utility kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-radius: 0.75rem;
+  border: 1px solid hsl(var(--border));
+  background-color: hsl(var(--card));
+  padding: 1rem;
+  min-height: 7rem;
+  transition: box-shadow 0.15s ease;
+}
+
+@utility kpi-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.5rem;
+  background-color: hsl(var(--primary) / 0.15);
+  color: hsl(var(--primary));
+}
+
+/* ── Action toolbar ────────────────────────────────────────────────────── */
+@utility action-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+@utility action-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+}
+
+@utility action-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+/* ── Data table ────────────────────────────────────────────────────────── */
+@utility data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+/* ── Empty state ───────────────────────────────────────────────────────── */
+@utility empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+}
+
+@utility empty-state-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 0.75rem;
+  background-color: hsl(var(--muted) / 0.5);
+  color: hsl(var(--muted-foreground));
+}
+
+/* ── Badges ────────────────────────────────────────────────────────────── */
+@utility badge-success {
+  background-color: hsl(142 71% 45% / 0.15);
+  color: hsl(142 71% 55%);
+  border-color: hsl(142 71% 45% / 0.3);
+}
+
+@utility badge-warning {
+  background-color: hsl(38 92% 50% / 0.15);
+  color: hsl(38 92% 60%);
+  border-color: hsl(38 92% 50% / 0.3);
+}
+
+@utility badge-danger {
+  background-color: hsl(0 72% 51% / 0.15);
+  color: hsl(0 72% 65%);
+  border-color: hsl(0 72% 51% / 0.3);
+}
+
+@utility badge-info {
+  background-color: hsl(217 91% 60% / 0.15);
+  color: hsl(217 91% 70%);
+  border-color: hsl(217 91% 60% / 0.3);
+}
+
+@utility badge-neutral {
+  background-color: hsl(var(--muted) / 0.5);
+  color: hsl(var(--muted-foreground));
+  border-color: hsl(var(--border));
+}
+
+/* ── Z-index layers ────────────────────────────────────────────────────── */
+@utility z-base    { z-index: 0; }
+@utility z-raised  { z-index: 10; }
+@utility z-dropdown { z-index: 100; }
+@utility z-modal   { z-index: 200; }
+@utility z-toast   { z-index: 300; }
+@utility z-tooltip { z-index: 400; }
+
+/* ── Data table cell styles (descendant selectors, regular CSS) ─────────── */
+.data-table thead tr {
+  border-bottom: 1px solid hsl(var(--border));
+}
+.data-table thead th {
+  padding: 0.625rem 0.875rem;
+  text-align: left;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: hsl(var(--muted-foreground));
+  white-space: nowrap;
+}
+.data-table tbody tr {
+  border-bottom: 1px solid hsl(var(--border) / 0.5);
+  transition: background-color 0.1s ease;
+}
+.data-table tbody tr:last-child {
+  border-bottom: none;
+}
+.data-table tbody tr:hover {
+  background-color: hsl(var(--muted) / 0.3);
+}
+.data-table tbody td {
+  padding: 0.75rem 0.875rem;
+  color: hsl(var(--foreground));
+  vertical-align: middle;
+}

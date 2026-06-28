@@ -175,7 +175,7 @@ export function CancelFlowModal({
             <div className="py-4">
               <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  <Badge className="bg-emerald-500/20 text-emerald-400">
+                  <Badge className="badge-success">
                     {offer.type}
                   </Badge>
                   <span className="font-semibold text-foreground">{offer.label}</span>

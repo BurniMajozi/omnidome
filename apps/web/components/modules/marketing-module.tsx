@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PageHeader } from "@/components/ui/page-header"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -23,7 +24,7 @@ import {
 } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import {
-  listCampaigns, listSocialAccounts, listSocialPosts, listInboxMessages,
+  listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
   listAdCampaigns, listCommentAutomations, getEngagementSummary,
   createSocialPost, publishSocialPost, crossPost, createWhatsAppBroadcast,
@@ -158,6 +159,15 @@ export function MarketingModule() {
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<Megaphone className="h-5 w-5" />}
+        title="Marketing"
+        subtitle="Campaigns, social media, ads, and automation"
+        actions={
+          <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Campaign</Button>
+        }
+      />
+
       {/* Tab Navigation */}
       <div className="flex items-center gap-1 border-b border-border pb-1 overflow-x-auto">
         {tabs.map((tab) => {
@@ -221,8 +231,13 @@ function CampaignsTab() {
   }
 
   const handleCreate = async () => {
+    if (!newCampaign.name) return
     try {
-      await listCampaigns() // refresh
+      await createCampaign({
+        ...newCampaign,
+        budget_zar: newCampaign.budget_zar ? Number(newCampaign.budget_zar) : undefined,
+      })
+      await loadCampaigns()
       setShowCreate(false)
       setNewCampaign({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
     } catch (e) {
@@ -420,9 +435,9 @@ function SocialComposerTab() {
     if (!content.trim() || selectedPlatforms.length === 0) return
     try {
       if (publishNow) {
-        await createSocialPost({ content, platforms: selectedPlatforms, status: "published" })
+        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "published" })
       } else {
-        await createSocialPost({ content, platforms: selectedPlatforms, status: "scheduled", schedule_minutes: scheduleMinutes })
+        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "scheduled", scheduled_for: new Date(Date.now() + scheduleMinutes * 60000).toISOString() })
       }
       setContent("")
       setSelectedPlatforms([])
@@ -435,7 +450,7 @@ function SocialComposerTab() {
   const handleCrossPost = async () => {
     if (!content.trim() || selectedPlatforms.length === 0) return
     try {
-      await crossPost({ content, platforms: selectedPlatforms, publish_now: publishNow, schedule_minutes: publishNow ? undefined : scheduleMinutes })
+      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: publishNow ? undefined : scheduleMinutes })
       setContent("")
       setSelectedPlatforms([])
       loadData()
@@ -571,10 +586,10 @@ function SocialInboxTab() {
     try {
       const [msgData, countData] = await Promise.all([
         listInboxMessages(filter !== "all" ? { status: filter } : undefined).catch(() => []),
-        getInboxUnreadCount().catch(() => ({ count: 0 })),
+        getInboxUnreadCount().catch(() => ({ total: 0, by_platform: {} as Record<string, number> })),
       ])
       setMessages(msgData || [])
-      setUnreadCount(countData?.count || 0)
+      setUnreadCount(countData?.total || 0)
     } catch (e) {
       console.error(e)
     } finally {
@@ -1009,7 +1024,7 @@ function AdsTab() {
   const handleCreate = async () => {
     if (!newAd.name) return
     try {
-      await createAdCampaign(newAd)
+      await createAdCampaign({ ...newAd, budget_zar: Number(newAd.budget_zar) || undefined, daily_budget_zar: Number(newAd.daily_budget_zar) || undefined })
       setShowCreate(false)
       setNewAd({ name: "", platform: "facebook", objective: "AWARENESS", budget_zar: "", daily_budget_zar: "" })
       loadAds()
@@ -1115,7 +1130,7 @@ function AutomationsTab() {
   const [automations, setAutomations] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
-  const [newAuto, setNewAuto] = useState({ name: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
+  const [newAuto, setNewAuto] = useState({ name: "", account_id: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
 
   useEffect(() => {
     loadAutomations()
@@ -1141,7 +1156,7 @@ function AutomationsTab() {
         trigger_keywords: newAuto.trigger_keywords.split(",").map((k) => k.trim()).filter(Boolean),
       })
       setShowCreate(false)
-      setNewAuto({ name: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
+      setNewAuto({ name: "", account_id: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
       loadAutomations()
     } catch (e) {
       console.error(e)

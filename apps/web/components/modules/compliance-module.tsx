@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { PageHeader } from "@/components/ui/page-header"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -27,9 +28,9 @@ import {
   listLeaveApplications, listVehicles, getExpiringVehicles, listForeignWorkers,
   getExpiringPermits, listTravelReadiness, listDrBcpPlans, getDrBcpDashboard,
   listComplianceScores, calculateAllScores, listObligations, listEserviceSubmissions,
-  listFinancialScenarios, listIcasaSubmissions, listDsar, getDsarDashboard,
-  listBreaches, getBreachDashboard, listFundingOpportunities, matchFundingByScore,
-  listCipcFilings, listBylawObligations, uploadDocument, fetchUrlDocument,
+  listIcasaSubmissions, listDsar,
+  listBreaches, listFundingOpportunities, matchFundingByScore,
+  uploadDocument, fetchUrlDocument,
   listDocuments, getDocumentDetail, reprocessDocument, linkDocumentToContract,
   getDocumentStats,
   type ComplianceOverview, type Contract, type BreachRegister, type ComplianceScore,
@@ -201,90 +202,82 @@ export default function ComplianceModule() {
   const [icasaSubs, setIcasaSubs] = useState<IcasaSubmission[]>([])
   const [funding, setFunding] = useState<FundingOpportunity[]>([])
 
+  /** Returns value or null — never rejects. */
+  const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
+
   const loadOverview = useCallback(async () => {
-    try {
-      const data = await getComplianceOverview()
-      setOverview(data)
-    } catch (e) {
-      console.error("Failed to load compliance overview:", e)
-    }
+    const data = await safe(getComplianceOverview())
+    if (data) setOverview(data)
   }, [])
 
   const loadSection = useCallback(async (tab: string) => {
-    try {
-      switch (tab) {
-        case "contracts": {
-          const [c, ec] = await Promise.all([
-            listContracts({ page: 1 }),
-            getExpiringContracts(90),
-          ])
-          setContracts(c.items ?? [])
-          setExpiringContracts(ec.items ?? [])
-          break
-        }
-        case "regulatory": {
-          const [tax, hs, bbbee, icasa, cipc, bylaw] = await Promise.all([
-            listTaxReturns(),
-            listHsIncidents(),
-            listBbbeeScorecards(),
-            listIcasaSubmissions(),
-            listCipcFilings(),
-            listBylawObligations(),
-          ])
-          setTaxReturns(tax.items ?? [])
-          setHsIncidents(hs.items ?? [])
-          setBbbeeCards(bbbee.items ?? [])
-          setIcasaSubs(icasa.items ?? [])
-          break
-        }
-        case "hr": {
-          const [leave, veh, fw, tr] = await Promise.all([
-            listLeaveApplications(),
-            listVehicles(),
-            listForeignWorkers(),
-            listTravelReadiness(),
-          ])
-          setLeaveApps(leave.items ?? [])
-          setVehicles(veh.items ?? [])
-          setFwPermits(fw.items ?? [])
-          setTravel(tr.items ?? [])
-          break
-        }
-        case "risk": {
-          const [br, ds, obl] = await Promise.all([
-            listBreaches(),
-            listDsar(),
-            listObligations({ status: "pending_review" }),
-          ])
-          setBreaches(br.items ?? [])
-          setDsar(ds.items ?? [])
-          setObligations(obl.items ?? [])
-          break
-        }
-        case "operations": {
-          const [dr, sc, es, fs] = await Promise.all([
-            listDrBcpPlans(),
-            listComplianceScores(),
-            listEserviceSubmissions(),
-            listFinancialScenarios(),
-          ])
-          setDrPlans(dr.items ?? [])
-          setScores(sc.items ?? [])
-          setEservices(es.items ?? [])
-          break
-        }
-        case "funding": {
-          const [f, sc] = await Promise.all([
-            listFundingOpportunities({ status: "identified" }),
-            listComplianceScores(),
-          ])
-          setFunding(f.items ?? [])
-          setScores(sc.items ?? [])
-          break
-        }
+    switch (tab) {
+      case "contracts": {
+        const [c, ec] = await Promise.all([
+          safe(listContracts({ page: 1 })),
+          safe(getExpiringContracts(90)),
+        ])
+        setContracts(c?.items ?? [])
+        setExpiringContracts(ec?.items ?? [])
+        break
       }
-    } catch (e) {
-      console.error(`Failed to load ${tab} section:`, e)
+      case "regulatory": {
+        const [tax, hs, bbbee, icasa] = await Promise.all([
+          safe(listTaxReturns()),
+          safe(listHsIncidents()),
+          safe(listBbbeeScorecards()),
+          safe(listIcasaSubmissions()),
+        ])
+        setTaxReturns(tax?.items ?? [])
+        setHsIncidents(hs?.items ?? [])
+        setBbbeeCards(bbbee?.items ?? [])
+        setIcasaSubs(icasa?.items ?? [])
+        break
+      }
+      case "hr": {
+        const [leave, veh, fw, tr] = await Promise.all([
+          safe(listLeaveApplications()),
+          safe(listVehicles()),
+          safe(listForeignWorkers()),
+          safe(listTravelReadiness()),
+        ])
+        setLeaveApps(leave?.items ?? [])
+        setVehicles(veh?.items ?? [])
+        setFwPermits(fw?.items ?? [])
+        setTravel(tr?.items ?? [])
+        break
+      }
+      case "risk": {
+        const [br, ds, obl] = await Promise.all([
+          safe(listBreaches()),
+          safe(listDsar()),
+          safe(listObligations({ status: "pending_review" })),
+        ])
+        setBreaches(br?.items ?? [])
+        setDsar(ds?.items ?? [])
+        setObligations(obl?.items ?? [])
+        break
+      }
+      case "operations": {
+        const [dr, sc, es] = await Promise.all([
+          safe(listDrBcpPlans()),
+          safe(listComplianceScores()),
+          safe(listEserviceSubmissions()),
+        ])
+        setDrPlans(dr?.items ?? [])
+        setScores(sc?.items ?? [])
+        setEservices(es?.items ?? [])
+        break
+      }
+      case "funding": {
+        const [f, sc] = await Promise.all([
+          safe(listFundingOpportunities({ status: "identified" })),
+          safe(listComplianceScores()),
+        ])
+        setFunding(f?.items ?? [])
+        setScores(sc?.items ?? [])
+        break
+      }
     }
   }, [])
 
@@ -343,28 +336,17 @@ export default function ComplianceModule() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-primary/10 p-2.5">
-            <Scale className="h-6 w-6 text-primary" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold">Compliance Center</h2>
-            <p className="text-sm text-muted-foreground">
-              Full-spectrum compliance management — contracts, regulatory, HR, risk, funding
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={loadOverview}>
-            <RefreshCw className="h-4 w-4 mr-1" /> Refresh
-          </Button>
-          <Button size="sm" onClick={() => calculateAllScores()}>
-            <Zap className="h-4 w-4 mr-1" /> Calculate Scores
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={<Scale className="h-5 w-5" />}
+        title="Compliance Center"
+        subtitle="Full-spectrum compliance management — contracts, regulatory, HR, risk, funding"
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={loadOverview}><RefreshCw className="h-3.5 w-3.5" />Refresh</Button>
+            <Button variant="cta" size="sm" onClick={() => calculateAllScores()}><Zap className="h-3.5 w-3.5" />Calculate Scores</Button>
+          </>
+        }
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-7">
@@ -1131,14 +1113,3 @@ export default function ComplianceModule() {
     </div>
   )
 }
-
-// Missing import
-const Broadcast = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    <path d="m2 8 6 6" /><path d="m22 8-6 6" /><circle cx="12" cy="12" r="2" />
-    <path d="M12 2v4" /><path d="M12 18v4" /><path d="M4.93 4.93l2.83 2.83" />
-    <path d="M16.24 16.24l2.83 2.83" /><path d="M2 12h4" /><path d="M18 12h4" />
-    <path d="M4.93 19.07l2.83-2.83" /><path d="M16.24 7.76l2.83-2.83" />
-  </svg>
-)

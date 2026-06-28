@@ -6,13 +6,25 @@
  * Proxies through the Next.js API routes to the HR service (port 8009).
  */
 
+import { supabase } from "@/lib/supabase/client"
+
 const API_BASE = "/svc/hr"
-const TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+async function getTenantId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return (
+    data.session?.user?.user_metadata?.tenant_id ??
+    data.session?.user?.app_metadata?.tenant_id ??
+    FALLBACK_TENANT_ID
+  )
+}
 
 async function fetchHR<T>(path: string, init?: RequestInit): Promise<T> {
+  const tenantId = await getTenantId()
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
-    headers: { "x-tenant-id": TENANT_ID, "Content-Type": "application/json" },
+    headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
     ...init,
   })
   if (!res.ok) {
@@ -102,7 +114,7 @@ export interface Schedule {
   shift_type?: string
   department: string
   notes?: string
-  confirmed: boolean
+  status: string
   created_at: string
   updated_at?: string
 }

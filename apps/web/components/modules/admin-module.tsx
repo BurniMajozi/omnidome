@@ -19,6 +19,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   listUCPSessions,
@@ -132,16 +133,17 @@ export function AdminModule() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-foreground">Platform Administration</h2>
-          <p className="text-sm text-muted-foreground">Tenant, module, user, audit, and commercial control plane.</p>
-        </div>
-        <Button variant="outline" onClick={() => void loadAdminData()} disabled={loading}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
-        </Button>
-      </div>
+      <PageHeader
+        icon={<ShieldCheck className="h-5 w-5" />}
+        title="Platform Administration"
+        subtitle="Tenant, module, user, audit, and commercial control plane"
+        actions={
+          <Button variant="outline" size="sm" onClick={() => void loadAdminData()} disabled={loading}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </Button>
+        }
+      />
 
       {error && (
         <Card className="border-red-500/30">
@@ -465,4 +467,3 @@ export function AdminModule() {
     </div>
   )
 }
-

@@ -23,10 +23,11 @@ import type {
   Journey, JourneyRule, Offer, FunnelData, ROIEntry,
   AttributeDef, OperatorDef, OfferTypeDef,
 } from "@/lib/journey-api"
+import { supabase } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899"]
 
-const TENANT_ID = "00000000-0000-0000-0000-000000000001" // TODO: from auth context
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 // ---------------------------------------------------------------------------
 // Empty rule template
@@ -53,7 +54,7 @@ function emptyOffer(): Partial<Offer> {
   }
 }
 
-function emptyJourney(): Partial<Journey> {
+function emptyJourney(tenantId?: string): Partial<Journey> {
   return {
     name: "",
     description: "",
@@ -61,7 +62,7 @@ function emptyJourney(): Partial<Journey> {
     priority: 0,
     channel: "portal",
     status: "draft",
-    tenant_id: TENANT_ID,
+    ...(tenantId ? { tenant_id: tenantId } : {}),
   }
 }
 
@@ -189,7 +190,7 @@ function RuleEditor({
 
       <Switch
         checked={rule.is_active}
-        onChange={(checked) => onChange({ ...rule, is_active: checked })}
+        onCheckedChange={(checked) => onChange({ ...rule, is_active: checked })}
         className="scale-75"
       />
 
@@ -562,6 +563,7 @@ function JourneyBuilder({
 // Main Dashboard Component
 // ---------------------------------------------------------------------------
 export function JourneyBuilderDashboard() {
+  const [tenantId, setTenantId] = useState(FALLBACK_TENANT_ID)
   const [tab, setTab] = useState("journeys")
   const [journeys, setJourneys] = useState<Journey[]>([])
   const [offers, setOffers] = useState<Offer[]>([])
@@ -570,33 +572,53 @@ export function JourneyBuilderDashboard() {
   const [attributes, setAttributes] = useState<AttributeDef[]>([])
   const [operators, setOperators] = useState<OperatorDef[]>([])
   const [offerTypes, setOfferTypes] = useState<OfferTypeDef[]>([])
+  const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isOffline, setIsOffline] = useState(false)
 
+  // Resolve tenant ID from Supabase session (falls back to dev default)
+  useEffect(() => {
+    const resolve = (session: Parameters<Parameters<typeof supabase.auth.onAuthStateChange>[0]>[1]) => {
+      setTenantId(
+        session?.user?.user_metadata?.tenant_id ??
+        session?.user?.app_metadata?.tenant_id ??
+        FALLBACK_TENANT_ID
+      )
+    }
+    supabase.auth.getSession().then(({ data }) => resolve(data.session))
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => resolve(session))
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
   const loadData = useCallback(async () => {
+    const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
     setLoading(true)
     setError(null)
     try {
-      const [jData, oData, aData, fData, rData] = await Promise.all([
-        journeyApi.listJourneys(TENANT_ID),
-        journeyApi.listOffers(TENANT_ID),
+      // Core endpoints — if these fail the service is down; set offline mode
+      const [jData, oData, aData] = await Promise.all([
+        journeyApi.listJourneys(tenantId),
+        journeyApi.listOffers(tenantId),
         journeyApi.getAttributes(),
-        journeyApi.getFunnel(TENANT_ID),
-        journeyApi.getROI(TENANT_ID),
       ])
       setJourneys(jData.journeys || [])
       setOffers(oData.offers || [])
       setAttributes(aData.attributes || [])
       setOperators(aData.operators || [])
       setOfferTypes(aData.offer_types || [])
-      setFunnel(fData.funnel || [])
-      setRoi(rData.roi || [])
       setIsOffline(false)
+
+      // Analytics endpoints — optional; failure doesn't block the journeys UI
+      const [fData, rData] = await Promise.all([
+        safe(journeyApi.getFunnel(tenantId)),
+        safe(journeyApi.getROI(tenantId)),
+      ])
+      setFunnel(fData?.funnel ?? [])
+      setRoi(rData?.roi ?? [])
     } catch (err: any) {
       console.error("Failed to load journey data:", err)
       setError("Retention journey service is currently unreachable. Operating in offline simulation mode.")
       setIsOffline(true)
-      // Fallback fallback mock data
       setJourneys([])
       setOffers([])
       setAttributes([])
@@ -607,7 +629,7 @@ export function JourneyBuilderDashboard() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [tenantId])
 
   const [editingJourney, setEditingJourney] = useState<Partial<Journey> | null>(null)
   const [editingOffer, setEditingOffer] = useState<Partial<Offer> | null>(null)
@@ -619,11 +641,11 @@ export function JourneyBuilderDashboard() {
       if (form.id) {
         await journeyApi.updateJourney(form.id, form)
       } else {
-        const created = await journeyApi.createJourney({ ...form, tenant_id: TENANT_ID })
+        const created = await journeyApi.createJourney({ ...form, tenant_id: tenantId })
         if (rules.length > 0) {
           await journeyApi.addRules(
             created.journey.id,
-            rules.map((r) => ({ ...r, journey_id: created.journey.id, tenant_id: TENANT_ID }))
+            rules.map((r) => ({ ...r, journey_id: created.journey.id, tenant_id: tenantId }))
           )
         }
       }
@@ -639,7 +661,7 @@ export function JourneyBuilderDashboard() {
       if ((offer as any).id) {
         await journeyApi.updateOffer((offer as any).id, offer)
       } else {
-        await journeyApi.createOffer({ ...offer, tenant_id: TENANT_ID })
+        await journeyApi.createOffer({ ...offer, tenant_id: tenantId })
       }
       setEditingOffer(null)
       loadData()
@@ -765,7 +787,7 @@ export function JourneyBuilderDashboard() {
             <p className="text-sm text-muted-foreground">
               Configure rule-based retention journeys that trigger when customers cancel.
             </p>
-            <Button size="sm" className="bg-primary gap-1" onClick={() => setEditingJourney(emptyJourney())}>
+            <Button size="sm" className="bg-primary gap-1" onClick={() => setEditingJourney(emptyJourney(tenantId))}>
               <Plus className="h-3 w-3" /> Create Journey
             </Button>
           </div>
@@ -841,7 +863,7 @@ export function JourneyBuilderDashboard() {
                   <p className="text-xs text-muted-foreground mt-1">
                     Create journeys to automatically present retention offers when customers cancel.
                   </p>
-                  <Button size="sm" className="bg-primary gap-1 mt-3" onClick={() => setEditingJourney(emptyJourney())}>
+                  <Button size="sm" className="bg-primary gap-1 mt-3" onClick={() => setEditingJourney(emptyJourney(tenantId))}>
                     <Plus className="h-3 w-3" /> Create First Journey
                   </Button>
                 </CardContent>

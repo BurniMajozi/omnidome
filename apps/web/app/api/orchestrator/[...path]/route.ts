@@ -12,7 +12,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   const url = new URL(`${ORCHESTRATOR_URL}/api/${pathStr}`)
 
   // Forward query params
-  request.searchParams.forEach((value, key) => {
+  request.nextUrl.searchParams.forEach((value, key) => {
     url.searchParams.set(key, value)
   })
 
@@ -23,11 +23,6 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     const val = request.headers.get(h)
     if (val) headers.set(h, val)
   })
-
-  // Default tenant for local dev
-  if (!headers.has("x-tenant-id")) {
-    headers.set("x-tenant-id", "00000000-0000-0000-0000-000000000001")
-  }
 
   try {
     const body = request.method !== "GET" ? await request.text() : undefined

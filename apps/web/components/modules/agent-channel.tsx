@@ -339,7 +339,7 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
             <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
               <Bot className="h-8 w-8 text-primary" />
             </div>
-            <h3 className="text-lg font-semibold text-foreground">Agent Channel</h3>
+            <h3 className="section-title">Agent Channel</h3>
             <p className="mt-1 text-sm text-muted-foreground text-center max-w-sm">
               Chat with AI agents that have full access to your OmniDome operating system.
               Each agent specializes in different tasks.

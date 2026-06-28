@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useRef, useCallback, useEffect } from "react"
+import { supabase } from "@/lib/supabase/client"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,6 +31,16 @@ import {
 } from "lucide-react"
 
 const API_BASE = "/svc/call-center"
+const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
+async function getTenantId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return (
+    data.session?.user?.user_metadata?.tenant_id ??
+    data.session?.user?.app_metadata?.tenant_id ??
+    FALLBACK_TENANT_ID
+  )
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────
 function cn(...classes: (string | false | undefined)[]) {
@@ -127,7 +138,7 @@ function SpeechToTextPanel() {
 
       const res = await fetch(`${API_BASE}/ai/speech-to-text`, {
         method: "POST",
-        headers: { "x-tenant-id": "00000000-0000-0000-0000-000000000001" },
+        headers: { "x-tenant-id": await getTenantId() },
         body: form,
       })
       if (!res.ok) throw new Error(await res.text())
@@ -290,7 +301,7 @@ function TextToSpeechPanel() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-tenant-id": "00000000-0000-0000-0000-000000000001",
+          "x-tenant-id": await getTenantId(),
         },
         body: JSON.stringify({ text, model: voice }),
       })
@@ -518,7 +529,7 @@ function AudioIntelligencePanel() {
 
       const res = await fetch(`${API_BASE}/ai/audio-intelligence`, {
         method: "POST",
-        headers: { "x-tenant-id": "00000000-0000-0000-0000-000000000001" },
+        headers: { "x-tenant-id": await getTenantId() },
         body: form,
       })
       if (!res.ok) throw new Error(await res.text())
@@ -741,9 +752,9 @@ function AudioIntelligencePanel() {
 // ═══════════════════════════════════════════════════════════════════════
 export function VoiceAIPanel() {
   return (
-    <div className="rounded-xl border border-border bg-card p-5">
+    <div className="surface-card p-5">
       <Tabs defaultValue="stt">
-        <TabsList className="mb-4 grid w-full grid-cols-4 bg-background">
+        <TabsList className="mb-4 grid w-full grid-cols-4 bg-muted/30">
           <TabsTrigger value="stt" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
             <Mic className="h-3.5 w-3.5" />
             Speech to Text

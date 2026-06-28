@@ -4,6 +4,8 @@ import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { PageHeader } from "@/components/ui/page-header"
+import { TableShell } from "@/components/ui/table-shell"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
@@ -40,6 +42,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useModuleData } from "@/lib/module-data"
 import { useIsClient } from "@/lib/use-is-client"
 import { WebAnalyticsDashboard } from "./web-analytics/web-analytics-dashboard"
+import { JourneyBuilderDashboard } from "./journey-builder/journey-builder-dashboard"
 import { WebAnalyticsCustomDashboard } from "@/modules/web-analytics-custom"
 import { CancelFlowModal } from "./cancel-flow-modal"
 import { JourneyABTesting } from "./journey-ab-testing"
@@ -194,7 +197,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   })
 
   const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats, retentionJourneys } = data
-  const journeysSafe = retentionJourneys ?? defaultRetentionJourneys
+  const [localPages, setLocalPages] = useState(() => landingPages)
 
   const [activeTab, setActiveTab] = useState("overview")
   const [cancelFlowOpen, setCancelFlowOpen] = useState(false)
@@ -207,6 +210,18 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
   return (
     <div className="space-y-6">
+      <PageHeader
+        icon={<Globe className="h-5 w-5" />}
+        title="Customer Portal"
+        subtitle="Self-service portal, journey management, and customer engagement"
+        actions={
+          <>
+            <Button variant="outline" size="sm"><Plus className="h-3.5 w-3.5" />New Page</Button>
+            <Button variant="cta" size="sm"><Globe className="h-3.5 w-3.5" />Publish</Button>
+          </>
+        }
+      />
+
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="border-border bg-card">
@@ -367,7 +382,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                       <p className="text-sm text-muted-foreground">omnidome.co.za</p>
                     </div>
                   </div>
-                  <Badge className="bg-emerald-500/20 text-emerald-400">Online</Badge>
+                  <Badge className="badge-success">Online</Badge>
                 </div>
 
                 <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
@@ -380,7 +395,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                       <p className="text-sm text-muted-foreground">4 bots active</p>
                     </div>
                   </div>
-                  <Badge className="bg-emerald-500/20 text-emerald-400">Running</Badge>
+                  <Badge className="badge-success">Running</Badge>
                 </div>
 
                 <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
@@ -393,7 +408,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                       <p className="text-sm text-muted-foreground">v2.4.1</p>
                     </div>
                   </div>
-                  <Badge className="bg-emerald-500/20 text-emerald-400">Live</Badge>
+                  <Badge className="badge-success">Live</Badge>
                 </div>
 
                 <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
@@ -406,7 +421,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                       <p className="text-sm text-muted-foreground">v3.1.0</p>
                     </div>
                   </div>
-                  <Badge className="bg-emerald-500/20 text-emerald-400">Live</Badge>
+                  <Badge className="badge-success">Live</Badge>
                 </div>
               </CardContent>
             </Card>
@@ -415,8 +430,8 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
         <TabsContent value="ai-apps" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-foreground">AI Agents & Chatbots</h3>
-            <Button size="sm" className="bg-primary">
+            <h3 className="section-title">AI Agents & Chatbots</h3>
+            <Button variant="cta" size="sm">
               <Plus className="mr-2 h-4 w-4" />
               Create AI Agent
             </Button>
@@ -472,15 +487,15 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                   </div>
                   <div className="mt-4 grid grid-cols-3 gap-4 text-center">
                     <div>
-                      <p className="text-lg font-semibold text-foreground">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
+                      <p className="section-title">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
                       <p className="text-xs text-muted-foreground">Conversations</p>
                     </div>
                     <div>
-                      <p className="text-lg font-semibold text-foreground">{agent.resolution}</p>
+                      <p className="section-title">{agent.resolution}</p>
                       <p className="text-xs text-muted-foreground">Resolution</p>
                     </div>
                     <div>
-                      <p className="text-lg font-semibold text-foreground">{agent.avgTime}</p>
+                      <p className="section-title">{agent.avgTime}</p>
                       <p className="text-xs text-muted-foreground">Avg Time</p>
                     </div>
                   </div>
@@ -492,73 +507,27 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
         <TabsContent value="website" className="mt-4 space-y-4">
           <div id="portal-landing" />
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="text-lg font-semibold text-foreground">Landing Pages</h3>
-            <Button size="sm" className="bg-primary">
-              <Plus className="mr-2 h-4 w-4" />
-              Create Page
-            </Button>
-          </div>
-
-          <Card className="border-border bg-card">
-            <CardContent className="p-0">
-              <div className="rounded-lg border border-border overflow-x-auto">
-                <table className="w-full min-w-[720px]">
-                  <thead>
-                    <tr className="border-b border-border bg-secondary/50">
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Page Name</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">URL</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Status</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Views</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Conversions</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Rate</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-muted-foreground">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {landingPages.map((page) => (
-                      <tr key={page.id} className="border-b border-border last:border-0">
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <Layout className="h-4 w-4 text-muted-foreground" />
-                            <span className="font-medium text-foreground">{page.name}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-muted-foreground">{page.url}</td>
-                        <td className="px-4 py-3">
-                          <Badge
-                            className={
-                              page.status === "published"
-                                ? "bg-emerald-500/20 text-emerald-400"
-                                : "bg-amber-500/20 text-amber-400"
-                            }
-                          >
-                            {page.status}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-foreground">{!isClient ? "--" : page.views.toLocaleString()}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{page.conversions}</td>
-                        <td className="px-4 py-3 text-sm text-foreground">{page.rate}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <Eye className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <ExternalLink className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
+          <TableShell
+            title="Landing Pages"
+            columns={[
+              { key: "name", label: "Page Name", inputType: "text" as const },
+              { key: "url", label: "URL", inputType: "text" as const },
+              { key: "status", label: "Status", inputType: "select" as const, options: ["published", "draft"], render: (v) => (
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v === "published" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+                  {String(v)}
+                </span>
+              )},
+              { key: "views", label: "Views", inputType: "number" as const, render: (v) => Number(v).toLocaleString() },
+              { key: "conversions", label: "Conversions", inputType: "number" as const },
+              { key: "rate", label: "Conv. Rate", inputType: "text" as const },
+            ]}
+            data={localPages}
+            addLabel="Create Page"
+            onAdd={(rec) => setLocalPages((prev) => [rec, ...prev])}
+            onDelete={(id) => setLocalPages((prev) => prev.filter((r) => r.id !== id))}
+            onEdit={(rec) => setLocalPages((prev) => prev.map((r) => r.id === rec.id ? rec : r))}
+            searchPlaceholder="Search pages..."
+          />
 
           {/* Website Builder Tools */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -632,7 +601,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                         <useCase.icon className="h-5 w-5 text-muted-foreground" />
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-foreground">{useCase.title}</p>
+                        <p className="card-title">{useCase.title}</p>
                         <p className="text-xs text-muted-foreground">{useCase.description}</p>
                       </div>
                     </div>
@@ -667,71 +636,8 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <WebAnalyticsCustomDashboard />
         </TabsContent>
 
-        <TabsContent value="journeys" className="mt-4 space-y-4">
-          <div id="portal-retention-journey" />
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-foreground">Retention Journeys</h3>
-              <p className="text-sm text-muted-foreground">Configure the cancel and win-back experiences shown in the portal.</p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setCancelFlowOpen(true)}
-              >
-                Test Cancel Flow
-              </Button>
-              <Button size="sm" className="bg-primary">
-                <Plus className="mr-2 h-4 w-4" />
-                Create Journey
-              </Button>
-            </div>
-          </div>
-
-          <div className="grid gap-4">
-            {journeysSafe.map((journey) => (
-              <Card key={journey.id} className="border-border bg-card">
-                <CardContent className="p-4 sm:p-5">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="font-semibold text-foreground">{journey.name}</h4>
-                        <Badge
-                          className={
-                            journey.status === "active"
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-amber-500/20 text-amber-400"
-                          }
-                        >
-                          {journey.status}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-muted-foreground">{journey.audience}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-6 text-sm">
-                      <div>
-                        <p className="text-xs text-muted-foreground">Steps</p>
-                        <p className="font-semibold text-foreground">{journey.stepCount}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-muted-foreground">Conversion</p>
-                        <p className="font-semibold text-foreground">{journey.conversion}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" className="bg-transparent">
-                          Edit
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+        <TabsContent value="journeys" className="mt-4">
+          <JourneyBuilderDashboard />
         </TabsContent>
 
         <TabsContent value="ab-testing" className="mt-4">
