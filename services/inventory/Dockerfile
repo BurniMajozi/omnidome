@@ -4,7 +4,7 @@ WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
 COPY services/inventory/requirements.txt ./services/inventory/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/inventory/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org --default-timeout=100 --retries 5 -r services/inventory/requirements.txt
 
 FROM python:3.12-slim
 
@@ -22,7 +22,7 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-RUN chown -R appuser:appuser /app /home/appuser
+RUN chown -R appuser:appuser /app
 
 USER appuser
 

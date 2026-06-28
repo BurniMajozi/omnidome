@@ -197,7 +197,7 @@ class CommunicationSession(Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="created")
     started_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     participants: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    session_metadata: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

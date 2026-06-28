@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.common.db import get_db
+from services.common.db import get_async_session as get_db
 from services.compliance.database import (
     ComplianceDocument, DocumentType, Contract,
 )

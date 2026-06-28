@@ -4,7 +4,7 @@ WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
 COPY services/admin/requirements.txt ./services/admin/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org -r services/admin/requirements.txt
+RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org --default-timeout=100 --retries 5 -r services/admin/requirements.txt
 
 FROM python:3.12-slim
 

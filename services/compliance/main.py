@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.common.db import get_db
+from services.common.db import get_async_session as get_db
 from services.common.middleware import configure_production
 
 logger = logging.getLogger("compliance")

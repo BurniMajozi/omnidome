@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.common.db import get_db
+from services.common.db import get_async_session as get_db
 from services.compliance.database import (
     TaxRegistration, TaxReturn, TaxReturnStatus, TaxType,
     HsRiskAssessment, HsIncident, HsSeverity,

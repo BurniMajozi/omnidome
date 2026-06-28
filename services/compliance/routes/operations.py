@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
-from services.common.db import get_db
+from services.common.db import get_async_session as get_db
 from services.compliance.database import (
     DrBcpPlan, DrBcpAssessment, DrBcpStatus,
     ComplianceScore, ComplianceObligation, ComplianceCategory, ComplianceStatus,

@@ -197,13 +197,13 @@ class CommunicationSessionCreate(BaseModel):
     channel_id: uuid.UUID
     session_type: str = Field(..., min_length=1, max_length=30)
     participants: List[Dict[str, Any]] = Field(default_factory=list)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    session_metadata: Dict[str, Any] = Field(default_factory=dict)
     provider_name: Optional[str] = None
 
 
 class CommunicationSessionEnd(BaseModel):
     status: str = Field(default="ended", min_length=1, max_length=30)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    session_metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CommunicationSessionRead(BaseModel):
@@ -219,7 +219,7 @@ class CommunicationSessionRead(BaseModel):
     status: str
     started_by: uuid.UUID
     participants: Dict[str, Any]
-    metadata: Dict[str, Any]
+    session_metadata: Dict[str, Any]
     started_at: datetime
     ended_at: Optional[datetime]
     created_at: datetime

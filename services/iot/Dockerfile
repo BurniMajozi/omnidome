@@ -4,8 +4,8 @@ WORKDIR /app
 
 # Install dependencies
 COPY requirements.txt* ./
-RUN pip install --no-cache-dir -r requirements.txt 2>/dev/null || \
-    pip install --no-cache-dir fastapi uvicorn sqlalchemy asyncpg httpx websockets pyjwt cryptography
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 -r requirements.txt 2>/dev/null || \
+    pip install --no-cache-dir --default-timeout=100 --retries 5 fastapi uvicorn sqlalchemy asyncpg httpx websockets pyjwt cryptography
 
 # Copy shared modules
 COPY services/common/ ./services/common/

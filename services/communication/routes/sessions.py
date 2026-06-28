@@ -65,7 +65,7 @@ async def create_session(
             event_type=f"start_{body.session_type}_session",
             payload={
                 "participants": body.participants,
-                "metadata": body.metadata,
+                "metadata": body.session_metadata,
                 "provider_name": body.provider_name,
             },
         )
@@ -81,7 +81,7 @@ async def create_session(
                     "channel_id": str(body.channel_id),
                     "started_by": str(ctx.user_id),
                     "participants": body.participants,
-                    "metadata": body.metadata,
+                    "metadata": body.session_metadata,
                 },
             )
         except Exception:
@@ -97,7 +97,7 @@ async def create_session(
             status=provider_result["status"],
             started_by=ctx.user_id,
             participants={"items": body.participants},
-            metadata=body.metadata,
+            session_metadata=body.session_metadata,
             started_at=datetime.now(timezone.utc),
         )
         session.add(comm_session)
@@ -152,7 +152,7 @@ async def end_session(
         if not comm_session:
             raise HTTPException(status_code=404, detail="Communication session not found")
         comm_session.status = body.status
-        comm_session.metadata = {**(comm_session.metadata or {}), **body.metadata}
+        comm_session.session_metadata = {**(comm_session.session_metadata or {}), **body.session_metadata}
         comm_session.ended_at = datetime.now(timezone.utc)
         await session.flush()
         await session.refresh(comm_session)
