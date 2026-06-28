@@ -18,7 +18,7 @@ curl http://localhost:8000/health
 
 ## Architecture
 
-- **25 microservices** — Python 3.12 + FastAPI + SQLAlchemy async
+- **27 microservices** — Python 3.12 + FastAPI + SQLAlchemy async
 - **2 frontends** — Next.js 16 admin dashboard (port 3000) + customer portal PWA (port 3001)
 - **API Gateway** — Reverse proxy with rate limiting + JWT auth (port 8000)
 - **PostgreSQL 15** — Single database with schema-per-service isolation
@@ -53,6 +53,7 @@ curl http://localhost:8000/health
 | Billing Collections | 8023 | services/billing_collections/Dockerfile |
 | FNO Intelligence | 8024 | services/fno_intelligence/Dockerfile |
 | Tenant Memory | 8025 | services/tenant_memory/Dockerfile |
+| Portal Builder | 8026 | services/portal_builder/Dockerfile |
 | Admin Dashboard | 3000 | apps/web/Dockerfile |
 | Customer App | 3001 | Standalone (EAS Build) |
 | Technician App | 3002 | Standalone (EAS Build) |

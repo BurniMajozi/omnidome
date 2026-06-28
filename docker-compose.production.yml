@@ -536,6 +536,28 @@ services:
           memory: 256M
           cpus: '0.5'
 
+  portal-builder:
+    build:
+      context: .
+      dockerfile: services/portal_builder/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+
   customer_journey:
     build:
       context: .

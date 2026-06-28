@@ -303,6 +303,25 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  portal-builder:
+    build:
+      context: .
+      dockerfile: services/portal_builder/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    ports:
+      - "8026:8026"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
   retention:
     build:
       context: .

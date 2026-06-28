@@ -1,7 +1,7 @@
 """
 Portal Builder Service — Main FastAPI Application
 Rapid landing page builder, campaign push engine, and SEO management.
-Port: 8022 | Module: portal-builder
+Port: 8026 | Module: portal_builder
 """
 
 import os
@@ -24,8 +24,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from services.common.entitlements import EntitlementGuard
 from services.common.auth import AuthContext, get_auth_context
-from services.common.db import Base as CommonBase, session_scope
+from services.common.db import Base, session_scope
 from services.common.middleware import add_exception_handlers
+from services.portal_builder.builder_ux import router as builder_ux_router
 
 # ── App ────────────────────────────────────────────────────────────────
 
@@ -50,12 +51,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(builder_ux_router)
+
 
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
-        from portal_builder.database import init_tables
+        from services.portal_builder.database import init_tables
         init_tables()
 
 
@@ -617,4 +620,4 @@ async def portal_analytics(ctx: AuthContext = Depends(get_auth_context)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8022)
+    uvicorn.run(app, host="0.0.0.0", port=8026)
