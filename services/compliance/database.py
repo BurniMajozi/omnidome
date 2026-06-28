@@ -20,7 +20,17 @@ from sqlalchemy.sql import func
 
 
 class Base(DeclarativeBase):
-    pass
+    def to_dict(self) -> dict:
+        """Serialize model to a plain dict, coercing enums to their .value."""
+        result: dict = {}
+        for col in self.__table__.columns:
+            val = getattr(self, col.name, None)
+            if isinstance(val, enum.Enum):
+                val = val.value
+            elif isinstance(val, Decimal):
+                val = float(val)
+            result[col.name] = val
+        return result
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
@@ -1058,13 +1068,12 @@ class FundingOpportunity(Base):
     max_funding_amount = Column(Numeric(15, 2))
     currency = Column(String(3), default="ZAR")
     eligibility_criteria = Column(Text)
-    required_bbbee_level = Column(Enum(BbbeeLevel))
-    application_deadline = Column(Date)
+    required_bbbee_level = Column(Enum(BbbeeLevel), nullable=True)
     status = Column(String(50), default="identified")
-    applied_date = Column(Date)
-    approval_date = Column(Date)
-    amount_awarded = Column(Numeric(15, 2))
+    application_deadline = Column(Date, nullable=True)
+    applied = Column(Boolean, default=False)
     notes = Column(Text)
-    created_at = Column(DateTime, default=func.now())
-    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+now(), onupdate=func.now())
     tenant_id = Column(String(100), nullable=False, index=True)

@@ -6,8 +6,19 @@ Covers: Contract Management, Tax, H&S, CIPC, Bylaw, BBBEE, Leave, Vehicles,
         Document Understanding, Financial Scenarios, ICASA, POPI, RICA,
         Breach Register, Funding Opportunities
 """
-from fastapi import FastAPI
+import logging
+import os
+
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from services.common.db import get_db
+from services.common.middleware import configure_production
+
+logger = logging.getLogger("compliance")
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(
     title="OmniDome Compliance Service",
@@ -15,13 +26,17 @@ app = FastAPI(
     description="Comprehensive compliance management for South African telecom operators",
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_production(app)
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+        from services.compliance.database import Base
+        from services.common.db import get_async_engine
+        async with (await get_async_engine()).begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("Compliance tables ensured")
 
 # ── Route Registration ──────────────────────────────────────────────────
 
@@ -84,14 +99,106 @@ async def health():
 # ── Compliance Overview Dashboard ───────────────────────────────────────
 
 @app.get("/api/v1/dashboard/overview")
-async def compliance_overview():
-    """Aggregated compliance overview across all categories."""
+async def compliance_overview(db: AsyncSession = Depends(get_db)):
+    """Aggregated compliance overview — scores, counts, and category breakdown."""
+    from services.compliance.database import (
+        ComplianceScore, Contract, ContractStatus,
+        BreachRegister, PopiDataAccessRequest, ComplianceObligation,
+        TaxReturn, HsIncident, FundingOpportunity, BbbeeScorecard,
+    )
+    from datetime import datetime, timedelta
+
+    # Compliance scores
+    scores_result = await db.execute(select(ComplianceScore).order_by(ComplianceScore.calculated_at.desc()))
+    scores = scores_result.scalars().all()
+
+    categories = [
+        {
+            "name": s.category.value if hasattr(s.category, "value") else str(s.category),
+            "score": float(s.score),
+            "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+            "issues": s.issues_count or 0,
+            "critical": s.critical_issues or 0,
+        }
+        for s in scores
+    ]
+    overall_score = (
+        round(sum(c["score"] for c in categories) / len(categories))
+        if categories else 0
+    )
+
+    # Expiring contracts (90 days)
+    cutoff = datetime.utcnow() + timedelta(days=90)
+    exp_result = await db.execute(
+        select(func.count(Contract.id)).where(
+            Contract.expiry_date <= cutoff,
+            Contract.status == ContractStatus.active,
+        )
+    )
+    expiring_contracts = exp_result.scalar() or 0
+
+    # Overdue DSARs
+    dsar_result = await db.execute(
+        select(func.count(PopiDataAccessRequest.id)).where(
+            PopiDataAccessRequest.due_date < datetime.utcnow(),
+            PopiDataAccessRequest.status != "completed",
+        )
+    )
+    overdue_dsar = dsar_result.scalar() or 0
+
+    # Open breaches
+    breach_result = await db.execute(
+        select(func.count(BreachRegister.id)).where(
+            BreachRegister.status.in_(["identified", "investigating"])
+        )
+    )
+    open_breaches = breach_result.scalar() or 0
+
+    # Pending obligations
+    obl_result = await db.execute(
+        select(func.count(ComplianceObligation.id)).where(
+            ComplianceObligation.status == "pending_review"
+        )
+    )
+    pending_obligations = obl_result.scalar() or 0
+
+    # Overdue tax
+    tax_result = await db.execute(
+        select(func.count(TaxReturn.id)).where(TaxReturn.status == "overdue")
+    )
+    tax_overdue = tax_result.scalar() or 0
+
+    # Open H&S incidents
+    hs_result = await db.execute(
+        select(func.count(HsIncident.id)).where(HsIncident.status == "open")
+    )
+    hs_open = hs_result.scalar() or 0
+
+    # BBBEE level (most recent)
+    bbbee_result = await db.execute(
+        select(BbbeeScorecard).order_by(BbbeeScorecard.id.desc()).limit(1)
+    )
+    bbbee = bbbee_result.scalar_one_or_none()
+    bbbee_level = (
+        bbbee.overall_level.value if bbbee and hasattr(bbbee.overall_level, "value")
+        else str(bbbee.overall_level) if bbbee else "pending"
+    )
+
+    # Funding matched
+    funding_result = await db.execute(
+        select(func.count(FundingOpportunity.id)).where(FundingOpportunity.status == "identified")
+    )
+    funding_matched = funding_result.scalar() or 0
+
     return {
-        "categories": [c.value for c in __import__(
-            "services.compliance.database", fromlist=["ComplianceCategory"]
-        ).ComplianceCategory],
-        "platforms": [p.value for p in __import__(
-            "services.compliance.database", fromlist=["EservicePlatform"]
-        ).EservicePlatform],
-        "status": "operational",
+        "overall_score": overall_score,
+        "categories": categories,
+        "expiring_contracts": expiring_contracts,
+        "overdue_dsar": overdue_dsar,
+        "open_breaches": open_breaches,
+        "pending_obligations": pending_obligations,
+        "tax_overdue": tax_overdue,
+        "hs_open_incidents": hs_open,
+        "bbbee_level": bbbee_level,
+        "funding_matched": funding_matched,
     }

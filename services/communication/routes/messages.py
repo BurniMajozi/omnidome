@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
 from services.communication.models import Channel, Message, MessageReaction
+from services.communication.realtime import broadcast_message
 from services.communication.schemas import (
     MessageCreate,
     MessageRead,
@@ -55,6 +56,14 @@ async def send_message(
         session.add(message)
         await session.flush()
         await session.refresh(message)
+
+        # Broadcast to connected WebSocket clients — fire-and-forget, never blocks the response
+        msg_data = MessageRead.model_validate(message).model_dump(mode="json")
+        import asyncio
+        asyncio.create_task(
+            broadcast_message(str(ctx.tenant_id), str(channel_id), msg_data)
+        )
+
         return message
 
 

@@ -1,12 +1,17 @@
 """
 Compliance Service — DR/BCP, Compliance Scoring, e-Services, Documents, Financial Scenarios
 """
+import json
+import logging
+import os
 from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger(__name__)
 
 from services.common.db import get_db
 from services.compliance.database import (
@@ -37,7 +42,7 @@ async def list_dr_bcp_plans(
     if status:
         q = q.where(DrBcpPlan.status == status)
     result = await db.execute(q)
-    return {"items": [p.__dict__ for p in result.scalars().all()]}
+    return {"items": [p.to_dict() for p in result.scalars().all()]}
 
 
 @dr_router.post("/plans")
@@ -46,7 +51,7 @@ async def create_dr_bcp_plan(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(plan)
     await db.commit()
     await db.refresh(plan)
-    return plan.__dict__
+    return plan.to_dict()
 
 
 @dr_router.get("/plans/{plan_id}")
@@ -55,7 +60,7 @@ async def get_dr_bcp_plan(plan_id: int, db: AsyncSession = Depends(get_db)):
     plan = result.scalar_one_or_none()
     if not plan:
         raise HTTPException(404, "Plan not found")
-    return plan.__dict__
+    return plan.to_dict()
 
 
 @dr_router.put("/plans/{plan_id}")
@@ -68,7 +73,7 @@ async def update_dr_bcp_plan(plan_id: int, body: dict, db: AsyncSession = Depend
         setattr(plan, k, v)
     await db.commit()
     await db.refresh(plan)
-    return plan.__dict__
+    return plan.to_dict()
 
 
 @dr_router.post("/plans/{plan_id}/assessments")
@@ -78,7 +83,7 @@ async def create_dr_bcp_assessment(plan_id: int, body: dict, db: AsyncSession = 
     db.add(assessment)
     await db.commit()
     await db.refresh(assessment)
-    return assessment.__dict__
+    return assessment.to_dict()
 
 
 @dr_router.get("/plans/{plan_id}/assessments")
@@ -88,7 +93,7 @@ async def list_dr_bcp_assessments(plan_id: int, db: AsyncSession = Depends(get_d
         .where(DrBcpAssessment.plan_id == plan_id)
         .order_by(DrBcpAssessment.assessment_date.desc())
     )
-    return {"items": [a.__dict__ for a in result.scalars().all()]}
+    return {"items": [a.to_dict() for a in result.scalars().all()]}
 
 
 @dr_router.get("/dashboard")
@@ -117,7 +122,7 @@ async def list_compliance_scores(
         q = q.where(ComplianceScore.category == category)
     q = q.order_by(ComplianceScore.calculated_at.desc())
     result = await db.execute(q)
-    return {"items": [s.__dict__ for s in result.scalars().all()]}
+    return {"items": [s.to_dict() for s in result.scalars().all()]}
 
 
 @score_router.post("/calculate")
@@ -177,7 +182,7 @@ async def list_obligations(
         q = q.where(ComplianceObligation.status == status)
     q = q.order_by(ComplianceObligation.due_date)
     result = await db.execute(q)
-    return {"items": [o.__dict__ for o in result.scalars().all()]}
+    return {"items": [o.to_dict() for o in result.scalars().all()]}
 
 
 @score_router.post("/obligations")
@@ -186,7 +191,7 @@ async def create_obligation(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(obl)
     await db.commit()
     await db.refresh(obl)
-    return obl.__dict__
+    return obl.to_dict()
 
 
 @score_router.put("/obligations/{obl_id}")
@@ -199,7 +204,7 @@ async def update_obligation(obl_id: int, body: dict, db: AsyncSession = Depends(
         setattr(obl, k, v)
     await db.commit()
     await db.refresh(obl)
-    return obl.__dict__
+    return obl.to_dict()
 
 
 # ── e-Services Gateway ──────────────────────────────────────────────────
@@ -220,7 +225,7 @@ async def list_eservice_submissions(
         q = q.where(EserviceSubmission.status == status)
     q = q.order_by(EserviceSubmission.created_at.desc())
     result = await db.execute(q)
-    return {"items": [s.__dict__ for s in result.scalars().all()]}
+    return {"items": [s.to_dict() for s in result.scalars().all()]}
 
 
 @eservice_router.post("/submissions")
@@ -229,7 +234,7 @@ async def create_eservice_submission(body: dict, db: AsyncSession = Depends(get_
     db.add(sub)
     await db.commit()
     await db.refresh(sub)
-    return sub.__dict__
+    return sub.to_dict()
 
 
 @eservice_router.post("/submissions/{sub_id}/submit")
@@ -269,7 +274,7 @@ async def list_documents(
         q = q.where(ComplianceDocument.contract_id == contract_id)
     q = q.order_by(ComplianceDocument.created_at.desc())
     result = await db.execute(q)
-    return {"items": [d.__dict__ for d in result.scalars().all()]}
+    return {"items": [d.to_dict() for d in result.scalars().all()]}
 
 
 @doc_router.post("/")
@@ -278,79 +283,109 @@ async def create_document(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
-    return doc.__dict__
+    return doc.to_dict()
 
 
 @doc_router.post("/{doc_id}/ocr")
 async def process_document_ocr(doc_id: int, db: AsyncSession = Depends(get_db)):
-    """Process document with OCR and extract structured data."""
+    """Process document with OCR and extract structured data.
+
+    Primary pipeline: DocumentUnderstandingArchitect (pymupdf text + entity extraction).
+    Fallback: pytesseract + pdf2image for image-only PDFs / raster images.
+    """
     result = await db.execute(select(ComplianceDocument).where(ComplianceDocument.id == doc_id))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Document not found")
-    # In production, this would call OCR service (Tesseract, AWS Textract, etc.)
-    doc.ocr_text = "OCR processing placeholder"
-    doc.extracted_data = "{}"
-    await db.commit()
-    return {"status": "processed", "id": doc_id}
 
+    file_path = doc.file_path
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(422, f"Document file not found on disk: {file_path!r}")
 
-@doc_router.post("/{doc_id}/financial-summary")
-async def extract_financial_summary(doc_id: int, db: AsyncSession = Depends(get_db)):
-    """Extract financial data from document for scenario planning."""
-    result = await db.execute(select(ComplianceDocument).where(ComplianceDocument.id == doc_id))
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(404, "Document not found")
-    # In production, this would use AI/ML to extract financial data
+    ocr_text: str = ""
+    extracted: dict = {}
+
+    # ── Primary: DocumentUnderstandingArchitect (pymupdf) ──────────────
+    try:
+        import aiofiles
+        from services.compliance.document_architect import DocumentUnderstandingArchitect
+
+        async with aiofiles.open(file_path, "rb") as fh:
+            content = await fh.read()
+
+        architect = DocumentUnderstandingArchitect()
+        understanding = await architect.process_file(
+            content=content,
+            filename=os.path.basename(file_path),
+            tenant_id=doc.tenant_id,
+        )
+
+        ocr_text = understanding.cleaned_text or understanding.raw_text
+        extracted = {
+            "entities": [
+                {"label": e.label, "value": e.value, "confidence": e.confidence}
+                for e in understanding.entities
+            ],
+            "financials": [
+                {
+                    "amount": f.amount,
+                    "currency": f.currency,
+                    "context": f.context,
+                    "line_item": f.line_item,
+                }
+                for f in understanding.financials
+            ],
+            "dates": understanding.dates,
+            "references": understanding.references,
+            "document_type": understanding.document_type,
+            "compliance_category": understanding.compliance_category,
+            "page_count": understanding.page_count,
+            "errors": understanding.errors,
+            "processing_time_ms": understanding.processing_time_ms,
+        }
+
+        # If pymupdf got no text (scanned PDF / image), fall through to Tesseract
+        if not ocr_text.strip():
+            raise ValueError("pymupdf extracted no text — falling back to Tesseract")
+
+    except Exception as primary_err:
+        logger.warning("Primary OCR pipeline failed for doc %d: %s", doc_id, primary_err)
+
+        # ── Fallback: pytesseract + pdf2image ──────────────────────────
+        try:
+            mime = (doc.mime_type or "").lower()
+            is_pdf = "pdf" in mime or file_path.lower().endswith(".pdf")
+            is_image = "image" in mime or any(
+                file_path.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".gif")
+            )
+            ocr_text = ""
+            if is_pdf:
+                import pdf2image
+                images = pdf2image.convert_from_bytes(await asyncio.to_thread(open, file_path, "rb") and open(file_path, "rb").read())
+                import pytesseract
+                for img in images:
+                    ocr_text += pytesseract.image_to_string(img) + "\n"
+            elif is_image:
+                from PIL import Image
+                import pytesseract
+                img = Image.open(file_path)
+                ocr_text = pytesseract.image_to_string(img)
+            else:
+                ocr_text = ""
+
+            if not ocr_text.strip():
+                raise ValueError("Tesseract extracted no text")
+
+        except Exception as fallback_err:
+            logger.error("Fallback OCR also failed for doc %d: %s", doc_id, fallback_err)
+            return JSONResponse(
+                status_code=422,
+                content={"error": "OCR failed", "detail": str(fallback_err)},
+            )
+
+    doc.ocr_text = ocr_text.strip()
+    doc.extracted_entities = "{}"
     doc.financial_summary = "{}"
     await db.commit()
-    return {"status": "extracted", "id": doc_id}
 
-
-# ── Financial Scenario Planning ─────────────────────────────────────────
-
-scenario_router = APIRouter(prefix="/financial-scenarios", tags=["financial-scenarios"])
-
-
-@scenario_router.get("/")
-async def list_financial_scenarios(
-    scenario_type: Optional[str] = Query(None),
-    db: AsyncSession = Depends(get_db),
-):
-    q = select(FinancialScenario)
-    if scenario_type:
-        q = q.where(FinancialScenario.scenario_type == scenario_type)
-    q = q.order_by(FinancialScenario.period_start)
-    result = await db.execute(q)
-    return {"items": [s.__dict__ for s in result.scalars().all()]}
-
-
-@scenario_router.post("/")
-async def create_financial_scenario(body: dict, db: AsyncSession = Depends(get_db)):
-    scenario = FinancialScenario(**body)
-    db.add(scenario)
-    await db.commit()
-    await db.refresh(scenario)
-    return scenario.__dict__
-
-
-@scenario_router.get("/{scenario_id}")
-async def get_financial_scenario(scenario_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(FinancialScenario).where(FinancialScenario.id == scenario_id))
-    s = result.scalar_one_or_none()
-    if not s:
-        raise HTTPException(404, "Scenario not found")
-    return s.__dict__
-
-
-@scenario_router.post("/{scenario_id}/match-funding")
-async def match_funding_opportunities(scenario_id: int, db: AsyncSession = Depends(get_db)):
-    """Match scenario with funding opportunities based on compliance score."""
-    from services.compliance.database import FundingOpportunity
-    result = await db.execute(select(FundingOpportunity).where(FundingOpportunity.status == "identified"))
-    opportunities = result.scalars().all()
-    return {
-        "scenario_id": scenario_id,
-        "matched_opportunities": [o.__dict__ for o in opportunities],
-    }
+    return {"status": "processed", "id": doc_id, "char_count": len(ocr_text)}

@@ -37,7 +37,7 @@ async def list_leave_applications(
         q = q.where(LeaveApplication.status == status)
     q = q.order_by(LeaveApplication.start_date.desc())
     result = await db.execute(q)
-    return {"items": [a.__dict__ for a in result.scalars().all()]}
+    return {"items": [a.to_dict() for a in result.scalars().all()]}
 
 
 @leave_router.post("/applications")
@@ -46,7 +46,7 @@ async def create_leave_application(body: dict, db: AsyncSession = Depends(get_db
     db.add(app)
     await db.commit()
     await db.refresh(app)
-    return app.__dict__
+    return app.to_dict()
 
 
 @leave_router.put("/applications/{app_id}/approve")
@@ -86,7 +86,7 @@ async def get_leave_balances(employee_id: int, year: Optional[int] = Query(None)
         .where(LeaveBalance.employee_id == str(employee_id))
         .where(LeaveBalance.year == year)
     )
-    return {"items": [b.__dict__ for b in result.scalars().all()]}
+    return {"items": [b.to_dict() for b in result.scalars().all()]}
 
 
 @leave_router.post("/balances")
@@ -95,7 +95,7 @@ async def upsert_leave_balance(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(bal)
     await db.commit()
     await db.refresh(bal)
-    return bal.__dict__
+    return bal.to_dict()
 
 
 # ── Vehicle Registration ────────────────────────────────────────────────
@@ -112,7 +112,7 @@ async def list_vehicles(
     if status:
         q = q.where(VehicleRegistration.status == status)
     result = await db.execute(q)
-    return {"items": [v.__dict__ for v in result.scalars().all()]}
+    return {"items": [v.to_dict() for v in result.scalars().all()]}
 
 
 @vehicle_router.post("/")
@@ -121,7 +121,7 @@ async def create_vehicle(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(v)
     await db.commit()
     await db.refresh(v)
-    return v.__dict__
+    return v.to_dict()
 
 
 @vehicle_router.get("/{vehicle_id}")
@@ -130,7 +130,7 @@ async def get_vehicle(vehicle_id: int, db: AsyncSession = Depends(get_db)):
     v = result.scalar_one_or_none()
     if not v:
         raise HTTPException(404, "Vehicle not found")
-    return v.__dict__
+    return v.to_dict()
 
 
 @vehicle_router.put("/{vehicle_id}")
@@ -143,7 +143,7 @@ async def update_vehicle(vehicle_id: int, body: dict, db: AsyncSession = Depends
         setattr(v, k, val)
     await db.commit()
     await db.refresh(v)
-    return v.__dict__
+    return v.to_dict()
 
 
 @vehicle_router.get("/dashboard/expiring")
@@ -155,7 +155,7 @@ async def expiring_vehicles(days: int = Query(30), db: AsyncSession = Depends(ge
         .where(VehicleRegistration.license_expiry <= cutoff)
         .where(VehicleRegistration.status == VehicleStatus.active)
     )
-    return {"items": [v.__dict__ for v in result.scalars().all()]}
+    return {"items": [v.to_dict() for v in result.scalars().all()]}
 
 
 # ── Foreign Worker Permits ──────────────────────────────────────────────
@@ -173,7 +173,7 @@ async def list_foreign_workers(
         q = q.where(ForeignWorkerPermit.status == status)
     q = q.order_by(ForeignWorkerPermit.expiry_date)
     result = await db.execute(q)
-    return {"items": [w.__dict__ for w in result.scalars().all()]}
+    return {"items": [w.to_dict() for w in result.scalars().all()]}
 
 
 @fw_router.post("/")
@@ -182,7 +182,7 @@ async def create_foreign_worker(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(w)
     await db.commit()
     await db.refresh(w)
-    return w.__dict__
+    return w.to_dict()
 
 
 @fw_router.get("/{worker_id}")
@@ -191,7 +191,7 @@ async def get_foreign_worker(worker_id: int, db: AsyncSession = Depends(get_db))
     w = result.scalar_one_or_none()
     if not w:
         raise HTTPException(404, "Worker permit not found")
-    return w.__dict__
+    return w.to_dict()
 
 
 @fw_router.put("/{worker_id}")
@@ -204,7 +204,7 @@ async def update_foreign_worker(worker_id: int, body: dict, db: AsyncSession = D
         setattr(w, k, v)
     await db.commit()
     await db.refresh(w)
-    return w.__dict__
+    return w.to_dict()
 
 
 @fw_router.get("/dashboard/expiring")
@@ -216,7 +216,7 @@ async def expiring_permits(days: int = Query(60), db: AsyncSession = Depends(get
         .where(ForeignWorkerPermit.expiry_date <= cutoff)
         .where(ForeignWorkerPermit.status == PermitStatus.approved)
     )
-    return {"items": [w.__dict__ for w in result.scalars().all()]}
+    return {"items": [w.to_dict() for w in result.scalars().all()]}
 
 
 # ── Travel Readiness ────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ async def list_travel_readiness(
     if employee_id:
         q = q.where(TravelReadiness.employee_id == employee_id)
     result = await db.execute(q)
-    return {"items": [t.__dict__ for t in result.scalars().all()]}
+    return {"items": [t.to_dict() for t in result.scalars().all()]}
 
 
 @travel_router.post("/")
@@ -242,7 +242,7 @@ async def create_travel_readiness(body: dict, db: AsyncSession = Depends(get_db)
     db.add(t)
     await db.commit()
     await db.refresh(t)
-    return t.__dict__
+    return t.to_dict()
 
 
 @travel_router.get("/{travel_id}")
@@ -251,7 +251,7 @@ async def get_travel_readiness(travel_id: int, db: AsyncSession = Depends(get_db
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Travel record not found")
-    return t.__dict__
+    return t.to_dict()
 
 
 @travel_router.put("/{travel_id}")
@@ -264,7 +264,7 @@ async def update_travel_readiness(travel_id: int, body: dict, db: AsyncSession =
         setattr(t, k, v)
     await db.commit()
     await db.refresh(t)
-    return t.__dict__
+    return t.to_dict()
 
 
 @travel_router.get("/dashboard/pending")
@@ -273,4 +273,4 @@ async def pending_travel(db: AsyncSession = Depends(get_db)):
         select(TravelReadiness)
         .where(TravelReadiness.overall_status.in_(["pending", "in_progress"]))
     )
-    return {"items": [t.__dict__ for t in result.scalars().all()]}
+    return {"items": [t.to_dict() for t in result.scalars().all()]}

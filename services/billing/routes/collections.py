@@ -7,7 +7,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-import httpx
+import asyncio
+from services.common.http_client import service_post
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func
 
@@ -26,7 +27,6 @@ logger = logging.getLogger("billing.collections")
 
 router = APIRouter(tags=["Collections"])
 
-NETWORK_URL = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +134,11 @@ def create_arrangement(
 # ---------------------------------------------------------------------------
 
 @router.post("/collections/{customer_id}/suspend")
-def manual_suspend(
+async def manual_suspend(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    _suspend_customer(ctx.tenant_id, customer_id)
+    await _suspend_customer(ctx.tenant_id, customer_id)
 
     # Mark overdue invoices
     with get_session() as session:
@@ -161,11 +161,11 @@ def manual_suspend(
 # ---------------------------------------------------------------------------
 
 @router.post("/collections/{customer_id}/reinstate")
-def reinstate_customer(
+async def reinstate_customer(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    _reinstate_customer(ctx.tenant_id, customer_id)
+    await _reinstate_customer(ctx.tenant_id, customer_id)
     return {"status": "reinstated", "customer_id": str(customer_id)}
 
 
@@ -197,41 +197,34 @@ def list_dunning_actions(
 # Network service integration helpers
 # ---------------------------------------------------------------------------
 
-def _forward_headers(tenant_id: uuid.UUID) -> dict:
-    return {
-        "X-User-Id": "00000000-0000-0000-0000-000000000000",
-        "X-Tenant-Id": str(tenant_id),
-    }
-
-
-def _suspend_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
+async def _suspend_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
     """Call network service to suspend all services for a customer."""
     try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{NETWORK_URL}/services/suspend-by-customer",
-                json={"customer_id": str(customer_id)},
-                headers=_forward_headers(tenant_id),
-            )
-            logger.info(
-                "Suspend request for customer %s: status=%s", customer_id, resp.status_code
-            )
+        await service_post(
+            "network",
+            "/services/suspend-by-customer",
+            json={"customer_id": str(customer_id)},
+            tenant_id=tenant_id,
+            user_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+            timeout=5.0,
+        )
+        logger.info("Suspend request for customer %s: OK", customer_id)
     except Exception as exc:
         logger.error("Suspend call failed for customer %s: %s", customer_id, exc)
 
 
-def _reinstate_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
+async def _reinstate_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
     """Call network service to reinstate all services for a customer."""
     try:
-        with httpx.Client(timeout=5.0) as client:
-            resp = client.post(
-                f"{NETWORK_URL}/services/reinstate-by-customer",
-                json={"customer_id": str(customer_id)},
-                headers=_forward_headers(tenant_id),
-            )
-            logger.info(
-                "Reinstate request for customer %s: status=%s", customer_id, resp.status_code
-            )
+        await service_post(
+            "network",
+            "/services/reinstate-by-customer",
+            json={"customer_id": str(customer_id)},
+            tenant_id=tenant_id,
+            user_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+            timeout=5.0,
+        )
+        logger.info("Reinstate request for customer %s: OK", customer_id)
     except Exception as exc:
         logger.error("Reinstate call failed for customer %s: %s", customer_id, exc)
 
@@ -274,7 +267,7 @@ def process_pending_dunning() -> int:
                     # Check if invoice is still unpaid
                     inv = session.query(Invoice).filter(Invoice.id == action.invoice_id).first()
                     if inv and inv.status not in ("paid", "voided"):
-                        _suspend_customer(action.tenant_id, action.customer_id)
+                        asyncio.run(_suspend_customer(action.tenant_id, action.customer_id))
                         inv.status = "overdue"
                         action.result = "suspended"
                     else:

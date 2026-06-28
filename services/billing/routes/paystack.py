@@ -7,7 +7,8 @@ import os
 from decimal import Decimal
 from typing import Optional
 
-import httpx
+import uuid
+from services.common.http_client import service_post
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 
 from services.common.auth import AuthContext, get_auth_context
@@ -229,21 +230,20 @@ async def _handle_charge_success(data: dict) -> None:
 
         # If fully paid and was overdue, trigger reinstatement
         if inv.status == "paid":
-            _trigger_auto_reinstate(tenant_id, inv.customer_id)
+            await _trigger_auto_reinstate(tenant_id, inv.customer_id)
 
 
-def _trigger_auto_reinstate(tenant_id, customer_id) -> None:
+async def _trigger_auto_reinstate(tenant_id, customer_id) -> None:
     """Notify Network service to reinstate customer service after payment."""
-    network_url = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
     try:
-        with httpx.Client(timeout=5.0) as client:
-            client.post(
-                f"{network_url}/services/reinstate-by-customer",
-                json={"customer_id": str(customer_id)},
-                headers={
-                    "X-User-Id": "00000000-0000-0000-0000-000000000000",
-                    "X-Tenant-Id": str(tenant_id),
-                },
-            )
+        await service_post(
+            "network",
+            "/services/reinstate-by-customer",
+            json={"customer_id": str(customer_id)},
+            tenant_id=tenant_id,
+            user_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
+            timeout=5.0,
+        )
+        logger.info("Auto-reinstate OK for customer %s", customer_id)
     except Exception as exc:
         logger.error("Auto-reinstate failed for customer %s: %s", customer_id, exc)

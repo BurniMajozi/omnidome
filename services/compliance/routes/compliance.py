@@ -37,7 +37,7 @@ async def list_icasa_submissions(
     if status:
         q = q.where(IcasaSubmission.status == status)
     result = await db.execute(q)
-    return {"items": [s.__dict__ for s in result.scalars().all()]}
+    return {"items": [s.to_dict() for s in result.scalars().all()]}
 
 
 @icasa_router.post("/submissions")
@@ -46,7 +46,7 @@ async def create_icasa_submission(body: dict, db: AsyncSession = Depends(get_db)
     db.add(sub)
     await db.commit()
     await db.refresh(sub)
-    return sub.__dict__
+    return sub.to_dict()
 
 
 @icasa_router.get("/submissions/{sub_id}")
@@ -55,7 +55,7 @@ async def get_icasa_submission(sub_id: int, db: AsyncSession = Depends(get_db)):
     sub = result.scalar_one_or_none()
     if not sub:
         raise HTTPException(404, "Submission not found")
-    return sub.__dict__
+    return sub.to_dict()
 
 
 @icasa_router.put("/submissions/{sub_id}")
@@ -68,7 +68,7 @@ async def update_icasa_submission(sub_id: int, body: dict, db: AsyncSession = De
         setattr(sub, k, v)
     await db.commit()
     await db.refresh(sub)
-    return sub.__dict__
+    return sub.to_dict()
 
 
 # ── ICASA Scraping ──────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ async def update_icasa_submission(sub_id: int, body: dict, db: AsyncSession = De
 @icasa_router.get("/scrape-jobs")
 async def list_scrape_jobs(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(IcasaScrapeJob))
-    return {"items": [j.__dict__ for j in result.scalars().all()]}
+    return {"items": [j.to_dict() for j in result.scalars().all()]}
 
 
 @icasa_router.post("/scrape-jobs")
@@ -85,7 +85,7 @@ async def create_scrape_job(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(job)
     await db.commit()
     await db.refresh(job)
-    return job.__dict__
+    return job.to_dict()
 
 
 @icasa_router.post("/scrape-jobs/{job_id}/run")
@@ -116,7 +116,7 @@ async def list_regulation_changes(
         q = q.where(IcasaRegulationChange.status == status)
     q = q.order_by(IcasaRegulationChange.detected_at.desc())
     result = await db.execute(q)
-    return {"items": [c.__dict__ for c in result.scalars().all()]}
+    return {"items": [c.to_dict() for c in result.scalars().all()]}
 
 
 @icasa_router.post("/regulation-changes")
@@ -125,7 +125,7 @@ async def create_regulation_change(body: dict, db: AsyncSession = Depends(get_db
     db.add(change)
     await db.commit()
     await db.refresh(change)
-    return change.__dict__
+    return change.to_dict()
 
 
 # ── POPI Act ────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ async def list_dsar(
         q = q.where(PopiDataAccessRequest.status == status)
     q = q.order_by(PopiDataAccessRequest.due_date)
     result = await db.execute(q)
-    return {"items": [r.__dict__ for r in result.scalars().all()]}
+    return {"items": [r.to_dict() for r in result.scalars().all()]}
 
 
 @popi_router.post("/dsar")
@@ -155,7 +155,7 @@ async def create_dsar(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(dsar)
     await db.commit()
     await db.refresh(dsar)
-    return dsar.__dict__
+    return dsar.to_dict()
 
 
 @popi_router.put("/dsar/{dsar_id}/complete")
@@ -191,7 +191,7 @@ async def list_anonymization_logs(
     if table_name:
         q = q.where(PopiAnonymizationLog.table_name == table_name)
     result = await db.execute(q)
-    return {"items": [l.__dict__ for l in result.scalars().all()]}
+    return {"items": [l.to_dict() for l in result.scalars().all()]}
 
 
 @popi_router.post("/anonymization-logs")
@@ -200,7 +200,7 @@ async def create_anonymization_log(body: dict, db: AsyncSession = Depends(get_db
     db.add(log)
     await db.commit()
     await db.refresh(log)
-    return log.__dict__
+    return log.to_dict()
 
 
 @popi_router.get("/consent-records")
@@ -212,7 +212,7 @@ async def list_consent_records(
     if data_subject_id:
         q = q.where(PopiConsentRecord.data_subject_id == data_subject_id)
     result = await db.execute(q)
-    return {"items": [r.__dict__ for r in result.scalars().all()]}
+    return {"items": [r.to_dict() for r in result.scalars().all()]}
 
 
 @popi_router.post("/consent-records")
@@ -221,7 +221,7 @@ async def create_consent_record(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(rec)
     await db.commit()
     await db.refresh(rec)
-    return rec.__dict__
+    return rec.to_dict()
 
 
 # ── RICA ────────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ async def list_rica_verifications(
     if status:
         q = q.where(RicaVerification.status == status)
     result = await db.execute(q)
-    return {"items": [v.__dict__ for v in result.scalars().all()]}
+    return {"items": [v.to_dict() for v in result.scalars().all()]}
 
 
 @rica_router.post("/verifications")
@@ -251,7 +251,7 @@ async def create_rica_verification(body: dict, db: AsyncSession = Depends(get_db
     db.add(v)
     await db.commit()
     await db.refresh(v)
-    return v.__dict__
+    return v.to_dict()
 
 
 @rica_router.get("/dashboard")
@@ -286,7 +286,7 @@ async def list_breaches(
         q = q.where(BreachRegister.category == category)
     q = q.order_by(BreachRegister.identified_date.desc())
     result = await db.execute(q)
-    return {"items": [b.__dict__ for b in result.scalars().all()]}
+    return {"items": [b.to_dict() for b in result.scalars().all()]}
 
 
 @breach_router.post("/")
@@ -295,7 +295,7 @@ async def create_breach(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(breach)
     await db.commit()
     await db.refresh(breach)
-    return breach.__dict__
+    return breach.to_dict()
 
 
 @breach_router.put("/{breach_id}")
@@ -308,7 +308,7 @@ async def update_breach(breach_id: int, body: dict, db: AsyncSession = Depends(g
         setattr(breach, k, v)
     await db.commit()
     await db.refresh(breach)
-    return breach.__dict__
+    return breach.to_dict()
 
 
 @breach_router.get("/dashboard")
@@ -346,7 +346,7 @@ async def list_funding_opportunities(
         q = q.where(FundingOpportunity.funding_type == funding_type)
     q = q.order_by(FundingOpportunity.application_deadline)
     result = await db.execute(q)
-    return {"items": [o.__dict__ for o in result.scalars().all()]}
+    return {"items": [o.to_dict() for o in result.scalars().all()]}
 
 
 @funding_router.post("/")
@@ -355,7 +355,7 @@ async def create_funding_opportunity(body: dict, db: AsyncSession = Depends(get_
     db.add(opp)
     await db.commit()
     await db.refresh(opp)
-    return opp.__dict__
+    return opp.to_dict()
 
 
 @funding_router.post("/match")
@@ -369,4 +369,4 @@ async def match_funding_by_compliance(
         .where(FundingOpportunity.status == "identified")
         .where(FundingOpportunity.min_compliance_score <= min_score)
     )
-    return {"items": [o.__dict__ for o in result.scalars().all()], "min_score": min_score}
+    return {"items": [o.to_dict() for o in result.scalars().all()], "min_score": min_score}

@@ -627,7 +627,7 @@ ROUTER_RETURN_STATUS = SAEnum(
 )
 
 
-class CancellationWorkflow(Base):
+class CancellationWorkflow(JourneyBase):
     """Tracks the full cancellation workflow from journey outcome to service termination.
 
     Triggered when:

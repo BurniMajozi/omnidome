@@ -1,7 +1,7 @@
 """HR service database layer — SQLAlchemy async models and session management."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, Numeric, Time
@@ -42,8 +42,8 @@ class LeaveRequest(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
     employee_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"))
     leave_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    start_date: Mapped[datetime] = mapped_column(Date, nullable=False)
-    end_date: Mapped[datetime] = mapped_column(Date, nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

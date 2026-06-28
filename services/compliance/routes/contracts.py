@@ -35,7 +35,7 @@ async def list_contracts(
     q = q.order_by(Contract.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(q)
     contracts = result.scalars().all()
-    return {"items": [c.__dict__ for c in contracts], "page": page, "page_size": page_size}
+    return {"items": [c.to_dict() for c in contracts], "page": page, "page_size": page_size}
 
 
 @router.post("/")
@@ -44,7 +44,7 @@ async def create_contract(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(contract)
     await db.commit()
     await db.refresh(contract)
-    return contract.__dict__
+    return contract.to_dict()
 
 
 @router.get("/{contract_id}")
@@ -53,7 +53,7 @@ async def get_contract(contract_id: int, db: AsyncSession = Depends(get_db)):
     contract = result.scalar_one_or_none()
     if not contract:
         raise HTTPException(404, "Contract not found")
-    return contract.__dict__
+    return contract.to_dict()
 
 
 @router.put("/{contract_id}")
@@ -72,7 +72,7 @@ async def update_contract(contract_id: int, body: dict, db: AsyncSession = Depen
     ))
     await db.commit()
     await db.refresh(contract)
-    return contract.__dict__
+    return contract.to_dict()
 
 
 @router.delete("/{contract_id}")
@@ -94,7 +94,7 @@ async def get_contract_audit(contract_id: int, db: AsyncSession = Depends(get_db
         .order_by(ContractAuditLog.performed_at.desc())
     )
     logs = result.scalars().all()
-    return {"items": [l.__dict__ for l in logs]}
+    return {"items": [l.to_dict() for l in logs]}
 
 
 # ── Contract SLA ────────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ async def get_contract_audit(contract_id: int, db: AsyncSession = Depends(get_db
 async def list_contract_slas(contract_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ContractSLA).where(ContractSLA.contract_id == contract_id))
     slas = result.scalars().all()
-    return {"items": [s.__dict__ for s in slas]}
+    return {"items": [s.to_dict() for s in slas]}
 
 
 @router.post("/{contract_id}/slas")
@@ -113,7 +113,7 @@ async def create_contract_sla(contract_id: int, body: dict, db: AsyncSession = D
     db.add(sla)
     await db.commit()
     await db.refresh(sla)
-    return sla.__dict__
+    return sla.to_dict()
 
 
 @router.post("/{contract_id}/slas/{sla_id}/measurements")
@@ -141,7 +141,7 @@ async def record_sla_measurement(
 
     await db.commit()
     await db.refresh(measurement)
-    return measurement.__dict__
+    return measurement.to_dict()
 
 
 @router.get("/{contract_id}/slas/{sla_id}/measurements")
@@ -153,7 +153,7 @@ async def list_sla_measurements(
         .where(SlaMeasurement.sla_id == sla_id)
         .order_by(SlaMeasurement.measured_at.desc())
     )
-    return {"items": [m.__dict__ for m in result.scalars().all()]}
+    return {"items": [m.to_dict() for m in result.scalars().all()]}
 
 
 # ── Contract Expiry Dashboard ───────────────────────────────────────────
@@ -170,4 +170,4 @@ async def expiring_contracts(
         .where(Contract.status == ContractStatus.active)
         .order_by(Contract.expiry_date)
     )
-    return {"items": [c.__dict__ for c in result.scalars().all()], "cutoff": str(cutoff)}
+    return {"items": [c.to_dict() for c in result.scalars().all()], "cutoff": str(cutoff)}

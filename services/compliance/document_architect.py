@@ -167,26 +167,44 @@ def extract_pdf(content: bytes) -> tuple[str, int]:
 
 
 def extract_pdf_ocr(content: bytes, lang: str = "eng") -> tuple[str, int]:
-    """OCR-scanned PDF pages that have no text layer."""
+    """OCR-scanned PDF pages that have no text layer.
+
+    For pages with an existing text layer, text is extracted directly via pymupdf.
+    For image-only pages, pytesseract is used (requires tesseract-ocr system package).
+    """
+    try:
+        import pytesseract  # type: ignore
+        from PIL import Image as PILImage  # type: ignore
+        _tesseract_available = True
+    except ImportError:
+        _tesseract_available = False
+
     text_parts = []
     with fitz.open(stream=content, filetype="pdf") as doc:
         page_count = len(doc)
         for i, page in enumerate(doc):
-            # Check if page has text
-            if page.get_text("text").strip():
+            page_text = page.get_text("text").strip()
+            if page_text:
+                # Page has a text layer — use it directly
                 text_parts.append(f"\n--- Page {i + 1} ---\n")
-                text_parts.append(page.get_text("text"))
+                text_parts.append(page_text)
             else:
-                # OCR the page image
+                # Image-only page — render and OCR
                 text_parts.append(f"\n--- Page {i + 1} (OCR) ---\n")
                 try:
                     pix = page.get_pixmap(dpi=300)
-                    ocr_doc = fitz.open("png", pix.tobytes("png"))
-                    # pymupdf doesn't have built-in OCR, use page text extraction
-                    # For true OCR, we'd need pytesseract — fallback to image extraction
-                    text_parts.append(f"[Image page {i + 1} — OCR requires tesseract]")
-                except Exception:
-                    text_parts.append(f"[Image page {i + 1} — extraction failed]")
+                    img_bytes = pix.tobytes("png")
+                    if _tesseract_available:
+                        import io
+                        img = PILImage.open(io.BytesIO(img_bytes))
+                        ocr_result = pytesseract.image_to_string(img, lang=lang)
+                        text_parts.append(ocr_result or f"[Page {i + 1} — no text detected]")
+                    else:
+                        text_parts.append(
+                            f"[Page {i + 1} — image-only; install pytesseract for OCR]"
+                        )
+                except Exception as exc:
+                    text_parts.append(f"[Page {i + 1} — OCR failed: {exc}]")
     return "\n".join(text_parts), page_count
 
 
@@ -562,6 +580,15 @@ class DocumentUnderstandingArchitect:
             fmt = detect_format(filename)
             if fmt == DocFormat.pdf:
                 result.raw_text, result.page_count = extract_pdf(content)
+            # Fall back to OCR if text is sparse (scanned PDF)
+            word_count = len(result.raw_text.split())
+            if word_count < 20:
+                try:
+                    ocr_text, _ = extract_pdf_ocr(content)
+                    if ocr_text.strip():
+                        result.raw_text = ocr_text
+                except Exception as ocr_err:
+                    pass  # OCR unavailable — keep sparse text
             elif fmt in EXTRACTORS:
                 extractor = EXTRACTORS[fmt]
                 if fmt in (DocFormat.pdf,):

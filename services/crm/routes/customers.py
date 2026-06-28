@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-import httpx
+from services.common.http_client import service_get
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
@@ -24,9 +24,6 @@ from services.crm.schemas import (
 router = APIRouter(prefix="/customers", tags=["Customers"])
 
 # Internal service URLs (Docker Compose service names)
-BILLING_URL = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
-SUPPORT_URL = os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")
-NETWORK_URL = os.getenv("NETWORK_SERVICE_URL", "http://network:8005")
 LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
 JOURNEY_ENGINE_URL = os.getenv("JOURNEY_ENGINE_SERVICE_URL", "http://journey_engine:8017")
 
@@ -72,17 +69,19 @@ async def _sync_customer_to_journey_engine(
             "id_number": customer.id_number,
         }
 
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(
-                f"{JOURNEY_ENGINE_URL}/customers/snapshot",
-                json={
-                    "customer_id": str(customer.id),
-                    "tenant_id": str(customer.tenant_id),
-                    "account_number": customer.account_number,
-                    "snapshot_data": snapshot_data,
-                    "source_event": source_event,
-                },
-            )
+        from services.common.http_client import service_post as _svc_post
+        await _svc_post(
+            "journey_engine",
+            "/customers/snapshot",
+            json={
+                "customer_id": str(customer.id),
+                "tenant_id": str(customer.tenant_id),
+                "account_number": customer.account_number,
+                "snapshot_data": snapshot_data,
+                "source_event": source_event,
+            },
+            tenant_id=customer.tenant_id,
+        )
     except Exception:
         pass  # non-blocking
 
@@ -206,17 +205,24 @@ def _forward_headers(ctx: AuthContext) -> dict:
     }
 
 
-async def _fetch_service_data(url: str, headers: dict) -> list:
-    """Fetch data from a sibling service; return empty list on failure."""
+async def _fetch_service_data(service_name: str, path: str, ctx) -> list:
+    """Fetch data from a sibling service via the resilient HTTP client."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code == 200:
-                data = resp.json()
-                return data if isinstance(data, list) else data.get("items", [])
-    except Exception:
-        pass
-    return []
+        result = await service_get(
+            service_name,
+            path,
+            tenant_id=ctx.tenant_id,
+            user_id=ctx.user_id,
+            timeout=5.0,
+        )
+        if isinstance(result, list):
+            return result
+        if isinstance(result, dict):
+            return result.get("items", [])
+        return []
+    except Exception as exc:
+        logger.warning("Cross-service call failed: %s %s — %s", service_name, path, exc)
+        return []
 
 
 @router.get("/{customer_id}", response_model=Customer360)
@@ -259,29 +265,11 @@ async def get_customer_360(
         view.tags = [t.tag for t in tags]
         view.notes_count = notes_count
 
-    # Aggregate cross-service data (best-effort, non-blocking)
-    headers = _forward_headers(ctx)
+    # Aggregate cross-service data (resilient — circuit breaker + retry)
     cid = str(customer_id)
-
-    billing_data, support_data, network_data = [], [], []
-    try:
-        billing_data = await _fetch_service_data(
-            f"{BILLING_URL}/invoices?customer_id={cid}", headers
-        )
-    except Exception:
-        pass
-    try:
-        support_data = await _fetch_service_data(
-            f"{SUPPORT_URL}/tickets?customer_id={cid}", headers
-        )
-    except Exception:
-        pass
-    try:
-        network_data = await _fetch_service_data(
-            f"{NETWORK_URL}/services?customer_id={cid}", headers
-        )
-    except Exception:
-        pass
+    billing_data = await _fetch_service_data("billing", f"/invoices?customer_id={cid}", ctx)
+    support_data = await _fetch_service_data("support", f"/tickets?customer_id={cid}", ctx)
+    network_data = await _fetch_service_data("network", f"/services?customer_id={cid}", ctx)
 
     view.billing = billing_data
     view.support = support_data
@@ -291,10 +279,10 @@ async def get_customer_360(
     # Lifecycle panel (best-effort, non-blocking)
     try:
         lifecycle_current = await _fetch_service_data(
-            f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/current", headers
+            "lifecycle", f"/lifecycle/customers/{cid}/current", ctx
         )
         lifecycle_history = await _fetch_service_data(
-            f"{LIFECYCLE_URL}/lifecycle/customers/{cid}/history?limit=20", headers
+            "lifecycle", f"/lifecycle/customers/{cid}/history?limit=20", ctx
         )
         # Normalize: _fetch_service_data may return list or dict
         if isinstance(lifecycle_current, list) and lifecycle_current:

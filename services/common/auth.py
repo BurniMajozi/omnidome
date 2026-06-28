@@ -178,3 +178,15 @@ async def get_current_tenant_id(ctx: AuthContext = Depends(get_auth_context)) ->
 
 async def get_current_user_id(ctx: AuthContext = Depends(get_auth_context)) -> uuid.UUID:
     return ctx.user_id
+
+
+def decode_token_payload(token: str) -> Dict[str, Any]:
+    """
+    Public wrapper around _decode_jwt for use in non-HTTP contexts
+    (e.g. WebSocket endpoint auth where HTTPException cannot be raised).
+    Raises ValueError on invalid tokens instead of HTTPException.
+    """
+    try:
+        return _decode_jwt(token)
+    except HTTPException as exc:
+        raise ValueError(exc.detail) from exc

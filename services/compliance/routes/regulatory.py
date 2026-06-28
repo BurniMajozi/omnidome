@@ -27,7 +27,7 @@ tax_router = APIRouter(prefix="/tax", tags=["tax"])
 @tax_router.get("/registrations")
 async def list_tax_registrations(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(TaxRegistration))
-    return {"items": [r.__dict__ for r in result.scalars().all()]}
+    return {"items": [r.to_dict() for r in result.scalars().all()]}
 
 
 @tax_router.post("/registrations")
@@ -36,7 +36,7 @@ async def create_tax_registration(body: dict, db: AsyncSession = Depends(get_db)
     db.add(reg)
     await db.commit()
     await db.refresh(reg)
-    return reg.__dict__
+    return reg.to_dict()
 
 
 @tax_router.get("/returns")
@@ -52,7 +52,7 @@ async def list_tax_returns(
         q = q.where(TaxReturn.status == status)
     q = q.order_by(TaxReturn.period_end.desc())
     result = await db.execute(q)
-    return {"items": [r.__dict__ for r in result.scalars().all()]}
+    return {"items": [r.to_dict() for r in result.scalars().all()]}
 
 
 @tax_router.post("/returns")
@@ -61,7 +61,7 @@ async def create_tax_return(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(tr)
     await db.commit()
     await db.refresh(tr)
-    return tr.__dict__
+    return tr.to_dict()
 
 
 @tax_router.put("/returns/{return_id}/submit")
@@ -96,7 +96,7 @@ hs_router = APIRouter(prefix="/health-safety", tags=["health-safety"])
 @hs_router.get("/risk-assessments")
 async def list_risk_assessments(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(HsRiskAssessment))
-    return {"items": [r.__dict__ for r in result.scalars().all()]}
+    return {"items": [r.to_dict() for r in result.scalars().all()]}
 
 
 @hs_router.post("/risk-assessments")
@@ -105,7 +105,7 @@ async def create_risk_assessment(body: dict, db: AsyncSession = Depends(get_db))
     db.add(ra)
     await db.commit()
     await db.refresh(ra)
-    return ra.__dict__
+    return ra.to_dict()
 
 
 @hs_router.get("/incidents")
@@ -121,7 +121,7 @@ async def list_incidents(
         q = q.where(HsIncident.status == status)
     q = q.order_by(HsIncident.incident_date.desc())
     result = await db.execute(q)
-    return {"items": [i.__dict__ for i in result.scalars().all()]}
+    return {"items": [i.to_dict() for i in result.scalars().all()]}
 
 
 @hs_router.post("/incidents")
@@ -130,7 +130,7 @@ async def create_incident(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(incident)
     await db.commit()
     await db.refresh(incident)
-    return incident.__dict__
+    return incident.to_dict()
 
 
 @hs_router.put("/incidents/{incident_id}")
@@ -143,7 +143,7 @@ async def update_incident(incident_id: int, body: dict, db: AsyncSession = Depen
         setattr(incident, k, v)
     await db.commit()
     await db.refresh(incident)
-    return incident.__dict__
+    return incident.to_dict()
 
 
 @hs_router.get("/dashboard")
@@ -165,7 +165,7 @@ cipc_router = APIRouter(prefix="/cipc", tags=["cipc"])
 @cipc_router.get("/filings")
 async def list_cipc_filings(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CipcFiling).order_by(CipcFiling.due_date))
-    return {"items": [f.__dict__ for f in result.scalars().all()]}
+    return {"items": [f.to_dict() for f in result.scalars().all()]}
 
 
 @cipc_router.post("/filings")
@@ -174,7 +174,7 @@ async def create_cipc_filing(body: dict, db: AsyncSession = Depends(get_db)):
     db.add(filing)
     await db.commit()
     await db.refresh(filing)
-    return filing.__dict__
+    return filing.to_dict()
 
 
 @cipc_router.put("/filings/{filing_id}/file")
@@ -204,7 +204,7 @@ async def list_bylaw_obligations(
     if municipality:
         q = q.where(BylawObligation.municipality == municipality)
     result = await db.execute(q)
-    return {"items": [o.__dict__ for o in result.scalars().all()]}
+    return {"items": [o.to_dict() for o in result.scalars().all()]}
 
 
 @bylaw_router.post("/obligations")
@@ -213,7 +213,7 @@ async def create_bylaw_obligation(body: dict, db: AsyncSession = Depends(get_db)
     db.add(obl)
     await db.commit()
     await db.refresh(obl)
-    return obl.__dict__
+    return obl.to_dict()
 
 
 @bylaw_router.put("/obligations/{obl_id}")
@@ -226,7 +226,7 @@ async def update_bylaw_obligation(obl_id: int, body: dict, db: AsyncSession = De
         setattr(obl, k, v)
     await db.commit()
     await db.refresh(obl)
-    return obl.__dict__
+    return obl.to_dict()
 
 
 # ── BBBEE Compliance ────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ bbbee_router = APIRouter(prefix="/bbbee", tags=["bbbee"])
 @bbbee_router.get("/scorecards")
 async def list_bbbee_scorecards(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(BbbeeScorecard).order_by(BbbeeScorecard.financial_year.desc()))
-    return {"items": [s.__dict__ for s in result.scalars().all()]}
+    return {"items": [s.to_dict() for s in result.scalars().all()]}
 
 
 @bbbee_router.post("/scorecards")
@@ -246,7 +246,7 @@ async def create_bbbee_scorecard(body: dict, db: AsyncSession = Depends(get_db))
     db.add(sc)
     await db.commit()
     await db.refresh(sc)
-    return sc.__dict__
+    return sc.to_dict()
 
 
 @bbbee_router.post("/scorecards/calculate")
@@ -301,4 +301,4 @@ async def get_bbbee_scorecard(scorecard_id: int, db: AsyncSession = Depends(get_
     sc = result.scalar_one_or_none()
     if not sc:
         raise HTTPException(404, "Scorecard not found")
-    return sc.__dict__
+    return sc.to_dict()

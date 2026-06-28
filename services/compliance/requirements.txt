@@ -1,0 +1,21 @@
+# Compliance service dependencies
+# Extends the common requirements (fastapi, uvicorn, sqlalchemy, httpx, etc.)
+-r ../common/requirements.txt
+
+# Document understanding (document_architect.py)
+pymupdf>=1.24.0          # fitz — PDF text extraction + page rendering
+aiofiles>=23.0.0         # async file I/O
+html2text>=2024.2.26     # HTML → markdown
+trafilatura>=1.9.0       # main-content extraction from HTML
+beautifulsoup4>=4.12.0   # HTML parsing (bs4)
+lxml>=5.0.0              # XML/HTML parsing
+python-docx>=1.1.0       # DOCX extraction
+python-pptx>=1.0.0       # PPTX extraction
+openpyxl>=3.1.0          # XLSX extraction
+markdownify>=0.13.0      # HTML/text → markdown
+
+# OCR fallback (image-only PDFs and raster images)
+# Requires system package: tesseract-ocr (apt-get install tesseract-ocr)
+pytesseract>=0.3.10
+pdf2image>=1.17.0        # Requires system package: poppler-utils
+Pillow>=10.0.0

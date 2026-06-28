@@ -464,31 +464,115 @@ async def get_demand_forecast(
     db=Depends(get_session),
     days: int = Query(7, ge=1, le=30),
 ):
-    """Return staffing demand forecast based on call center queue data."""
+    """Return staffing demand forecast derived from workforce, leave, and call-center queue data.
+
+    Formula per day:
+        available_pool  = active_employees - employees_on_approved_leave_that_day
+        day_factor      = day-of-week load multiplier (ISP call center patterns)
+        queue_factor    = live queue pressure scalar (from call_center service, optional)
+        required_staff  = max(round(available_pool * SERVICE_RATIO * day_factor * queue_factor), MIN_FLOOR)
+    """
     from datetime import timedelta
+
+    # ── 1. Total active workforce for this tenant ────────────────────────
+    emp_result = await db.execute(
+        select(func.count(Employee.id)).where(
+            Employee.tenant_id == tenant_id,
+            Employee.status == "ACTIVE",
+        )
+    )
+    active_employees: int = emp_result.scalar() or 0
+
+    # Fraction of workforce needed for customer-facing / operational roles.
+    # Configurable via env; default 0.70 for a typical ISP call centre.
+    SERVICE_RATIO: float = float(os.getenv("HR_FORECAST_SERVICE_RATIO", "0.70"))
+    MIN_FLOOR: int = int(os.getenv("HR_FORECAST_MIN_STAFF", "3"))
+
+    # ── 2. Live queue pressure from call_center service (best-effort) ────
+    CALL_CENTER_URL = os.getenv("CALL_CENTER_SERVICE_URL", "http://localhost:8007")
+    queue_factor: float = 1.0
+    queue_meta: dict = {}
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get(
+                f"{CALL_CENTER_URL}/queues/dashboard/summary",
+                headers={"x-tenant-id": str(tenant_id)},
+            )
+            if resp.status_code == 200:
+                summary = resp.json()
+                total_load = (
+                    summary.get("inbound", {}).get("total_active", 0)
+                    + summary.get("inbound", {}).get("total_queued", 0)
+                    + summary.get("outbound", {}).get("total_active", 0)
+                    + summary.get("outbound", {}).get("total_queued", 0)
+                )
+                queue_meta = {"total_load": total_load}
+                # Scale up requirement if queue is under pressure (>20 concurrent)
+                if total_load > 40:
+                    queue_factor = 1.20
+                elif total_load > 20:
+                    queue_factor = 1.10
+    except Exception:
+        pass  # Call center service unavailable — use baseline
+
+    # ── 3. Day-of-week load multipliers (Mon–Sun) ───────────────────────
+    # Based on typical ISP support patterns: peak mid-week, low weekends.
+    DOW_FACTORS: list[float] = [1.15, 1.05, 1.00, 1.00, 0.90, 0.60, 0.40]
+    # index 0 = Monday, 6 = Sunday (matches date.weekday())
+
     today = date.today()
     forecast = []
+
     for i in range(days):
-        d = today + timedelta(days=day)
+        d = today + timedelta(days=i)
+
         # Count scheduled staff for this date
-        result = await db.execute(
+        sched_result = await db.execute(
             select(func.count(StaffSchedule.id)).where(
                 StaffSchedule.tenant_id == tenant_id,
                 StaffSchedule.schedule_date == d,
                 StaffSchedule.status != "CANCELLED",
             )
         )
-        scheduled = result.scalar() or 0
+        scheduled: int = sched_result.scalar() or 0
+
+        # Count employees on approved leave this day
+        leave_result = await db.execute(
+            select(func.count(LeaveRequest.id)).where(
+                LeaveRequest.tenant_id == tenant_id,
+                LeaveRequest.status == "APPROVED",
+                LeaveRequest.start_date <= d,
+                LeaveRequest.end_date >= d,
+            )
+        )
+        on_leave: int = leave_result.scalar() or 0
+
+        available_pool = max(active_employees - on_leave, 0)
+        day_factor = DOW_FACTORS[d.weekday()]
+        required = max(
+            round(available_pool * SERVICE_RATIO * day_factor * queue_factor),
+            MIN_FLOOR,
+        )
+
         forecast.append({
             "date": d.isoformat(),
             "day": d.strftime("%A"),
             "scheduled_staff": scheduled,
-            "required_staff": max(scheduled, 28),  # TODO: derive from queue data
-            "gap": max(0, 28 - scheduled),
+            "required_staff": required,
+            "gap": max(0, required - scheduled),
+            # diagnostic fields for UI / debugging
+            "_meta": {
+                "active_employees": active_employees,
+                "on_leave": on_leave,
+                "available_pool": available_pool,
+                "service_ratio": SERVICE_RATIO,
+                "day_factor": day_factor,
+                "queue_factor": queue_factor,
+                **queue_meta,
+            },
         })
+
     return forecast
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TRAINING
 # ═══════════════════════════════════════════════════════════════════════════
