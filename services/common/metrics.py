@@ -33,10 +33,10 @@ _active_requests: dict[str, int] = {}
 _service_name: str = "unknown"
 
 
-def setup_metrics(app: FastAPI, service_name_: str = "unknown") -> None:
+def setup_metrics(app: FastAPI, service_name: str = "unknown") -> None:
     """Attach Prometheus metrics middleware and endpoint to a FastAPI app."""
     global _service_name
-    _service_name = service_name_
+    _service_name = service_name
 
     @app.middleware("http")
     async def metrics_middleware(request: Request, call_next):
