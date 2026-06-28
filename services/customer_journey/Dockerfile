@@ -12,8 +12,8 @@ RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuse
 
 WORKDIR /app
 
-COPY --from=builder /root/.local /home/appuser/.local
-ENV PATH=/home/appuser/.local/bin:$PATH
+COPY --from=builder /root/.local /app/.local
+ENV PATH=/app/.local/bin:$PATH
 
 COPY services/customer_journey/ ./services/customer_journey/
 COPY services/common/ ./services/common/
