@@ -49,9 +49,9 @@ async def create_billing_account(
             detail="Either customer_id or company_id is required",
         )
 
-    async with get_session() as session:
+    with get_session() as session:
         # Check uniqueness of account_number per tenant
-        existing = await session.execute(
+        existing = session.execute(
             select(BillingAccount).where(
                 BillingAccount.tenant_id == ctx.tenant_id,
                 BillingAccount.account_number == body.account_number,
@@ -76,8 +76,8 @@ async def create_billing_account(
             auto_debit=body.auto_debit,
         )
         session.add(acct)
-        await session.flush()
-        await session.refresh(acct)
+        session.flush()
+        session.refresh(acct)
         logger.info("Created billing account %s (%s)", acct.id, acct.account_number)
         return BillingAccountRead.model_validate(acct)
 
@@ -91,11 +91,12 @@ async def get_billing_account(
     account_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(BillingAccount).where(
                 BillingAccount.id == account_id,
                 BillingAccount.tenant_id == ctx.tenant_id,
+                BillingAccount.deleted_at.is_(None),
             )
         )
         acct = result.scalar_one_or_none()
@@ -115,8 +116,11 @@ async def list_billing_accounts(
     company_id: Optional[uuid.UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
 ):
-    async with get_session() as session:
-        stmt = select(BillingAccount).where(BillingAccount.tenant_id == ctx.tenant_id)
+    with get_session() as session:
+        stmt = select(BillingAccount).where(
+            BillingAccount.tenant_id == ctx.tenant_id,
+            BillingAccount.deleted_at.is_(None),
+        )
         if customer_id:
             stmt = stmt.where(BillingAccount.customer_id == customer_id)
         if company_id:
@@ -125,7 +129,7 @@ async def list_billing_accounts(
             stmt = stmt.where(BillingAccount.status == status_filter)
 
         stmt = stmt.order_by(BillingAccount.created_at.desc()).limit(200)
-        result = await session.execute(stmt)
+        result = session.execute(stmt)
         items = result.scalars().all()
         return [BillingAccountRead.model_validate(a) for a in items]
 
@@ -140,8 +144,8 @@ async def list_account_subscriptions(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Return subscription IDs linked to this billing account."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription.id).where(
                 Subscription.billing_account_id == account_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -164,7 +168,7 @@ async def list_account_invoices(
     """Return invoices linked to this billing account."""
     from services.billing.schemas import InvoiceRead, PaginatedResponse
 
-    async with get_session() as session:
+    with get_session() as session:
         stmt = select(Invoice).where(
             Invoice.billing_account_id == account_id,
             Invoice.tenant_id == ctx.tenant_id,
@@ -173,11 +177,11 @@ async def list_account_invoices(
             Invoice.billing_account_id == account_id,
             Invoice.tenant_id == ctx.tenant_id,
         )
-        total = (await session.execute(count_stmt)).scalar() or 0
+        total = (session.execute(count_stmt)).scalar() or 0
         pages = max(1, (total + page_size - 1) // page_size)
 
         stmt = stmt.order_by(Invoice.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-        items = (await session.execute(stmt)).scalars().all()
+        items = (session.execute(stmt)).scalars().all()
         return PaginatedResponse(
             items=[InvoiceRead.model_validate(i) for i in items],
             total=total,
@@ -197,8 +201,8 @@ async def close_billing_account(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Close a billing account. All active subscriptions must be cancelled first."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(BillingAccount).where(
                 BillingAccount.id == account_id,
                 BillingAccount.tenant_id == ctx.tenant_id,
@@ -211,7 +215,7 @@ async def close_billing_account(
             raise HTTPException(status_code=400, detail="Account is already closed")
 
         # Check for active subscriptions
-        sub_result = await session.execute(
+        sub_result = session.execute(
             select(func.count(Subscription.id)).where(
                 Subscription.billing_account_id == account_id,
                 Subscription.status.in_(["active", "trial", "paused"]),
@@ -225,7 +229,7 @@ async def close_billing_account(
             )
 
         acct.status = "closed"
-        await session.flush()
-        await session.refresh(acct)
+        session.flush()
+        session.refresh(acct)
         logger.info("Closed billing account %s", acct.id)
         return BillingAccountRead.model_validate(acct)

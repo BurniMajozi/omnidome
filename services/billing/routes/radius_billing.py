@@ -38,10 +38,10 @@ async def sync_radius_usage(
     - By the RADIUS service when usage thresholds are crossed
     - Manually by an admin
     """
-    async with get_session() as session:
+    with get_session() as session:
         # Find target subscriptions
         if subscription_id:
-            result = await session.execute(
+            result = session.execute(
                 select(Subscription).where(
                     Subscription.id == subscription_id,
                     Subscription.tenant_id == ctx.tenant_id,
@@ -51,7 +51,7 @@ async def sync_radius_usage(
             if not subs[0]:
                 raise HTTPException(status_code=404, detail="Subscription not found")
         else:
-            result = await session.execute(
+            result = session.execute(
                 select(Subscription).where(
                     Subscription.tenant_id == ctx.tenant_id,
                     Subscription.status == "active",
@@ -76,7 +76,7 @@ async def sync_radius_usage(
             session.add(usage)
             created.append(usage)
 
-        await session.flush()
+        session.flush()
         logger.info("Synced %d usage records for tenant %s", len(created), ctx.tenant_id)
 
         return {

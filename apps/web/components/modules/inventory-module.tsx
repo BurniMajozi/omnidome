@@ -21,6 +21,7 @@ import {
 } from "recharts"
 import { Package, Warehouse, Truck, AlertTriangle } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
+import { PurchasingSection } from "./purchasing-section"
 
 // Stock levels by category
 const defaultStockByCategoryData = [
@@ -424,6 +425,10 @@ export function InventoryModule() {
                         </BarChart>
                     </ResponsiveContainer>
                 </div>
+            </div>
+
+            <div className="mt-6">
+                <PurchasingSection />
             </div>
         </ModuleLayout>
     )

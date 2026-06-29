@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.http_client import service_post
 from services.billing.database import compute_vat, get_session, next_invoice_number
 from services.billing.models import DunningAction, Invoice, Subscription, SubscriptionUsage
 from services.billing.routes.subscriptions import _add_interval
@@ -47,7 +48,7 @@ async def generate_invoices(
     (base_price_zar + segment_pricing), rolls up unbilled usage, and
     creates a linked invoice. Skips subscriptions still in trial.
     """
-    async with get_session() as session:
+    with get_session() as session:
         # Resolve target subscriptions
         sub_stmt = select(Subscription).where(
             Subscription.tenant_id == ctx.tenant_id,
@@ -56,7 +57,7 @@ async def generate_invoices(
         if body.customer_ids:
             sub_stmt = sub_stmt.where(Subscription.customer_id.in_(body.customer_ids))
 
-        sub_result = await session.execute(sub_stmt)
+        sub_result = session.execute(sub_stmt)
         subscriptions = sub_result.scalars().all()
 
         created: list[Invoice] = []
@@ -73,7 +74,7 @@ async def generate_invoices(
                 recurring = sub.base_price_zar
 
             # Roll up unbilled usage
-            usage_result = await session.execute(
+            usage_result = session.execute(
                 select(SubscriptionUsage).where(
                     SubscriptionUsage.subscription_id == sub.id,
                     SubscriptionUsage.billed_invoice_id.is_(None),
@@ -121,8 +122,8 @@ async def generate_invoices(
                 line_items=line_items,
             )
             session.add(inv)
-            await session.flush()
-            await session.refresh(inv)
+            session.flush()
+            session.refresh(inv)
 
             # Mark usage as billed
             for u in unbilled:
@@ -136,6 +137,46 @@ async def generate_invoices(
             created.append(inv)
 
         return [InvoiceRead.model_validate(i) for i in created]
+
+
+async def _post_invoice_to_gl(inv: Invoice, ctx: AuthContext) -> None:
+    """Push a GL revenue-recognition entry to finance the moment an invoice is sent.
+
+    Uses the same source="BILLING"/source_id=<invoice id> convention finance's
+    own /billing/sync-invoices pull job already keys off, so that pull job
+    remains a safe reconciliation fallback if this call fails (finance down,
+    network blip, etc.) — it'll just pick up anything this push missed on its
+    next run instead of double-posting.
+    """
+    try:
+        await service_post(
+            "finance", "/journal-entries",
+            tenant_id=ctx.tenant_id, user_id=getattr(ctx, "user_id", None),
+            json={
+                "entry_date": date.today().isoformat(),
+                "description": f"Revenue recognition - Invoice {inv.number}",
+                "source": "BILLING",
+                "source_id": str(inv.id),
+                "lines": [
+                    {
+                        "account_code": "1100", "account_name": "Accounts Receivable",
+                        "description": f"AR - Customer {str(inv.customer_id)[:8]}",
+                        "debit": float(inv.total_zar), "credit": 0,
+                    },
+                    {
+                        "account_code": "4000", "account_name": "Revenue - FTTH Subscriptions",
+                        "description": f"Revenue - Invoice {inv.number}",
+                        "debit": 0, "credit": float(inv.total_zar),
+                    },
+                ],
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to post GL entry for invoice %s to finance (%s) — "
+            "finance's /billing/sync-invoices reconciliation job will catch it later",
+            inv.number, exc,
+        )
 
 
 def _schedule_dunning(session, inv: Invoice) -> None:
@@ -173,7 +214,7 @@ async def list_invoices(
     min_amount: Optional[Decimal] = Query(None),
     max_amount: Optional[Decimal] = Query(None),
 ):
-    async with get_session() as session:
+    with get_session() as session:
         stmt = select(Invoice).where(Invoice.tenant_id == ctx.tenant_id)
         count_stmt = select(func.count(Invoice.id)).where(Invoice.tenant_id == ctx.tenant_id)
 
@@ -196,12 +237,12 @@ async def list_invoices(
             stmt = stmt.where(Invoice.total_zar <= max_amount)
             count_stmt = count_stmt.where(Invoice.total_zar <= max_amount)
 
-        total_result = await session.execute(count_stmt)
+        total_result = session.execute(count_stmt)
         total = total_result.scalar() or 0
         pages = max(1, (total + page_size - 1) // page_size)
 
         stmt = stmt.order_by(Invoice.created_at.desc()).offset((page - 1) * page_size).limit(page_size)
-        items_result = await session.execute(stmt)
+        items_result = session.execute(stmt)
         items = items_result.scalars().all()
 
         return PaginatedResponse(
@@ -222,8 +263,8 @@ async def get_invoice(
     invoice_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Invoice).where(
                 Invoice.id == invoice_id,
                 Invoice.tenant_id == ctx.tenant_id,
@@ -245,8 +286,8 @@ async def send_invoice(
     body: InvoiceSendRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Invoice).where(
                 Invoice.id == invoice_id,
                 Invoice.tenant_id == ctx.tenant_id,
@@ -262,8 +303,9 @@ async def send_invoice(
 
         if inv.status == "draft":
             inv.status = "sent"
-            await session.flush()
-            await session.refresh(inv)
+            session.flush()
+            session.refresh(inv)
+            await _post_invoice_to_gl(inv, ctx)
 
         return InvoiceRead.model_validate(inv)
 
@@ -278,8 +320,8 @@ async def create_credit_note(
     body: CreditNoteRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Invoice).where(
                 Invoice.id == invoice_id,
                 Invoice.tenant_id == ctx.tenant_id,
@@ -324,6 +366,6 @@ async def create_credit_note(
         if abs(total) >= original.total_zar:
             original.status = "voided"
 
-        await session.flush()
-        await session.refresh(cn)
+        session.flush()
+        session.refresh(cn)
         return InvoiceRead.model_validate(cn)

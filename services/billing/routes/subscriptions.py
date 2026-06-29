@@ -44,7 +44,7 @@ async def create_subscription(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Create a new customer subscription."""
-    async with get_session() as session:
+    with get_session() as session:
         now = datetime.now(tz=timezone.utc)
         trial_ends_at = None
         if body.trial_days and body.trial_days > 0:
@@ -71,8 +71,8 @@ async def create_subscription(
             trial_ends_at=trial_ends_at,
         )
         session.add(sub)
-        await session.flush()
-        await session.refresh(sub)
+        session.flush()
+        session.refresh(sub)
         logger.info("Created subscription %s for customer %s", sub.id, sub.customer_id)
         return SubscriptionRead.model_validate(sub)
 
@@ -87,7 +87,7 @@ async def create_prorated_subscription(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Create a subscription with a prorated first billing period."""
-    async with get_session() as session:
+    with get_session() as session:
         effective_price = body.base_price_zar
         if body.segment_pricing and body.segment and body.segment in body.segment_pricing:
             effective_price = Decimal(str(body.segment_pricing[body.segment]))
@@ -116,8 +116,8 @@ async def create_prorated_subscription(
             current_period_end=billing_period_end,
         )
         session.add(sub)
-        await session.flush()
-        await session.refresh(sub)
+        session.flush()
+        session.refresh(sub)
 
         vat = compute_vat(prorated)
         total = prorated + vat
@@ -147,7 +147,7 @@ async def create_prorated_subscription(
             notes=f"Prorated first invoice: {days_in_period} of {total_days} days",
         )
         session.add(inv)
-        await session.flush()
+        session.flush()
 
         logger.info(
             "Created prorated subscription %s, invoice %s for R%s",
@@ -173,8 +173,8 @@ async def get_subscription(
     subscription_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -197,8 +197,8 @@ async def cancel_subscription(
     at_period_end: bool = Query(False, description="Defer cancellation to end of billing period"),
 ):
     """Soft-cancel a subscription."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -216,8 +216,8 @@ async def cancel_subscription(
             sub.status = "cancelled"
             sub.cancelled_at = datetime.now(tz=timezone.utc)
 
-        await session.flush()
-        await session.refresh(sub)
+        session.flush()
+        session.refresh(sub)
         logger.info("Cancelled subscription %s (at_period_end=%s)", sub.id, at_period_end)
         return SubscriptionRead.model_validate(sub)
 
@@ -232,8 +232,8 @@ async def reactivate_subscription(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Reactivate a cancelled or paused subscription."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -248,8 +248,8 @@ async def reactivate_subscription(
         sub.status = "active"
         sub.cancelled_at = None
         sub.cancel_at_period_end = False
-        await session.flush()
-        await session.refresh(sub)
+        session.flush()
+        session.refresh(sub)
         logger.info("Reactivated subscription %s", sub.id)
         return SubscriptionRead.model_validate(sub)
 
@@ -265,8 +265,8 @@ async def record_usage(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Record usage for usage-based billing. Usage rolls up into the next invoice."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -286,8 +286,8 @@ async def record_usage(
             description=body.description,
         )
         session.add(usage)
-        await session.flush()
-        await session.refresh(usage)
+        session.flush()
+        session.refresh(usage)
         logger.info(
             "Recorded usage for subscription %s: %s %s @ R%s/unit",
             sub.id, body.quantity, body.metric, body.unit_price_zar,
@@ -305,8 +305,8 @@ async def preview_invoice(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Generate a preview of the next invoice for a subscription (no DB write)."""
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -333,8 +333,8 @@ async def generate_invoice(
     Skips if the subscription is still in its trial period.
     Rolls up any unbilled usage into the invoice.
     """
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -376,11 +376,11 @@ async def generate_invoice(
             line_items=preview.line_items,
         )
         session.add(inv)
-        await session.flush()
-        await session.refresh(inv)
+        session.flush()
+        session.refresh(inv)
 
         # Mark usage as billed
-        unbilled_result = await session.execute(
+        unbilled_result = session.execute(
             select(SubscriptionUsage).where(
                 SubscriptionUsage.subscription_id == sub.id,
                 SubscriptionUsage.billed_invoice_id.is_(None),
@@ -393,8 +393,8 @@ async def generate_invoice(
         sub.current_period_start = preview.billing_period_end
         sub.current_period_end = _add_interval(preview.billing_period_end, sub.billing_interval)
 
-        await session.flush()
-        await session.refresh(inv)
+        session.flush()
+        session.refresh(inv)
 
         logger.info(
             "Generated invoice %s for subscription %s: R%s",
@@ -414,7 +414,7 @@ async def list_subscriptions(
     status_filter: Optional[str] = Query(None, alias="status"),
     plan: Optional[str] = Query(None),
 ):
-    async with get_session() as session:
+    with get_session() as session:
         stmt = select(Subscription).where(Subscription.tenant_id == ctx.tenant_id)
         if customer_id:
             stmt = stmt.where(Subscription.customer_id == customer_id)
@@ -424,7 +424,7 @@ async def list_subscriptions(
             stmt = stmt.where(Subscription.plan == plan)
 
         stmt = stmt.order_by(Subscription.created_at.desc()).limit(200)
-        result = await session.execute(stmt)
+        result = session.execute(stmt)
         items = result.scalars().all()
         return [SubscriptionRead.model_validate(s) for s in items]
 
@@ -453,7 +453,7 @@ async def _build_invoice_preview(session, sub: Subscription) -> InvoicePreviewRe
     else:
         recurring = sub.base_price_zar
 
-    unbilled_result = await session.execute(
+    unbilled_result = session.execute(
         select(SubscriptionUsage).where(
             SubscriptionUsage.subscription_id == sub.id,
             SubscriptionUsage.billed_invoice_id.is_(None),

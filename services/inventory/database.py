@@ -13,13 +13,13 @@ from typing import AsyncGenerator, Optional
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, Numeric,
-    String, Text, UniqueConstraint, func,
+    String, Text, UniqueConstraint, func, select,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from services.common.db import get_async_engine
+from services.common.db import get_async_engine, SoftDeleteMixin
 
 
 class Base(DeclarativeBase):
@@ -397,7 +397,7 @@ class PackageItem(Base):
 # SUPPLIER
 # ════════════════════════════════════════════════════════════════════════
 
-class Supplier(Base):
+class Supplier(Base, SoftDeleteMixin):
     """Supplier/vendor for stock procurement."""
     __tablename__ = "inventory_suppliers"
 
@@ -432,7 +432,7 @@ class Supplier(Base):
 # PURCHASE ORDER (Finance places order)
 # ════════════════════════════════════════════════════════════════════════
 
-class PurchaseOrder(Base):
+class PurchaseOrder(Base, SoftDeleteMixin):
     """Purchase order for stock procurement — created by finance."""
     __tablename__ = "inventory_purchase_orders"
 
@@ -593,7 +593,7 @@ class GoodsReceiptItem(Base):
 # WAREHOUSE
 # ════════════════════════════════════════════════════════════════════════
 
-class Warehouse(Base):
+class Warehouse(Base, SoftDeleteMixin):
     __tablename__ = "inventory_warehouses"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -814,6 +814,53 @@ class StockPipelineSnapshot(Base):
         Index("ix_pipeline_tenant_date", "tenant_id", "snapshot_date"),
         Index("ix_pipeline_product", "product_id"),
     )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# DOCUMENT NUMBERING
+# ════════════════════════════════════════════════════════════════════════
+
+class InventorySequence(Base):
+    """Per-tenant, per-document-type counter for auto-generated reference numbers.
+
+    Same convention as services.billing.database.InvoiceSequence and
+    services.finance.database.JournalEntrySequence, generalized across
+    doc_type so PO/GR numbering don't need a separate table each.
+    """
+    __tablename__ = "inventory_sequences"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    doc_type: Mapped[str] = mapped_column(String(20), nullable=False)  # "po", "gr"
+    last_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "doc_type", name="uq_inventory_sequence_tenant_doctype"),
+    )
+
+
+async def next_sequence_number(session: AsyncSession, tenant_id: uuid.UUID, doc_type: str, prefix: str) -> str:
+    """Generate the next sequential reference number for a tenant + doc_type.
+
+    Uses a `FOR UPDATE` lock on the sequence row to prevent duplicates under
+    concurrent generation. Format: <prefix>-<TENANT4>-<seq:06d>.
+    """
+    result = await session.execute(
+        select(InventorySequence)
+        .where(InventorySequence.tenant_id == tenant_id, InventorySequence.doc_type == doc_type)
+        .with_for_update()
+    )
+    seq = result.scalar_one_or_none()
+    if seq is None:
+        seq = InventorySequence(tenant_id=tenant_id, doc_type=doc_type, last_number=0)
+        session.add(seq)
+        await session.flush()
+
+    seq.last_number += 1
+    await session.flush()
+
+    short_tenant = str(tenant_id).split("-")[0].upper()[:4]
+    return f"{prefix}-{short_tenant}-{seq.last_number:06d}"
 
 
 # ════════════════════════════════════════════════════════════════════════

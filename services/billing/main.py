@@ -22,6 +22,7 @@ from services.billing.routes.cancellations import router as cancellations_router
 from services.billing.routes.radius_billing import router as radius_billing_router
 from services.billing.routes.billing_accounts import router as billing_accounts_router
 from services.billing.routes.subscription_transfers import router as transfers_router
+from services.billing.routes.plans import router as plans_router
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -80,6 +81,7 @@ app.include_router(subscriptions_router)
 app.include_router(cancellations_router)
 app.include_router(billing_accounts_router)
 app.include_router(transfers_router)
+app.include_router(plans_router)
 
 
 app.include_router(radius_billing_router)

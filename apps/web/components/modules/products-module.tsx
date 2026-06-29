@@ -1,7 +1,7 @@
 "use client"
 import { TableShell } from "@/components/ui/table-shell"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,118 +14,56 @@ import {
   Phone,
   Shield,
   Plus,
-  Edit,
-  Trash2,
   TrendingUp,
   Users,
   DollarSign,
-  Search,
-  Filter,
-  MoreVertical,
-  Copy,
-  Eye,
-  ToggleLeft,
 } from "lucide-react"
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
   PieChart,
   Pie,
   Cell,
+  Tooltip,
+  ResponsiveContainer,
   BarChart,
   Bar,
+  CartesianGrid,
+  XAxis,
+  YAxis,
 } from "recharts"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { useModuleData } from "@/lib/module-data"
 import { useIsClient } from "@/lib/use-is-client"
+import { listPlans, createPlan, listBundles, createBundle, type Plan, type Bundle } from "@/lib/products-api"
 
-const defaultSubscriptionTrend = [
-  { month: "Jul", fibre: 8500, lte: 3200, voip: 1800, tv: 2400 },
-  { month: "Aug", fibre: 9100, lte: 3400, voip: 1950, tv: 2600 },
-  { month: "Sep", fibre: 9800, lte: 3550, voip: 2100, tv: 2850 },
-  { month: "Oct", fibre: 10500, lte: 3700, voip: 2250, tv: 3100 },
-  { month: "Nov", fibre: 11200, lte: 3900, voip: 2400, tv: 3350 },
-  { month: "Dec", fibre: 12000, lte: 4100, voip: 2550, tv: 3600 },
-]
+const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
-const defaultProductMixData = [
-  { name: "Fibre", value: 54, color: "#10b981" },
-  { name: "LTE", value: 18, color: "#3b82f6" },
-  { name: "VoIP", value: 12, color: "#f59e0b" },
-  { name: "TV", value: 16, color: "#8b5cf6" },
-]
-
-const defaultProducts = [
-  { id: 1, name: "Fibre 50Mbps", category: "Fibre", price: 699, subscribers: 4250, status: "active", mrr: 2970750 },
-  { id: 2, name: "Fibre 100Mbps", category: "Fibre", price: 899, subscribers: 3850, status: "active", mrr: 3461150 },
-  { id: 3, name: "Fibre 200Mbps", category: "Fibre", price: 1199, subscribers: 2100, status: "active", mrr: 2517900 },
-  { id: 4, name: "LTE Uncapped", category: "LTE", price: 599, subscribers: 2450, status: "active", mrr: 1467550 },
-  { id: 5, name: "LTE 100GB", category: "LTE", price: 399, subscribers: 1650, status: "active", mrr: 658350 },
-  { id: 6, name: "VoIP Basic", category: "VoIP", price: 149, subscribers: 1800, status: "active", mrr: 268200 },
-  { id: 7, name: "TV Premium", category: "TV", price: 299, subscribers: 2100, status: "active", mrr: 627900 },
-  { id: 8, name: "Fibre 500Mbps", category: "Fibre", price: 1599, status: "draft", subscribers: 0, mrr: 0 },
-]
-
-const defaultBundles = [
-  {
-    id: 1,
-    name: "Home Essential",
-    products: ["Fibre 50Mbps", "VoIP Basic"],
-    price: 799,
-    subscribers: 1250,
-    discount: "6%",
-  },
-  {
-    id: 2,
-    name: "Home Premium",
-    products: ["Fibre 100Mbps", "TV Premium", "VoIP Basic"],
-    price: 1249,
-    subscribers: 850,
-    discount: "8%",
-  },
-  {
-    id: 3,
-    name: "Business Starter",
-    products: ["Fibre 100Mbps", "VoIP Basic"],
-    price: 999,
-    subscribers: 420,
-    discount: "5%",
-  },
-  {
-    id: 4,
-    name: "Ultimate Bundle",
-    products: ["Fibre 200Mbps", "TV Premium", "VoIP Basic"],
-    price: 1549,
-    subscribers: 380,
-    discount: "10%",
-  },
-]
-
-const formatCurrency = (value: number) => {
-  return `R ${value.toLocaleString("en-ZA")}`
+const categoryColors: Record<string, string> = {
+  Fibre: "#10b981",
+  LTE: "#3b82f6",
+  VoIP: "#f59e0b",
+  TV: "#8b5cf6",
 }
 
 export function ProductsModule() {
-  const { data } = useModuleData("products", {
-    subscriptionTrend: defaultSubscriptionTrend,
-    productMixData: defaultProductMixData,
-    products: defaultProducts,
-    bundles: defaultBundles,
-  })
-
-  const { subscriptionTrend, productMixData, products, bundles } = data
-  const [localProducts, setLocalProducts] = useState(() => products)
-
+  const [plans, setPlans] = useState<Plan[]>([])
+  const [bundles, setBundles] = useState<Bundle[]>([])
+  const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("overview")
-  const [searchTerm, setSearchTerm] = useState("")
+  const [showAddBundle, setShowAddBundle] = useState(false)
+  const [newBundle, setNewBundle] = useState({ name: "", discount_pct: "5", plan_ids: [] as string[] })
   const isClient = useIsClient()
 
-  const getCategoryIcon = (category: string) => {
+  async function refresh() {
+    setLoading(true)
+    const [p, b] = await Promise.all([listPlans(), listBundles()])
+    setPlans(p)
+    setBundles(b)
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [])
+
+  const getCategoryIcon = (category: string | null) => {
     switch (category) {
       case "Fibre":
         return <Wifi className="h-4 w-4 text-emerald-400" />
@@ -140,8 +78,38 @@ export function ProductsModule() {
     }
   }
 
-  const totalMRR = products.reduce((sum, p) => sum + p.mrr, 0)
-  const totalSubscribers = products.reduce((sum, p) => sum + p.subscribers, 0)
+  const totalMRR = plans.reduce((sum, p) => sum + p.mrr, 0)
+  const totalSubscribers = plans.reduce((sum, p) => sum + p.subscribers, 0)
+  const activeCount = plans.filter((p) => p.is_active).length
+
+  const productMixData = Object.entries(
+    plans.reduce((acc: Record<string, number>, p) => {
+      const key = p.category ?? "Uncategorized"
+      acc[key] = (acc[key] ?? 0) + (totalSubscribers > 0 ? p.subscribers : 1)
+      return acc
+    }, {})
+  ).map(([name, value]) => ({ name, value, color: categoryColors[name] ?? "#a78bfa" }))
+
+  async function handleAddPlan(rec: Plan) {
+    await createPlan({
+      name: rec.name ?? "",
+      category: rec.category ?? undefined,
+      price: Number(rec.price) || 0,
+    })
+    await refresh()
+  }
+
+  async function handleAddBundle() {
+    if (!newBundle.name || newBundle.plan_ids.length === 0) return
+    await createBundle({
+      name: newBundle.name,
+      discount_pct: Number(newBundle.discount_pct) || 0,
+      plan_ids: newBundle.plan_ids,
+    })
+    setShowAddBundle(false)
+    setNewBundle({ name: "", discount_pct: "5", plan_ids: [] })
+    await refresh()
+  }
 
   return (
     <div className="space-y-6">
@@ -152,8 +120,8 @@ export function ProductsModule() {
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Total Products</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{products.length}</p>
-                <p className="mt-1 text-xs text-emerald-400">7 Active, 1 Draft</p>
+                <p className="mt-1 text-2xl font-bold text-foreground">{plans.length}</p>
+                <p className="mt-1 text-xs text-emerald-400">{activeCount} Active, {plans.length - activeCount} Inactive</p>
               </div>
               <div className="rounded-lg bg-emerald-500/20 p-2">
                 <Package className="h-5 w-5 text-emerald-400" />
@@ -168,9 +136,9 @@ export function ProductsModule() {
               <div>
                 <p className="text-sm text-muted-foreground">Total Subscribers</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">{!isClient ? "--" : totalSubscribers.toLocaleString()}</p>
-                <div className="mt-1 flex items-center gap-1 text-emerald-400">
-                  <TrendingUp className="h-3 w-3" />
-                  <span className="text-xs">+842 this month</span>
+                <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                  <Users className="h-3 w-3" />
+                  <span className="text-xs">Active subscriptions</span>
                 </div>
               </div>
               <div className="rounded-lg bg-blue-500/20 p-2">
@@ -186,9 +154,9 @@ export function ProductsModule() {
               <div>
                 <p className="text-sm text-muted-foreground">Monthly Recurring Revenue</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">{!isClient ? "R --" : formatCurrency(totalMRR)}</p>
-                <div className="mt-1 flex items-center gap-1 text-emerald-400">
+                <div className="mt-1 flex items-center gap-1 text-muted-foreground">
                   <TrendingUp className="h-3 w-3" />
-                  <span className="text-xs">+5.2% growth</span>
+                  <span className="text-xs">From active subscriptions</span>
                 </div>
               </div>
               <div className="rounded-lg bg-amber-500/20 p-2">
@@ -202,11 +170,9 @@ export function ProductsModule() {
           <CardContent className="p-5">
             <div className="flex items-start justify-between">
               <div>
-                <p className="text-sm text-muted-foreground">Active Bundles</p>
+                <p className="text-sm text-muted-foreground">Bundles</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">{bundles.length}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {!isClient ? "--" : bundles.reduce((s, b) => s + b.subscribers, 0).toLocaleString()} subscribers
-                </p>
+                <p className="mt-1 text-xs text-muted-foreground">Multi-plan packages</p>
               </div>
               <div className="rounded-lg bg-purple-500/20 p-2">
                 <Shield className="h-5 w-5 text-purple-400" />
@@ -225,111 +191,52 @@ export function ProductsModule() {
             <TabsTrigger value="bundles">Bundles</TabsTrigger>
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
           </TabsList>
-          <Button variant="default" size="sm" >
-            <Plus className="mr-2 h-4 w-4" />
-            Add Product
-          </Button>
         </div>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* Subscription Trend */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Subscription Growth by Product</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={subscriptionTrend}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                      <XAxis dataKey="month" stroke="#9ca3af" fontSize={12} />
-                      <YAxis stroke="#9ca3af" fontSize={12} />
-                      <Tooltip contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }} />
-                      <Area
-                        type="monotone"
-                        dataKey="fibre"
-                        stackId="1"
-                        stroke="#10b981"
-                        fill="#10b981"
-                        fillOpacity={0.4}
-                        name="Fibre"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="lte"
-                        stackId="1"
-                        stroke="#3b82f6"
-                        fill="#3b82f6"
-                        fillOpacity={0.4}
-                        name="LTE"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="voip"
-                        stackId="1"
-                        stroke="#f59e0b"
-                        fill="#f59e0b"
-                        fillOpacity={0.4}
-                        name="VoIP"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="tv"
-                        stackId="1"
-                        stroke="#8b5cf6"
-                        fill="#8b5cf6"
-                        fillOpacity={0.4}
-                        name="TV"
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Product Mix */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Product Mix</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={productMixData}
-                        cx="50%"
-                        cy="50%"
-                        innerRadius={60}
-                        outerRadius={100}
-                        paddingAngle={2}
-                        dataKey="value"
-                      >
-                        {productMixData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip
-                        contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }}
-                        formatter={(value: number) => `${value}%`}
-                      />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="mt-4 flex flex-wrap justify-center gap-4">
-                  {productMixData.map((item) => (
-                    <div key={item.name} className="flex items-center gap-2">
-                      <div className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
-                      <span className="text-sm text-muted-foreground">
-                        {item.name} ({item.value}%)
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <Card className="border-border bg-card">
+            <CardHeader>
+              <CardTitle className="text-base">Product Mix</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {plans.length === 0 ? (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  No products yet. Add one from the Products tab.
+                </p>
+              ) : (
+                <>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={productMixData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={100}
+                          paddingAngle={2}
+                          dataKey="value"
+                        >
+                          {productMixData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={entry.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 flex flex-wrap justify-center gap-4">
+                    {productMixData.map((item) => (
+                      <div key={item.name} className="flex items-center gap-2">
+                        <div className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
+                        <span className="text-sm text-muted-foreground">{item.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="products" className="mt-4">
@@ -337,81 +244,119 @@ export function ProductsModule() {
             title="Product Catalog"
             columns={[
               { key: "name", label: "Product Name", inputType: "text" },
-              { key: "category", label: "Category", inputType: "select", options: ["Fibre", "Voice", "Mobile", "Business", "IoT"] },
+              { key: "category", label: "Category", inputType: "select", options: ["Fibre", "LTE", "VoIP", "TV"] },
               { key: "price", label: "Price/mo (R)", inputType: "number", render: (v) => `R ${Number(v).toLocaleString()}` },
               { key: "subscribers", label: "Subscribers", inputType: "number", render: (v) => Number(v).toLocaleString() },
               { key: "mrr", label: "MRR (R)", inputType: "number", render: (v) => `R ${Number(v).toLocaleString()}` },
-              { key: "status", label: "Status", inputType: "select", options: ["active", "draft"], render: (v) => (
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v === "active" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
-                  {v === "active" ? "Active" : "Draft"}
+              { key: "is_active", label: "Status", render: (v) => (
+                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
+                  {v ? "Active" : "Inactive"}
                 </span>
               )},
             ]}
-            data={localProducts}
+            data={plans}
             addLabel="New Product"
-            onAdd={(rec) => setLocalProducts((prev) => [rec, ...prev])}
-            onDelete={(id) => setLocalProducts((prev) => prev.filter((r) => r.id !== id))}
-            onEdit={(rec) => setLocalProducts((prev) => prev.map((r) => r.id === rec.id ? rec : r))}
+            onAdd={handleAddPlan}
             searchPlaceholder="Search products..."
           />
         </TabsContent>
 
-        <TabsContent value="bundles" className="mt-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {bundles.map((bundle) => (
-              <Card key={bundle.id} className="border-border bg-card">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className="font-semibold text-foreground">{bundle.name}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">{bundle.products.join(" + ")}</p>
-                    </div>
-                    <Badge className="badge-success">{bundle.discount} off</Badge>
-                  </div>
-                  <div className="mt-4 flex items-center justify-between">
-                    <div>
-                      <p className="text-2xl font-bold text-foreground">{!isClient ? "R --" : formatCurrency(bundle.price)}</p>
-                      <p className="text-xs text-muted-foreground">per month</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-foreground">{!isClient ? "--" : bundle.subscribers.toLocaleString()}</p>
-                      <p className="text-xs text-muted-foreground">subscribers</p>
-                    </div>
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <Button variant="outline" size="sm" className="flex-1 bg-transparent">
-                      Edit
-                    </Button>
-                    <Button variant="outline" size="sm" className="flex-1 bg-transparent">
-                      View Details
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+        <TabsContent value="bundles" className="mt-4 space-y-4">
+          <div className="flex justify-end">
+            <Button size="sm" onClick={() => setShowAddBundle(true)}>
+              <Plus className="mr-2 h-4 w-4" /> New Bundle
+            </Button>
           </div>
+
+          {showAddBundle && (
+            <Card className="border-border bg-card">
+              <CardHeader><CardTitle className="text-sm">Create Bundle</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <Input placeholder="Bundle name" value={newBundle.name} onChange={(e) => setNewBundle({ ...newBundle, name: e.target.value })} />
+                <Input placeholder="Discount %" type="number" value={newBundle.discount_pct} onChange={(e) => setNewBundle({ ...newBundle, discount_pct: e.target.value })} />
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Select plans to include:</p>
+                  {plans.map((p) => (
+                    <label key={p.id} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={newBundle.plan_ids.includes(p.id)}
+                        onChange={(e) => {
+                          setNewBundle((prev) => ({
+                            ...prev,
+                            plan_ids: e.target.checked ? [...prev.plan_ids, p.id] : prev.plan_ids.filter((id) => id !== p.id),
+                          }))
+                        }}
+                      />
+                      {p.name} ({formatCurrency(p.price)})
+                    </label>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleAddBundle}>Create</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowAddBundle(false)}>Cancel</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {bundles.length === 0 ? (
+            <Card className="border-border bg-card">
+              <CardContent className="py-12 text-center text-sm text-muted-foreground">No bundles yet.</CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              {bundles.map((bundle) => (
+                <Card key={bundle.id} className="border-border bg-card">
+                  <CardContent className="p-5">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-semibold text-foreground">{bundle.name}</h3>
+                        <p className="mt-1 text-sm text-muted-foreground">{bundle.products.join(" + ")}</p>
+                      </div>
+                      <Badge className="badge-success">{bundle.discount_pct}% off</Badge>
+                    </div>
+                    <div className="mt-4 flex items-center justify-between">
+                      <div>
+                        <p className="text-2xl font-bold text-foreground">{!isClient ? "R --" : formatCurrency(bundle.price)}</p>
+                        <p className="text-xs text-muted-foreground">per month</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="font-semibold text-foreground">{!isClient ? "--" : bundle.subscribers.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">subscribers</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="pricing" className="mt-4">
           <Card className="border-border bg-card">
             <CardHeader>
-              <CardTitle className="text-base">Price Comparison by Category</CardTitle>
+              <CardTitle className="text-base">Price Comparison by Product</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={products.filter((p) => p.status === "active")} layout="vertical">
-                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                    <XAxis type="number" stroke="#9ca3af" fontSize={12} tickFormatter={(v) => `R${v}`} />
-                    <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={11} width={100} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }}
-                      formatter={(value: number) => formatCurrency(value)}
-                    />
-                    <Bar dataKey="price" fill="#10b981" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              {plans.length === 0 ? (
+                <p className="py-12 text-center text-sm text-muted-foreground">No products yet.</p>
+              ) : (
+                <div className="h-80">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={plans.filter((p) => p.is_active)} layout="vertical">
+                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                      <XAxis type="number" stroke="#9ca3af" fontSize={12} tickFormatter={(v) => `R${v}`} />
+                      <YAxis type="category" dataKey="name" stroke="#9ca3af" fontSize={11} width={100} />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }}
+                        formatter={(value: number) => formatCurrency(value)}
+                      />
+                      <Bar dataKey="price" fill="#10b981" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

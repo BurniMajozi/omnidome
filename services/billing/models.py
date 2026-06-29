@@ -22,6 +22,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from services.common.db import SoftDeleteMixin
+
 
 class Base(DeclarativeBase):
     pass
@@ -142,10 +144,10 @@ class InvoiceLine(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
 
-    # Product reference
-    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
-    )
+    # Product reference — plain UUID, not a DB-level FK: inventory_products is
+    # owned by services.inventory's own metadata/Base, which this service never
+    # imports, so SQLAlchemy can't resolve a ForeignKey(...) against it.
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     product_sku: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
@@ -193,7 +195,7 @@ class InvoiceSequence(Base):
 # Billing Account (top-level billing entity)
 # ---------------------------------------------------------------------------
 
-class BillingAccount(Base):
+class BillingAccount(Base, SoftDeleteMixin):
     """Top-level billing entity that groups subscriptions and invoices.
 
     A BillingAccount can be owned by either:
@@ -346,6 +348,60 @@ class PaymentArrangement(Base):
 
 
 # ---------------------------------------------------------------------------
+# Billing Plan (service catalog: Fibre/LTE/VoIP/TV plans subscriptions bind to)
+# ---------------------------------------------------------------------------
+
+class BillingPlan(Base):
+    __tablename__ = "billing_plans"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[Optional[str]] = mapped_column(String(30), nullable=True, comment="Fibre, LTE, VoIP, TV")
+    price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="ZAR")
+    billing_cycle: Mapped[str] = mapped_column(Text, nullable=False, default="MONTHLY")
+    fno_provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_billing_plans_tenant", "tenant_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bundles (multiple plans sold together at a discount)
+# ---------------------------------------------------------------------------
+
+class Bundle(Base):
+    __tablename__ = "bundles"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    discount_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    items: Mapped[list["BundleItem"]] = relationship(back_populates="bundle", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_bundles_tenant", "tenant_id"),
+    )
+
+
+class BundleItem(Base):
+    __tablename__ = "bundle_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bundle_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("bundles.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("billing_plans.id"), nullable=False)
+
+    bundle: Mapped["Bundle"] = relationship(back_populates="items")
+
+
+# ---------------------------------------------------------------------------
 # Subscription
 # ---------------------------------------------------------------------------
 
@@ -371,7 +427,7 @@ class Subscription(Base):
         comment="Links to CRM Property — the physical address being serviced"
     )
     plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("plans.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), ForeignKey("billing_plans.id"), nullable=True,
     )
     segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(SUBSCRIPTION_STATUS, nullable=False, default="active")
@@ -400,7 +456,7 @@ class Subscription(Base):
     __table_args__ = (
         Index("ix_subscriptions_tenant_customer", "tenant_id", "customer_id"),
         Index("ix_subscriptions_tenant_status", "tenant_id", "status"),
-        Index("ix_subscriptions_tenant_plan", "tenant_id", "plan"),
+        Index("ix_subscriptions_tenant_plan", "tenant_id", "plan_id"),
         Index("ix_subscriptions_plan_id", "plan_id"),
         Index("ix_subscriptions_billing_account", "billing_account_id"),
         Index("ix_subscriptions_property", "property_id"),

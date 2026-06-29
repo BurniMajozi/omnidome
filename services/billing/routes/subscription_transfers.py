@@ -12,6 +12,7 @@ import logging
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
@@ -52,9 +53,9 @@ async def create_transfer(
     creates a transfer record, and puts the subscription into pending-transfer
     state. The transfer must then be approved to finalize.
     """
-    async with get_session() as session:
+    with get_session() as session:
         # Validate subscription exists and is active
-        sub_result = await session.execute(
+        sub_result = session.execute(
             select(Subscription).where(
                 Subscription.id == body.subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
@@ -70,7 +71,7 @@ async def create_transfer(
             )
 
         # Validate not already in a transfer
-        existing_result = await session.execute(
+        existing_result = session.execute(
             select(SubscriptionTransfer).where(
                 SubscriptionTransfer.subscription_id == body.subscription_id,
                 SubscriptionTransfer.tenant_id == ctx.tenant_id,
@@ -111,7 +112,7 @@ async def create_transfer(
 
         # Validate billing accounts
         if body.to_billing_account_id:
-            acct_result = await session.execute(
+            acct_result = session.execute(
                 select(BillingAccount).where(
                     BillingAccount.id == body.to_billing_account_id,
                     BillingAccount.tenant_id == ctx.tenant_id,
@@ -131,7 +132,7 @@ async def create_transfer(
                 account_name=f"Auto-created for transfer",
             )
             session.add(acct)
-            await session.flush()
+            session.flush()
             to_billing_account_id = acct.id
             logger.info(
                 "Auto-created billing account %s for incoming customer %s",
@@ -164,8 +165,8 @@ async def create_transfer(
         # Set subscription status
         sub.status = "active"  # remains active during transfer
 
-        await session.flush()
-        await session.refresh(xfer)
+        session.flush()
+        session.refresh(xfer)
         logger.info(
             "Transfer %s initiated: sub %s from %s to %s, prorated R%s / R%s",
             xfer.id, sub.id, body.from_customer_id, body.to_customer_id,
@@ -192,8 +193,8 @@ async def approve_transfer(
     3. Transfers the subscription to the new customer/billing account
     4. Marks the transfer as completed
     """
-    async with get_session() as session:
-        xfer_result = await session.execute(
+    with get_session() as session:
+        xfer_result = session.execute(
             select(SubscriptionTransfer).where(
                 SubscriptionTransfer.id == transfer_id,
                 SubscriptionTransfer.tenant_id == ctx.tenant_id,
@@ -208,7 +209,7 @@ async def approve_transfer(
                 detail=f"Cannot approve a {xfer.status} transfer",
             )
 
-        sub_result = await session.execute(
+        sub_result = session.execute(
             select(Subscription).where(Subscription.id == xfer.subscription_id)
         )
         sub = sub_result.scalar_one_or_none()
@@ -222,8 +223,8 @@ async def approve_transfer(
                 tz=__import__("datetime").timezone.utc
             )
             xfer.notes = (xfer.notes or "") + f"\nCancelled: {body.notes or 'Rejected'}"
-            await session.flush()
-            await session.refresh(xfer)
+            session.flush()
+            session.refresh(xfer)
             logger.info("Transfer %s cancelled", xfer.id)
             return SubscriptionTransferRead.model_validate(xfer)
 
@@ -256,7 +257,7 @@ async def approve_transfer(
                 notes=f"Transfer out to customer {xfer.to_customer_id}",
             )
             session.add(out_inv)
-            await session.flush()
+            session.flush()
             xfer.settlement_invoice_id = out_inv.id
 
         # 2. First invoice for incoming tenant
@@ -301,8 +302,8 @@ async def approve_transfer(
         if body.notes:
             xfer.notes = (xfer.notes or "") + f"\nApproval note: {body.notes}"
 
-        await session.flush()
-        await session.refresh(xfer)
+        session.flush()
+        session.refresh(xfer)
         logger.info(
             "Transfer %s completed: subscription %s now belongs to customer %s",
             xfer.id, sub.id, xfer.to_customer_id,
@@ -319,8 +320,8 @@ async def get_transfer(
     transfer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    async with get_session() as session:
-        result = await session.execute(
+    with get_session() as session:
+        result = session.execute(
             select(SubscriptionTransfer).where(
                 SubscriptionTransfer.id == transfer_id,
                 SubscriptionTransfer.tenant_id == ctx.tenant_id,
@@ -344,7 +345,7 @@ async def list_transfers(
     to_customer_id: Optional[uuid.UUID] = Query(None),
     status_filter: Optional[str] = Query(None, alias="status"),
 ):
-    async with get_session() as session:
+    with get_session() as session:
         stmt = select(SubscriptionTransfer).where(
             SubscriptionTransfer.tenant_id == ctx.tenant_id
         )
@@ -358,6 +359,6 @@ async def list_transfers(
             stmt = stmt.where(SubscriptionTransfer.status == status_filter)
 
         stmt = stmt.order_by(SubscriptionTransfer.created_at.desc()).limit(200)
-        result = await session.execute(stmt)
+        result = session.execute(stmt)
         items = result.scalars().all()
         return [SubscriptionTransferRead.model_validate(x) for x in items]
