@@ -9,7 +9,7 @@ import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 from services.common.db import get_async_engine

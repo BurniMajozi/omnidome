@@ -53,6 +53,27 @@ class Base(DeclarativeBase):
     )
 
 
+class SoftDeleteMixin:
+    """Adds a nullable deleted_at column for soft-delete instead of physical DELETE.
+
+    Mix into any model regardless of which DeclarativeBase it uses:
+        class Supplier(Base, SoftDeleteMixin): ...
+
+    Callers must filter `deleted_at.is_(None)` themselves in list/get queries —
+    this mixin does not enforce row-level filtering the way tenant_id does.
+    """
+
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        default=None,
+    )
+
+    @property
+    def is_deleted(self) -> bool:
+        return self.deleted_at is not None
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _add_tenant_criteria(execute_state) -> None:
     if execute_state.execution_options.get("include_all_tenants", False):

@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.db import Base
-from services.retention.main import ChurnModel, RiskLevel, extract_features, churn_model
+from services.retention.churn_model import ChurnModel, RiskLevel, extract_features, churn_model
 
 logger = logging.getLogger("retention.batch_churn")
 

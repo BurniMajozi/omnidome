@@ -268,7 +268,9 @@ class OrderItem(Base):
     order_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
 
     item_type: Mapped[str] = mapped_column(ORDER_ITEM_TYPE, nullable=False)
-    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True)
+    # Plain UUID, not a DB-level FK: inventory_products is owned by
+    # services.inventory's own metadata/Base, which this service never imports.
+    product_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     subscription_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
     description: Mapped[str] = mapped_column(String(500), nullable=False)
