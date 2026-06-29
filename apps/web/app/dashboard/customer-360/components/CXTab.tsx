@@ -586,7 +586,7 @@ export function CXTab({ customerId }: CXTabProps) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`/api/crm/customers/${encodeURIComponent(customerId)}/360/cx`, {
+      const response = await fetch(`/svc/crm/customers/${encodeURIComponent(customerId)}/360/cx`, {
         cache: "no-store",
       })
       if (!response.ok) {

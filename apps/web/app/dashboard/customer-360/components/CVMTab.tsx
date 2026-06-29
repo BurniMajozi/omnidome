@@ -603,7 +603,7 @@ export function CVMTab({ customerId }: CVMTabProps) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`/api/crm/customers/${encodeURIComponent(customerId)}/360/cvm`, {
+      const response = await fetch(`/svc/crm/customers/${encodeURIComponent(customerId)}/360/cvm`, {
         cache: "no-store",
       })
       if (!response.ok) {

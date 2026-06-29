@@ -34,11 +34,6 @@ CUSTOMER_STATUS = SAEnum(
     "active", "suspended", "churned", name="customer_status", create_type=True
 )
 
-LEAD_STATUS = SAEnum(
-    "new", "contacted", "qualified", "converted", "lost",
-    name="lead_status", create_type=True,
-)
-
 SA_PROVINCES = SAEnum(
     "eastern_cape",
     "free_state",
@@ -466,7 +461,10 @@ class Lead(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     coverage_area: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     interested_package: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    status: Mapped[str] = mapped_column(LEAD_STATUS, nullable=False, default="new")
+    # Plain string, not the LEAD_STATUS Postgres enum: the `leads` table is shared
+    # with services.sales (deals/quotes FK into it), which writes uppercase status
+    # values ('NEW', 'CONVERTED', ...) — a strict enum column would reject those.
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")
     assigned_to: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     coverage_check_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

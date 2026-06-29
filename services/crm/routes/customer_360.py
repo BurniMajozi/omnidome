@@ -34,6 +34,7 @@ from services.crm.schemas import (
     BillingAccountInfo,
     CRMResponse,
     CRMSummary,
+    CustomerRead,
     CXResponse,
     CXSummary,
     CVMResponse,

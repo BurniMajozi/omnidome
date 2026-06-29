@@ -340,7 +340,7 @@ export function CRMTab({ customerId }: CRMTabProps) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`/api/crm/customers/${encodeURIComponent(customerId)}/360/crm`, {
+      const response = await fetch(`/svc/crm/customers/${encodeURIComponent(customerId)}/360/crm`, {
         cache: "no-store",
       })
       if (!response.ok) {

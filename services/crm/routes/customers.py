@@ -1,5 +1,6 @@
 """Customer Management routes — CRUD, 360 view, timeline."""
 
+import logging
 import os
 import uuid
 from datetime import datetime
@@ -12,6 +13,7 @@ from sqlalchemy import func, or_, select
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import generate_account_number, get_session
 from services.crm.models import ActivityEvent, Customer, CustomerNote, CustomerTag
+from services.lifecycle.models import CustomerLifecycle
 from services.crm.schemas import (
     Customer360,
     CustomerCreate,
@@ -22,6 +24,7 @@ from services.crm.schemas import (
 )
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
+logger = logging.getLogger("crm.customers")
 
 # Internal service URLs (Docker Compose service names)
 LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
@@ -183,10 +186,36 @@ async def list_customers(
         result = await session.execute(stmt)
         items = result.scalars().all()
 
+        lifecycle_by_customer: dict[uuid.UUID, dict] = {}
+        if items:
+            lifecycle_rows = await session.execute(
+                select(CustomerLifecycle.customer_id, CustomerLifecycle.health_score, CustomerLifecycle.monthly_recurring_revenue)
+                .where(CustomerLifecycle.customer_id.in_([c.id for c in items]))
+            )
+            for customer_id, health_score, mrr in lifecycle_rows.all():
+                lifecycle_by_customer[customer_id] = {"health_score": health_score, "mrr": float(mrr or 0)}
+
     pages = max(1, (total + page_size - 1) // page_size)
 
+    enriched_items = []
+    for c in items:
+        record = CustomerRead.model_validate(c).model_dump(mode="json")
+        lifecycle = lifecycle_by_customer.get(c.id, {})
+        mrr = lifecycle.get("mrr", 0)
+        health_score = lifecycle.get("health_score")
+        record["mrr"] = mrr
+        record["customer_type"] = "Enterprise" if mrr >= 2000 else "SMB" if mrr >= 500 else "Residential"
+        record["health"] = (
+            "Excellent" if health_score is not None and health_score >= 80
+            else "Good" if health_score is not None and health_score >= 60
+            else "At Risk" if health_score is not None and health_score >= 30
+            else "Unknown" if health_score is None
+            else "Critical"
+        )
+        enriched_items.append(record)
+
     return PaginatedResponse(
-        items=[CustomerRead.model_validate(c) for c in items],
+        items=enriched_items,
         total=total,
         page=page,
         page_size=page_size,

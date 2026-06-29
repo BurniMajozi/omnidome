@@ -67,7 +67,7 @@ function DetailsTab({ customerId }: { customerId: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/crm/customers/${customerId}/360/details`, { cache: "no-store" })
+        const res = await fetch(`/svc/crm/customers/${customerId}/360/details`, { cache: "no-store" })
         if (!res.ok) throw new Error(`Failed: ${res.status}`)
         const json = await res.json()
         if (!cancelled) setData(json)
@@ -106,7 +106,7 @@ function CXTab({ customerId }: { customerId: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/crm/customers/${customerId}/360/cx`, { cache: "no-store" })
+        const res = await fetch(`/svc/crm/customers/${customerId}/360/cx`, { cache: "no-store" })
         if (!res.ok) throw new Error(`Failed: ${res.status}`)
         const json = await res.json()
         if (!cancelled) setData(json)
@@ -143,7 +143,7 @@ function CRMTab({ customerId }: { customerId: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/crm/customers/${customerId}/360/crm`, { cache: "no-store" })
+        const res = await fetch(`/svc/crm/customers/${customerId}/360/crm`, { cache: "no-store" })
         if (!res.ok) throw new Error(`Failed: ${res.status}`)
         const json = await res.json()
         if (!cancelled) setData(json)
@@ -180,7 +180,7 @@ function CVMTab({ customerId }: { customerId: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(`/api/crm/customers/${customerId}/360/cvm`, { cache: "no-store" })
+        const res = await fetch(`/svc/crm/customers/${customerId}/360/cvm`, { cache: "no-store" })
         if (!res.ok) throw new Error(`Failed: ${res.status}`)
         const json = await res.json()
         if (!cancelled) setData(json)
