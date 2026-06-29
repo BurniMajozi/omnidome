@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 import uuid
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, func, and_
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -32,6 +32,9 @@ from services.finance.database import (
     get_session, init_tables,
     JournalEntry, JournalEntryLine,
     FinancialRecord, BudgetScenario,
+    next_journal_reference,
+    RevenueContract, ExpenseReceipt, ApprovalRequest, FinancePurchaseOrder,
+    FixedAsset, RecurringPayment, BankStatementItem,
 )
 
 logger = logging.getLogger("finance")
@@ -382,7 +385,7 @@ async def create_journal_entry(
     entry = JournalEntry(
         tenant_id=tenant_id,
         entry_date=payload.entry_date,
-        reference=payload.reference,
+        reference=payload.reference or await next_journal_reference(db, tenant_id),
         description=payload.description,
         source=payload.source,
         source_id=payload.source_id,
@@ -422,7 +425,10 @@ async def list_journal_entries(
     """List journal entries with optional filters."""
     await _ensure_sample_data(tenant_id, db)
 
-    query = select(JournalEntry).where(JournalEntry.tenant_id == tenant_id)
+    query = select(JournalEntry).where(
+        JournalEntry.tenant_id == tenant_id,
+        JournalEntry.deleted_at.is_(None),
+    )
     if source:
         query = query.where(JournalEntry.source == source)
     if from_date:
@@ -455,6 +461,7 @@ async def get_journal_entry(
         select(JournalEntry).where(
             JournalEntry.id == entry_id,
             JournalEntry.tenant_id == tenant_id,
+            JournalEntry.deleted_at.is_(None),
         )
     )
     entry = result.scalar_one_or_none()
@@ -478,6 +485,7 @@ async def post_journal_entry(
         select(JournalEntry).where(
             JournalEntry.id == entry_id,
             JournalEntry.tenant_id == tenant_id,
+            JournalEntry.deleted_at.is_(None),
         )
     )
     entry = result.scalar_one_or_none()
@@ -495,11 +503,17 @@ async def delete_journal_entry(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Delete a journal entry (only if not posted)"""
+    """Soft-delete a journal entry (only if not posted).
+
+    Rows are kept (deleted_at set) rather than physically removed, so GL
+    history is never silently destroyed — mirrors the soft-delete convention
+    used for master-data entities elsewhere in the platform.
+    """
     result = await db.execute(
         select(JournalEntry).where(
             JournalEntry.id == entry_id,
             JournalEntry.tenant_id == tenant_id,
+            JournalEntry.deleted_at.is_(None),
         )
     )
     entry = result.scalar_one_or_none()
@@ -508,12 +522,7 @@ async def delete_journal_entry(
     if entry.is_posted:
         raise HTTPException(status_code=400, detail="Cannot delete posted entry — reverse with correcting entry")
 
-    # Delete lines first
-    await db.execute(
-        text("DELETE FROM journal_entry_lines WHERE journal_entry_id = :id"),
-        {"id": entry_id},
-    )
-    await db.delete(entry)
+    entry.deleted_at = datetime.utcnow()
     await db.flush()
 
 
@@ -789,11 +798,13 @@ async def sync_billing_invoices(
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
                 f"{BILLING_SERVICE_URL}/invoices",
-                params={"tenant_id": str(tenant_id), "status": "SENT"},
+                params={"tenant_id": str(tenant_id), "status": "sent"},
             )
             if r.status_code >= 400:
                 return {"status": "billing_unavailable", "invoices_synced": 0}
-            invoices = r.json()
+            # billing's /invoices returns a PaginatedResponse ({"items": [...], "total": ...}),
+            # not a bare list.
+            invoices = r.json().get("items", [])
     except httpx.RequestError as exc:
         logger.warning("Billing service unreachable: %s", exc)
         return {"status": "billing_unavailable", "error": str(exc), "invoices_synced": 0}
@@ -812,14 +823,14 @@ async def sync_billing_invoices(
         if existing.scalar_one_or_none():
             continue
 
-        amount = float(inv.get("total_amount", 0))
-        customer_id = inv.get("contact_id", "")
+        amount = float(inv.get("total_zar", 0))
+        customer_id = inv.get("customer_id", "")
 
         entry = JournalEntry(
             tenant_id=tenant_id,
             entry_date=date.today(),
-            reference=f"INV-{inv.get('invoice_number', invoice_id[:8])}",
-            description=f"Revenue recognition - Invoice {inv.get('invoice_number', '')}",
+            reference=f"INV-{inv.get('number', invoice_id[:8])}",
+            description=f"Revenue recognition - Invoice {inv.get('number', '')}",
             source="BILLING",
             source_id=invoice_id,
         )
@@ -1049,6 +1060,211 @@ async def delete_record(
         raise HTTPException(status_code=404, detail="Record not found")
     await db.delete(r)
     await db.flush()
+
+
+# ── Revenue Recognition ─────────────────────────────────────────────────
+
+class RevenueContractCreate(BaseModel):
+    contract_reference: str
+    customer_name: str
+    method: str = "straight_line"
+    total_contract_value: float = 0
+    start_date: date
+    end_date: date
+    recognized_to_date: float = 0
+    deferred_balance: float = 0
+
+
+def _contract_out(c: RevenueContract) -> dict:
+    return {
+        "id": str(c.id), "contract": c.contract_reference, "customer": c.customer_name,
+        "method": c.method, "start": c.start_date.isoformat(), "end": c.end_date.isoformat(),
+        "recognized": float(c.recognized_to_date), "deferred": float(c.deferred_balance),
+        "total_contract_value": float(c.total_contract_value),
+    }
+
+
+@app.get("/revenue-contracts")
+async def list_revenue_contracts(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    result = await db.execute(select(RevenueContract).where(RevenueContract.tenant_id == tenant_id).order_by(desc(RevenueContract.created_at)))
+    return [_contract_out(c) for c in result.scalars().all()]
+
+
+@app.post("/revenue-contracts", status_code=status.HTTP_201_CREATED)
+async def create_revenue_contract(
+    payload: RevenueContractCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    c = RevenueContract(tenant_id=tenant_id, **payload.model_dump())
+    db.add(c)
+    await db.flush()
+    await db.refresh(c)
+    return _contract_out(c)
+
+
+# ── Expense Governance: Receipts, Approvals, Purchase Orders, Assets, Recurring Payments ──
+
+class ExpenseReceiptCreate(BaseModel):
+    vendor: str
+    amount: float = 0
+    category: Optional[str] = None
+    status: str = "processed"
+    ocr_confidence: Optional[int] = None
+    submitted_by: Optional[str] = None
+    receipt_date: date = Field(default_factory=date.today)
+
+
+@app.get("/expense-receipts")
+async def list_expense_receipts(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(ExpenseReceipt).where(ExpenseReceipt.tenant_id == tenant_id).order_by(desc(ExpenseReceipt.created_at)))
+    return [{"id": str(r.id), "vendor": r.vendor, "amount": float(r.amount), "category": r.category,
+             "status": r.status, "ocrConfidence": r.ocr_confidence, "submittedBy": r.submitted_by,
+             "date": r.receipt_date.isoformat()} for r in result.scalars().all()]
+
+
+@app.post("/expense-receipts", status_code=status.HTTP_201_CREATED)
+async def create_expense_receipt(payload: ExpenseReceiptCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    r = ExpenseReceipt(tenant_id=tenant_id, **payload.model_dump())
+    db.add(r)
+    await db.flush()
+    await db.refresh(r)
+    return {"id": str(r.id), "vendor": r.vendor, "amount": float(r.amount), "category": r.category,
+            "status": r.status, "ocrConfidence": r.ocr_confidence, "submittedBy": r.submitted_by,
+            "date": r.receipt_date.isoformat()}
+
+
+class ApprovalRequestCreate(BaseModel):
+    request: str
+    amount: float = 0
+    owner: Optional[str] = None
+    status: str = "pending"
+    policy: Optional[str] = None
+
+
+@app.get("/approval-requests")
+async def list_approval_requests(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(ApprovalRequest).where(ApprovalRequest.tenant_id == tenant_id).order_by(desc(ApprovalRequest.created_at)))
+    return [{"id": str(a.id), "request": a.request, "amount": float(a.amount), "owner": a.owner,
+             "status": a.status, "policy": a.policy} for a in result.scalars().all()]
+
+
+@app.post("/approval-requests", status_code=status.HTTP_201_CREATED)
+async def create_approval_request(payload: ApprovalRequestCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    a = ApprovalRequest(tenant_id=tenant_id, **payload.model_dump())
+    db.add(a)
+    await db.flush()
+    await db.refresh(a)
+    return {"id": str(a.id), "request": a.request, "amount": float(a.amount), "owner": a.owner,
+            "status": a.status, "policy": a.policy}
+
+
+class PurchaseOrderCreate(BaseModel):
+    vendor: str
+    amount: float = 0
+    status: str = "draft"
+    approver: Optional[str] = None
+    due_date: Optional[date] = None
+
+
+@app.get("/purchase-orders")
+async def list_purchase_orders(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(FinancePurchaseOrder).where(FinancePurchaseOrder.tenant_id == tenant_id).order_by(desc(FinancePurchaseOrder.created_at)))
+    return [{"id": str(p.id), "vendor": p.vendor, "amount": float(p.amount), "status": p.status,
+             "approver": p.approver, "dueDate": p.due_date.isoformat() if p.due_date else None} for p in result.scalars().all()]
+
+
+@app.post("/purchase-orders", status_code=status.HTTP_201_CREATED)
+async def create_purchase_order(payload: PurchaseOrderCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    p = FinancePurchaseOrder(tenant_id=tenant_id, **payload.model_dump())
+    db.add(p)
+    await db.flush()
+    await db.refresh(p)
+    return {"id": str(p.id), "vendor": p.vendor, "amount": float(p.amount), "status": p.status,
+            "approver": p.approver, "dueDate": p.due_date.isoformat() if p.due_date else None}
+
+
+class FixedAssetCreate(BaseModel):
+    asset_name: str
+    location: Optional[str] = None
+    status: str = "active"
+    cost: float = 0
+    accumulated_depreciation: float = 0
+    useful_life_years: Optional[float] = None
+
+
+@app.get("/fixed-assets")
+async def list_fixed_assets(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(FixedAsset).where(FixedAsset.tenant_id == tenant_id).order_by(desc(FixedAsset.created_at)))
+    return [{"id": str(a.id), "asset": a.asset_name, "location": a.location, "status": a.status,
+             "cost": float(a.cost), "depreciation": float(a.accumulated_depreciation),
+             "remainingLife": f"{float(a.useful_life_years)} years" if a.useful_life_years else None} for a in result.scalars().all()]
+
+
+@app.post("/fixed-assets", status_code=status.HTTP_201_CREATED)
+async def create_fixed_asset(payload: FixedAssetCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    a = FixedAsset(tenant_id=tenant_id, **payload.model_dump())
+    db.add(a)
+    await db.flush()
+    await db.refresh(a)
+    return {"id": str(a.id), "asset": a.asset_name, "location": a.location, "status": a.status,
+            "cost": float(a.cost), "depreciation": float(a.accumulated_depreciation),
+            "remainingLife": f"{float(a.useful_life_years)} years" if a.useful_life_years else None}
+
+
+class RecurringPaymentCreate(BaseModel):
+    vendor: str
+    amount: float = 0
+    frequency: str = "Monthly"
+    next_run: Optional[date] = None
+    status: str = "active"
+
+
+@app.get("/recurring-payments")
+async def list_recurring_payments(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(RecurringPayment).where(RecurringPayment.tenant_id == tenant_id).order_by(desc(RecurringPayment.created_at)))
+    return [{"id": str(r.id), "vendor": r.vendor, "amount": float(r.amount), "frequency": r.frequency,
+             "nextRun": r.next_run.isoformat() if r.next_run else None, "status": r.status} for r in result.scalars().all()]
+
+
+@app.post("/recurring-payments", status_code=status.HTTP_201_CREATED)
+async def create_recurring_payment(payload: RecurringPaymentCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    r = RecurringPayment(tenant_id=tenant_id, **payload.model_dump())
+    db.add(r)
+    await db.flush()
+    await db.refresh(r)
+    return {"id": str(r.id), "vendor": r.vendor, "amount": float(r.amount), "frequency": r.frequency,
+            "nextRun": r.next_run.isoformat() if r.next_run else None, "status": r.status}
+
+
+# ── Bank Reconciliation ─────────────────────────────────────────────────
+
+class BankStatementItemCreate(BaseModel):
+    item_date: date = Field(default_factory=date.today)
+    description: str
+    amount: float = 0
+    status: str = "unmatched"
+    source: Optional[str] = None
+
+
+@app.get("/bank-items")
+async def list_bank_items(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(BankStatementItem).where(BankStatementItem.tenant_id == tenant_id).order_by(desc(BankStatementItem.item_date)))
+    return [{"id": str(b.id), "date": b.item_date.isoformat(), "description": b.description,
+             "amount": float(b.amount), "status": b.status, "source": b.source} for b in result.scalars().all()]
+
+
+@app.post("/bank-items", status_code=status.HTTP_201_CREATED)
+async def create_bank_item(payload: BankStatementItemCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+    b = BankStatementItem(tenant_id=tenant_id, **payload.model_dump())
+    db.add(b)
+    await db.flush()
+    await db.refresh(b)
+    return {"id": str(b.id), "date": b.item_date.isoformat(), "description": b.description,
+            "amount": float(b.amount), "status": b.status, "source": b.source}
 
 
 # ── Health ─────────────────────────────────────────────────────────────
