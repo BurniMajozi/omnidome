@@ -35,7 +35,9 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    router.replace("/dashboard")
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) router.replace("/dashboard")
+    })
   }, [router])
 
   const handleEmailSignIn = async (event: React.FormEvent<HTMLFormElement>) => {

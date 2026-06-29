@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
-from services.crm.database import get_session
+from services.common.db import session_scope as get_session
 from services.agent_orchestrator.conversation.models import (
     AgentConversation,
     AgentMessage,

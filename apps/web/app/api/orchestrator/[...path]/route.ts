@@ -3,8 +3,34 @@
  * Forwards all /api/orchestrator/* requests to the orchestrator service.
  */
 import { NextRequest, NextResponse } from "next/server"
+import { getSupabaseServer } from "@/lib/supabase/server"
 
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://localhost:8021"
+const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
+const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY || ""
+
+// Resolves a verified Supabase session into this platform's {user_id, tenant_id}.
+// Returns null on any failure -- callers must drop identity headers entirely
+// rather than fall back to anything client-supplied (no tenant-spoofing via headers).
+async function resolveIdentity(bearerToken: string): Promise<{ userId: string; tenantId: string } | null> {
+  const { client } = getSupabaseServer()
+  if (!client) return null
+
+  const { data, error } = await client.auth.getUser(bearerToken)
+  if (error || !data.user?.email) return null
+
+  try {
+    const res = await fetch(
+      `${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(data.user.email)}`,
+      { headers: { "x-internal-key": INTERNAL_SERVICE_KEY } },
+    )
+    if (!res.ok) return null
+    const body = await res.json()
+    return { userId: body.user_id, tenantId: body.tenant_id }
+  } catch {
+    return null
+  }
+}
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
@@ -18,11 +44,22 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
 
   // Forward headers (auth context)
   const headers = new Headers()
-  const forwardHeaders = ["authorization", "x-tenant-id", "x-user-id", "content-type"]
+  const forwardHeaders = ["authorization", "content-type"]
   forwardHeaders.forEach((h) => {
     const val = request.headers.get(h)
     if (val) headers.set(h, val)
   })
+
+  // Identity is always resolved server-side from a verified Supabase token --
+  // never trust a client-sent x-user-id/x-tenant-id directly (tenant-spoofing).
+  const authHeader = request.headers.get("authorization")
+  if (authHeader?.startsWith("Bearer ")) {
+    const identity = await resolveIdentity(authHeader.slice(7))
+    if (identity) {
+      headers.set("x-user-id", identity.userId)
+      headers.set("x-tenant-id", identity.tenantId)
+    }
+  }
 
   try {
     const body = request.method !== "GET" ? await request.text() : undefined

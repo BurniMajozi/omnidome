@@ -39,6 +39,8 @@ from services.agent_orchestrator.protocol_models import (
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
 from services.agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.hermes_client import hermes_client
+from services.agent_orchestrator.routes.agents import _hermes_system_note
 
 router = APIRouter(tags=["Agent Protocols"])
 
@@ -158,8 +160,6 @@ async def a2a_message(body: A2AMessage, ctx: AuthContext = Depends(get_auth_cont
 
 @router.post("/api/protocols/ag-ui/run")
 async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_context)):
-    from services.agent_orchestrator.llm import llm_client
-
     run_id = uuid.uuid4()
     correlation = _correlation_id()
 
@@ -180,16 +180,25 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 tenant_id=ctx.tenant_id,
                 context={**body.context, "user_id": str(ctx.user_id)},
             )
-            messages = agent._build_messages(body.message, body.context.get("history", []))
-            tools_for_llm = tool_registry.to_openai_format(agent.tools)
+            history = body.context.get("history", [])
 
             # Stream tokens and emit AG-UI events
             full_content = ""
-            async for token in llm_client.chat_stream(
-                agent_type=body.agent_type,
-                messages=messages,
-                tools=tools_for_llm,
-            ):
+            if settings.chat_backend == "hermes":
+                messages = agent._build_messages(body.message, history)
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context)})
+                token_stream = hermes_client.chat_stream(messages)
+            else:
+                from services.agent_orchestrator.llm import llm_client
+                messages = agent._build_messages(body.message, history)
+                tools_for_llm = tool_registry.to_openai_format(agent.tools)
+                token_stream = llm_client.chat_stream(
+                    agent_type=body.agent_type,
+                    messages=messages,
+                    tools=tools_for_llm,
+                )
+
+            async for token in token_stream:
                 full_content += token
                 yield await emit(AGUIEvent(
                     type="TEXT_MESSAGE_CONTENT",

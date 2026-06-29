@@ -21,6 +21,14 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    # Hermes — local agent brain (Ollama + Gemma). When chat_backend is
+    # "hermes", chat is bridged to Hermes's OpenAI-compatible API server
+    # instead of the legacy qwen/llama Agent.run() loop. "legacy" is kept
+    # as a rollback switch.
+    chat_backend: str = "hermes"
+    hermes_base_url: str = "http://hermes:8642/v1"
+    hermes_api_key: str = ""
+
     # Model routing — maps agent_type -> (primary_model, fallback_model)
     # Keys match the canonical agent_type values used by frontend and routes:
     #   customer_facing, retention, provisioning, executive, support

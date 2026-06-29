@@ -1,5 +1,6 @@
 """Agent invocation routes — with conversation persistence."""
 
+import json
 import uuid
 import logging
 from typing import Optional
@@ -9,9 +10,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
-from services.crm.database import get_session
+from services.common.db import session_scope as get_session
 from services.agent_orchestrator.agents import Agent
 from services.agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.config import settings
+from services.agent_orchestrator.hermes_client import hermes_client
+from services.agent_orchestrator.protocols import AGUIEvent
 from services.agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
 from services.agent_orchestrator.conversation.models import (
     AgentConversation,
@@ -22,6 +26,18 @@ from services.agent_orchestrator.conversation.models import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _hermes_system_note(agent_type: str, tenant_id, context: dict) -> str:
+    """Short domain/tenant context note for Hermes — it has its own persona
+    (SOUL.md) and reaches business tools itself via MCP (ask_<agent_type>_agent),
+    so this intentionally doesn't replicate the qwen/llama personas in llm.py."""
+    return (
+        f"This conversation is happening inside OmniDome's '{agent_type}' context "
+        f"for tenant {tenant_id}. Use your ask_{agent_type}_agent tool (or other "
+        f"ask_*_agent tools) for anything requiring real CRM/billing/network/etc. data. "
+        f"Extra context: {json.dumps(context)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -96,35 +112,47 @@ async def _persist_messages(
 @router.get("", response_model=list[AgentInfo])
 async def list_agents():
     """List all available agents and their tool sets."""
+    legacy_llm = {
+        "customer_facing": "qwen2.5:7b",
+        "retention": "llama3.1:70b",
+        "provisioning": "qwen2.5:7b",
+        "executive": "llama3.1:70b",
+        "support": "qwen2.5:7b",
+    }
+    hermes_llm = "hermes-agent (gemma3:4b via Ollama)"
+
+    def _llm(agent_type: str) -> str:
+        return hermes_llm if settings.chat_backend == "hermes" else legacy_llm[agent_type]
+
     agents = [
         AgentInfo(
             agent_type="customer_facing",
             description="DomeBot — assists customers with balances, invoices, coverage, tickets",
-            llm="qwen2.5:7b",
+            llm=_llm("customer_facing"),
             tools=Agent("customer_facing").available_tool_names,
         ),
         AgentInfo(
             agent_type="retention",
             description="ChurnGuard — autonomous churn prediction and retention campaigns",
-            llm="llama3.1:70b",
+            llm=_llm("retention"),
             tools=Agent("retention").available_tool_names,
         ),
         AgentInfo(
             agent_type="provisioning",
             description="ProvisionBot — automates new customer provisioning workflow",
-            llm="qwen2.5:7b",
+            llm=_llm("provisioning"),
             tools=Agent("provisioning").available_tool_names,
         ),
         AgentInfo(
             agent_type="executive",
             description="InsightBot — executive briefings and analytics",
-            llm="llama3.1:70b",
+            llm=_llm("executive"),
             tools=Agent("executive").available_tool_names,
         ),
         AgentInfo(
             agent_type="support",
             description="SupportBot — ticket management and diagnostics",
-            llm="qwen2.5:7b",
+            llm=_llm("support"),
             tools=Agent("support").available_tool_names,
         ),
     ]
@@ -188,17 +216,24 @@ async def invoke_agent(
             conversation_id = conv.id
 
     # Run the agent (outside the DB session to avoid long-held locks)
+    tenant_id = body.tenant_id or ctx.tenant_id
     agent = Agent(
         agent_type=body.agent_type,
-        tenant_id=body.tenant_id or ctx.tenant_id,
+        tenant_id=tenant_id,
         context=body.context,
     )
 
-    result = await agent.run(
-        user_message=body.message,
-        history=history,
-        conversation_id=conversation_id,
-    )
+    if settings.chat_backend == "hermes":
+        messages = agent._build_messages(body.message, history)
+        messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
+        content = await hermes_client.chat(messages)
+        result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
+    else:
+        result = await agent.run(
+            user_message=body.message,
+            history=history,
+            conversation_id=conversation_id,
+        )
 
     # Persist messages
     async with get_session() as session:
@@ -229,28 +264,86 @@ async def invoke_agent_stream(
     body: AgentInvokeRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Streaming agent invocation — returns SSE stream."""
-    from services.agent_orchestrator.llm import llm_client
+    """Streaming agent invocation — returns an SSE stream of AGUIEvent JSON
+    (matching packages/agent-chat's invokeAgentStreaming parser)."""
+    tenant_id = body.tenant_id or ctx.tenant_id
+    conversation_id = body.conversation_id
+
+    async def _ensure_conversation() -> uuid.UUID:
+        if conversation_id:
+            return conversation_id
+        async with get_session() as session:
+            conv = AgentConversation(
+                tenant_id=tenant_id,
+                agent_type=body.agent_type,
+                channel="api",
+                context=body.context,
+            )
+            session.add(conv)
+            await session.flush()
+            return conv.id
 
     async def event_stream():
-        agent = Agent(
-            agent_type=body.agent_type,
-            tenant_id=body.tenant_id or ctx.tenant_id,
-            context=body.context,
-        )
-        tools = agent.tools
-        tools_for_llm = tool_registry.to_openai_format(tools)
+        run_id = uuid.uuid4()
+        conv_id = await _ensure_conversation()
 
+        def emit(event: AGUIEvent) -> str:
+            return f"data: {event.model_dump_json()}\n\n"
+
+        yield emit(AGUIEvent(
+            type="RUN_STARTED",
+            run_id=run_id,
+            tenant_id=tenant_id,
+            conversation_id=conv_id,
+            data={"agent_type": body.agent_type},
+        ))
+
+        agent = Agent(agent_type=body.agent_type, tenant_id=tenant_id, context=body.context)
         history = body.context.get("history", [])
-        messages = agent._build_messages(body.message, history)
+        full_content = ""
 
-        async for token in llm_client.chat_stream(
-            agent_type=body.agent_type,
-            messages=messages,
-            tools=tools_for_llm,
-        ):
-            yield f"data: {token}\n\n"
+        try:
+            if settings.chat_backend == "hermes":
+                messages = agent._build_messages(body.message, history)
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
+                async for delta in hermes_client.chat_stream(messages):
+                    full_content += delta
+                    yield emit(AGUIEvent(
+                        type="TEXT_MESSAGE_CONTENT", run_id=run_id, tenant_id=tenant_id,
+                        conversation_id=conv_id, data={"delta": delta},
+                    ))
+            else:
+                from services.agent_orchestrator.llm import llm_client
 
-        yield "data: [DONE]\n\n"
+                tools_for_llm = tool_registry.to_openai_format(agent.tools)
+                messages = agent._build_messages(body.message, history)
+                async for token in llm_client.chat_stream(
+                    agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
+                ):
+                    full_content += token
+                    yield emit(AGUIEvent(
+                        type="TEXT_MESSAGE_CONTENT", run_id=run_id, tenant_id=tenant_id,
+                        conversation_id=conv_id, data={"delta": token},
+                    ))
+        except Exception as exc:
+            logger.error("Agent stream failed (backend=%s): %s", settings.chat_backend, exc)
+            yield emit(AGUIEvent(
+                type="RUN_ERROR", run_id=run_id, tenant_id=tenant_id,
+                conversation_id=conv_id, data={"error": str(exc)},
+            ))
+            return
+
+        async with get_session() as session:
+            await _persist_messages(
+                session=session,
+                conversation_id=conv_id,
+                agent_type=body.agent_type,
+                user_message=body.message,
+                assistant_content=full_content,
+                tool_calls=[],
+            )
+            await session.flush()
+
+        yield emit(AGUIEvent(type="RUN_FINISHED", run_id=run_id, tenant_id=tenant_id, conversation_id=conv_id))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

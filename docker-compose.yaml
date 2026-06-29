@@ -406,6 +406,8 @@ services:
       - COMPLIANCE_SERVICE_URL=${COMPLIANCE_SERVICE_URL:-http://compliance:8019}
       - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
+      - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
     ports:
       - "3000:3000"
     depends_on:

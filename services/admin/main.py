@@ -25,7 +25,7 @@ logger = logging.getLogger("admin")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="OmniDome Admin Service", version="1.0.0")
-guard = EntitlementGuard(module_name="admin")
+guard = EntitlementGuard(module_name="admin", public_paths={"/internal/users/by-email"})
 
 configure_production(app)
 
@@ -848,6 +848,33 @@ async def get_user(
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return row
+
+
+@app.get("/internal/users/by-email")
+async def internal_get_user_by_email(
+    request: Request,
+    email: str = Query(...),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Service-to-service identity bootstrap lookup.
+
+    Used by apps/web's orchestrator proxy to resolve a verified Supabase
+    user's email into this platform's {user_id, tenant_id} -- the only join
+    key, since no supabase_id column exists on `users`. Gated by a shared
+    secret, not get_auth_context, since the caller has no tenant context yet.
+    """
+    expected = os.getenv("INTERNAL_SERVICE_KEY", "")
+    if not expected or request.headers.get("x-internal-key") != expected:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal key")
+
+    result = await session.execute(
+        text("select id, tenant_id from users where email = :email and is_active = true"),
+        {"email": email},
+    )
+    row = result.mappings().first()
+    if not row or not row["tenant_id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    return {"user_id": str(row["id"]), "tenant_id": str(row["tenant_id"])}
 
 
 @app.post("/users", status_code=status.HTTP_201_CREATED)

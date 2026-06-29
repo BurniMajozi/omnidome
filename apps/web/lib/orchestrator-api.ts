@@ -11,7 +11,20 @@
  *   - AP2 payment mandates
  */
 
+import { supabase } from "@/lib/supabase/client"
+
 const ORCHESTRATOR_BASE = "/api/orchestrator"
+
+// Attaches the current Supabase session as a Bearer token so the orchestrator
+// proxy can resolve real {user_id, tenant_id} identity server-side.
+async function authFetch(url: string, init: RequestInit): Promise<Response> {
+  const { data } = await supabase.auth.getSession()
+  const headers = new Headers(init.headers)
+  if (data.session?.access_token) {
+    headers.set("Authorization", `Bearer ${data.session.access_token}`)
+  }
+  return fetch(url, { ...init, headers })
+}
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -272,7 +285,7 @@ export async function listAgents(): Promise<AgentInfo[]> {
 }
 
 export async function invokeAgent(req: AgentInvokeRequest): Promise<AgentInvokeResponse> {
-  const res = await fetch(`${ORCHESTRATOR_BASE}/agents/invoke`, {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/invoke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -289,7 +302,7 @@ export async function invokeAgentStream(
   onToken: (token: string) => void,
   onDone: (fullResponse: AgentInvokeResponse) => void,
 ): Promise<void> {
-  const res = await fetch(`${ORCHESTRATOR_BASE}/agents/invoke/stream`, {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/invoke/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -329,7 +342,7 @@ export async function invokeAgentAGUI(
   req: AGUIRunRequest,
   onEvent: (event: AGUIEvent) => void,
 ): Promise<void> {
-  const res = await fetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/run`, {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
