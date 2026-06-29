@@ -10,21 +10,23 @@ import { supabase } from "@/lib/supabase/client"
 
 const API_BASE = "/svc/marketing"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000001"
 
-async function getTenantId(): Promise<string> {
+async function getAuthHeaders(): Promise<Record<string, string>> {
   const { data } = await supabase.auth.getSession()
-  return (
+  const tenantId =
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??
     FALLBACK_TENANT_ID
-  )
+  const userId = data.session?.user?.id ?? FALLBACK_USER_ID
+  return { "x-tenant-id": tenantId, "x-user-id": userId }
 }
 
 async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
-      headers: { "x-tenant-id": await getTenantId(), "Content-Type": "application/json" },
+      headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
       ...init,
     })
     if (!res.ok) {
@@ -604,25 +606,48 @@ export const deleteCommentAutomation = (id: string) =>
 // ── Email ────────────────────────────────────────────────────────────
 
 export const sendEmailBatch = (data: EmailBatchSendInput) =>
-  fetchMarketing<{ status: string; sent: number }>("/email/send-batch", {
+  fetchMarketing<{ status: string; sent: number }>("/email/send", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const listEmailTemplates = () =>
-  fetchMarketing<EmailTemplate[]>("/email/templates")
+  fetchMarketing<EmailTemplate[]>("/templates")
 
 export const createEmailTemplate = (data: EmailTemplateCreate) =>
-  fetchMarketing<EmailTemplate>("/email/templates", {
+  fetchMarketing<EmailTemplate>("/templates", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const listAudienceSegments = () =>
-  fetchMarketing<AudienceSegment[]>("/email/segments")
+  fetchMarketing<AudienceSegment[]>("/segments")
 
 export const createAudienceSegment = (data: AudienceSegmentCreate) =>
-  fetchMarketing<AudienceSegment>("/email/segments", {
+  fetchMarketing<AudienceSegment>("/segments", {
     method: "POST",
     body: JSON.stringify(data),
   })
+
+// ── Traditional Media (Radio / OOH / Billboard) ────────────────────────
+
+export interface TraditionalCampaign {
+  id: string
+  tenant_id: string
+  medium: "radio" | "billboard" | "ooh_screen"
+  name: string
+  category?: string
+  reach?: string
+  spots_booked: number
+  impressions: number
+  spend_zar: number
+  leads_generated: number
+  metrics?: Record<string, unknown>
+  period_month?: string
+  created_at: string
+}
+
+export const listTraditionalCampaigns = (medium?: string) => {
+  const q = medium ? `?medium=${encodeURIComponent(medium)}` : ""
+  return fetchMarketing<TraditionalCampaign[]>(`/traditional-campaigns${q}`)
+}

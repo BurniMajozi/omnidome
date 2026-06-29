@@ -185,7 +185,7 @@ class MarketingEmailBatch(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     campaign_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("marketing_campaigns.id"), nullable=False,
     )
     subject: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     from_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
@@ -218,7 +218,7 @@ class MarketingEmailEvent(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     batch_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("marketing_email_batches.id"), nullable=False,
     )
     recipient_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     event_type: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -320,7 +320,7 @@ class MarketingABTest(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     campaign_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("marketing_campaigns.id"), nullable=False,
     )
     variant_a: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
     variant_b: Mapped[Dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -380,10 +380,10 @@ class SocialPost(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("social_media_accounts.id"), nullable=False,
     )
     campaign_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), nullable=True,
+        UUID(as_uuid=True), ForeignKey("marketing_campaigns.id"), nullable=True,
     )
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     media_urls: Mapped[Optional[List[str]]] = mapped_column(JSONB, nullable=True)
@@ -415,7 +415,7 @@ class SocialInboxMessage(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("social_media_accounts.id"), nullable=False,
     )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     message_type: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -448,7 +448,7 @@ class SocialAnalytics(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("social_media_accounts.id"), nullable=False,
     )
     platform: Mapped[str] = mapped_column(String(50), nullable=False)
     metric_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -544,10 +544,10 @@ class WhatsAppBroadcastRecipient(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     broadcast_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("whatsapp_broadcasts.id"), nullable=False,
     )
     contact_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("whatsapp_contacts.id"), nullable=False,
     )
     phone_number: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="PENDING")
@@ -607,7 +607,7 @@ class CommentAutomation(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False,
+        UUID(as_uuid=True), ForeignKey("social_media_accounts.id"), nullable=False,
     )
     trigger_type: Mapped[str] = mapped_column(String(30), nullable=False)
     trigger_keywords: Mapped[Optional[List[str]]] = mapped_column(JSONB, nullable=True)
@@ -638,6 +638,33 @@ class SocialWebhookEvent(Base):
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     processed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ===========================================================================
+# 19. TraditionalMediaCampaign  (traditional_media_campaigns)
+# ===========================================================================
+
+class TraditionalMediaCampaign(Base):
+    """Offline media buys: radio, billboards, airport/OOH screens."""
+
+    __tablename__ = "traditional_media_campaigns"
+    __table_args__ = (
+        Index("idx_traditional_media_campaigns_tenant_id", "tenant_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    medium: Mapped[str] = mapped_column(String(30), nullable=False)  # radio, billboard, ooh_screen
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # National/Regional/Community, etc.
+    reach: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # free-text: "1.2M listeners", "Western Cape"
+    spots_booked: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    spend_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0"))
+    leads_generated: Mapped[int] = mapped_column(Integer, default=0)
+    metrics: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)  # ctr, dwell_time, brand_recall, etc.
+    period_month: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

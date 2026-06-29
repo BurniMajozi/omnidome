@@ -22,7 +22,6 @@ import {
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
   Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy,
 } from "lucide-react"
-import { useModuleData } from "@/lib/module-data"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
@@ -30,7 +29,10 @@ import {
   createSocialPost, publishSocialPost, crossPost, createWhatsAppBroadcast,
   sendWhatsAppBroadcast, createCommentAutomation, replyToInboxMessage,
   archiveInboxMessage, markInboxRead, createAdCampaign, updateAdCampaign,
+  listTraditionalCampaigns, type TraditionalCampaign,
 } from "@/lib/marketing-api"
+
+const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ICON MAPS
@@ -74,68 +76,6 @@ const statusColor: Record<string, string> = {
   NEUTRAL: "border-gray-500/40 text-gray-400",
   NEGATIVE: "border-red-500/40 text-red-400",
 }
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// EXISTING DATA (traditional marketing — kept from original module)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const defaultChannelData = [
-  { name: "Email", value: 32, fill: "#4ade80" },
-  { name: "Social", value: 28, fill: "#60a5fa" },
-  { name: "Search", value: 18, fill: "#f59e0b" },
-  { name: "Display", value: 12, fill: "#a78bfa" },
-  { name: "SMS", value: 10, fill: "#f472b6" },
-]
-
-const defaultROI = [
-  { campaign: "Summer Promo", roi: 3.2 },
-  { campaign: "Back to School", roi: 2.8 },
-  { campaign: "Holiday Sale", roi: 4.1 },
-  { campaign: "Black Friday", roi: 5.2 },
-  { campaign: "New Year", roi: 2.4 },
-]
-
-const defaultLeadFunnel = [
-  { name: "Leads", value: 18400, fill: "#a78bfa" },
-  { name: "MQL", value: 9200, fill: "#60a5fa" },
-  { name: "SQL", value: 4600, fill: "#4ade80" },
-  { name: "Customers", value: 1840, fill: "#f59e0b" },
-]
-
-const defaultRadioStations = [
-  { station: "KFM", type: "Regional", listeners: "1.2M", spotsBooked: 24, spend: "R 180,000", reach: "Western Cape", ctr: "1.8%" },
-  { station: "East Coast Radio", type: "Regional", listeners: "2.1M", spotsBooked: 40, spend: "R 240,000", reach: "KwaZulu-Natal", ctr: "2.3%" },
-  { station: "Jacaranda FM", type: "National", listeners: "3.8M", spotsBooked: 60, spend: "R 420,000", reach: "National", ctr: "3.1%" },
-  { station: "5FM", type: "National", listeners: "4.2M", spotsBooked: 48, spend: "R 380,000", reach: "National", ctr: "2.7%" },
-]
-
-const defaultRadioPerformance = [
-  { month: "Jan", spots: 120, reach: 8200000, leads: 340, spend: 420000 },
-  { month: "Feb", spots: 145, reach: 9400000, leads: 410, spend: 480000 },
-  { month: "Mar", spots: 132, reach: 8800000, leads: 380, spend: 450000 },
-  { month: "Apr", spots: 168, reach: 11200000, leads: 520, spend: 560000 },
-  { month: "May", spots: 155, reach: 10600000, leads: 480, spend: 530000 },
-  { month: "Jun", spots: 178, reach: 12400000, leads: 610, spend: 620000 },
-]
-
-const defaultRadioByType = [
-  { name: "National", value: 45, fill: "#4ade80" },
-  { name: "Regional", value: 35, fill: "#60a5fa" },
-  { name: "Community", value: 20, fill: "#f59e0b" },
-]
-
-const defaultBillboardData = [
-  { name: "High-Traffic Highway", value: 35, fill: "#4ade80" },
-  { name: "Urban CBD", value: 28, fill: "#60a5fa" },
-  { name: "Suburban Retail", value: 22, fill: "#f59e0b" },
-  { name: "Airport", value: 15, fill: "#a78bfa" },
-]
-
-const defaultOOHMetrics = [
-  { medium: "Airport Screens", campaigns: 6, impressions: "8.4M", dwellTime: "6.2s", attentionRate: "78%", footTrafficLift: "+31%", brandRecall: "52%" },
-  { medium: "Digital Billboards", campaigns: 9, impressions: "14.6M", dwellTime: "3.8s", attentionRate: "62%", footTrafficLift: "+18%", brandRecall: "38%" },
-  { medium: "Static Billboards", campaigns: 12, impressions: "22.1M", dwellTime: "2.1s", attentionRate: "45%", footTrafficLift: "+12%", brandRecall: "28%" },
-]
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN MODULE
@@ -249,6 +189,18 @@ function CampaignsTab() {
   const totalSent = campaigns.reduce((sum: number, c: any) => sum + (c.total_sent || 0), 0)
   const totalConversions = campaigns.reduce((sum: number, c: any) => sum + (c.total_conversions || 0), 0)
   const avgROI = campaigns.length > 0 ? (campaigns.reduce((sum: number, c: any) => sum + (c.total_conversions > 0 ? c.total_conversions / Math.max(c.total_sent, 1) * 100 : 0), 0) / campaigns.length).toFixed(1) : "0"
+
+  const channelDistribution = Object.entries(
+    campaigns.reduce((acc: Record<string, number>, c: any) => {
+      acc[c.channel] = (acc[c.channel] ?? 0) + 1
+      return acc
+    }, {})
+  ).map(([name, value]) => ({ name, value }))
+
+  const campaignBudgets = campaigns
+    .filter((c: any) => c.budget_zar > 0)
+    .slice(0, 8)
+    .map((c: any) => ({ campaign: c.name, budget: Number(c.budget_zar) }))
 
   return (
     <div className="space-y-6">
@@ -377,15 +329,15 @@ function CampaignsTab() {
         </CardContent>
       </Card>
 
-      {/* Channel Distribution + ROI */}
+      {/* Channel Distribution + Budget */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader><CardTitle>Channel Distribution</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={defaultChannelData} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}%`}>{defaultChannelData.map((e, i) => <Cell key={i} fill={e.fill} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div></CardContent>
+          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={channelDistribution} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}`}>{channelDistribution.map((e, i) => <Cell key={i} fill={channelColors[i % channelColors.length]} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div></CardContent>
         </Card>
         <Card className="border-border bg-card">
-          <CardHeader><CardTitle>Campaign ROI</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={defaultROI}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="campaign" tick={{ fill: "#737373", fontSize: 10 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="roi" fill="#4ade80" name="ROI" /></BarChart></ResponsiveContainer></div></CardContent>
+          <CardHeader><CardTitle>Budget by Campaign</CardTitle></CardHeader>
+          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={campaignBudgets}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="campaign" tick={{ fill: "#737373", fontSize: 10 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="budget" fill="#4ade80" name="Budget (R)" /></BarChart></ResponsiveContainer></div></CardContent>
         </Card>
       </div>
     </div>
@@ -1227,25 +1179,64 @@ function AutomationsTab() {
 // TRADITIONAL TAB (existing marketing — radio, billboards, OOH)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const radioTypeColors: Record<string, string> = {
+  National: "#4ade80",
+  Regional: "#60a5fa",
+  Community: "#f59e0b",
+}
+
 function TraditionalTab() {
-  const { data } = useModuleData("marketing", {
-    channelData: defaultChannelData,
-    roiData: defaultROI,
-    leadFunnel: defaultLeadFunnel,
-    radioPerformance: defaultRadioPerformance,
-    radioByType: defaultRadioByType,
-  })
+  const [campaigns, setCampaigns] = useState<TraditionalCampaign[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    listTraditionalCampaigns().then((data) => {
+      setCampaigns(data ?? [])
+      setLoading(false)
+    })
+  }, [])
+
+  const radioCampaigns = campaigns.filter((c) => c.medium === "radio")
+  const oohCampaigns = campaigns.filter((c) => c.medium === "billboard" || c.medium === "ooh_screen")
+
+  const totalSpend = campaigns.reduce((sum, c) => sum + Number(c.spend_zar || 0), 0)
+  const totalImpressions = campaigns.reduce((sum, c) => sum + (c.impressions || 0), 0)
+  const activeMediums = new Set(campaigns.map((c) => c.medium)).size
+
+  const radioPerformance = Object.values(
+    radioCampaigns.reduce((acc: Record<string, { month: string; spots: number; leads: number }>, c) => {
+      const key = c.period_month?.slice(0, 7) ?? "Unscheduled"
+      acc[key] = acc[key] ?? { month: key, spots: 0, leads: 0 }
+      acc[key].spots += c.spots_booked || 0
+      acc[key].leads += c.leads_generated || 0
+      return acc
+    }, {})
+  )
+
+  const radioByType = Object.entries(
+    radioCampaigns.reduce((acc: Record<string, number>, c) => {
+      const key = c.category ?? "Uncategorized"
+      acc[key] = (acc[key] ?? 0) + 1
+      return acc
+    }, {})
+  ).map(([name, value]) => ({ name, value, fill: radioTypeColors[name] ?? "#a78bfa" }))
+
+  const kpis = [
+    { label: "Campaigns Recorded", value: String(campaigns.length), icon: BarChart3, color: "text-blue-400", bg: "bg-blue-500/10" },
+    { label: "Total Impressions", value: totalImpressions.toLocaleString(), icon: Users, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+    { label: "Total Spend", value: `R ${totalSpend.toLocaleString()}`, icon: TrendingUp, color: "text-amber-400", bg: "bg-amber-500/10" },
+    { label: "Active Mediums", value: String(activeMediums), icon: Radio, color: "text-purple-400", bg: "bg-purple-500/10" },
+  ]
+
+  if (loading) {
+    return <div className="py-12 text-center text-sm text-muted-foreground">Loading traditional media data...</div>
+  }
 
   return (
     <div className="space-y-6">
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Campaigns Analyzed", value: "24", icon: BarChart3, color: "text-blue-400", bg: "bg-blue-500/10" },
-          { label: "Total Reach", value: "68.4M", icon: Users, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-          { label: "Avg ROI", value: "3.5x", icon: TrendingUp, color: "text-amber-400", bg: "bg-amber-500/10" },
-          { label: "Active Channels", value: "5", icon: Radio, color: "text-purple-400", bg: "bg-purple-500/10" },
-        ].map((kpi: any) => (
+        {kpis.map((kpi) => (
           <Card key={kpi.label} className="border-border bg-card">
             <CardContent className="p-4">
               <div className="flex items-center justify-between">
@@ -1257,42 +1248,50 @@ function TraditionalTab() {
         ))}
       </div>
 
+      {campaigns.length === 0 && (
+        <Card className="border-border bg-card">
+          <CardContent className="p-8 text-center text-sm text-muted-foreground">
+            No traditional media campaigns recorded yet. Use{" "}
+            <code className="rounded bg-secondary px-1.5 py-0.5">POST /traditional-campaigns</code> on the marketing
+            service to log radio, billboard, or OOH screen buys.
+          </CardContent>
+        </Card>
+      )}
+
       {/* Radio + Billboard */}
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="border-border bg-card">
-          <CardHeader><CardTitle>Radio Performance</CardTitle><CardDescription>Spots, reach, and leads over time</CardDescription></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={data.radioPerformance}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Legend /><Bar dataKey="spots" fill="#4ade80" name="Spots" /><Bar dataKey="leads" fill="#60a5fa" name="Leads" /></BarChart></ResponsiveContainer></div></CardContent>
+          <CardHeader><CardTitle>Radio Performance</CardTitle><CardDescription>Spots and leads by month</CardDescription></CardHeader>
+          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={radioPerformance}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Legend /><Bar dataKey="spots" fill="#4ade80" name="Spots" /><Bar dataKey="leads" fill="#60a5fa" name="Leads" /></BarChart></ResponsiveContainer></div></CardContent>
         </Card>
         <Card className="border-border bg-card">
           <CardHeader><CardTitle>Radio by Type</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={data.radioByType} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}%`}>{data.radioByType.map((e: any, i: number) => <Cell key={i} fill={e.fill} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div></CardContent>
+          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={radioByType} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}`}>{radioByType.map((e, i) => <Cell key={i} fill={e.fill} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div></CardContent>
         </Card>
       </div>
 
       {/* Radio Stations Table */}
       <Card className="border-border bg-card">
-        <CardHeader><CardTitle>Radio Stations</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Radio Campaigns</CardTitle></CardHeader>
         <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[700px]">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
                   <th className="py-2 pr-4 font-medium">Station</th><th className="py-2 pr-4 font-medium">Type</th>
-                  <th className="py-2 pr-4 font-medium">Listeners</th><th className="py-2 pr-4 font-medium">Spots</th>
-                  <th className="py-2 pr-4 font-medium">Spend</th><th className="py-2 pr-4 font-medium">Reach</th>
-                  <th className="py-2 font-medium">CTR</th>
+                  <th className="py-2 pr-4 font-medium">Reach</th><th className="py-2 pr-4 font-medium">Spots</th>
+                  <th className="py-2 pr-4 font-medium">Spend</th><th className="py-2 font-medium">Leads</th>
                 </tr>
               </thead>
               <tbody>
-                {defaultRadioStations.map((row) => (
-                  <tr key={row.station} className="border-b border-border/60 text-sm">
-                    <td className="py-3 pr-4 text-foreground font-medium">{row.station}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.type}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.listeners}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.spotsBooked}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.spend}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.reach}</td>
-                    <td className="py-3 text-muted-foreground">{row.ctr}</td>
+                {radioCampaigns.map((row) => (
+                  <tr key={row.id} className="border-b border-border/60 text-sm">
+                    <td className="py-3 pr-4 text-foreground font-medium">{row.name}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.category ?? "—"}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.reach ?? "—"}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.spots_booked}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">R {Number(row.spend_zar).toLocaleString()}</td>
+                    <td className="py-3 text-muted-foreground">{row.leads_generated}</td>
                   </tr>
                 ))}
               </tbody>
@@ -1309,22 +1308,20 @@ function TraditionalTab() {
             <table className="w-full min-w-[800px]">
               <thead>
                 <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="py-2 pr-4 font-medium">Medium</th><th className="py-2 pr-4 font-medium">Campaigns</th>
-                  <th className="py-2 pr-4 font-medium">Impressions</th><th className="py-2 pr-4 font-medium">Dwell Time</th>
-                  <th className="py-2 pr-4 font-medium">Attention</th><th className="py-2 pr-4 font-medium">Traffic Lift</th>
-                  <th className="py-2 font-medium">Brand Recall</th>
+                  <th className="py-2 pr-4 font-medium">Medium</th><th className="py-2 pr-4 font-medium">Name</th>
+                  <th className="py-2 pr-4 font-medium">Category</th><th className="py-2 pr-4 font-medium">Impressions</th>
+                  <th className="py-2 pr-4 font-medium">Spend</th><th className="py-2 font-medium">Leads</th>
                 </tr>
               </thead>
               <tbody>
-                {defaultOOHMetrics.map((row) => (
-                  <tr key={row.medium} className="border-b border-border/60 text-sm">
+                {oohCampaigns.map((row) => (
+                  <tr key={row.id} className="border-b border-border/60 text-sm">
                     <td className="py-3 pr-4 text-foreground font-medium">{row.medium}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.campaigns}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.impressions}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.dwellTime}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.attentionRate}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{row.footTrafficLift}</td>
-                    <td className="py-3 text-muted-foreground">{row.brandRecall}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.name}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.category ?? "—"}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">{row.impressions.toLocaleString()}</td>
+                    <td className="py-3 pr-4 text-muted-foreground">R {Number(row.spend_zar).toLocaleString()}</td>
+                    <td className="py-3 text-muted-foreground">{row.leads_generated}</td>
                   </tr>
                 ))}
               </tbody>

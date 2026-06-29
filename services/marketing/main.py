@@ -35,6 +35,7 @@ from services.marketing.database import (
     AdCampaign,
     CommentAutomation,
     SocialWebhookEvent,
+    TraditionalMediaCampaign,
 )
 
 app = FastAPI(title="OmniDome Marketing Service", version="2.0.0")
@@ -414,6 +415,19 @@ class AdCampaignCreate(BaseModel):
     end_date: Optional[datetime] = None
     targeting: Optional[Dict[str, Any]] = None
     creative: Optional[Dict[str, Any]] = None
+
+
+class TraditionalCampaignCreate(BaseModel):
+    medium: str  # radio, billboard, ooh_screen
+    name: str
+    category: Optional[str] = None
+    reach: Optional[str] = None
+    spots_booked: int = 0
+    impressions: int = 0
+    spend_zar: Decimal = Decimal("0")
+    leads_generated: int = 0
+    metrics: Optional[Dict[str, Any]] = None
+    period_month: Optional[date] = None
 
 
 class AdCampaignUpdate(BaseModel):
@@ -2726,6 +2740,82 @@ async def create_ticket_from_social(
         status="created" if ticket_id else "failed",
         message=f"Ticket {'created' if ticket_id else 'creation failed'} from social message",
     )
+
+
+# ──────────────── Traditional Media (Radio / OOH / Billboard) ────────────────
+
+
+@app.get("/traditional-campaigns", response_model=List[Dict[str, Any]])
+async def list_traditional_campaigns(
+    medium: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """List offline media buys (radio, billboard, OOH screens)."""
+    async with get_session() as session:
+        stmt = select(TraditionalMediaCampaign).where(TraditionalMediaCampaign.tenant_id == tenant_id)
+        if medium:
+            stmt = stmt.where(TraditionalMediaCampaign.medium == medium)
+        stmt = stmt.order_by(TraditionalMediaCampaign.created_at.desc())
+        result = await session.execute(stmt)
+        campaigns = result.scalars().all()
+    return [
+        {
+            "id": c.id,
+            "tenant_id": c.tenant_id,
+            "medium": c.medium,
+            "name": c.name,
+            "category": c.category,
+            "reach": c.reach,
+            "spots_booked": c.spots_booked,
+            "impressions": c.impressions,
+            "spend_zar": c.spend_zar,
+            "leads_generated": c.leads_generated,
+            "metrics": c.metrics,
+            "period_month": c.period_month,
+            "created_at": c.created_at,
+        }
+        for c in campaigns
+    ]
+
+
+@app.post("/traditional-campaigns", status_code=201, response_model=Dict[str, Any])
+async def create_traditional_campaign(
+    body: TraditionalCampaignCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Record an offline media buy (radio, billboard, OOH screen)."""
+    async with get_session() as session:
+        campaign = TraditionalMediaCampaign(
+            tenant_id=tenant_id,
+            medium=body.medium,
+            name=body.name,
+            category=body.category,
+            reach=body.reach,
+            spots_booked=body.spots_booked,
+            impressions=body.impressions,
+            spend_zar=body.spend_zar,
+            leads_generated=body.leads_generated,
+            metrics=body.metrics,
+            period_month=body.period_month,
+        )
+        session.add(campaign)
+        await session.flush()
+        await session.refresh(campaign)
+        return {
+            "id": campaign.id,
+            "tenant_id": campaign.tenant_id,
+            "medium": campaign.medium,
+            "name": campaign.name,
+            "category": campaign.category,
+            "reach": campaign.reach,
+            "spots_booked": campaign.spots_booked,
+            "impressions": campaign.impressions,
+            "spend_zar": campaign.spend_zar,
+            "leads_generated": campaign.leads_generated,
+            "metrics": campaign.metrics,
+            "period_month": campaign.period_month,
+            "created_at": campaign.created_at,
+        }
 
 
 if __name__ == "__main__":
