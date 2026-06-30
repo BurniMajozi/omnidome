@@ -16,6 +16,9 @@ import {
   Cpu,
   Play,
   Square,
+  Mic,
+  MicOff,
+  Volume2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -29,6 +32,7 @@ import {
   type ToolCallEvent,
   type AgentInfo,
 } from "@/lib/orchestrator-api"
+import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -75,11 +79,72 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     memoryWrites: [],
   })
 
+  const [isRecording, setIsRecording] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null)
+  const voiceRecorder = useRef<MediaRecorder | null>(null)
+  const voiceChunks = useRef<Blob[]>([])
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [])
+
+  const startVoiceRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
+      voiceChunks.current = []
+      recorder.ondataavailable = (e) => e.data.size > 0 && voiceChunks.current.push(e.data)
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        const blob = new Blob(voiceChunks.current, { type: "audio/webm" })
+        setIsTranscribing(true)
+        try {
+          const result = await voiceboxTranscribe(blob)
+          if (result.text?.trim()) {
+            setInputValue((prev) => (prev ? `${prev} ${result.text}` : result.text).trim())
+          }
+        } catch (err) {
+          console.error("Voice transcription failed", err)
+        } finally {
+          setIsTranscribing(false)
+        }
+      }
+      recorder.start()
+      voiceRecorder.current = recorder
+      setIsRecording(true)
+    } catch (err) {
+      console.error("Microphone access denied", err)
+    }
+  }, [])
+
+  const stopVoiceRecording = useCallback(() => {
+    voiceRecorder.current?.stop()
+    setIsRecording(false)
+  }, [])
+
+  const handleSpeakMessage = async (message: AGUIMessage) => {
+    if (!message.content?.trim()) return
+    setSpeakingMessageId(message.id)
+    try {
+      const blob = await voiceboxSpeak({
+        text: message.content,
+        scope: "orchestrator_agent_type",
+        scope_ref: selectedAgent,
+        requested_by_service: "ag_ui_chat",
+      })
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audio.onended = () => setSpeakingMessageId(null)
+      audio.onerror = () => setSpeakingMessageId(null)
+      await audio.play()
+    } catch (err) {
+      console.error(`Speak failed — bind a voice to "${selectedAgent}" in Call Center → Voice Studio first`, err)
+      setSpeakingMessageId(null)
+    }
+  }
 
   useEffect(() => {
     scrollToBottom()
@@ -420,6 +485,22 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                   </span>
                 )}
               </div>
+              {message.role === "assistant" && !message.isStreaming && message.content && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 shrink-0 self-end"
+                  onClick={() => handleSpeakMessage(message)}
+                  disabled={speakingMessageId === message.id}
+                  title="Speak message"
+                >
+                  {speakingMessageId === message.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Volume2 className="h-3.5 w-3.5 text-muted-foreground" />
+                  )}
+                </Button>
+              )}
             </div>
 
             {/* Tool call events */}
@@ -497,6 +578,21 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             disabled={isSending}
           />
           <Button
+            variant={isRecording ? "destructive" : "outline"}
+            size="icon"
+            onClick={isRecording ? stopVoiceRecording : startVoiceRecording}
+            disabled={isTranscribing}
+            title={isRecording ? "Stop recording" : "Voice input"}
+          >
+            {isTranscribing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : isRecording ? (
+              <MicOff className="h-4 w-4" />
+            ) : (
+              <Mic className="h-4 w-4" />
+            )}
+          </Button>
+          <Button
             onClick={handleSendMessage}
             disabled={isSending || !inputValue.trim()}
             size="icon"
@@ -509,7 +605,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           </Button>
         </div>
         <p className="mt-1.5 text-[10px] text-muted-foreground">
-          AG-UI streaming • Tool calls visible • Memory writes tracked
+          AG-UI streaming • Tool calls visible • Memory writes tracked • Voice in/out via Voicebox
         </p>
       </div>
     </div>

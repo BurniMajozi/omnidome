@@ -461,6 +461,26 @@ services:
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
       - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
       - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
+      # *_SERVICE_URL for next.config.mjs's /svc/* rewrites (Docker hostnames —
+      # these all previously fell back to a hardcoded "localhost:PORT" in
+      # next.config.mjs, which only resolves when this Next.js process runs on
+      # the host, not inside this container. Found 2026-06-30: this silently
+      # broke call-center, communication's voice add-ons, and webchat's own
+      # COMMUNICATION_SERVICE_URL-dependent /api/chat/* routes.)
+      - SALES_SERVICE_URL=${SALES_SERVICE_URL:-http://sales:8002}
+      - RICA_SERVICE_URL=${RICA_SERVICE_URL:-http://rica:8004}
+      - NETWORK_SERVICE_URL=${NETWORK_SERVICE_URL:-http://network:8005}
+      - IOT_SERVICE_URL=${IOT_SERVICE_URL:-http://iot:8006}
+      - CALL_CENTER_SERVICE_URL=${CALL_CENTER_SERVICE_URL:-http://call_center:8007}
+      - SUPPORT_SERVICE_URL=${SUPPORT_SERVICE_URL:-http://support:8008}
+      - HR_SERVICE_URL=${HR_SERVICE_URL:-http://hr:8009}
+      - RETENTION_SERVICE_URL=${RETENTION_SERVICE_URL:-http://retention:8012}
+      - COMMUNICATION_SERVICE_URL=${COMMUNICATION_SERVICE_URL:-http://communication:8020}
+      - WEB_ANALYTICS_SERVICE_URL=${WEB_ANALYTICS_SERVICE_URL:-http://web_analytics:8016}
+      - CUSTOMER_JOURNEY_SERVICE_URL=${CUSTOMER_JOURNEY_SERVICE_URL:-http://customer_journey:8022}
+      - BILLING_COLLECTIONS_SERVICE_URL=${BILLING_COLLECTIONS_SERVICE_URL:-http://billing_collections:8023}
+      - FNO_INTELLIGENCE_SERVICE_URL=${FNO_INTELLIGENCE_SERVICE_URL:-http://fno_intelligence:8024}
+      - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
     ports:
       - "3000:3000"
     depends_on:
