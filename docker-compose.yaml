@@ -290,6 +290,11 @@ services:
       - "17493:17493"
     volumes:
       - voicebox_models:/data/models
+      # Engine's own SQLite db (profiles/generations) + generated audio +
+      # uploaded cloning samples — without this, recreating the container
+      # silently wipes every voice profile even though our Postgres
+      # metadata (services/voicebox) still references them.
+      - voicebox_data:/app/data
     restart: unless-stopped
 
   agent-orchestrator:
@@ -627,3 +632,4 @@ volumes:
   postgres_data:
   ollama_data:
   voicebox_models:
+  voicebox_data:
