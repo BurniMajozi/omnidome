@@ -919,14 +919,16 @@ export default function PricingPage() {
                                         </div>
                                     </div>
 
-                                    <Button className={cn(
-                                        "w-full mb-6",
-                                        key === "growth"
-                                            ? "bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all"
-                                            : "bg-secondary"
-                                    )}>
-                                        {plan.basePrice === 0 ? "Get started free" : "Start trial"}
-                                    </Button>
+                                    <Link href="/auth">
+                                        <Button className={cn(
+                                            "w-full mb-6",
+                                            key === "growth"
+                                                ? "bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all"
+                                                : "bg-secondary"
+                                        )}>
+                                            {plan.basePrice === 0 ? "Get started free" : "Start trial"}
+                                        </Button>
+                                    </Link>
 
                                     <ul className="space-y-3">
                                         {plan.features.map((feat, idx) => (

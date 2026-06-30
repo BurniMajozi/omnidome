@@ -1,6 +1,8 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { supabase } from "@/lib/supabase/client"
 import { Sidebar } from "@/components/dashboard/sidebar"
 import { Header } from "@/components/dashboard/header"
 import { AGUIChat } from "@/components/chat/ag-ui-chat"
@@ -49,16 +51,36 @@ const sectionTitles: Record<string, string> = {
 }
 
 export default function Dashboard() {
+  const router = useRouter()
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [retentionTab, setRetentionTab] = useState<string | null>(null)
   const [portalTab, setPortalTab] = useState<string | null>(null)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
+  const [authChecked, setAuthChecked] = useState(false)
 
   useEffect(() => {
-    console.log("Operator Dashboard: Local authentication bypass enabled.")
-  }, [])
+    let mounted = true
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return
+      if (!data.session) {
+        router.replace("/auth")
+        return
+      }
+      setAuthChecked(true)
+    })
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) router.replace("/auth")
+    })
+
+    return () => {
+      mounted = false
+      subscription.subscription.unsubscribe()
+    }
+  }, [router])
 
   useEffect(() => {
     let mounted = true
@@ -150,6 +172,14 @@ export default function Dashboard() {
     setActiveSection(section)
     if (section !== "retention") setRetentionTab(null)
     if (section !== "portal") setPortalTab(null)
+  }
+
+  if (!authChecked) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    )
   }
 
   return (

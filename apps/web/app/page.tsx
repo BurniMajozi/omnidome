@@ -1314,7 +1314,9 @@ export default function LandingPage() {
 
                         <div className="border-t border-border pt-4 mt-2">
                             <Link href="/auth" className="block text-center mb-4 font-medium">Sign In</Link>
-                            <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 shadow-[0_0_25px_rgba(79,70,229,0.3)] hover:shadow-[0_0_35px_rgba(79,70,229,0.5)] transition-all">Get Started</Button>
+                            <Link href="/auth">
+                                <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 shadow-[0_0_25px_rgba(79,70,229,0.3)] hover:shadow-[0_0_35px_rgba(79,70,229,0.5)] transition-all">Get Started</Button>
+                            </Link>
                         </div>
                     </div>
                 )}
