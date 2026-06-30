@@ -4,7 +4,12 @@ import { useEffect, useState, useCallback, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
 import { supabase } from "@/lib/supabase/client"
+import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import {
+  Mic,
+  MicOff,
+  Volume2,
+  Loader2,
   Hash,
   Lock,
   ChevronDown,
@@ -861,6 +866,67 @@ export function CommunicationModule() {
     })),
   ]
 
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null)
+  const voiceRecorder = useRef<MediaRecorder | null>(null)
+  const voiceChunks = useRef<Blob[]>([])
+
+  const startVoiceRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
+      voiceChunks.current = []
+      recorder.ondataavailable = (e) => e.data.size > 0 && voiceChunks.current.push(e.data)
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        const blob = new Blob(voiceChunks.current, { type: "audio/webm" })
+        setIsTranscribing(true)
+        try {
+          const result = await voiceboxTranscribe(blob)
+          if (result.text?.trim()) {
+            setMessageInput((prev) => (prev ? `${prev} ${result.text}` : result.text).trim())
+          }
+        } catch (err) {
+          console.error("Voice transcription failed", err)
+        } finally {
+          setIsTranscribing(false)
+        }
+      }
+      recorder.start()
+      voiceRecorder.current = recorder
+      setIsRecordingVoice(true)
+    } catch (err) {
+      console.error("Microphone access denied", err)
+    }
+  }, [])
+
+  const stopVoiceRecording = useCallback(() => {
+    voiceRecorder.current?.stop()
+    setIsRecordingVoice(false)
+  }, [])
+
+  const handleSpeakMessage = async (msg: { id: string; content: string }) => {
+    if (!msg.content?.trim()) return
+    setSpeakingMessageId(msg.id)
+    try {
+      const blob = await voiceboxSpeak({
+        text: msg.content,
+        scope: "webchat_bot",
+        scope_ref: "default",
+        requested_by_service: "webchat",
+      })
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      audio.onended = () => setSpeakingMessageId(null)
+      audio.onerror = () => setSpeakingMessageId(null)
+      await audio.play()
+    } catch (err) {
+      console.error("Speak failed — bind a voice to the webchat bot in Call Center → Voice Studio first", err)
+      setSpeakingMessageId(null)
+    }
+  }
+
   const handleSend = async () => {
     const trimmed = messageInput.trim()
     if (!trimmed || !activeChannelId) return
@@ -1675,7 +1741,7 @@ export function CommunicationModule() {
             <span className="uppercase tracking-wide">Providers</span>
           </div>
           <Badge variant="secondary" className="text-xs">
-            Voice: Deepgram
+            Voice: Voicebox
           </Badge>
           <Badge variant="secondary" className="text-xs">
             Email: Unione
@@ -1747,6 +1813,20 @@ export function CommunicationModule() {
                         )}
                       </div>
                       <div className="opacity-0 group-hover:opacity-100 flex items-start gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => handleSpeakMessage(msg)}
+                          disabled={speakingMessageId === msg.id}
+                          title="Speak message"
+                        >
+                          {speakingMessageId === msg.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Volume2 className="h-4 w-4" />
+                          )}
+                        </Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPanel("add-approval", msg)}>
                           <Smile className="h-4 w-4" />
                         </Button>
@@ -1857,6 +1937,22 @@ export function CommunicationModule() {
                   </Button>
                   <Button variant="ghost" size="icon" className="h-8 w-8">
                     <Paperclip className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant={isRecordingVoice ? "destructive" : "ghost"}
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={isRecordingVoice ? stopVoiceRecording : startVoiceRecording}
+                    disabled={isTranscribing}
+                    title={isRecordingVoice ? "Stop recording" : "Voice input"}
+                  >
+                    {isTranscribing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : isRecordingVoice ? (
+                      <MicOff className="h-4 w-4" />
+                    ) : (
+                      <Mic className="h-4 w-4" />
+                    )}
                   </Button>
                   <Button
                     size="icon"

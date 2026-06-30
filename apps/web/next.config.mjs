@@ -39,6 +39,7 @@ const nextConfig = {
       { source: '/svc/customer-journey/:path*', destination: 'http://localhost:8022/:path*' },
       { source: '/svc/billing-collections/:path*', destination: 'http://localhost:8023/:path*' },
       { source: '/svc/fno-intelligence/:path*', destination: 'http://localhost:8024/:path*' },
+      { source: '/svc/voicebox/:path*', destination: 'http://localhost:8027/:path*' },
     ]
   },
 }

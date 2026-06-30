@@ -1,0 +1,3 @@
+-r ../common/requirements.txt
+httpx>=0.27.0
+python-multipart>=0.0.9

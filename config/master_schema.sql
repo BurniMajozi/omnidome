@@ -913,7 +913,8 @@ VALUES
     ('hr', 'HR', 'Staff and talent management', FALSE),
     ('rica', 'RICA', 'Compliance and verification', FALSE),
     ('marketing', 'Marketing', 'Campaign management, email delivery, and marketing automation', FALSE),
-    ('memory', 'Tenant Memory', 'Tenant-scoped operational memory and agent recall', TRUE)
+    ('memory', 'Tenant Memory', 'Tenant-scoped operational memory and agent recall', TRUE),
+    ('voicebox', 'Voicebox', 'Voice cloning, personalities, TTS and STT', TRUE)
 ON CONFLICT (key) DO UPDATE SET
     name = EXCLUDED.name,
     description = EXCLUDED.description,

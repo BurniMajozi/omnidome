@@ -19,12 +19,11 @@ from services.call_center.database import (
     Agent, Script, CallSession, CallQueue, WhisperSession,
     get_session, init_tables,
 )
-from services.call_center.deepgram_service import (
+from services.call_center.voicebox_adapter import (
     transcribe_audio,
-    transcribe_url,
-    synthesize_speech_simple,
+    synthesize_speech,
     analyze_audio,
-    analyze_audio_url,
+    VoiceboxUnavailable,
 )
 
 app = FastAPI(title="OmniDome Call Center Service", version="0.3.0")
@@ -541,9 +540,8 @@ async def whisper_websocket(
                     try:
                         result = await transcribe_audio(
                             audio_bytes=audio_chunk,
+                            tenant_id=tenant_id,
                             language=language,
-                            model="nova-2",
-                            smart_format=True,
                         )
                         transcript = result.get("transcript", "").strip()
                         confidence = result.get("confidence", 0)
@@ -573,8 +571,8 @@ async def whisper_websocket(
                             try:
                                 result = await transcribe_audio(
                                     audio_bytes=bytes(audio_buffer),
+                                    tenant_id=tenant_id,
                                     language=language,
-                                    model="nova-2",
                                 )
                                 transcript = result.get("transcript", "").strip()
                                 if transcript:
@@ -834,7 +832,7 @@ async def get_hub_intelligence(tenant_id: uuid.UUID = Depends(get_current_tenant
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DEEPGRAM VOICE AI  (existing — STT/TTS/Audio Intel)
+# VOICEBOX VOICE AI  (STT/TTS/Audio Intel — replaces Deepgram)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TranscriptionResponse(BaseModel):
@@ -845,7 +843,8 @@ class TranscriptionResponse(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    model: str = "aura-2-en"
+    voice_profile_id: Optional[uuid.UUID] = None
+    agent_id: Optional[uuid.UUID] = None  # resolves the voice bound to this call-center agent
 
 class AudioIntelligenceResponse(BaseModel):
     transcript: str
@@ -858,54 +857,47 @@ class AudioIntelligenceResponse(BaseModel):
 
 
 @app.post("/ai/speech-to-text")
-async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"), model: str = Form("nova-2"), diarize: bool = Form(False), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await transcribe_audio(audio_bytes=audio_bytes, language=language, model=model, diarize=diarize)
+        result = await transcribe_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language)
         return TranscriptionResponse(**result)
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error(f"STT error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/ai/speech-to-text/url")
-async def speech_to_text_url(url: str = Form(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    try:
-        result = await transcribe_url(url=url, language=language)
-        return TranscriptionResponse(**result)
-    except Exception as exc:
-        logger.error(f"STT URL error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/ai/text-to-speech")
 async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
-        audio_bytes = await synthesize_speech_simple(text=request.text, model=request.model)
+        audio_bytes = await synthesize_speech(
+            text=request.text,
+            tenant_id=str(tenant_id),
+            voice_profile_id=str(request.voice_profile_id) if request.voice_profile_id else None,
+            scope_ref=str(request.agent_id) if request.agent_id else None,
+        )
         return Response(content=audio_bytes, media_type="audio/mpeg", headers={"Content-Disposition": "attachment; filename=speech.mp3"})
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.error(f"TTS error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.post("/ai/audio-intelligence")
-async def audio_intelligence(file: UploadFile = File(...), language: str = Form("en"), summarize: bool = Form(True), sentiment: bool = Form(True), intents: bool = Form(True), topics: bool = Form(True), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def audio_intelligence(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, language=language, summarize=summarize, detect_sentiment=sentiment, detect_intents=intents, detect_topics=topics)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language)
         return AudioIntelligenceResponse(**result)
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error(f"Audio Intelligence error: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
-
-
-@app.post("/ai/audio-intelligence/url")
-async def audio_intelligence_url(url: str = Form(...), language: str = Form("en"), summarize: bool = Form(True), sentiment: bool = Form(True), intents: bool = Form(True), topics: bool = Form(True), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    try:
-        result = await analyze_audio_url(url=url, language=language, summarize=summarize, detect_sentiment=sentiment, detect_intents=intents, detect_topics=topics)
-        return AudioIntelligenceResponse(**result)
-    except Exception as exc:
-        logger.error(f"Audio Intelligence URL error: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
 
 
@@ -913,8 +905,10 @@ async def audio_intelligence_url(url: str = Form(...), language: str = Form("en"
 async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, summarize=True, detect_sentiment=False, detect_intents=False, detect_topics=False)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
         return {"summary": result["summary"], "transcript": result["transcript"], "confidence": result["confidence"]}
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -923,8 +917,10 @@ async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = De
 async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, summarize=False, detect_sentiment=True, detect_intents=False, detect_topics=False)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
         return {"sentiments": result["sentiments"], "transcript": result["transcript"]}
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -933,8 +929,10 @@ async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID 
 async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, summarize=False, detect_sentiment=False, detect_intents=True, detect_topics=False)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
         return {"intents": result["intents"], "transcript": result["transcript"]}
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -943,8 +941,10 @@ async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = 
 async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, summarize=False, detect_sentiment=False, detect_intents=False, detect_topics=True)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
         return {"topics": result["topics"], "transcript": result["transcript"]}
+    except VoiceboxUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react"
 import { supabase } from "@/lib/supabase/client"
+import { listVoices, speak as voiceboxSpeak, type VoiceProfile } from "@/lib/voicebox-api"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -287,30 +288,35 @@ function SpeechToTextPanel() {
 // ═══════════════════════════════════════════════════════════════════════
 function TextToSpeechPanel() {
   const [text, setText] = useState("")
-  const [voice, setVoice] = useState("aura-2-en")
+  const [voices, setVoices] = useState<VoiceProfile[]>([])
+  const [voiceId, setVoiceId] = useState<string>("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
 
+  useEffect(() => {
+    listVoices()
+      .then((all) => {
+        const ready = all.filter((v) => v.status === "ready")
+        setVoices(ready)
+        if (ready.length > 0) setVoiceId(ready[0].id)
+      })
+      .catch((err) => console.error("Failed to load voices", err))
+  }, [])
+
   const handleGenerate = async () => {
-    if (!text.trim()) return
+    if (!text.trim() || !voiceId) return
     setIsGenerating(true)
     setAudioUrl(null)
+    setError(null)
     try {
-      const res = await fetch(`${API_BASE}/ai/text-to-speech`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-tenant-id": await getTenantId(),
-        },
-        body: JSON.stringify({ text, model: voice }),
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const blob = await res.blob()
+      const blob = await voiceboxSpeak({ text, voice_profile_id: voiceId, requested_by_service: "call_center_ui" })
       const url = URL.createObjectURL(blob)
       setAudioUrl(url)
-    } catch (err) {
+    } catch (err: any) {
       console.error(err)
+      setError(err?.message ?? "Speech generation failed")
     } finally {
       setIsGenerating(false)
     }
@@ -327,34 +333,33 @@ function TextToSpeechPanel() {
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Aura: Voice Synthesis</span>
+        <span className="text-sm text-muted-foreground">Voicebox: Voice Synthesis</span>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Input */}
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">Voice Model</label>
-            <select
-              value={voice}
-              onChange={(e) => setVoice(e.target.value)}
-              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
-            >
-              <option value="aura-2-en">Aura 2 — English</option>
-              <option value="aura-2-en-female">Aura 2 — English (Female)</option>
-              <option value="aura-asteria-en">Asteria — English</option>
-              <option value="aura-luna-en">Luna — English</option>
-              <option value="aura-stella-en">Stella — English</option>
-              <option value="aura-athena-en">Athena — English</option>
-              <option value="aura-hera-en">Hera — English</option>
-              <option value="aura-orion-en">Orion — English</option>
-              <option value="aura-arcas-en">Arcas — English</option>
-              <option value="aura-perseus-en">Perseus — English</option>
-              <option value="aura-angus-en">Angus — English</option>
-              <option value="aura-orpheus-en">Orpheus — English</option>
-              <option value="aura-helios-en">Helios — English</option>
-              <option value="aura-zeus-en">Zeus — English</option>
-            </select>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">Voice</label>
+            {voices.length > 0 ? (
+              <select
+                value={voiceId}
+                onChange={(e) => setVoiceId(e.target.value)}
+                title="Voice"
+                aria-label="Voice"
+                className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+              >
+                {voices.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} {v.voice_type === "cloned" ? "(cloned)" : "(preset)"}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="rounded-lg border border-dashed border-border bg-card/50 px-3 py-2 text-xs text-muted-foreground">
+                No voices yet — clone or add one in the Voice Studio tab below.
+              </p>
+            )}
           </div>
 
           <textarea
@@ -365,7 +370,7 @@ function TextToSpeechPanel() {
             className="w-full rounded-lg border border-border bg-card p-3 text-sm text-foreground placeholder-muted-foreground resize-none focus:outline-none focus:ring-1 focus:ring-cyan-500"
           />
 
-          <Button onClick={handleGenerate} disabled={isGenerating || !text.trim()} className="w-full">
+          <Button onClick={handleGenerate} disabled={isGenerating || !text.trim() || !voiceId} className="w-full">
             {isGenerating ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -373,6 +378,7 @@ function TextToSpeechPanel() {
             )}
             {isGenerating ? "Generating…" : "Generate Speech"}
           </Button>
+          {error && <p className="text-xs text-red-400">{error}</p>}
         </div>
 
         {/* Output */}
@@ -387,7 +393,7 @@ function TextToSpeechPanel() {
                 </div>
                 <audio ref={audioRef} controls src={audioUrl} className="w-full" />
                 <Button size="sm" variant="outline" className="w-full" onClick={downloadAudio}>
-                  <Download className="mr-2 h-4 w-4" /> Download MP3
+                  <Download className="mr-2 h-4 w-4" /> Download
                 </Button>
               </div>
             ) : (

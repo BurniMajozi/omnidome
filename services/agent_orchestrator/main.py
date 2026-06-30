@@ -91,12 +91,14 @@ from services.agent_orchestrator.routes.agents import router as agents_router
 from services.agent_orchestrator.routes.conversations import router as conversations_router
 from services.agent_orchestrator.routes.protocols import router as protocols_router
 from services.agent_orchestrator.routes.tools import router as tools_router
+from services.agent_orchestrator.routes.voice import router as voice_router
 from services.agent_orchestrator.routes.mcp import router as mcp_router, sse_transport as mcp_sse_transport
 
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(conversations_router, prefix="/api/conversations")
 app.include_router(protocols_router)
 app.include_router(tools_router, prefix="/api/tools")
+app.include_router(voice_router, prefix="/api/agents")
 app.include_router(mcp_router)
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 

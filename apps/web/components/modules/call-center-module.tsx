@@ -41,6 +41,7 @@ import {
   XCircle,
   Timer,
   Hash,
+  Sparkles,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -50,6 +51,7 @@ import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PageHeader } from "@/components/ui/page-header"
 import { VoiceAIPanel } from "@/components/modules/voice-ai-panel"
+import { VoiceStudioTab } from "@/components/modules/voice-studio-tab"
 import {
   listAgents,
   listSessions,
@@ -1249,7 +1251,7 @@ export function CallCenterModule() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="mb-4 grid w-full grid-cols-4 bg-muted/30">
+        <TabsList className="mb-4 grid w-full grid-cols-5 bg-muted/30">
           <TabsTrigger value="overview" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <TrendingUp className="h-3.5 w-3.5" />
             Overview
@@ -1261,6 +1263,10 @@ export function CallCenterModule() {
           <TabsTrigger value="whisper" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
             <Mic className="h-3.5 w-3.5" />
             Whisper AI
+          </TabsTrigger>
+          <TabsTrigger value="voicestudio" className="gap-1.5 text-xs data-[state=active]:text-pink-400">
+            <Sparkles className="h-3.5 w-3.5" />
+            Voice Studio
           </TabsTrigger>
           <TabsTrigger value="customer360" className="gap-1.5 text-xs data-[state=active]:text-violet-400">
                        <User className="h-3.5 w-3.5" />
@@ -1278,6 +1284,10 @@ export function CallCenterModule() {
 
         <TabsContent value="whisper">
           <WhisperAITab />
+        </TabsContent>
+
+        <TabsContent value="voicestudio">
+          <VoiceStudioTab />
         </TabsContent>
 
         <TabsContent value="customer360">

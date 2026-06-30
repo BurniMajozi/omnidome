@@ -166,6 +166,8 @@ services:
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
+      - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
     ports:
       - "8007:8007"
     depends_on:
@@ -245,6 +247,51 @@ services:
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
 
+  # ── Voicebox: tenant-aware voice cloning/personalities/TTS/STT adapter ──
+  # Lightweight (no PyTorch) — talks to the heavy `voicebox-engine` below
+  # over HTTP. Starts normally with the rest of the stack; calls against
+  # it 503 cleanly with a clear message until voicebox-engine is running.
+  voicebox:
+    build:
+      context: .
+      dockerfile: services/voicebox/Dockerfile
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - LICENSE_PATH=${LICENSE_PATH}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      - VOICEBOX_ENGINE_URL=${VOICEBOX_ENGINE_URL:-http://voicebox-engine:17493}
+    ports:
+      - "8027:8027"
+    depends_on:
+      - db
+    volumes:
+      - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  # Heavy local ML engine (PyTorch + several TTS engines + Whisper),
+  # vendored from https://github.com/jamiepine/voicebox (MIT) into
+  # services/voicebox/engine. NOT started by `docker compose up` — the
+  # `profiles` key below excludes it from the default run. Bring it up
+  # explicitly once you've confirmed GPU/disk budget:
+  #   docker compose --profile voicebox-engine up -d voicebox-engine
+  # First run downloads multi-GB model weights into the voicebox_models
+  # volume (set VOICEBOX_MODELS_DIR inside the container if you want a
+  # different layout).
+  voicebox-engine:
+    profiles: ["voicebox-engine"]
+    build:
+      context: services/voicebox/engine
+      dockerfile: Dockerfile
+    environment:
+      - VOICEBOX_MODELS_DIR=/data/models
+    ports:
+      - "17493:17493"
+    volumes:
+      - voicebox_models:/data/models
+    restart: unless-stopped
+
   agent-orchestrator:
     build:
       context: .
@@ -258,6 +305,7 @@ services:
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - AGENT_ORCHESTRATOR_ENABLE_TELEGRAM=false
+      - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
     ports:
       - "8021:8021"
     depends_on:
@@ -578,3 +626,4 @@ services:
 volumes:
   postgres_data:
   ollama_data:
+  voicebox_models:
