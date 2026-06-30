@@ -82,6 +82,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const [isRecording, setIsRecording] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null)
+  const [voiceError, setVoiceError] = useState<string | null>(null)
   const voiceRecorder = useRef<MediaRecorder | null>(null)
   const voiceChunks = useRef<Blob[]>([])
 
@@ -92,6 +93,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   }, [])
 
   const startVoiceRecording = useCallback(async () => {
+    setVoiceError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
@@ -108,6 +110,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           }
         } catch (err) {
           console.error("Voice transcription failed", err)
+          setVoiceError(err instanceof Error ? err.message : "Transcription failed")
         } finally {
           setIsTranscribing(false)
         }
@@ -117,6 +120,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       setIsRecording(true)
     } catch (err) {
       console.error("Microphone access denied", err)
+      setVoiceError(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access denied — allow it in your browser's site permissions."
+          : "Could not access microphone",
+      )
     }
   }, [])
 
@@ -128,6 +136,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const handleSpeakMessage = async (message: AGUIMessage) => {
     if (!message.content?.trim()) return
     setSpeakingMessageId(message.id)
+    setVoiceError(null)
     try {
       const blob = await voiceboxSpeak({
         text: message.content,
@@ -141,7 +150,12 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       audio.onerror = () => setSpeakingMessageId(null)
       await audio.play()
     } catch (err) {
-      console.error(`Speak failed — bind a voice to "${selectedAgent}" in Call Center → Voice Studio first`, err)
+      console.error("Speak failed", err)
+      setVoiceError(
+        err instanceof Error
+          ? `${err.message} — bind a voice to "${selectedAgent}" in Call Center → Voice Studio first.`
+          : "Speech playback failed",
+      )
       setSpeakingMessageId(null)
     }
   }
@@ -563,6 +577,12 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
       {/* Input Area */}
       <div className="border-t border-border bg-secondary p-4">
+        {voiceError && (
+          <div className="mb-2 flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-400">
+            <span>{voiceError}</span>
+            <button type="button" onClick={() => setVoiceError(null)} className="ml-2 shrink-0 hover:text-red-300">×</button>
+          </div>
+        )}
         <div className="flex gap-2">
           <Input
             value={inputValue}

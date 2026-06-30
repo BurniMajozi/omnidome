@@ -869,10 +869,12 @@ export function CommunicationModule() {
   const [isRecordingVoice, setIsRecordingVoice] = useState(false)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null)
+  const [voiceError, setVoiceError] = useState<string | null>(null)
   const voiceRecorder = useRef<MediaRecorder | null>(null)
   const voiceChunks = useRef<Blob[]>([])
 
   const startVoiceRecording = useCallback(async () => {
+    setVoiceError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
@@ -889,6 +891,7 @@ export function CommunicationModule() {
           }
         } catch (err) {
           console.error("Voice transcription failed", err)
+          setVoiceError(err instanceof Error ? err.message : "Transcription failed")
         } finally {
           setIsTranscribing(false)
         }
@@ -898,6 +901,11 @@ export function CommunicationModule() {
       setIsRecordingVoice(true)
     } catch (err) {
       console.error("Microphone access denied", err)
+      setVoiceError(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access denied — allow it in your browser's site permissions."
+          : "Could not access microphone",
+      )
     }
   }, [])
 
@@ -909,6 +917,7 @@ export function CommunicationModule() {
   const handleSpeakMessage = async (msg: { id: string; content: string }) => {
     if (!msg.content?.trim()) return
     setSpeakingMessageId(msg.id)
+    setVoiceError(null)
     try {
       const blob = await voiceboxSpeak({
         text: msg.content,
@@ -922,7 +931,12 @@ export function CommunicationModule() {
       audio.onerror = () => setSpeakingMessageId(null)
       await audio.play()
     } catch (err) {
-      console.error("Speak failed — bind a voice to the webchat bot in Call Center → Voice Studio first", err)
+      console.error("Speak failed", err)
+      setVoiceError(
+        err instanceof Error
+          ? `${err.message} — bind a voice to the webchat bot in Call Center → Voice Studio first.`
+          : "Speech playback failed",
+      )
       setSpeakingMessageId(null)
     }
   }
@@ -1912,6 +1926,12 @@ export function CommunicationModule() {
 
             {/* Message Input */}
             <div className="p-4 border-t border-border">
+              {voiceError && (
+                <div className="mb-2 flex items-center justify-between rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs text-red-400">
+                  <span>{voiceError}</span>
+                  <button type="button" onClick={() => setVoiceError(null)} className="ml-2 shrink-0 hover:text-red-300">×</button>
+                </div>
+              )}
               <div className="rounded-lg border border-border bg-secondary/50 p-2">
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="icon" className="h-8 w-8">

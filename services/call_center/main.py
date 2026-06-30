@@ -13,7 +13,7 @@ from sqlalchemy import select, desc, func
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
-from services.common.auth import get_current_tenant_id
+from services.common.auth import get_current_tenant_id, get_current_user_id
 
 from services.call_center.database import (
     Agent, Script, CallSession, CallQueue, WhisperSession,
@@ -542,6 +542,7 @@ async def whisper_websocket(
                             audio_bytes=audio_chunk,
                             tenant_id=tenant_id,
                             language=language,
+                            user_id=agent_id or tenant_id,
                         )
                         transcript = result.get("transcript", "").strip()
                         confidence = result.get("confidence", 0)
@@ -573,6 +574,7 @@ async def whisper_websocket(
                                     audio_bytes=bytes(audio_buffer),
                                     tenant_id=tenant_id,
                                     language=language,
+                                    user_id=agent_id or tenant_id,
                                 )
                                 transcript = result.get("transcript", "").strip()
                                 if transcript:
@@ -857,10 +859,10 @@ class AudioIntelligenceResponse(BaseModel):
 
 
 @app.post("/ai/speech-to-text")
-async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await transcribe_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language)
+        result = await transcribe_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language, user_id=str(user_id))
         return TranscriptionResponse(**result)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -870,13 +872,14 @@ async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"
 
 
 @app.post("/ai/text-to-speech")
-async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await synthesize_speech(
             text=request.text,
             tenant_id=str(tenant_id),
             voice_profile_id=str(request.voice_profile_id) if request.voice_profile_id else None,
             scope_ref=str(request.agent_id) if request.agent_id else None,
+            user_id=str(user_id),
         )
         return Response(content=audio_bytes, media_type="audio/mpeg", headers={"Content-Disposition": "attachment; filename=speech.mp3"})
     except VoiceboxUnavailable as exc:
@@ -889,10 +892,10 @@ async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get
 
 
 @app.post("/ai/audio-intelligence")
-async def audio_intelligence(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def audio_intelligence(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language)
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language, user_id=str(user_id))
         return AudioIntelligenceResponse(**result)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -902,10 +905,10 @@ async def audio_intelligence(file: UploadFile = File(...), language: str = Form(
 
 
 @app.post("/ai/summarize")
-async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), user_id=str(user_id))
         return {"summary": result["summary"], "transcript": result["transcript"], "confidence": result["confidence"]}
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -914,10 +917,10 @@ async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = De
 
 
 @app.post("/ai/sentiment")
-async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), user_id=str(user_id))
         return {"sentiments": result["sentiments"], "transcript": result["transcript"]}
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -926,10 +929,10 @@ async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID 
 
 
 @app.post("/ai/intents")
-async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), user_id=str(user_id))
         return {"intents": result["intents"], "transcript": result["transcript"]}
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -938,10 +941,10 @@ async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = 
 
 
 @app.post("/ai/topics")
-async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
-        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id))
+        result = await analyze_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), user_id=str(user_id))
         return {"topics": result["topics"], "transcript": result["transcript"]}
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))

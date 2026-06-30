@@ -29,10 +29,12 @@ import {
   TrendingDown,
   Minus,
   ChevronRight,
+  AlertCircle,
 } from "lucide-react"
 
 const API_BASE = "/svc/call-center"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 async function getTenantId(): Promise<string> {
   const { data } = await supabase.auth.getSession()
@@ -41,6 +43,16 @@ async function getTenantId(): Promise<string> {
     data.session?.user?.app_metadata?.tenant_id ??
     FALLBACK_TENANT_ID
   )
+}
+
+async function getUserId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return data.session?.user?.id ?? FALLBACK_USER_ID
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const [tenantId, userId] = await Promise.all([getTenantId(), getUserId()])
+  return { "x-tenant-id": tenantId, "x-user-id": userId }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────
@@ -95,11 +107,13 @@ function SpeechToTextPanel() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [result, setResult] = useState<TranscriptResult | null>(null)
   const [language, setLanguage] = useState("en")
+  const [error, setError] = useState<string | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const chunks = useRef<Blob[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const startRecording = useCallback(async () => {
+    setError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
@@ -120,6 +134,13 @@ function SpeechToTextPanel() {
       setIsRecording(true)
     } catch (err) {
       console.error("Microphone access denied", err)
+      setError(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access was denied. Allow microphone access for this site in your browser's address-bar permissions, then try again."
+          : err instanceof DOMException && err.name === "NotFoundError"
+            ? "No microphone was found on this device."
+            : `Could not start recording: ${err instanceof Error ? err.message : String(err)}`,
+      )
     }
   }, [language])
 
@@ -131,15 +152,15 @@ function SpeechToTextPanel() {
   const sendAudioForTranscription = async (blob: Blob) => {
     setIsProcessing(true)
     setResult(null)
+    setError(null)
     try {
       const form = new FormData()
       form.append("file", blob, "recording.webm")
       form.append("language", language)
-      form.append("model", "nova-2")
 
       const res = await fetch(`${API_BASE}/ai/speech-to-text`, {
         method: "POST",
-        headers: { "x-tenant-id": await getTenantId() },
+        headers: await getAuthHeaders(),
         body: form,
       })
       if (!res.ok) throw new Error(await res.text())
@@ -147,6 +168,7 @@ function SpeechToTextPanel() {
       setResult(data)
     } catch (err) {
       console.error(err)
+      setError(err instanceof Error ? err.message : "Transcription failed")
     } finally {
       setIsProcessing(false)
     }
@@ -250,7 +272,12 @@ function SpeechToTextPanel() {
         {/* Right — results */}
         <Card className="border-border bg-card/50">
           <CardContent className="p-5">
-            {result ? (
+            {error ? (
+              <div className="flex flex-col items-center gap-2 py-20 text-center">
+                <AlertCircle className="h-8 w-8 text-red-400" />
+                <p className="max-w-xs text-sm text-red-400">{error}</p>
+              </div>
+            ) : result ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <Badge variant="outline" className="text-xs">
@@ -302,7 +329,10 @@ function TextToSpeechPanel() {
         setVoices(ready)
         if (ready.length > 0) setVoiceId(ready[0].id)
       })
-      .catch((err) => console.error("Failed to load voices", err))
+      .catch((err) => {
+        console.error("Failed to load voices", err)
+        setError(err instanceof Error ? `Could not load voices: ${err.message}` : "Could not load voices")
+      })
   }, [])
 
   const handleGenerate = async () => {
@@ -535,7 +565,7 @@ function AudioIntelligencePanel() {
 
       const res = await fetch(`${API_BASE}/ai/audio-intelligence`, {
         method: "POST",
-        headers: { "x-tenant-id": await getTenantId() },
+        headers: await getAuthHeaders(),
         body: form,
       })
       if (!res.ok) throw new Error(await res.text())

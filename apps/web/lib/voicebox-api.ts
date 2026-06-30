@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase/client"
 
 const API_BASE = "/svc/voicebox"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 async function getTenantId(): Promise<string> {
   const { data } = await supabase.auth.getSession()
@@ -12,8 +13,18 @@ async function getTenantId(): Promise<string> {
   )
 }
 
+async function getUserId(): Promise<string> {
+  const { data } = await supabase.auth.getSession()
+  return data.session?.user?.id ?? FALLBACK_USER_ID
+}
+
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const [tenantId, userId] = await Promise.all([getTenantId(), getUserId()])
+  return { "x-tenant-id": tenantId, "x-user-id": userId }
+}
+
 async function makeHeaders(): Promise<Record<string, string>> {
-  return { "x-tenant-id": await getTenantId(), "Content-Type": "application/json" }
+  return { ...(await getAuthHeaders()), "Content-Type": "application/json" }
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -98,7 +109,7 @@ export async function cloneVoice(data: {
 
   const res = await fetch(`${API_BASE}/voices/clone`, {
     method: "POST",
-    headers: { "x-tenant-id": await getTenantId() },
+    headers: await getAuthHeaders(),
     body: form,
   })
   return handleResponse(res)
@@ -220,7 +231,7 @@ export async function transcribe(audio: File | Blob, language?: string): Promise
 
   const res = await fetch(`${API_BASE}/transcribe`, {
     method: "POST",
-    headers: { "x-tenant-id": await getTenantId() },
+    headers: await getAuthHeaders(),
     body: form,
   })
   return handleResponse(res)

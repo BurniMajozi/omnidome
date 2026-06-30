@@ -29,20 +29,30 @@ def _voicebox_url() -> str:
     return os.getenv("VOICEBOX_SERVICE_URL", "http://voicebox:8027")
 
 
+# Generous timeout: the first transcribe/speak call for a given engine/voice
+# combination also triggers a (slow) model download+load on the voicebox
+# engine side — same rationale as services/voicebox/engine_client.py's
+# GENERATION_STREAM_TIMEOUT_SECONDS. A short timeout here would cut the
+# request off while voicebox is still legitimately working, surfacing as a
+# confusing empty-message error (str(httpx.TimeoutException()) is empty).
+_VOICEBOX_CALL_TIMEOUT_SECONDS = 600.0
+
+
 async def transcribe_audio(
     audio_bytes: bytes,
     tenant_id: str,
     language: str = "en",
+    user_id: Optional[str] = None,
     **_ignored,
 ) -> dict:
     """Transcribe an audio buffer via the voicebox service."""
     try:
-        async with httpx.AsyncClient(base_url=_voicebox_url(), timeout=60.0) as client:
+        async with httpx.AsyncClient(base_url=_voicebox_url(), timeout=_VOICEBOX_CALL_TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 "/transcribe",
                 files={"file": ("audio.wav", audio_bytes)},
                 data={"language": language},
-                headers={"x-tenant-id": tenant_id},
+                headers={"x-tenant-id": tenant_id, "x-user-id": user_id or tenant_id},
             )
             resp.raise_for_status()
             result = resp.json()
@@ -50,6 +60,11 @@ async def transcribe_audio(
         if exc.response.status_code == 503:
             raise VoiceboxUnavailable(exc.response.json().get("detail", str(exc))) from exc
         raise
+    except httpx.TimeoutException as exc:
+        raise VoiceboxUnavailable(
+            f"voicebox timed out after {_VOICEBOX_CALL_TIMEOUT_SECONDS:.0f}s transcribing — "
+            "it may still be loading a model for the first time; try again shortly."
+        ) from exc
 
     return {
         "transcript": result.get("text", ""),
@@ -65,6 +80,7 @@ async def synthesize_speech(
     voice_profile_id: Optional[str] = None,
     scope: str = "call_center_agent",
     scope_ref: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> bytes:
     """Synthesize speech via the voicebox service. Requires either a
     voice_profile_id or a scope_ref (e.g. a call_center_agent id) with a
@@ -79,14 +95,21 @@ async def synthesize_speech(
         raise ValueError("synthesize_speech requires voice_profile_id or scope_ref")
 
     try:
-        async with httpx.AsyncClient(base_url=_voicebox_url(), timeout=120.0) as client:
-            resp = await client.post("/speak", json=payload, headers={"x-tenant-id": tenant_id})
+        async with httpx.AsyncClient(base_url=_voicebox_url(), timeout=_VOICEBOX_CALL_TIMEOUT_SECONDS) as client:
+            resp = await client.post(
+                "/speak", json=payload, headers={"x-tenant-id": tenant_id, "x-user-id": user_id or tenant_id}
+            )
             resp.raise_for_status()
             return resp.content
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 503:
             raise VoiceboxUnavailable(exc.response.json().get("detail", str(exc))) from exc
         raise
+    except httpx.TimeoutException as exc:
+        raise VoiceboxUnavailable(
+            f"voicebox timed out after {_VOICEBOX_CALL_TIMEOUT_SECONDS:.0f}s generating speech — "
+            "it may still be loading a model for the first time; try again shortly."
+        ) from exc
 
 
 def _sentiment_label(score: float) -> str:
@@ -101,6 +124,7 @@ async def analyze_audio(
     audio_bytes: bytes,
     tenant_id: str,
     language: str = "en",
+    user_id: Optional[str] = None,
     **_ignored,
 ) -> dict:
     """Transcribe then run the transcript through the local-LLM text
@@ -109,7 +133,7 @@ async def analyze_audio(
     (the LLM analyzes the whole transcript at once), so segments carry a
     single entry covering the full transcript rather than Deepgram's
     multiple timestamped segments."""
-    transcription = await transcribe_audio(audio_bytes, tenant_id=tenant_id, language=language)
+    transcription = await transcribe_audio(audio_bytes, tenant_id=tenant_id, language=language, user_id=user_id)
     transcript = transcription["transcript"]
     intelligence = await analyze_transcript(transcript)
     sentiment_score = intelligence["sentiment"]

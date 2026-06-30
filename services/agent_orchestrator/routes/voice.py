@@ -31,7 +31,7 @@ async def voice_transcribe(
     """STT only — transcribe audio for use as agent input."""
     try:
         audio_bytes = await file.read()
-        return await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), language=language)
+        return await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -44,7 +44,7 @@ async def voice_speak(
 ):
     """TTS only — speak arbitrary text in this agent type's bound voice."""
     try:
-        audio_bytes, content_type = await speak(text, tenant_id=str(ctx.tenant_id), agent_type=agent_type)
+        audio_bytes, content_type = await speak(text, tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
         return Response(content=audio_bytes, media_type=content_type)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -66,7 +66,7 @@ async def voice_invoke(
     """
     try:
         audio_bytes = await file.read()
-        transcription = await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), language=language)
+        transcription = await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
@@ -84,7 +84,7 @@ async def voice_invoke(
     }
 
     try:
-        audio_reply, content_type = await speak(invoke_result.message, tenant_id=str(ctx.tenant_id), agent_type=agent_type)
+        audio_reply, content_type = await speak(invoke_result.message, tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
         response["audio_base64"] = base64.b64encode(audio_reply).decode("ascii")
         response["audio_content_type"] = content_type
     except VoiceboxUnavailable as exc:
