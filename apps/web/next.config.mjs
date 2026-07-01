@@ -43,7 +43,9 @@ const nextConfig = {
       { source: '/svc/rica/:path*', destination: `${process.env.RICA_SERVICE_URL || 'http://localhost:8004'}/:path*` },
       { source: '/svc/network/:path*', destination: `${process.env.NETWORK_SERVICE_URL || 'http://localhost:8005'}/:path*` },
       { source: '/svc/iot/:path*', destination: `${process.env.IOT_SERVICE_URL || 'http://localhost:8006'}/:path*` },
-      { source: '/svc/call-center/:path*', destination: `${process.env.CALL_CENTER_SERVICE_URL || 'http://localhost:8007'}/:path*` },
+      // /svc/call-center is handled by app/svc/call-center/[...path]/route.ts
+      // (route handler — NOT a rewrite — so long STT/TTS model-load waits
+      // don't hit the rewrite proxy's connection limits / ECONNRESET).
       { source: '/svc/support/:path*', destination: `${process.env.SUPPORT_SERVICE_URL || 'http://localhost:8008'}/:path*` },
       { source: '/svc/hr/:path*', destination: `${process.env.HR_SERVICE_URL || 'http://localhost:8009'}/:path*` },
       { source: '/svc/analytics/:path*', destination: `${process.env.ANALYTICS_SERVICE_URL || 'http://localhost:8011'}/:path*` },
@@ -55,7 +57,9 @@ const nextConfig = {
       { source: '/svc/customer-journey/:path*', destination: `${process.env.CUSTOMER_JOURNEY_SERVICE_URL || 'http://localhost:8022'}/:path*` },
       { source: '/svc/billing-collections/:path*', destination: `${process.env.BILLING_COLLECTIONS_SERVICE_URL || 'http://localhost:8023'}/:path*` },
       { source: '/svc/fno-intelligence/:path*', destination: `${process.env.FNO_INTELLIGENCE_SERVICE_URL || 'http://localhost:8024'}/:path*` },
-      { source: '/svc/voicebox/:path*', destination: `${process.env.VOICEBOX_SERVICE_URL || 'http://localhost:8027'}/:path*` },
+      // /svc/voicebox is handled by app/svc/voicebox/[...path]/route.ts
+      // (route handler — NOT a rewrite — so long TTS generation waits
+      // don't hit the rewrite proxy's connection limits / ECONNRESET).
     ]
   },
 }

@@ -7,6 +7,7 @@ this service itself stays lightweight (no PyTorch).
 Port: 8027 | Module: voicebox
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -56,10 +57,39 @@ async def health():
     return {"status": "ok", "service": "voicebox", "engine_reachable": engine_up}
 
 
+async def _prewarm_models() -> None:
+    """Background task: warm the Whisper STT and Kokoro TTS models so the
+    first real user request doesn't hit a cold-load timeout. Runs after
+    server startup completes — non-blocking, failures are logged and ignored."""
+    await asyncio.sleep(5)  # let the server settle first
+    try:
+        # Tiny silent WAV: 44-byte header + 1600 samples of silence (0.1s, 16kHz)
+        import struct
+        num_samples = 1600
+        wav = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", 36 + num_samples * 2, b"WAVE",
+                          b"fmt ", 16, 1, 1, 16000, 32000, 2, 16, b"data", num_samples * 2)
+        wav += b"\x00" * (num_samples * 2)
+        logger.info("Voicebox prewarm: loading Whisper STT model...")
+        await engine_client.transcribe(wav, filename="prewarm.wav")
+        logger.info("Voicebox prewarm: Whisper ready")
+    except Exception as exc:
+        logger.warning("Voicebox prewarm (STT) failed — first user request will be slow: %s", exc)
+
+    try:
+        # Warm Kokoro TTS — listing presets forces the kokoro backend module to
+        # import and register its voice list, shortening first-generation time.
+        logger.info("Voicebox prewarm: pre-importing Kokoro TTS backend...")
+        await engine_client.list_presets("kokoro")
+        logger.info("Voicebox prewarm: Kokoro backend imported")
+    except Exception as exc:
+        logger.warning("Voicebox prewarm (TTS) failed — first user request will be slow: %s", exc)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
     await init_tables()
+    asyncio.create_task(_prewarm_models())
 
 
 @app.middleware("http")
