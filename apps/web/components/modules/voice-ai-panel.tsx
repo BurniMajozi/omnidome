@@ -116,7 +116,10 @@ function SpeechToTextPanel() {
     setError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : ""
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
       chunks.current = []
 
       recorder.ondataavailable = (e) => {
@@ -125,11 +128,15 @@ function SpeechToTextPanel() {
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(chunks.current, { type: "audio/webm" })
+        const blob = new Blob(chunks.current, { type: mimeType || "audio/webm" })
+        if (blob.size < 100) {
+          setError("No audio captured — hold the button while speaking, then release.")
+          return
+        }
         await sendAudioForTranscription(blob)
       }
 
-      recorder.start()
+      recorder.start(250) // timeslice ensures ondataavailable fires even for short recordings
       mediaRecorder.current = recorder
       setIsRecording(true)
     } catch (err) {

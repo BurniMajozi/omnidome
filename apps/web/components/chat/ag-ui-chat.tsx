@@ -96,12 +96,19 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     setVoiceError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" })
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : ""
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
       voiceChunks.current = []
       recorder.ondataavailable = (e) => e.data.size > 0 && voiceChunks.current.push(e.data)
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(voiceChunks.current, { type: "audio/webm" })
+        const blob = new Blob(voiceChunks.current, { type: mimeType || "audio/webm" })
+        if (blob.size < 100) {
+          setVoiceError("No audio captured — hold the button while speaking, then release.")
+          return
+        }
         setIsTranscribing(true)
         try {
           const result = await voiceboxTranscribe(blob)
@@ -115,7 +122,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           setIsTranscribing(false)
         }
       }
-      recorder.start()
+      recorder.start(250) // timeslice ensures ondataavailable fires even for short recordings
       voiceRecorder.current = recorder
       setIsRecording(true)
     } catch (err) {
