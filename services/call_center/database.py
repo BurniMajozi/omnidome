@@ -113,6 +113,26 @@ class WhisperSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+# ── Voice Agent Deployment ──────────────────────────────────────────────
+
+class VoiceAgentDeployment(Base):
+    __tablename__ = "voice_agent_deployments"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    agent_name: Mapped[str] = mapped_column(String(200), nullable=False, default="Voice Agent")
+    system_prompt: Mapped[Optional[str]] = mapped_column(Text)
+    stt_model: Mapped[str] = mapped_column(String(50), default="whisper-large-v3")
+    tts_voice: Mapped[str] = mapped_column(String(50), default="voicebox-nova")
+    llm_provider: Mapped[str] = mapped_column(String(30), default="anthropic")
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)  # "inbound" | "outbound"
+    phone_number: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # "active" | "stopped"
+    call_session_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    deployed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
 # ── Session factory ────────────────────────────────────────────────────
 
 _session_factory: Optional[async_sessionmaker] = None

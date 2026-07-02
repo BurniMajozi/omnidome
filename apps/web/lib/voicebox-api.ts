@@ -168,7 +168,7 @@ export async function updatePersonality(id: string, data: Partial<{
   default_voice_profile_id: string
 }>): Promise<VoicePersonality> {
   const res = await fetch(`${API_BASE}/personalities/${id}`, {
-    method: "PUT",
+    method: "PATCH",
     headers: await makeHeaders(),
     body: JSON.stringify(data),
   })
@@ -206,19 +206,25 @@ export async function listBindings(params?: { scope?: BindingScope; scope_ref?: 
 
 // ── Speak / Transcribe ───────────────────────────────────────────────────────
 
-export async function speak(data: {
-  text: string
-  voice_profile_id?: string
-  scope?: BindingScope
-  scope_ref?: string
-  personality_id?: string
-  use_personality?: boolean
-  requested_by_service?: string
-}): Promise<Blob> {
+export async function speak(
+  data: {
+    text: string
+    voice_profile_id?: string
+    scope?: BindingScope
+    scope_ref?: string
+    personality_id?: string
+    use_personality?: boolean
+    requested_by_service?: string
+  },
+  signal?: AbortSignal
+): Promise<Blob> {
+  // Default: abort after 90 s so a cold-engine call doesn't hang the browser indefinitely.
+  const effectiveSignal = signal ?? AbortSignal.timeout(90_000)
   const res = await fetch(`${API_BASE}/speak`, {
     method: "POST",
     headers: await makeHeaders(),
     body: JSON.stringify(data),
+    signal: effectiveSignal,
   })
   if (!res.ok) throw new Error(await res.text())
   return res.blob()
@@ -236,3 +242,43 @@ export async function transcribe(audio: File | Blob, language?: string): Promise
   })
   return handleResponse(res)
 }
+
+// -- Binding delete ----------------------------------------------------------
+
+export async function deleteBinding(scope: string, scopeRef: string): Promise<void> {
+  const url = new URL(`${API_BASE}/bindings`, typeof window !== "undefined" ? window.location.origin : "http://localhost:3000")
+  url.searchParams.set("scope", scope)
+  url.searchParams.set("scope_ref", scopeRef)
+  const res = await fetch(url.toString(), { method: "DELETE", headers: await makeHeaders() })
+  if (!res.ok && res.status !== 204) throw new Error(await res.text())
+}
+
+// -- Generation history ------------------------------------------------------
+
+export interface GenerationRecord {
+  id: string
+  voice_profile_id: string
+  voice_name: string | null
+  source_text: string
+  status: string
+  requested_by_service: string | null
+  created_at: string | null
+}
+
+export async function listGenerations(limit = 50): Promise<GenerationRecord[]> {
+  const url = new URL(`${API_BASE}/generations`, typeof window !== "undefined" ? window.location.origin : "http://localhost:3000")
+  url.searchParams.set("limit", String(limit))
+  const res = await fetch(url.toString(), { headers: await makeHeaders(), cache: "no-store" })
+  return handleResponse(res)
+}
+
+// -- Bulk clear failed voices ------------------------------------------------
+
+export async function clearFailedVoices(): Promise<{ deleted: number }> {
+  const res = await fetch(`${API_BASE}/voices/failed`, {
+    method: "DELETE",
+    headers: await makeHeaders(),
+  })
+  return handleResponse(res)
+}
+

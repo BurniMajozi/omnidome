@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { StatCard } from "@/components/dashboard/stat-card"
 import {
   BarChart,
@@ -62,7 +62,9 @@ import {
   createWhisperSession,
   stopWhisperSession,
   getCustomer360,
+  getWhisperWsUrl,
 } from "@/lib/call-center-api"
+import { toWav } from "@/lib/audio-utils"
 
 // ─── Default / fallback chart data ──────────────────────────────────────────
 
@@ -663,19 +665,31 @@ interface WhisperSession {
 }
 
 function WhisperAITab() {
+  // ── REST session list (sidebar context) ─────────────────────────────────
   const [sessions, setSessions] = useState<WhisperSession[]>([])
-  const [activeSessions, setActiveSessions] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [selectedSession, setSelectedSession] = useState<string | null>(null)
-  const [liveTranscript, setLiveTranscript] = useState<string[]>([])
+  const [listError, setListError] = useState<string | null>(null)
+
+  // ── WebSocket / mic state ────────────────────────────────────────────────
   const [agentId, setAgentId] = useState("")
   const [sessionId, setSessionId] = useState("")
-  const [starting, setStarting] = useState(false)
+  const [wsStatus, setWsStatus] = useState<"idle" | "connecting" | "live" | "error">("idle")
+  const [liveLines, setLiveLines] = useState<{ text: string; conf?: number }[]>([])
+  const [micError, setMicError] = useState<string | null>(null)
 
-  const fetchData = useCallback(async () => {
+  // ── Refs (no re-render on change) ───────────────────────────────────────
+  const wsRef = useRef<WebSocket | null>(null)
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const segTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const loopActiveRef = useRef(false)
+  const mimeRef = useRef("audio/webm")
+  const transcriptEndRef = useRef<HTMLDivElement | null>(null)
+
+  // ── Load session list once on mount ─────────────────────────────────────
+  const fetchSessions = useCallback(async () => {
     setLoading(true)
-    setError(null)
+    setListError(null)
     try {
       const [sessResult, agentsResult] = await Promise.allSettled([listSessions(), listAgents()])
       const sessList = sessResult.status === "fulfilled"
@@ -684,91 +698,204 @@ function WhisperAITab() {
       const agentList = agentsResult.status === "fulfilled"
         ? (agentsResult.value?.agents ?? agentsResult.value ?? [])
         : []
-
-      const allSessions = Array.isArray(sessList) ? sessList : []
-      setSessions(allSessions)
-
-      // Identify active ones (no end_time)
-      const active = allSessions.filter((s: any) => !s.end_time && s.start_time)
-      setActiveSessions(active)
-
-      // Build whisper-like session display
-      const whisperSessions: WhisperSession[] = active.map((s: any) => {
-        const agent = Array.isArray(agentList)
-          ? agentList.find((a: any) => String(a.id) === String(s.agent_id))
-          : null
-        return {
-          id: s.id,
-          agent_id: s.agent_id ?? "",
-          agent_name: agent?.name ?? s.agent_id ?? "Unknown",
-          call_session_id: s.id,
-          status: "live",
-          transcript: s.live_transcript ? [s.live_transcript] : [],
-        }
-      })
-      if (whisperSessions.length > 0) {
-        setSessions(whisperSessions)
-      }
+      const active = (Array.isArray(sessList) ? sessList : []).filter(
+        (s: any) => !s.end_time && s.start_time
+      )
+      setSessions(
+        active.map((s: any) => {
+          const agent = Array.isArray(agentList)
+            ? agentList.find((a: any) => String(a.id) === String(s.agent_id))
+            : null
+          return {
+            id: s.id,
+            agent_id: s.agent_id ?? "",
+            agent_name: agent?.name ?? s.agent_id ?? "Unknown",
+            call_session_id: s.id,
+            status: "live",
+            transcript: [],
+          }
+        })
+      )
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load sessions")
+      setListError(err instanceof Error ? err.message : "Failed to load sessions")
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => {
-    fetchData()
-    // Poll every 10s for live updates
-    const interval = setInterval(fetchData, 10000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  useEffect(() => { fetchSessions() }, [fetchSessions])
 
-  const handleStartWhisper = async () => {
-    if (!agentId.trim() || !sessionId.trim()) return
-    setStarting(true)
-    try {
-      await createWhisperSession({
-        call_session_id: sessionId,
-        agent_id: agentId,
-        language: "en",
+  // ── Audio segment loop ───────────────────────────────────────────────────
+  // Each iteration captures 3s of audio, converts to WAV, sends to WS, repeats.
+  const runSegmentLoop = useCallback(async () => {
+    loopActiveRef.current = true
+    const mimeType = mimeRef.current
+
+    while (
+      loopActiveRef.current &&
+      streamRef.current &&
+      wsRef.current?.readyState === WebSocket.OPEN
+    ) {
+      await new Promise<void>((resolve) => {
+        const recorder = new MediaRecorder(streamRef.current!, { mimeType })
+        const chunks: Blob[] = []
+        recorderRef.current = recorder
+
+        recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+        recorder.onstop = async () => {
+          if (chunks.length && wsRef.current?.readyState === WebSocket.OPEN) {
+            const blob = new Blob(chunks, { type: mimeType })
+            if (blob.size >= 500) {
+              try {
+                const wav = await toWav(blob)
+                if (wsRef.current?.readyState === WebSocket.OPEN) {
+                  wsRef.current.send(await wav.arrayBuffer())
+                }
+              } catch {
+                // encode failure on very short clips — skip silently
+              }
+            }
+          }
+          resolve()
+        }
+
+        recorder.start()
+        segTimerRef.current = setTimeout(() => {
+          if (recorder.state === "recording") recorder.stop()
+        }, 3000)
       })
-      setAgentId("")
-      setSessionId("")
-      await fetchData()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to start whisper session")
-    } finally {
-      setStarting(false)
     }
-  }
+  }, [])
 
-  const handleStopWhisper = async (id: string) => {
+  // ── Stop everything ──────────────────────────────────────────────────────
+  const stopAll = useCallback(() => {
+    loopActiveRef.current = false
+    if (segTimerRef.current) clearTimeout(segTimerRef.current)
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop()
+    streamRef.current?.getTracks().forEach((t) => t.stop())
+    wsRef.current?.close()
+    wsRef.current = null
+    streamRef.current = null
+    recorderRef.current = null
+    setWsStatus("idle")
+  }, [])
+
+  // Cleanup on unmount
+  useEffect(() => () => stopAll(), [stopAll])
+
+  // ── Start WebSocket + mic ────────────────────────────────────────────────
+  const handleStartWhisper = useCallback(async () => {
+    if (!agentId.trim() || !sessionId.trim()) return
+    stopAll()
+    setMicError(null)
+    setWsStatus("connecting")
+    setLiveLines([])
+
     try {
-      await stopWhisperSession(id)
-      await fetchData()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to stop whisper session")
-    }
-  }
+      // Acquire mic before opening WS (fail fast on permission denied)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      streamRef.current = stream
+      mimeRef.current = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : "audio/webm"
 
-  const selectedSess = sessions.find((s) => s.id === selectedSession)
+      const url = await getWhisperWsUrl(sessionId, agentId)
+      const ws = new WebSocket(url)
+      wsRef.current = ws
+
+      ws.onopen = () => {
+        setWsStatus("live")
+        runSegmentLoop()
+      }
+
+      ws.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data as string)
+          if (msg.transcript) {
+            setLiveLines((prev) => [...prev, { text: msg.transcript, conf: msg.confidence }])
+            setTimeout(() => transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" }), 50)
+          }
+        } catch { /* non-JSON frame */ }
+      }
+
+      ws.onerror = () => {
+        setWsStatus("error")
+        setMicError("WebSocket connection failed — is the call-center service running?")
+        stream.getTracks().forEach((t) => t.stop())
+        streamRef.current = null
+      }
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) {
+          loopActiveRef.current = false
+          streamRef.current?.getTracks().forEach((t) => t.stop())
+          streamRef.current = null
+          setWsStatus("idle")
+        }
+      }
+    } catch (err) {
+      stopAll()
+      setWsStatus("error")
+      setMicError(
+        err instanceof DOMException && err.name === "NotAllowedError"
+          ? "Microphone access denied — allow mic access in your browser and try again."
+          : err instanceof DOMException && err.name === "NotFoundError"
+            ? "No microphone found on this device."
+            : err instanceof Error
+              ? err.message
+              : "Connection failed"
+      )
+    }
+  }, [agentId, sessionId, stopAll, runSegmentLoop])
+
+  // ── Populate form fields from session card click ─────────────────────────
+  const handleSessionClick = useCallback((s: WhisperSession) => {
+    setAgentId(s.agent_id)
+    setSessionId(s.call_session_id ?? s.id)
+  }, [])
+
+  const isLive = wsStatus === "live"
+  const isConnecting = wsStatus === "connecting"
 
   return (
     <div className="space-y-6">
-      {/* Voice AI Panel (existing) */}
+      {/* Voice AI Panel */}
       <VoiceAIPanel />
 
-      {/* Live Transcription Panel */}
+      {/* Live WebSocket Transcription Panel */}
       <Card className="border-border bg-card">
         <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base text-foreground">
-            <Radio className="h-4 w-4 text-cyan-400" />
-            Live Transcription
-          </CardTitle>
-          <CardDescription>Real-time whisper transcription during active calls</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2 text-base text-foreground">
+                <Radio className="h-4 w-4 text-cyan-400" />
+                Live Transcription
+                {isLive && (
+                  <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    LIVE
+                  </span>
+                )}
+                {isConnecting && (
+                  <span className="flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Connecting…
+                  </span>
+                )}
+              </CardTitle>
+              <CardDescription>
+                Whisper STT over WebSocket — real-time transcription during active calls
+              </CardDescription>
+            </div>
+            <Button variant="ghost" size="sm" onClick={fetchSessions}>
+              <Activity className="h-3.5 w-3.5 mr-1.5" />
+              Refresh Sessions
+            </Button>
+          </div>
         </CardHeader>
+
         <CardContent className="space-y-4">
-          {/* Start Session Form */}
+          {/* Connect form */}
           <div className="flex flex-wrap items-end gap-3 rounded-lg border border-border/40 bg-background/40 p-3">
             <div className="min-w-[160px] flex-1">
               <label className="mb-1 block text-xs text-muted-foreground">Agent ID</label>
@@ -777,6 +904,7 @@ function WhisperAITab() {
                 onChange={(e) => setAgentId(e.target.value)}
                 placeholder="Agent UUID"
                 className="h-8 text-sm"
+                disabled={isLive || isConnecting}
               />
             </div>
             <div className="min-w-[160px] flex-1">
@@ -786,22 +914,32 @@ function WhisperAITab() {
                 onChange={(e) => setSessionId(e.target.value)}
                 placeholder="Session UUID"
                 className="h-8 text-sm"
+                disabled={isLive || isConnecting}
               />
             </div>
-            <Button size="sm" onClick={handleStartWhisper} disabled={starting || !agentId.trim() || !sessionId.trim()}>
-              {starting ? (
-                <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-              ) : (
+            {isLive || isConnecting ? (
+              <Button size="sm" variant="destructive" onClick={stopAll}>
+                <MicOff className="mr-1.5 h-4 w-4" />
+                Stop
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                onClick={handleStartWhisper}
+                disabled={!agentId.trim() || !sessionId.trim()}
+                className="bg-cyan-600 hover:bg-cyan-500 text-white"
+              >
                 <Mic className="mr-1.5 h-4 w-4" />
-              )}
-              Start Whisper
-            </Button>
+                Start Whisper
+              </Button>
+            )}
           </div>
 
-          {error && (
+          {/* Errors */}
+          {(micError || listError) && (
             <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4" />
-              {error}
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {micError ?? listError}
             </div>
           )}
 
@@ -811,88 +949,91 @@ function WhisperAITab() {
             </div>
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
-              {/* Active Sessions List */}
+              {/* Active Sessions sidebar */}
               <div>
                 <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  Active Whisper Sessions ({sessions.length})
+                  Active Call Sessions ({sessions.length})
                 </h4>
-                <ScrollArea className="h-64">
+                <ScrollArea className="h-72">
                   <div className="space-y-2">
                     {sessions.map((s) => (
                       <div
                         key={s.id}
-                        onClick={() => {
-                          setSelectedSession(s.id)
-                          setLiveTranscript(s.transcript ?? [])
-                        }}
-                        className={cn(
-                          "cursor-pointer rounded-lg border p-3 transition-all",
-                          selectedSession === s.id
-                            ? "border-cyan-500/40 bg-cyan-500/5"
-                            : "border-border/40 bg-background/30 hover:bg-background/50"
-                        )}
+                        onClick={() => handleSessionClick(s)}
+                        title="Click to populate form fields"
+                        className="cursor-pointer rounded-lg border border-border/40 bg-background/30 p-3 hover:bg-background/50 hover:border-cyan-500/30 transition-all"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
-                            <span className="text-sm font-medium text-foreground">{s.agent_name ?? s.agent_id}</span>
+                            <span className="text-sm font-medium text-foreground">
+                              {s.agent_name ?? s.agent_id}
+                            </span>
                           </div>
-                          <div className="flex items-center gap-2">
-                            <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
-                              {s.status ?? "live"}
-                            </Badge>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="h-6 px-2 text-[10px]"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleStopWhisper(s.id)
-                              }}
-                            >
-                              <MicOff className="h-3 w-3" />
-                            </Button>
-                          </div>
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
+                          >
+                            {s.status ?? "live"}
+                          </Badge>
                         </div>
-                        <p className="mt-1 text-[10px] text-muted-foreground font-mono">{s.id}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground font-mono truncate">{s.id}</p>
                       </div>
                     ))}
                     {sessions.length === 0 && (
                       <p className="py-8 text-center text-sm text-muted-foreground">
-                        No active whisper sessions. Start one above.
+                        No active call sessions found.
                       </p>
                     )}
                   </div>
                 </ScrollArea>
               </div>
 
-              {/* Transcript View */}
+              {/* Live Transcript */}
               <div>
                 <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                  {selectedSess ? `Transcript — ${selectedSess.agent_name ?? selectedSess.agent_id}` : "Transcript"}
+                  Live Transcript
+                  {liveLines.length > 0 && (
+                    <span className="ml-2 normal-case text-muted-foreground/60">
+                      {liveLines.length} segment{liveLines.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
                 </h4>
-                <ScrollArea className="h-64">
-                  {selectedSess ? (
-                    <div className="space-y-2 rounded-lg border border-border/40 bg-background/30 p-3">
-                      {liveTranscript.length > 0 ? (
-                        liveTranscript.map((line, i) => (
-                          <div key={i} className="flex gap-2 text-sm">
-                            <span className="shrink-0 text-[10px] text-muted-foreground font-mono pt-0.5">{i + 1}</span>
-                            <p className="text-foreground">{line}</p>
+                <div className="h-72 overflow-y-auto rounded-lg border border-border/40 bg-background/30 p-3 space-y-2">
+                  {liveLines.length > 0 ? (
+                    <>
+                      {liveLines.map((line, i) => (
+                        <div key={i} className="flex gap-2 text-sm">
+                          <span className="shrink-0 text-[10px] text-muted-foreground font-mono pt-0.5 select-none">
+                            {String(i + 1).padStart(2, "0")}
+                          </span>
+                          <div className="flex-1">
+                            <p className="text-foreground leading-relaxed">{line.text}</p>
+                            {line.conf !== undefined && (
+                              <p className="text-[10px] text-muted-foreground/60">
+                                {(line.conf * 100).toFixed(0)}% confidence
+                              </p>
+                            )}
                           </div>
-                        ))
-                      ) : (
-                        <p className="py-8 text-center text-sm text-muted-foreground">
-                          Listening for transcription…
-                        </p>
-                      )}
+                        </div>
+                      ))}
+                      <div ref={transcriptEndRef} />
+                    </>
+                  ) : isLive ? (
+                    <div className="flex h-full items-center justify-center">
+                      <div className="text-center">
+                        <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-cyan-400" />
+                        <p className="text-sm text-muted-foreground">Streaming audio — speak now…</p>
+                      </div>
                     </div>
                   ) : (
                     <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-border/40">
-                      <p className="text-sm text-muted-foreground">Select a session to view transcript</p>
+                      <p className="text-sm text-muted-foreground">
+                        {wsStatus === "error" ? "Connection failed — check errors above" : "Start a session to see live transcript"}
+                      </p>
                     </div>
                   )}
-                </ScrollArea>
+                </div>
               </div>
             </div>
           )}

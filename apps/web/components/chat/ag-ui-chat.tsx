@@ -33,6 +33,7 @@ import {
   type AgentInfo,
 } from "@/lib/orchestrator-api"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
+import { toWav } from "@/lib/audio-utils"
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -104,14 +105,15 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       recorder.ondataavailable = (e) => e.data.size > 0 && voiceChunks.current.push(e.data)
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(voiceChunks.current, { type: mimeType || "audio/webm" })
-        if (blob.size < 100) {
+        const rawBlob = new Blob(voiceChunks.current, { type: mimeType || "audio/webm" })
+        if (rawBlob.size < 100) {
           setVoiceError("No audio captured — hold the button while speaking, then release.")
           return
         }
+        const wavBlob = await toWav(rawBlob).catch(() => rawBlob)
         setIsTranscribing(true)
         try {
-          const result = await voiceboxTranscribe(blob)
+          const result = await voiceboxTranscribe(wavBlob)
           if (result.text?.trim()) {
             setInputValue((prev) => (prev ? `${prev} ${result.text}` : result.text).trim())
           }

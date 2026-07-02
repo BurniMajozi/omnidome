@@ -3,6 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import { supabase } from "@/lib/supabase/client"
 import { listVoices, speak as voiceboxSpeak, type VoiceProfile } from "@/lib/voicebox-api"
+import { toWav } from "@/lib/audio-utils"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -30,7 +31,15 @@ import {
   Minus,
   ChevronRight,
   AlertCircle,
+  PhoneCall,
+  PhoneOff,
+  PhoneIncoming,
+  PhoneOutgoing,
+  CheckCircle2,
+  X,
+  Radio,
 } from "lucide-react"
+import { deployVoiceAgent, stopVoiceAgent, listVoiceAgentDeployments } from "@/lib/call-center-api"
 
 const API_BASE = "/svc/call-center"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -128,12 +137,16 @@ function SpeechToTextPanel() {
 
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(chunks.current, { type: mimeType || "audio/webm" })
-        if (blob.size < 100) {
+        const rawBlob = new Blob(chunks.current, { type: mimeType || "audio/webm" })
+        if (rawBlob.size < 100) {
           setError("No audio captured — hold the button while speaking, then release.")
           return
         }
-        await sendAudioForTranscription(blob)
+        // Convert to 16kHz WAV so the server doesn't have to rely on
+        // librosa's deprecated audioread opus/webm fallback (which causes
+        // Whisper to hallucinate instead of transcribing real speech).
+        const wavBlob = await toWav(rawBlob).catch(() => rawBlob)
+        await sendAudioForTranscription(wavBlob)
       }
 
       recorder.start(250) // timeslice ensures ondataavailable fires even for short recordings
@@ -206,7 +219,7 @@ function SpeechToTextPanel() {
     <div className="space-y-4">
       {/* Sub-tabs */}
       <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Nova: Transcription</span>
+        <span className="text-sm text-muted-foreground">Whisper: Transcription</span>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
@@ -451,100 +464,364 @@ function TextToSpeechPanel() {
 // ═══════════════════════════════════════════════════════════════════════
 // Voice Agent Tab
 // ═══════════════════════════════════════════════════════════════════════
+
+interface DeploymentRecord {
+  id: string
+  agent_name: string
+  mode: "inbound" | "outbound"
+  phone_number: string
+  stt_model: string
+  tts_voice: string
+  llm_provider: string
+  status: "active" | "stopped"
+  deployed_at: string
+}
+
 function VoiceAgentPanel() {
+  // ── Config form state ──────────────────────────────────────────────────
+  const [agentName, setAgentName] = useState("Customer Support Agent")
+  const [systemPrompt, setSystemPrompt] = useState(
+    "You are a helpful customer support agent for a telecommunications company. Be friendly, professional, and help customers resolve their issues."
+  )
+  const [sttModel, setSttModel] = useState("whisper-large-v3")
+  const [ttsVoice, setTtsVoice] = useState("voicebox-nova")
+  const [llmProvider, setLlmProvider] = useState("anthropic")
+
+  // ── Deploy modal state ─────────────────────────────────────────────────
+  const [modalOpen, setModalOpen] = useState(false)
+  const [deployMode, setDeployMode] = useState<"inbound" | "outbound">("inbound")
+  const [phoneNumber, setPhoneNumber] = useState("")
+  const [deploying, setDeploying] = useState(false)
+  const [deployError, setDeployError] = useState<string | null>(null)
+
+  // ── Active deployments ─────────────────────────────────────────────────
+  const [deployments, setDeployments] = useState<DeploymentRecord[]>([])
+  const [loadingDeps, setLoadingDeps] = useState(true)
+  const [undeploying, setUndeploying] = useState<string | null>(null)
+
+  const activeDeployments = deployments.filter((d) => d.status === "active")
+
+  // Load existing deployments on mount
+  useEffect(() => {
+    listVoiceAgentDeployments()
+      .then((data) => setDeployments(Array.isArray(data) ? data : []))
+      .catch(() => {/* backend may be unavailable */})
+      .finally(() => setLoadingDeps(false))
+  }, [])
+
+  // ── Deploy ─────────────────────────────────────────────────────────────
+  const handleDeploy = async () => {
+    if (!phoneNumber.trim()) return
+    setDeploying(true)
+    setDeployError(null)
+    try {
+      const result = await deployVoiceAgent({
+        agent_name: agentName,
+        system_prompt: systemPrompt,
+        stt_model: sttModel,
+        tts_voice: ttsVoice,
+        llm_provider: llmProvider,
+        mode: deployMode,
+        phone_number: phoneNumber.trim(),
+      })
+      setDeployments((prev) => [result, ...prev])
+      setModalOpen(false)
+      setPhoneNumber("")
+    } catch (err) {
+      setDeployError(err instanceof Error ? err.message : "Deployment failed")
+    } finally {
+      setDeploying(false)
+    }
+  }
+
+  // ── Undeploy ───────────────────────────────────────────────────────────
+  const handleUndeploy = async (id: string) => {
+    setUndeploying(id)
+    try {
+      const result = await stopVoiceAgent(id)
+      setDeployments((prev) => prev.map((d) => (d.id === id ? { ...d, ...result } : d)))
+    } catch {
+      /* show nothing — stale state is fine */
+    } finally {
+      setUndeploying(null)
+    }
+  }
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Flux: Voice Agents</span>
-      </div>
+    <>
+      {/* ── Deploy Modal ─────────────────────────────────────────────── */}
+      {modalOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card shadow-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4 text-violet-400" />
+                <h2 className="text-base font-semibold text-foreground">Deploy Voice Agent</h2>
+              </div>
+              <button
+                onClick={() => { setModalOpen(false); setDeployError(null) }}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Configuration */}
-        <div className="space-y-4">
-          <Card className="border-border bg-card/50">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Agent Configuration</CardTitle>
-              <CardDescription>Configure your AI voice agent for call center automation</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
+            <div className="p-5 space-y-5">
+              {/* Mode toggle */}
               <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">Agent Name</label>
-                <input
-                  type="text"
-                  placeholder="Customer Support Agent"
-                  className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
-                />
+                <label className="mb-2 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  Call Direction
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["inbound", "outbound"] as const).map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setDeployMode(m)}
+                      className={cn(
+                        "flex items-center justify-center gap-2 rounded-lg border px-4 py-3 text-sm font-medium transition-all",
+                        deployMode === m
+                          ? "border-violet-500/50 bg-violet-500/10 text-violet-300"
+                          : "border-border bg-card/50 text-muted-foreground hover:bg-secondary"
+                      )}
+                    >
+                      {m === "inbound"
+                        ? <PhoneIncoming className="h-4 w-4" />
+                        : <PhoneOutgoing className="h-4 w-4" />}
+                      {m.charAt(0).toUpperCase() + m.slice(1)}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {deployMode === "inbound"
+                    ? "Agent monitors the queue and answers incoming calls from this number."
+                    : "Agent dials out to the specified number and handles the call."}
+                </p>
               </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">System Prompt</label>
-                <textarea
-                  rows={4}
-                  placeholder="You are a helpful customer support agent for a telecommunications company. Be friendly, professional, and help customers resolve their issues."
-                  className="w-full rounded-lg border border-border bg-card p-3 text-sm text-foreground placeholder-muted-foreground resize-none"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">STT Model</label>
-                <select className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                  <option value="nova-2">Nova-2 (Recommended)</option>
-                  <option value="nova-2-conversationalai">Nova-2 ConversationalAI</option>
-                  <option value="nova-2-phonecall">Nova-2 Phone Call</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">TTS Voice</label>
-                <select className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                  <option value="aura-asteria-en">Asteria (Female)</option>
-                  <option value="aura-orion-en">Orion (Male)</option>
-                  <option value="aura-luna-en">Luna (Female)</option>
-                  <option value="aura-arcas-en">Arcas (Male)</option>
-                </select>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-muted-foreground">LLM Provider</label>
-                <select className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                  <option value="openai">OpenAI GPT-4o</option>
-                  <option value="anthropic">Anthropic Claude</option>
-                  <option value="groq">Groq Llama</option>
-                </select>
-              </div>
-            </CardContent>
-          </Card>
 
-          <Button className="w-full" disabled>
-            <Bot className="mr-2 h-4 w-4" /> Deploy Agent
-            <Badge variant="outline" className="ml-2 text-[10px]">Coming Soon</Badge>
-          </Button>
+              {/* Phone number */}
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                  {deployMode === "inbound" ? "Queue / DID Number" : "Dial-out Number"}
+                </label>
+                <div className="relative">
+                  <PhoneCall className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="tel"
+                    value={phoneNumber}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    placeholder="+27 11 555 0100"
+                    className="h-10 w-full rounded-lg border border-border bg-secondary/50 pl-9 pr-3 text-sm text-foreground placeholder-muted-foreground focus:border-violet-500/60 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Summary */}
+              <div className="rounded-lg border border-border/40 bg-background/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p><span className="text-foreground font-medium">Agent:</span> {agentName}</p>
+                <p><span className="text-foreground font-medium">STT:</span> {sttModel}</p>
+                <p><span className="text-foreground font-medium">TTS:</span> {ttsVoice}</p>
+                <p><span className="text-foreground font-medium">LLM:</span> {llmProvider}</p>
+              </div>
+
+              {deployError && (
+                <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 shrink-0" />
+                  {deployError}
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setModalOpen(false); setDeployError(null) }}
+                  disabled={deploying}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleDeploy}
+                  disabled={deploying || !phoneNumber.trim()}
+                  className="bg-violet-600 hover:bg-violet-500 text-white"
+                >
+                  {deploying ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Bot className="mr-1.5 h-4 w-4" />
+                  )}
+                  {deploying ? "Deploying…" : "Deploy"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        <div className="flex items-center gap-6 border-b border-border pb-2">
+          <span className="text-sm text-muted-foreground">Flux: Voice Agents</span>
         </div>
 
-        {/* Preview */}
-        <Card className="border-border bg-card/50">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium">Voice Agent Capabilities</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {[
-              { icon: Mic, title: "Real-time STT", desc: "Nova-2 streaming transcription with <300ms latency" },
-              { icon: Volume2, title: "Natural TTS", desc: "Aura voices optimized for conversational speech" },
-              { icon: Brain, title: "LLM Reasoning", desc: "Plug in any LLM for agent reasoning and responses" },
-              { icon: MessageSquare, title: "Turn-taking", desc: "Intelligent barge-in and end-of-turn detection" },
-              { icon: Target, title: "Intent Routing", desc: "Auto-detect caller intent and route to right department" },
-              { icon: Sparkles, title: "Live Sentiment", desc: "Real-time sentiment monitoring during calls" },
-            ].map((item) => (
-              <div key={item.title} className="flex items-start gap-3 rounded-lg border border-border/50 bg-background/50 p-3">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-cyan-500/10">
-                  <item.icon className="h-4 w-4 text-cyan-400" />
+        {/* Active deployment status cards */}
+        {activeDeployments.length > 0 && (
+          <div className="space-y-2">
+            {activeDeployments.map((dep) => (
+              <div
+                key={dep.id}
+                className="flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15">
+                    {dep.mode === "inbound"
+                      ? <PhoneIncoming className="h-4 w-4 text-emerald-400" />
+                      : <PhoneOutgoing className="h-4 w-4 text-emerald-400" />}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground">{dep.agent_name}</span>
+                      <span className="flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        LIVE
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] border-emerald-500/30 text-emerald-400 capitalize"
+                      >
+                        {dep.mode}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      <Radio className="mr-1 inline h-3 w-3" />
+                      {dep.phone_number} · {dep.stt_model} · {dep.tts_voice}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-foreground">{item.title}</p>
-                  <p className="text-xs text-muted-foreground">{item.desc}</p>
-                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                  onClick={() => handleUndeploy(dep.id)}
+                  disabled={undeploying === dep.id}
+                >
+                  {undeploying === dep.id
+                    ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    : <PhoneOff className="mr-1.5 h-3.5 w-3.5" />}
+                  Undeploy
+                </Button>
               </div>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        )}
+
+        <div className="grid gap-6 lg:grid-cols-2">
+          {/* Configuration */}
+          <div className="space-y-4">
+            <Card className="border-border bg-card/50">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Agent Configuration</CardTitle>
+                <CardDescription>Configure your AI voice agent for call center automation</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">Agent Name</label>
+                  <input
+                    type="text"
+                    value={agentName}
+                    onChange={(e) => setAgentName(e.target.value)}
+                    placeholder="Customer Support Agent"
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-violet-500/60 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">System Prompt</label>
+                  <textarea
+                    rows={4}
+                    value={systemPrompt}
+                    onChange={(e) => setSystemPrompt(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-card p-3 text-sm text-foreground placeholder-muted-foreground resize-none focus:border-violet-500/60 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">STT Model</label>
+                  <select
+                    value={sttModel}
+                    onChange={(e) => setSttModel(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="whisper-large-v3">Whisper Large v3 (Recommended)</option>
+                    <option value="whisper-medium">Whisper Medium</option>
+                    <option value="whisper-base">Whisper Base (Fastest)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">TTS Voice</label>
+                  <select
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="voicebox-nova">Nova (Female, Neutral)</option>
+                    <option value="voicebox-orion">Orion (Male, Neutral)</option>
+                    <option value="voicebox-luna">Luna (Female, Warm)</option>
+                    <option value="voicebox-atlas">Atlas (Male, Deep)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-muted-foreground">LLM Provider</label>
+                  <select
+                    value={llmProvider}
+                    onChange={(e) => setLlmProvider(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="anthropic">Anthropic Claude</option>
+                    <option value="openai">OpenAI GPT-4o</option>
+                    <option value="groq">Groq Llama</option>
+                  </select>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Button
+              className="w-full bg-violet-600 hover:bg-violet-500 text-white"
+              onClick={() => { setDeployError(null); setModalOpen(true) }}
+            >
+              <Bot className="mr-2 h-4 w-4" />
+              {activeDeployments.length > 0 ? "Deploy Another Agent" : "Deploy Agent"}
+            </Button>
+          </div>
+
+          {/* Capabilities */}
+          <Card className="border-border bg-card/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium">Voice Agent Capabilities</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {[
+                { icon: Mic, title: "Real-time STT", desc: "Whisper Large v3 streaming transcription via WebSocket — 3s latency" },
+                { icon: Volume2, title: "Natural TTS", desc: "Voicebox voices optimized for conversational phone speech" },
+                { icon: Brain, title: "LLM Reasoning", desc: "Plug in any LLM for agent reasoning and response generation" },
+                { icon: MessageSquare, title: "Turn-taking", desc: "Intelligent barge-in and end-of-turn detection via VAD" },
+                { icon: Target, title: "Intent Routing", desc: "Auto-detect caller intent and route to the right department" },
+                { icon: Sparkles, title: "Live Sentiment", desc: "Real-time sentiment monitoring from Whisper transcripts" },
+              ].map((item) => (
+                <div key={item.title} className="flex items-start gap-3 rounded-lg border border-border/50 bg-background/50 p-3">
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-500/10">
+                    <item.icon className="h-4 w-4 text-violet-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-foreground">{item.title}</p>
+                    <p className="text-xs text-muted-foreground">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
       </div>
-    </div>
+    </>
   )
 }
 

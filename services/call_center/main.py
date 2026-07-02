@@ -16,7 +16,7 @@ from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id, get_current_user_id
 
 from services.call_center.database import (
-    Agent, Script, CallSession, CallQueue, WhisperSession,
+    Agent, Script, CallSession, CallQueue, WhisperSession, VoiceAgentDeployment,
     get_session, init_tables,
 )
 from services.call_center.voicebox_adapter import (
@@ -821,6 +821,153 @@ async def get_realtime_sentiment(tenant_id: uuid.UUID = Depends(get_current_tena
         "alerts_count": alerts_result.scalar() or 0,
         "critical_escalations": critical_result.scalar() or 0,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# VOICE AGENT DEPLOYMENTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class VoiceAgentDeployRequest(BaseModel):
+    agent_name: str = "Customer Support Agent"
+    system_prompt: str = ""
+    stt_model: str = "whisper-large-v3"
+    tts_voice: str = "voicebox-nova"
+    llm_provider: str = "anthropic"
+    mode: str  # "inbound" | "outbound"
+    phone_number: str
+
+
+def _deployment_to_dict(d: VoiceAgentDeployment) -> dict:
+    return {
+        "id": str(d.id),
+        "tenant_id": str(d.tenant_id),
+        "agent_name": d.agent_name,
+        "system_prompt": d.system_prompt or "",
+        "stt_model": d.stt_model,
+        "tts_voice": d.tts_voice,
+        "llm_provider": d.llm_provider,
+        "mode": d.mode,
+        "phone_number": d.phone_number,
+        "status": d.status,
+        "call_session_id": str(d.call_session_id) if d.call_session_id else None,
+        "deployed_at": d.deployed_at.isoformat() if d.deployed_at else None,
+        "stopped_at": d.stopped_at.isoformat() if d.stopped_at else None,
+    }
+
+
+@app.get("/voice-agents")
+async def list_voice_agents(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """List all voice agent deployments for this tenant."""
+    result = await db.execute(
+        select(VoiceAgentDeployment)
+        .where(VoiceAgentDeployment.tenant_id == tenant_id)
+        .order_by(desc(VoiceAgentDeployment.deployed_at))
+    )
+    return [_deployment_to_dict(d) for d in result.scalars().all()]
+
+
+@app.post("/voice-agents/deploy", status_code=status.HTTP_201_CREATED)
+async def deploy_voice_agent(
+    body: VoiceAgentDeployRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """
+    Deploy a voice agent:
+    - Picks up an IDLE human agent record (or creates a virtual one) and marks it ON_CALL.
+    - Opens a CallSession for the deployment with the configured direction.
+    - Returns a VoiceAgentDeployment record tracking the full config.
+    """
+    # Find or create an agent to associate with this deployment
+    agent_result = await db.execute(
+        select(Agent)
+        .where(Agent.tenant_id == tenant_id, Agent.status == "IDLE")
+        .limit(1)
+    )
+    agent = agent_result.scalar_one_or_none()
+    if agent:
+        agent.status = "ON_CALL"
+        await db.flush()
+    else:
+        agent = Agent(
+            tenant_id=tenant_id,
+            name=body.agent_name,
+            extension="AI-" + str(uuid.uuid4())[:4].upper(),
+            status="ON_CALL",
+        )
+        db.add(agent)
+        await db.flush()
+        await db.refresh(agent)
+
+    # Open a call session
+    direction = "INBOUND" if body.mode.lower() == "inbound" else "OUTBOUND"
+    sess = CallSession(
+        tenant_id=tenant_id,
+        agent_id=agent.id,
+        direction=direction,
+        start_time=datetime.utcnow(),
+        notes=f"[Voice Agent] {body.agent_name} | {body.mode.upper()} | {body.phone_number}",
+    )
+    db.add(sess)
+    await db.flush()
+    await db.refresh(sess)
+
+    # Create the deployment record
+    deployment = VoiceAgentDeployment(
+        tenant_id=tenant_id,
+        agent_name=body.agent_name,
+        system_prompt=body.system_prompt,
+        stt_model=body.stt_model,
+        tts_voice=body.tts_voice,
+        llm_provider=body.llm_provider,
+        mode=body.mode.lower(),
+        phone_number=body.phone_number,
+        status="active",
+        call_session_id=sess.id,
+    )
+    db.add(deployment)
+    await db.flush()
+    await db.refresh(deployment)
+    return _deployment_to_dict(deployment)
+
+
+@app.post("/voice-agents/{deployment_id}/stop")
+async def stop_voice_agent(
+    deployment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Stop a deployed voice agent and end its call session."""
+    result = await db.execute(
+        select(VoiceAgentDeployment).where(
+            VoiceAgentDeployment.id == deployment_id,
+            VoiceAgentDeployment.tenant_id == tenant_id,
+        )
+    )
+    deployment = result.scalar_one_or_none()
+    if not deployment:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+
+    now = datetime.utcnow()
+    deployment.status = "stopped"
+    deployment.stopped_at = now
+
+    # End the linked call session
+    if deployment.call_session_id:
+        sess_result = await db.execute(
+            select(CallSession).where(CallSession.id == deployment.call_session_id)
+        )
+        sess = sess_result.scalar_one_or_none()
+        if sess and not sess.end_time:
+            sess.end_time = now
+            sess.duration_seconds = int((now - sess.start_time).total_seconds())
+            sess.outcome = "RESOLVED"
+
+    await db.flush()
+    return _deployment_to_dict(deployment)
 
 
 @app.post("/reports/import")

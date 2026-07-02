@@ -2,14 +2,22 @@
 
 This service owns the tenant-scoped metadata layer (voice profiles,
 personalities, agent/webchat bindings, generation history) and proxies
-the actual ML work — cloning, synthesis, transcription — to the vendored
+the actual ML work -- cloning, synthesis, transcription -- to the vendored
 voicebox engine (see services/voicebox/engine) via engine_client.py.
+
+Enum columns
+------------
+Status, type, and scope columns use ``sqlalchemy.Enum(native_enum=False)``
+which maps to VARCHAR with a server-side CHECK constraint.  This avoids the
+ALTER-TYPE pain of PostgreSQL native enums while still giving database-level
+validation.  For an existing database, run an Alembic migration (or
+``DROP TABLE ... CASCADE`` in dev) to pick up the CHECK constraints.
 """
 
 import uuid
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import ForeignKey, Index, Numeric, String, Text
+from sqlalchemy import Enum as SAEnum, ForeignKey, Index, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import Mapped, mapped_column
@@ -21,20 +29,38 @@ class Base(CommonBase):
     __abstract__ = True
 
 
+# ---------------------------------------------------------------------------
+# Enums (native_enum=False == VARCHAR + CHECK constraint, easy to migrate)
+# ---------------------------------------------------------------------------
+
+_PROFILE_STATUS   = SAEnum("pending", "ready", "failed",
+                            name="voicebox_profile_status", native_enum=False)
+_VOICE_TYPE       = SAEnum("cloned", "preset", "designed",
+                            name="voicebox_voice_type", native_enum=False)
+_BINDING_SCOPE    = SAEnum("call_center_agent", "orchestrator_agent_type", "webchat_bot",
+                            name="voicebox_binding_scope", native_enum=False)
+_GEN_STATUS       = SAEnum("generating", "completed", "failed",
+                            name="voicebox_generation_status", native_enum=False)
+
+
+# ---------------------------------------------------------------------------
+# Models
+# ---------------------------------------------------------------------------
+
 class VoiceProfile(Base):
-    """A speaker voice — cloned from a sample, a preset stock voice, or
-    text-designed. `engine_profile_id` is the id assigned by the voicebox
+    """A speaker voice -- cloned from a sample, a preset stock voice, or
+    text-designed.  ``engine_profile_id`` is the id assigned by the voicebox
     engine itself; this row is the tenant-scoped pointer to it."""
 
     __tablename__ = "voicebox_profiles"
 
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    name: Mapped[str]            = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    language: Mapped[str] = mapped_column(String(10), default="en")
-    voice_type: Mapped[str] = mapped_column(String(20), default="cloned")  # cloned, preset, designed
-    engine: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # qwen, kokoro, chatterbox, ...
+    language: Mapped[str]        = mapped_column(String(10), default="en")
+    voice_type: Mapped[str]      = mapped_column(_VOICE_TYPE, default="cloned")
+    engine: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     engine_profile_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="ready")  # pending, ready, failed
+    status: Mapped[str]          = mapped_column(_PROFILE_STATUS, default="pending")
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
 
@@ -46,15 +72,17 @@ class VoiceProfile(Base):
 class VoicePersonality(Base):
     """A reusable persona: a name/description plus a style prompt that
     drives in-character rewriting before synthesis (voicebox's "compose"
-    feature). Optionally pinned to a default voice profile."""
+    feature).  Optionally pinned to a default voice profile."""
 
     __tablename__ = "voicebox_personalities"
 
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    name: Mapped[str]            = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     style_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     default_voice_profile_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("voicebox_profiles.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("voicebox_profiles.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     __table_args__ = (
@@ -64,18 +92,22 @@ class VoicePersonality(Base):
 
 class AgentVoiceBinding(Base):
     """Maps a voice (+ optional personality) onto a consumer of this
-    service — a call-center agent, an orchestrator agent type, or the
-    webchat bot — without those services needing their own voice FKs."""
+    service -- a call-center agent, an orchestrator agent type, or the
+    webchat bot -- without those services needing their own voice FKs."""
 
     __tablename__ = "voicebox_agent_bindings"
 
-    scope: Mapped[str] = mapped_column(String(30), nullable=False)  # call_center_agent, orchestrator_agent_type, webchat_bot
+    scope: Mapped[str]     = mapped_column(_BINDING_SCOPE, nullable=False)
     scope_ref: Mapped[str] = mapped_column(String(100), nullable=False)
     voice_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("voicebox_profiles.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("voicebox_profiles.id", ondelete="CASCADE"),
+        nullable=False,
     )
     personality_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("voicebox_personalities.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("voicebox_personalities.id", ondelete="SET NULL"),
+        nullable=True,
     )
 
     __table_args__ = (
@@ -84,29 +116,37 @@ class AgentVoiceBinding(Base):
 
 
 class VoiceGeneration(Base):
-    """Provenance log of synthesis calls — mirrors voicebox's own
+    """Provenance log of synthesis calls -- mirrors voicebox's own
     generation-history concept, scoped per tenant."""
 
     __tablename__ = "voicebox_generations"
 
     voice_profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("voicebox_profiles.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("voicebox_profiles.id", ondelete="CASCADE"),
+        nullable=False,
     )
     personality_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("voicebox_personalities.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("voicebox_personalities.id", ondelete="SET NULL"),
+        nullable=True,
     )
-    source_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_text: Mapped[str]     = mapped_column(Text, nullable=False)
     engine_generation_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="completed")
+    # Default "generating" -- updated to "completed" or "failed" after the engine call.
+    # A startup cleanup job marks any rows stuck in "generating" for >10 min as "failed".
+    status: Mapped[str]          = mapped_column(_GEN_STATUS, default="generating")
     duration_seconds: Mapped[Optional[float]] = mapped_column(Numeric(8, 2), nullable=True)
-    requested_by_service: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # call_center, agent_orchestrator, web
+    requested_by_service: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     __table_args__ = (
         Index("ix_voicebox_generations_tenant", "tenant_id", "created_at"),
     )
 
 
-# ── Session factory ────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Session factory
+# ---------------------------------------------------------------------------
 
 _session_factory: Optional[async_sessionmaker] = None
 

@@ -232,3 +232,42 @@ export async function getWhisperWsUrl(callSessionId: string, agentId: string): P
   const host = window.location.host
   return `${protocol}//${host}/svc/call-center/ws/whisper/${callSessionId}?tenant_id=${tenantId}&agent_id=${agentId}`
 }
+
+// ── Voice Agent Deployments ──────────────────────────────────────────────────
+
+export interface VoiceAgentDeployRequest {
+  agent_name: string
+  system_prompt: string
+  stt_model: string
+  tts_voice: string
+  llm_provider: string
+  mode: "inbound" | "outbound"
+  phone_number: string
+}
+
+export async function listVoiceAgentDeployments(): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/voice-agents`, {
+    headers: await makeHeaders(),
+    cache: "no-store",
+  })
+  const data = await handleResponse<any[]>(res)
+  return Array.isArray(data) ? data : []
+}
+
+export async function deployVoiceAgent(data: VoiceAgentDeployRequest): Promise<any> {
+  const res = await fetch(`${API_BASE}/voice-agents/deploy`, {
+    method: "POST",
+    headers: await makeHeaders(),
+    body: JSON.stringify(data),
+  })
+  return handleResponse(res)
+}
+
+export async function stopVoiceAgent(deploymentId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/voice-agents/${deploymentId}/stop`, {
+    method: "POST",
+    headers: await makeHeaders(),
+  })
+  return handleResponse(res)
+}
+
