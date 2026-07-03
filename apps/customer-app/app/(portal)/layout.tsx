@@ -25,9 +25,9 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50">
+    <div className="min-h-screen flex flex-col bg-gray-50/70">
       {/* Top bar */}
-      <header className="sticky top-0 z-50 bg-white border-b border-gray-200 px-4 h-14 flex items-center justify-between shrink-0">
+      <header className="sticky top-0 z-50 bg-white/85 backdrop-blur border-b border-gray-200 px-4 h-14 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <button className="lg:hidden p-2 -ml-2 rounded-lg hover:bg-gray-100" onClick={() => setSidebarOpen(!sidebarOpen)} aria-label="Toggle menu">
             {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
@@ -50,7 +50,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
 
       <div className="flex flex-1 overflow-hidden">
         {/* Desktop sidebar */}
-        <nav className="hidden lg:flex flex-col w-56 bg-white border-r border-gray-200 shrink-0">
+        <nav className="hidden lg:flex flex-col w-56 bg-white/85 backdrop-blur border-r border-gray-200 shrink-0">
           <div className="flex-1 py-4 px-3 space-y-1">
             {navItems.map((item) => {
               const active = pathname === item.href || pathname.startsWith(item.href + "/");
@@ -101,7 +101,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
       </div>
 
       {/* Mobile bottom nav */}
-      <nav className="lg:hidden sticky bottom-0 z-50 bg-white border-t border-gray-200 h-16 flex items-center justify-around shrink-0">
+      <nav className="lg:hidden sticky bottom-0 z-50 bg-white/85 backdrop-blur border-t border-gray-200 h-16 flex items-center justify-around shrink-0">
         {navItems.map((item) => {
           const active = pathname === item.href;
           const Icon = item.icon;

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import type { ExpoConfig, ConfigContext } from 'expo/config';
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
@@ -50,7 +51,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'RECEIVE_BOOT_COMPLETED',
       'VIBRATE',
     ],
-    googleServicesFile: './google-services.json',
+    // FCM config is optional for local APK builds — only wired when the file exists.
+    ...(existsSync('./google-services.json') ? { googleServicesFile: './google-services.json' } : {}),
     softwareKeyboardLayoutMode: 'pan',
   },
 
