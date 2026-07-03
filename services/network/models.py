@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
@@ -15,14 +16,23 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from services.common.db import register_tenant_scoped_base
+
 
 class Base(DeclarativeBase):
     pass
+
+
+# Every model below carries tenant_id; opt this Base into the automatic
+# tenant filter in services.common.db so a missed manual .where() clause
+# can no longer leak rows across tenants.
+register_tenant_scoped_base(Base)
 
 
 # ---------------------------------------------------------------------------
