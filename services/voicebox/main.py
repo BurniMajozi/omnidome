@@ -25,6 +25,7 @@ from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 
 from services.voicebox import engine_client
+from services.common.db import run_with_db_retry
 from services.voicebox.database import (
     AgentVoiceBinding,
     VoiceGeneration,
@@ -120,7 +121,7 @@ async def _cleanup_startup() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
-    await init_tables()
+    await run_with_db_retry(init_tables, logger=logger)
     await engine_client.init_client()
     asyncio.create_task(_prewarm_models())
     asyncio.create_task(_cleanup_startup())

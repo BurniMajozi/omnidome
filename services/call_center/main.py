@@ -14,6 +14,7 @@ from sqlalchemy import select, desc, func
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id, get_current_user_id
+from services.common.db import run_with_db_retry
 
 from services.call_center.database import (
     Agent, Script, CallSession, CallQueue, WhisperSession, VoiceAgentDeployment,
@@ -41,7 +42,7 @@ async def health():
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
-    await init_tables()
+    await run_with_db_retry(init_tables, logger=logger)
 
 
 @app.middleware("http")

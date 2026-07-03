@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import lru_cache
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import DateTime, create_engine, event, func
@@ -161,6 +163,35 @@ async def session_scope(tenant_id: Optional[uuid.UUID] = None) -> AsyncGenerator
         except Exception:
             await session.rollback()
             raise
+
+
+async def run_with_db_retry(
+    fn: Callable[[], Awaitable[Any]],
+    *,
+    attempts: int = 30,
+    delay: float = 5.0,
+    logger: Optional[logging.Logger] = None,
+) -> Any:
+    """Run a startup-time DB operation, retrying while the database comes up.
+
+    Without this, a uvicorn worker whose startup hook can't reach Postgres
+    exits immediately and the parent respawns it in a tight loop — on this
+    project's dev machine that fork storm has taken down Docker Desktop
+    itself. Sleeping between attempts keeps the worker alive and idle until
+    the database (or the network path to it) is ready.
+    """
+    log = logger or logging.getLogger("db.startup")
+    for attempt in range(1, attempts + 1):
+        try:
+            return await fn()
+        except Exception as exc:  # noqa: BLE001 — any connect error means "not ready yet"
+            if attempt == attempts:
+                raise
+            log.warning(
+                "DB startup attempt %d/%d failed (%s: %s); retrying in %.0fs",
+                attempt, attempts, type(exc).__name__, exc, delay,
+            )
+            await asyncio.sleep(delay)
 
 
 def require_database_url() -> str:

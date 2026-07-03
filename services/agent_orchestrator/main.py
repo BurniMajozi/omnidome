@@ -50,20 +50,27 @@ app.add_middleware(
 async def startup() -> None:
     guard.ensure_startup()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
-        from services.agent_orchestrator.conversation.models import Base as ConvBase
-        from services.agent_orchestrator.protocol_models import (
-            UCPCheckoutSessionRecord,
-            AP2IntentMandateRecord,
-            AP2PaymentMandateRecord,
-            AP2PaymentReceiptRecord,
-        )
-        from services.common.db import get_engine
-        engine = get_engine()
-        ConvBase.metadata.create_all(bind=engine)
-        UCPCheckoutSessionRecord.metadata.create_all(bind=engine)
-        AP2IntentMandateRecord.metadata.create_all(bind=engine)
-        AP2PaymentMandateRecord.metadata.create_all(bind=engine)
-        AP2PaymentReceiptRecord.metadata.create_all(bind=engine)
+        import asyncio
+
+        from services.common.db import get_engine, run_with_db_retry
+
+        def _create_tables() -> None:
+            from services.agent_orchestrator.conversation.models import Base as ConvBase
+            from services.agent_orchestrator.protocol_models import (
+                UCPCheckoutSessionRecord,
+                AP2IntentMandateRecord,
+                AP2PaymentMandateRecord,
+                AP2PaymentReceiptRecord,
+            )
+
+            engine = get_engine()
+            ConvBase.metadata.create_all(bind=engine)
+            UCPCheckoutSessionRecord.metadata.create_all(bind=engine)
+            AP2IntentMandateRecord.metadata.create_all(bind=engine)
+            AP2PaymentMandateRecord.metadata.create_all(bind=engine)
+            AP2PaymentReceiptRecord.metadata.create_all(bind=engine)
+
+        await run_with_db_retry(lambda: asyncio.to_thread(_create_tables), logger=logger)
         logger.info("Agent orchestrator conversation + protocol tables ensured")
 
 
