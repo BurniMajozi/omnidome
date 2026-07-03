@@ -9,6 +9,19 @@
  * audio that causes Whisper to hallucinate instead of transcribing real speech).
  */
 export async function toWav(blob: Blob, targetSampleRate = 16_000): Promise<Blob> {
+  return (await toWavWithStats(blob, targetSampleRate)).wav
+}
+
+/**
+ * Like toWav, but also reports signal stats so callers can detect a silent
+ * recording (OS delivering a muted/wrong microphone) BEFORE uploading —
+ * Whisper transcribes silence as hallucinated filler like "you".
+ * rms is 0..1; anything below ~0.001 is effectively silence.
+ */
+export async function toWavWithStats(
+  blob: Blob,
+  targetSampleRate = 16_000,
+): Promise<{ wav: Blob; rms: number; durationSeconds: number }> {
   const arrayBuffer = await blob.arrayBuffer()
   const audioCtx = new AudioContext({ sampleRate: targetSampleRate })
 
@@ -29,8 +42,15 @@ export async function toWav(blob: Blob, targetSampleRate = 16_000): Promise<Blob
     }
   }
 
-  return encodeWav(pcm, targetSampleRate)
+  let sumSquares = 0
+  for (let i = 0; i < numSamples; i++) sumSquares += pcm[i] * pcm[i]
+  const rms = numSamples > 0 ? Math.sqrt(sumSquares / numSamples) : 0
+
+  return { wav: encodeWav(pcm, targetSampleRate), rms, durationSeconds: decoded.duration }
 }
+
+/** Threshold below which a recording is treated as silent (no usable speech). */
+export const SILENCE_RMS_THRESHOLD = 0.001
 
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const numSamples = samples.length

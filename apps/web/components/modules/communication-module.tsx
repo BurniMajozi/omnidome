@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
 import { supabase } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
-import { toWav } from "@/lib/audio-utils"
+import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import {
   Mic,
   MicOff,
@@ -891,7 +891,14 @@ export function CommunicationModule() {
           setVoiceError("No audio captured — hold the button while speaking, then release.")
           return
         }
-        const wavBlob = await toWav(rawBlob).catch(() => rawBlob)
+        const stats = await toWavWithStats(rawBlob).catch(() => null)
+        if (stats && stats.rms < SILENCE_RMS_THRESHOLD) {
+          setVoiceError(
+            "The recording contains no sound — Windows is likely capturing the wrong microphone. Check Settings → System → Sound → Input.",
+          )
+          return
+        }
+        const wavBlob = stats ? stats.wav : rawBlob
         setIsTranscribing(true)
         try {
           const result = await voiceboxTranscribe(wavBlob)

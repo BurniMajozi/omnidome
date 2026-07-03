@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import { supabase } from "@/lib/supabase/client"
 import { listVoices, speak as voiceboxSpeak, type VoiceProfile } from "@/lib/voicebox-api"
-import { toWav } from "@/lib/audio-utils"
+import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -155,8 +155,14 @@ function SpeechToTextPanel() {
         // Convert to 16kHz WAV so the server doesn't have to rely on
         // librosa's deprecated audioread opus/webm fallback (which causes
         // Whisper to hallucinate instead of transcribing real speech).
-        const wavBlob = await toWav(rawBlob).catch(() => rawBlob)
-        await sendAudioForTranscription(wavBlob)
+        const stats = await toWavWithStats(rawBlob).catch(() => null)
+        if (stats && stats.rms < SILENCE_RMS_THRESHOLD) {
+          setError(
+            "The recording contains no sound — Windows is likely capturing the wrong microphone. Check Settings → System → Sound → Input: speak and confirm the level bar moves, then try again.",
+          )
+          return
+        }
+        await sendAudioForTranscription(stats ? stats.wav : rawBlob)
       }
 
       recorder.start(250) // timeslice ensures ondataavailable fires even for short recordings
