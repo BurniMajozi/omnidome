@@ -114,6 +114,16 @@ interface AudioIntelResult {
 function SpeechToTextPanel() {
   const [isRecording, setIsRecording] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [processingSeconds, setProcessingSeconds] = useState(0)
+
+  useEffect(() => {
+    if (!isProcessing) {
+      setProcessingSeconds(0)
+      return
+    }
+    const t = setInterval(() => setProcessingSeconds((s) => s + 1), 1000)
+    return () => clearInterval(t)
+  }, [isProcessing])
   const [result, setResult] = useState<TranscriptResult | null>(null)
   const [language, setLanguage] = useState("en")
   const [error, setError] = useState<string | null>(null)
@@ -265,7 +275,11 @@ function SpeechToTextPanel() {
               )}
             </button>
             <span className="text-sm text-muted-foreground">
-              {isProcessing ? "Processing…" : isRecording ? "Recording — click to stop" : "Speak"}
+              {isProcessing
+                ? `Transcribing… ${processingSeconds}s (takes ~20s on this server — don't navigate away)`
+                : isRecording
+                  ? "Recording — click to stop"
+                  : "Speak"}
             </span>
           </div>
 
