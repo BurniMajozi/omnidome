@@ -31,3 +31,7 @@ Thumbs.db
 # Agent data and Obsidian repo
 hermes_data/
 Hermes-Obsidian/
+
+# debug/verification artifacts
+apps/web/scripts/*.png
+apps/web/scripts/*.wav

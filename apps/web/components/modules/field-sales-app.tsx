@@ -153,16 +153,16 @@ function Customer360Panel({ contact, onClose }: { contact: Customer360; onClose:
 
 function QuoteBuilder({ customerId, onDone }: { customerId: string; onDone: () => void }) {
   const [products, setProducts] = useState<Array<{ id: string; name: string; monthly_price: number; setup_fee: number }>>([])
-  const [selected, setSelected] = useState<Array<{ product_id: string; name: string; monthly_price: number; qty: number }>>([])
+  const [selected, setSelected] = useState<Array<{ product_id: string; name: string; monthly_price: number; setup_fee: number; qty: number }>>([])
   const [term, setTerm] = useState("12")
 
   useEffect(() => {
     fieldSalesApi.listProducts().then(setProducts).catch(() => {})
   }, [])
 
-  const addProduct = (p: { id: string; name: string; monthly_price: number }) => {
+  const addProduct = (p: { id: string; name: string; monthly_price: number; setup_fee: number }) => {
     if (selected.find(s => s.product_id === p.id)) return
-    setSelected([...selected, { product_id: p.id, name: p.name, monthly_price: p.monthly_price, qty: 1 }])
+    setSelected([...selected, { product_id: p.id, name: p.name, monthly_price: p.monthly_price, setup_fee: p.setup_fee, qty: 1 }])
   }
 
   const removeProduct = (id: string) => setSelected(selected.filter(s => s.product_id !== id))

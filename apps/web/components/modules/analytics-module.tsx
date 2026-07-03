@@ -27,7 +27,7 @@ import {
 import { BarChart3, TrendingUp, Brain, Activity, MousePointerClick, Clock } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { analyticsApi } from "@/lib/analytics/api"
-import type { ClickPoint, PageLoadPoint } from "@/lib/api"
+import type { ClickPoint, PageLoadPoint } from "@/lib/analytics/api"
 import { useEffect, useState, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 

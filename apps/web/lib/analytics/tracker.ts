@@ -279,7 +279,7 @@ class AnalyticsTracker {
       this.trackPageView()
     })
     const originalPushState = history.pushState
-    history.pushState = (...args: any[]) => {
+    history.pushState = (...args: Parameters<typeof history.pushState>) => {
       originalPushState.apply(history, args)
       this.handlePageUnload()
       this.pageStartTime = Date.now()

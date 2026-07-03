@@ -127,8 +127,8 @@ export function DocumentResultCard({ result, showDetails, onToggleDetails }: Doc
                 {u.links.map((l, i) => (
                   <div key={i} className="flex items-center justify-between rounded-md border border-border/50 bg-muted/30 px-2 py-1.5">
                     <div className="flex items-center gap-2 min-w-0">
-                      <Badge variant="outline" className={`text-[10px] ${LINK_TYPE_COLOR[l.link_type] || ""}`}>
-                        {l.link_type}
+                      <Badge variant="outline" className={`text-[10px] ${LINK_TYPE_COLOR[l.type] || ""}`}>
+                        {l.type}
                       </Badge>
                       <span className="text-xs truncate max-w-[300px]">{l.url}</span>
                     </div>

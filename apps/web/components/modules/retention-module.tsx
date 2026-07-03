@@ -1,5 +1,6 @@
 "use client"
 
+import type { JSX } from "react"
 import { useEffect, useState } from "react"
 import { ModuleLayout } from "./module-layout"
 import {
@@ -623,9 +624,9 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                                                 borderRadius: "8px",
                                                 color: "#fff",
                                             }}
-                                            formatter={(value: number, name: string, props: ChurnReasonPayload) => {
+                                            formatter={(value: number, name: string, props: { payload?: { count?: number } }) => {
                                                 const label = name === "percentage" ? "Churned" : name
-                                                return [`${props.payload.count} customers (${value}%)`, label]
+                                                return [`${props.payload?.count ?? 0} customers (${value}%)`, label]
                                             }}
                                         />
                                     <Bar dataKey="percentage" fill="#f97316" name="Percentage" />

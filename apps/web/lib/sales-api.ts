@@ -37,6 +37,7 @@ export interface PipelineOverviewStage extends PipelineStage {
 export interface Deal {
   id: string
   tenant_id: string
+  name: string
   customer_id: string
   lead_id?: string
   agent_id?: string

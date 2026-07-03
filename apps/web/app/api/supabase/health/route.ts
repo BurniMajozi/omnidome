@@ -3,7 +3,7 @@ import { getSupabaseServer } from "@/lib/supabase/server"
 
 export async function GET() {
   const { client: supabaseClient, error: supabaseError } = getSupabaseServer()
-  if (supabaseError) {
+  if (supabaseError || !supabaseClient) {
     return NextResponse.json({ error: supabaseError }, { status: 500 })
   }
   const { error } = await supabaseClient.from("channels").select("id").limit(1)

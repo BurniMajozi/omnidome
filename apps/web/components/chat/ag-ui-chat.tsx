@@ -303,6 +303,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 next.memoryWrites = [
                   ...next.memoryWrites,
                   {
+                    runId: (event.data.run_id as string) ?? (event.data.correlation_id as string) ?? "",
                     correlationId: event.data.correlation_id as string,
                     status: event.data.status as string,
                   },

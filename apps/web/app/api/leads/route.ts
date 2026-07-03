@@ -3,7 +3,7 @@ import { getSupabaseServer } from "@/lib/supabase/server"
 
 export async function GET() {
   const { client: supabaseClient, error: supabaseError } = getSupabaseServer()
-  if (supabaseError) {
+  if (supabaseError || !supabaseClient) {
     return NextResponse.json({ error: supabaseError }, { status: 500 })
   }
   const { data, error } = await supabaseClient.from("leads").select("*").order("created_at", { ascending: false })
@@ -15,7 +15,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const { client: supabaseClient, error: supabaseError } = getSupabaseServer()
-  if (supabaseError) {
+  if (supabaseError || !supabaseClient) {
     return NextResponse.json({ error: supabaseError }, { status: 500 })
   }
   const body = await request.json()
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const { client: supabaseClient, error: supabaseError } = getSupabaseServer()
-  if (supabaseError) {
+  if (supabaseError || !supabaseClient) {
     return NextResponse.json({ error: supabaseError }, { status: 500 })
   }
   const body = await request.json()

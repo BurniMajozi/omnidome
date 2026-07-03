@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server"
 
 const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://localhost:8020"
 
-export async function PATCH(request: NextRequest, { params }: { params: { messageId: string } }) {
-  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/messages/${params.messageId}/pin`)
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ messageId: string }> }) {
+  const { messageId } = await params
+  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/messages/${messageId}/pin`)
   const headers = new Headers()
   for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
     const value = request.headers.get(header)

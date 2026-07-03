@@ -19,10 +19,12 @@ async function forward(request: NextRequest, channelId: string) {
   return NextResponse.json(payload, { status: response.status })
 }
 
-export function PATCH(request: NextRequest, { params }: { params: { channelId: string } }) {
-  return forward(request, params.channelId)
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ channelId: string }> }) {
+  const { channelId } = await params
+  return forward(request, channelId)
 }
 
-export function GET(request: NextRequest, { params }: { params: { channelId: string } }) {
-  return forward(request, params.channelId)
+export async function GET(request: NextRequest, { params }: { params: Promise<{ channelId: string }> }) {
+  const { channelId } = await params
+  return forward(request, channelId)
 }

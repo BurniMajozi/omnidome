@@ -24,7 +24,7 @@ export function MorphingText({
   const text2Ref = useRef<HTMLSpanElement>(null)
   const morphRef = useRef(0)
   const cooldownRef = useRef(cooldownTime)
-  const frameRef = useRef<number>()
+  const frameRef = useRef<number | undefined>(undefined)
   const lastTimeRef = useRef<number | null>(null)
 
   const setStyles = useCallback((fraction: number) => {

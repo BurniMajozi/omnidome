@@ -170,7 +170,7 @@ export function AITaskChat({ isOpen, onClose, initialAgent, context: initialCont
             ? {
                 ...m,
                 content: response.message,
-                toolCalls: response.tool_calls,
+                toolCalls: response.tool_calls?.map(({ name, arguments: args, result }) => ({ name, args, result })),
                 isStreaming: false,
               }
             : m,

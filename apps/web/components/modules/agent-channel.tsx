@@ -167,6 +167,8 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
         },
       })
 
+      const toolCalls = response.tool_calls?.map(({ name, arguments: args, result }) => ({ name, args, result }))
+
       // Update with actual response
       setConversations((prev) =>
         prev.map((c) =>
@@ -175,7 +177,7 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
                 ...c,
                 messages: c.messages.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: response.message, toolCalls: response.tool_calls, isStreaming: false }
+                    ? { ...m, content: response.message, toolCalls, isStreaming: false }
                     : m,
                 ),
               }
@@ -185,7 +187,7 @@ export function AgentChannel({ context = {}, onCreateTask }: AgentChannelProps) 
 
       // Check if agent created a task
       if (onCreateTask) {
-        const taskTool = response.tool_calls?.find(
+        const taskTool = toolCalls?.find(
           (tc) => tc.name === "support.create_task" || tc.name === "crm.create_task",
         )
         if (taskTool) {

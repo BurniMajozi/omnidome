@@ -100,7 +100,7 @@ function renderComponent(
     case "Card":
       return (
         <div className="rounded-lg border border-border bg-card p-4">
-          {props.title && (
+          {Boolean(props.title) && (
             <h4 className="text-sm font-semibold text-foreground mb-2">
               {resolveValue(props.title as string, data)}
             </h4>
@@ -148,7 +148,7 @@ function renderComponent(
       return (
         <div className="overflow-x-auto rounded border border-border">
           <table className="w-full text-sm">
-            {props.headers && (
+            {Boolean(props.headers) && (
               <thead>
                 <tr className="border-b border-border bg-secondary">
                   {(props.headers as string[]).map((h) => (

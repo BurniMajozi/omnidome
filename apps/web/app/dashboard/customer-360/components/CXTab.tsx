@@ -243,7 +243,7 @@ function DeliveryStatusBadge({ status }: { status: Delivery["status"] }) {
         </Badge>
       )
     default:
-      return <Badge variant="secondary">{status.replace("_", " ")}</Badge>
+      return <Badge variant="secondary">{String(status).replace("_", " ")}</Badge>
   }
 }
 
@@ -320,7 +320,7 @@ function TicketStatusBadge({ status }: { status: SupportTicket["status"] }) {
         </Badge>
       )
     default:
-      return <Badge variant="secondary">{status.replace("_", " ")}</Badge>
+      return <Badge variant="secondary">{String(status).replace("_", " ")}</Badge>
   }
 }
 

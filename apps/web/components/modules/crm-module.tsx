@@ -1,5 +1,6 @@
 "use client"
 
+import type { JSX } from "react"
 import { useEffect, useState } from "react"
 import { ModuleLayout } from "./module-layout"
 import {
@@ -110,9 +111,13 @@ export function CrmModule() {
       activities={activities}
       issues={issues}
       summary={summary}
-      tasks={tasks}
+      tasks={tasks.map((t) => ({
+        ...t,
+        priority: (["urgent", "high", "normal", "low"].includes(t.priority) ? t.priority : "normal") as "urgent" | "high" | "normal" | "low",
+        status: (["todo", "in-progress", "done"].includes(t.status) ? t.status : "todo") as "todo" | "in-progress" | "done",
+      }))}
       aiRecommendations={aiRecommendations}
-      tableData={tableData}
+      tableData={tableData.map((row, i) => ({ ...row, id: String(row.id ?? i) })) as { id: string; [key: string]: string | number }[]}
       tableColumns={tableColumns}
     >
       {/* Charts */}

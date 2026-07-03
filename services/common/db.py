@@ -74,6 +74,22 @@ class SoftDeleteMixin:
         return self.deleted_at is not None
 
 
+_tenant_scoped_bases: list[type] = []
+
+
+def register_tenant_scoped_base(base: type) -> None:
+    """Opt a service-local DeclarativeBase into the automatic tenant filter.
+
+    Services that define their own ``Base(DeclarativeBase)`` instead of
+    inheriting this module's ``Base`` are invisible to the ``do_orm_execute``
+    tenant criteria below. Calling this next to the Base definition closes
+    that gap. Every mapped subclass of ``base`` MUST have a ``tenant_id``
+    column — the filter is applied unconditionally to all of them.
+    """
+    if base not in _tenant_scoped_bases:
+        _tenant_scoped_bases.append(base)
+
+
 @event.listens_for(Session, "do_orm_execute")
 def _add_tenant_criteria(execute_state) -> None:
     if execute_state.execution_options.get("include_all_tenants", False):
@@ -81,13 +97,14 @@ def _add_tenant_criteria(execute_state) -> None:
     tenant_id = execute_state.session.info.get("tenant_id") or get_tenant_context()
     if not tenant_id:
         return
-    execute_state.statement = execute_state.statement.options(
-        with_loader_criteria(
-            Base,
-            lambda cls: cls.tenant_id == tenant_id,
-            include_aliases=True,
+    for scoped_base in (Base, *_tenant_scoped_bases):
+        execute_state.statement = execute_state.statement.options(
+            with_loader_criteria(
+                scoped_base,
+                lambda cls: cls.tenant_id == tenant_id,
+                include_aliases=True,
+            )
         )
-    )
 
 
 def _database_url() -> str:
