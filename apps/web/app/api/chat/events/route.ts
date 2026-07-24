@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://localhost:8020"
+const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://communication:8020"
 
 async function proxyPost(request: NextRequest) {
   const body = await request.json().catch(() => null)

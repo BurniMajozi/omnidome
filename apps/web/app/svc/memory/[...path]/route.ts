@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 const TENANT_MEMORY_SERVICE_URL =
-  process.env.TENANT_MEMORY_SERVICE_URL || "http://localhost:8025"
+  process.env.TENANT_MEMORY_SERVICE_URL || "http://tenant_memory:8025"
 
 async function proxy(
   req: NextRequest,

@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getSupabaseServer } from "@/lib/supabase/server"
 
-const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://localhost:8021"
+const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://agent-orchestrator:8021"
 const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY || ""
 

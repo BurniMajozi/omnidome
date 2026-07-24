@@ -1,11 +1,24 @@
 const { chromium } = require('playwright');
 const path = require('path');
 
-const SUPABASE_URL = 'https://axxlelobqhwhbxfwjvnx.supabase.co';
-const SUPABASE_PROJECT_REF = 'axxlelobqhwhbxfwjvnx';
-const ANON_KEY = 'sb_publishable_PUl56uA4lbb_dM1MumeCEw_uR3Z2wwx';
-const TEST_EMAIL = 'verify-test@omnidome.local';
-const TEST_PASSWORD = 'VerifyTest123!';
+// Credentials come from the environment — nothing secret is committed here.
+// Run with, e.g.:
+//   SUPABASE_URL=... SUPABASE_ANON_KEY=... VERIFY_TEST_EMAIL=... VERIFY_TEST_PASSWORD=... node scripts/verify_hermes_chat.js
+// (the *_SUPABASE_* values live in apps/web/.env, which is gitignored).
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+const ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const TEST_EMAIL = process.env.VERIFY_TEST_EMAIL;
+const TEST_PASSWORD = process.env.VERIFY_TEST_PASSWORD;
+
+for (const [name, value] of Object.entries({ SUPABASE_URL, ANON_KEY, TEST_EMAIL, TEST_PASSWORD })) {
+  if (!value) {
+    console.error(`FATAL: missing required env var for ${name}. See the header comment for usage.`);
+    process.exit(1);
+  }
+}
+
+// Derive the project ref from the Supabase URL (used for the localStorage auth key).
+const SUPABASE_PROJECT_REF = new URL(SUPABASE_URL).hostname.split('.')[0];
 
 (async () => {
   // Sign in as a real Supabase user (created + confirmed earlier via the admin

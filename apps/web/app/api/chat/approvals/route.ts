@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 
-const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://localhost:8020"
+const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://communication:8020"
 
 async function forward(request: NextRequest, method: "GET" | "POST" | "PATCH") {
   const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/approvals`)

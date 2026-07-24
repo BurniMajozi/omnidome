@@ -46,6 +46,7 @@ import { JourneyBuilderDashboard } from "./journey-builder/journey-builder-dashb
 import { WebAnalyticsCustomDashboard } from "@/modules/web-analytics-custom"
 import { CancelFlowModal } from "./cancel-flow-modal"
 import { JourneyABTesting } from "./journey-ab-testing"
+import { AB_TESTING_ENABLED } from "@/lib/flags"
 import { CommissionTiers } from "./commission-tiers"
 import { FieldSalesApp } from "./field-sales-app"
 import { TechnicianApp } from "./technician-app"
@@ -306,7 +307,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
           <TabsTrigger value="analytics-custom">Custom Dashboards</TabsTrigger>
           <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
-          <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>
+          {AB_TESTING_ENABLED && <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>}
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
           <TabsTrigger value="commissions">Commissions</TabsTrigger>
@@ -640,9 +641,12 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <JourneyBuilderDashboard />
         </TabsContent>
 
-        <TabsContent value="ab-testing" className="mt-4">
-          <JourneyABTesting />
-        </TabsContent>
+        {/* A/B Testing is mock-only (no backend) — feature-flagged off for v1. */}
+        {AB_TESTING_ENABLED && (
+          <TabsContent value="ab-testing" className="mt-4">
+            <JourneyABTesting />
+          </TabsContent>
+        )}
 
         <TabsContent value="field-sales" className="mt-4">
           <FieldSalesApp />

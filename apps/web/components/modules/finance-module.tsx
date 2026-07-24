@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ModuleLayout } from "./module-layout"
 import { useModuleData } from "@/lib/module-data"
+import { FINANCE_MOCK_JOURNALS_ENABLED } from "@/lib/flags"
 import { RevenueRecognitionPanel } from "./finance/revenue-recognition-panel"
 import { ExpenseTrackingPanel } from "./finance/expense-tracking-panel"
 import { JournalsTrialBalancePanel } from "./finance/journals-trial-balance-panel"
@@ -388,10 +389,14 @@ export function FinanceModule() {
         </TabsContent>
 
         <TabsContent value="journals" className="mt-4">
-          <JournalsTrialBalancePanel
-            journals={data.journals ?? defaultJournals}
-            trialBalance={data.trialBalance ?? defaultTrialBalance}
-          />
+          {/* Legacy mock panel — feature-flagged off by default now that
+              LiveJournalEntries is the real backend-backed source. */}
+          {FINANCE_MOCK_JOURNALS_ENABLED && (
+            <JournalsTrialBalancePanel
+              journals={data.journals ?? defaultJournals}
+              trialBalance={data.trialBalance ?? defaultTrialBalance}
+            />
+          )}
           <LiveJournalEntries />
         </TabsContent>
 

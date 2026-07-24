@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 
 const COMPLIANCE_SERVICE_URL =
-  process.env.COMPLIANCE_SERVICE_URL || "http://localhost:8019"
+  process.env.COMPLIANCE_SERVICE_URL || "http://compliance:8019"
 
 async function proxy(
   req: NextRequest,
