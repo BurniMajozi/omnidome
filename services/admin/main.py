@@ -454,6 +454,7 @@ async def create_role(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _auth_rate_limiter.check(request)
+    await _require_tenant_admin(ctx, session)
     role_id = uuid.uuid4()
 
     result = await session.execute(
@@ -864,7 +865,8 @@ async def internal_get_user_by_email(
     secret, not get_auth_context, since the caller has no tenant context yet.
     """
     expected = os.getenv("INTERNAL_SERVICE_KEY", "")
-    if not expected or request.headers.get("x-internal-key") != expected:
+    provided = request.headers.get("x-internal-key") or ""
+    if not expected or not secrets.compare_digest(provided, expected):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal key")
 
     result = await session.execute(
@@ -885,6 +887,7 @@ async def create_user(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _auth_rate_limiter.check(request)
+    await _require_tenant_admin(ctx, session)
     user_id = uuid.uuid4()
     if payload.password:
         hashed_password = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
@@ -911,6 +914,14 @@ async def create_user(
     row = result.mappings().one()
 
     if payload.role_id:
+        # Only assign a role that belongs to the caller's tenant (mirrors
+        # assign_role) — prevents attaching a cross-tenant / unknown role.
+        role_row = await session.execute(
+            text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
+            {"role_id": str(payload.role_id), "tenant_id": str(ctx.tenant_id)},
+        )
+        if not role_row.first():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
         await session.execute(
             text(
                 """
