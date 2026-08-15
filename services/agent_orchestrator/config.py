@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     finance_service_url: str = "http://finance:8015"
     call_center_service_url: str = "http://call_center:8007"
     tenant_memory_service_url: str = "http://tenant_memory:8025"
+    fno_intelligence_service_url: str = "http://fno-intelligence:8024"
     public_agent_url: str = "http://agent-orchestrator:8021"
     ucp_auto_approve_limit_zar: float = 500.0
     agent_orchestrator_enable_telegram: bool = False
@@ -79,6 +80,7 @@ class Settings(BaseSettings):
             "network.check_coverage", "network.get_service_status",
             "support.create_ticket",
             "sales.get_pipeline",
+            "fno_intelligence.*",
         ],
         "retention": [
             "crm.get_customer", "crm.list_customers",
@@ -87,6 +89,7 @@ class Settings(BaseSettings):
             "billing.get_balance", "billing.get_invoice",
             "billing.list_billing_accounts", "billing.list_transfers",
             "sales.get_pipeline",
+            "fno_intelligence.*",
         ],
         "provisioning": [
             "crm.get_customer", "crm.list_customers",
@@ -95,6 +98,7 @@ class Settings(BaseSettings):
             "sales.get_pipeline",
             "support.create_ticket",
             "billing.list_billing_accounts",
+            "fno_intelligence.*",
         ],
         "executive": [
             "analytics.get_executive_summary",
@@ -106,6 +110,7 @@ class Settings(BaseSettings):
             "sales.get_pipeline",
             "finance.get_financial_summary",
             "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
+            "fno_intelligence.*",
         ],
         "support": [
             "crm.get_customer", "crm.list_customers",
@@ -113,10 +118,11 @@ class Settings(BaseSettings):
             "support.create_ticket",
             "network.get_service_status",
             "call_center.get_intelligence",
+            "fno_intelligence.*",
         ],
     }
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
 settings = Settings()

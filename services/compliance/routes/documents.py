@@ -5,17 +5,19 @@ entity extraction, and document linking to compliance records.
 """
 import json
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.db import get_async_session as get_db
+from services.common.firecrawl import FirecrawlClient, FirecrawlUnavailable
 from services.compliance.database import (
     ComplianceDocument, DocumentType, Contract,
 )
 from services.compliance.document_architect import (
-    DocumentUnderstandingArchitect, get_architect,
+    DocumentUnderstandingArchitect, get_architect, InputType,
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -156,6 +158,82 @@ async def fetch_url_document(
         "crawl": crawl,
         "documents_found": len(stored),
         "documents": stored,
+    }
+
+
+# ── Web-Intel Ingest (Firecrawl) ──────────────────────────────────────
+
+@router.post("/web-intel-ingest")
+async def web_intel_ingest(
+    url: str = Form(...),
+    tenant_id: str = Form("default"),
+    doc_type_hint: Optional[str] = Form(None),
+    contract_id: Optional[int] = Form(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch a URL through the shared Firecrawl client (clean markdown, keyless
+    fallback) and run it through the compliance understanding pipeline.
+
+    Reuses ``services.common.firecrawl`` so Firecrawl is the single extraction
+    layer across the platform — no duplicate client in compliance.
+    """
+    client = FirecrawlClient()
+    try:
+        scraped = await client.scrape(url)
+    except FirecrawlUnavailable as e:
+        raise HTTPException(502, f"Web-intel extraction unavailable: {e}")
+
+    markdown = FirecrawlClient.markdown_from(scraped)
+    if not markdown:
+        raise HTTPException(422, "Firecrawl returned no extractable content for the URL")
+
+    architect = get_architect()
+    result = await architect.process_file(
+        content=markdown.encode("utf-8"),
+        filename=f"web-intel-{urlparse(url).netloc or 'page'}.md",
+        tenant_id=tenant_id,
+        doc_type_hint=doc_type_hint,
+        contract_id=contract_id,
+    )
+    result.source = url
+    result.input_type = InputType.url_fetch.value
+
+    doc_record = ComplianceDocument(
+        title=result.title or url,
+        document_type=_map_doc_type(result.document_type),
+        file_path=url,
+        file_size=len(markdown.encode("utf-8")),
+        mime_type="text/markdown",
+        ocr_text=result.cleaned_text[:50000] if result.cleaned_text else None,
+        extracted_data=json.dumps({
+            "entities": [{"label": e.label, "value": e.value} for e in result.entities],
+            "links": [{"url": l.url, "type": l.link_type} for l in result.links],
+            "references": result.references,
+        }, default=str) if result.entities else None,
+        tags=f"auto_classified:{result.document_type},source:web-intel" if result.document_type else "source:web-intel",
+        tenant_id=tenant_id,
+        contract_id=contract_id,
+    )
+    db.add(doc_record)
+    await db.commit()
+    await db.refresh(doc_record)
+
+    return {
+        "status": "processed",
+        "source": "firecrawl",
+        "document_id": doc_record.id,
+        "understanding": {
+            "doc_id": result.doc_id,
+            "title": result.title,
+            "document_type": result.document_type,
+            "compliance_category": result.compliance_category,
+            "confidence": result.confidence,
+            "entities_count": len(result.entities),
+            "links_count": len(result.links),
+            "markdown_preview": result.markdown[:1000] if result.markdown else "",
+            "processing_time_ms": result.processing_time_ms,
+            "errors": result.errors,
+        },
     }
 
 

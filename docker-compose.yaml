@@ -500,9 +500,10 @@ services:
     ports:
       - "8080:80"
     volumes:
-      - .:/usr/share/nginx/html
-      - ./apps/portal:/usr/share/nginx/html/portal
-    # Note: We mount root so portal can fetch theme from ../brand_guidelines
+      - ./apps/portal:/usr/share/nginx/html/portal:ro
+      - ./brand_guidelines:/usr/share/nginx/html/brand_guidelines:ro
+    # Scoped read-only mounts: portal fetches theme from ../brand_guidelines.
+    # NEVER mount repo root here - it exposes .env/.git/source over HTTP.
 
   ollama:
     image: ollama/ollama:latest

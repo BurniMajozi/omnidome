@@ -26,8 +26,9 @@ async def upsert_module_data(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
-        # Upsert: check if module data already exists
+        # Upsert: check if module data already exists for this tenant
         stmt = select(ModuleData).where(
+            ModuleData.tenant_id == ctx.tenant_id,
             ModuleData.module_name == body.module_name
         )
         result = await session.execute(stmt)
@@ -41,6 +42,7 @@ async def upsert_module_data(
             return existing
 
         module_data = ModuleData(
+            tenant_id=ctx.tenant_id,
             module_name=body.module_name,
             payload=body.payload,
             updated_by=ctx.user_id,
@@ -56,7 +58,9 @@ async def list_module_data(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
-        stmt = select(ModuleData).order_by(ModuleData.module_name)
+        stmt = select(ModuleData).where(
+            ModuleData.tenant_id == ctx.tenant_id
+        ).order_by(ModuleData.module_name)
         result = await session.execute(stmt)
         items = result.scalars().all()
         return [ModuleDataRead.model_validate(m) for m in items]
@@ -69,6 +73,7 @@ async def get_module_data(
 ):
     async with session_scope() as session:
         stmt = select(ModuleData).where(
+            ModuleData.tenant_id == ctx.tenant_id,
             ModuleData.module_name == module_name
         )
         result = await session.execute(stmt)
@@ -89,6 +94,7 @@ async def update_module_data(
 ):
     async with session_scope() as session:
         stmt = select(ModuleData).where(
+            ModuleData.tenant_id == ctx.tenant_id,
             ModuleData.module_name == module_name
         )
         result = await session.execute(stmt)
@@ -110,6 +116,7 @@ async def delete_module_data(
 ):
     async with session_scope() as session:
         stmt = select(ModuleData).where(
+            ModuleData.tenant_id == ctx.tenant_id,
             ModuleData.module_name == module_name
         )
         result = await session.execute(stmt)

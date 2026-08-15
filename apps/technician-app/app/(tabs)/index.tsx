@@ -5,8 +5,8 @@ import { useRouter } from "expo-router";
 import {
   Wrench, MapPin, Phone, Clock, ChevronRight, Star, Timer,
 } from "lucide-react";
-import { technicianApi } from "../../../lib/api/client";
-import type { TechJob, TechStats } from "../../../lib/api/types";
+import { technicianApi } from "@/lib/api/client";
+import type { TechJob, TechStats } from "@/lib/api/types";
 
 // ── Brand Config ──────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ const brandConfig = {
 
 function PriorityBadge({ priority }: { priority: string }) {
   const colors: Record<string, string> = {
-    URGRENT: "bg-red-500/20 text-red-400 border border-red-500/30",
+    URGENT: "bg-red-500/20 text-red-400 border border-red-500/30",
     HIGH: "bg-orange-500/20 text-orange-400 border border-orange-500/30",
     NORMAL: "bg-blue-500/20 text-blue-400 border border-blue-500/30",
     LOW: "bg-slate-600/60 text-slate-300 border border-slate-500/30",

@@ -36,6 +36,8 @@ from services.fno_intelligence.models import (
     FNOReport,
     FNOPortalSession,
 )
+from services.common.firecrawl import FirecrawlError, FirecrawlUnavailable
+from services.fno_intelligence import web_intel
 
 router = APIRouter(tags=["FNO Intelligence"])
 
@@ -942,3 +944,139 @@ async def escalate_fault(
     await db.flush()
 
     return {"id": str(fault.id), "status": "escalated"}
+
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 9. WEB INTELLIGENCE (Firecrawl-powered)
+# ════════════════════════════════════════════════════════════════════════
+
+class WebIntelRequest(BaseModel):
+    fno_name: Optional[str] = None
+    address: Optional[str] = None
+    portal_url: Optional[str] = None
+    city: Optional[str] = None
+    product_query: Optional[str] = None
+    competitors: list[str] = Field(default_factory=list)
+
+
+@router.post("/web-intel/product-research")
+async def web_product_research(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Research an FNO's products/packages via web search + LLM summary."""
+    if not payload.fno_name:
+        raise HTTPException(400, "fno_name is required")
+    try:
+        return await web_intel.product_research(
+            payload.fno_name, product_query=payload.product_query
+        )
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/web-intel/fno-site-message")
+async def web_fno_site_message(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Scrape the latest message/announcement off an FNO portal page."""
+    if not payload.portal_url:
+        raise HTTPException(400, "portal_url is required")
+    try:
+        return await web_intel.fno_site_message(payload.portal_url)
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/web-intel/new-site-releases")
+async def web_new_site_releases(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Discover newly-released coverage areas / build sites for an FNO."""
+    if not payload.fno_name:
+        raise HTTPException(400, "fno_name is required")
+    try:
+        return await web_intel.new_site_releases(payload.fno_name, city=payload.city)
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/web-intel/cancellation-processing")
+async def web_cancellation_processing(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Extract the cancellation/termination procedure and required steps."""
+    if not payload.fno_name:
+        raise HTTPException(400, "fno_name is required")
+    try:
+        return await web_intel.cancellation_processing(
+            payload.fno_name, portal_url=payload.portal_url
+        )
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/web-intel/address-lookup")
+async def web_address_lookup(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Resolve a street address to fibre coverage / available FNOs."""
+    if not payload.address:
+        raise HTTPException(400, "address is required")
+    try:
+        return await web_intel.address_lookup(
+            payload.address, fno_name=payload.fno_name
+        )
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.post("/web-intel/competitor-analysis")
+async def web_competitor_analysis(
+    payload: WebIntelRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Compare an FNO against named competitors (LLM-interpreted from web data)."""
+    if not payload.fno_name:
+        raise HTTPException(400, "fno_name is required")
+    try:
+        return await web_intel.competitor_analysis(
+            payload.fno_name, competitors=payload.competitors
+        )
+    except FirecrawlUnavailable as exc:
+        raise HTTPException(503, str(exc))
+    except FirecrawlError as exc:
+        raise HTTPException(502, str(exc))
+
+
+@router.get("/web-intel/capabilities")
+async def web_intel_capabilities():
+    """List the six web-intel capabilities and which model powers each step."""
+    return {
+        "extraction_provider": "firecrawl",
+        "reasoning_provider": "openrouter",
+        "capabilities": web_intel.CAPABILITY_MODELS if hasattr(web_intel, "CAPABILITY_MODELS") else None,
+        "endpoints": [
+            "/web-intel/product-research",
+            "/web-intel/fno-site-message",
+            "/web-intel/new-site-releases",
+            "/web-intel/cancellation-processing",
+            "/web-intel/address-lookup",
+            "/web-intel/competitor-analysis",
+        ],
+    }

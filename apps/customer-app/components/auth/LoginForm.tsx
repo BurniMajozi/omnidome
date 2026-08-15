@@ -22,8 +22,10 @@ export default function LoginForm() {
     try {
       const api = new ApiClient();
       const res = await api.login(email, password);
-      document.cookie = `access_token=${res.access_token}; path=/; max-age=${res.expires_in}`;
-      document.cookie = `refresh_token=${res.refresh_token}; path=/; max-age=2592000`;
+      // ApiClient.login() returns camelCase tokens (accessToken/refreshToken)
+      const accessMaxAge = res.expiresIn ?? 3600;
+      document.cookie = `access_token=${res.accessToken}; path=/; max-age=${accessMaxAge}`;
+      document.cookie = `refresh_token=${res.refreshToken}; path=/; max-age=2592000`;
       router.push("/dashboard");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed");

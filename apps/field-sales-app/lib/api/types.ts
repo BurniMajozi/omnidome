@@ -5,6 +5,15 @@
  * Aggregates data from CRM, Sales, Billing, Inventory, Communication services.
  */
 
+export interface SalesAgentProfile {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  role: string;
+  zone?: string;
+}
+
 export interface MobileContact {
   id: string;
   first_name: string;

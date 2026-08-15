@@ -1,0 +1,35 @@
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+ ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of C:\Users\Benedict\Desktop\OminiDome\omnidome\package-lock.json as the root directory.
+ To silence this warning, set `outputFileTracingRoot` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/output#caveats for more information.
+ Detected additional lockfiles: 
+   * C:\Users\Benedict\Desktop\OminiDome\omnidome\apps\technician-app\package-lock.json
+
+ ⚠ Attempted to load @next/swc-win32-x64-msvc, but an error occurred: \\?\C:\Users\Benedict\Desktop\OminiDome\omnidome\apps\technician-app\node_modules\@next\swc-win32-x64-msvc\next-swc.win32-x64-msvc.node is not a valid Win32 application.
+\\?\C:\Users\Benedict\Desktop\OminiDome\omnidome\apps\technician-app\node_modules\@next\swc-win32-x64-msvc\next-swc.win32-x64-msvc.node
+   Skipping creating a lockfile at C:\Users\Benedict\Desktop\OminiDome\omnidome\apps\technician-app\.next\lock because we're using WASM bindings
+   ▲ Next.js 16.0.10 (webpack)
+
+   Creating an optimized production build ...
+ ✓ (pwa) Compiling for server...
+ ✓ (pwa) Compiling for server...
+ ✓ (pwa) Compiling for client (static)...
+ ○ (pwa) Service worker: C:\Users\Benedict\Desktop\OminiDome\omnidome\apps\technician-app\public\sw.js
+ ○ (pwa)   URL: /sw.js
+ ○ (pwa)   Scope: /
+ ✓ Compiled successfully in 17.9s
+   Running TypeScript ...
+Failed to compile.
+
+./components/chat/AgentChat.tsx:9:65
+Type error: Cannot find module '@omnidome/agent-chat' or its corresponding type declarations.
+
+[0m [90m  7 |[39m [90m */[39m
+ [90m  8 |[39m
+[31m[1m>[22m[39m[90m  9 |[39m [36mimport[39m { [33mAgentChat[39m [36mas[39m [33mBaseAgentChat[39m[33m,[39m type [33mAgentChatProps[39m } [36mfrom[39m [32m"@omnidome/agent-chat"[39m[33m;[39m
+ [90m    |[39m                                                                 [31m[1m^[22m[39m
+ [90m 10 |[39m [36mimport[39m { useAuthStore } [36mfrom[39m [32m"@/lib/stores/auth-store"[39m[33m;[39m
+ [90m 11 |[39m
+ [90m 12 |[39m [36mexport[39m [36mfunction[39m [33mAgentChat[39m(props[33m:[39m [33mOmit[39m[33m<[39m[33mAgentChatProps[39m[33m,[39m [32m"auth"[39m [33m|[39m [32m"target"[39m [33m|[39m [32m"theme"[39m[33m>[39m) {[0m
+Next.js build worker exited with code: 1 and signal: null

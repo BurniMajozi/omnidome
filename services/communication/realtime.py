@@ -130,7 +130,7 @@ async def handle_connection(
                 pass  # Keepalive acknowledged — nothing to do
 
     except Exception:
-        pass  # Client disconnected
+        logger.debug("Client disconnected or ping failed, cleaning up")
     finally:
         ping_task.cancel()
         disconnect(websocket, tenant_id, channel_id, user_id)
@@ -152,7 +152,7 @@ async def _ping_loop(
             await asyncio.sleep(PING_INTERVAL)
             await websocket.send_text(json.dumps({"type": "ping", "data": {}}))
     except Exception:
-        pass
+        logger.debug("Ping loop exited, connection likely closed")
 
 
 async def _broadcast_except(

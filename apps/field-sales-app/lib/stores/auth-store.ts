@@ -6,15 +6,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-
-export interface SalesAgentProfile {
-  id: string;
-  name: string;
-  email: string;
-  phone?: string;
-  role: string;
-  zone?: string;
-}
+import type { SalesAgentProfile } from '../api/types';
 
 interface AuthState {
   agent: SalesAgentProfile | null;

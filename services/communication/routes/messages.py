@@ -59,7 +59,9 @@ async def send_message(
 
         # Broadcast to connected WebSocket clients — fire-and-forget, never blocks the response
         msg_data = MessageRead.model_validate(message).model_dump(mode="json")
+        from services.communication.realtime import broadcast_message
         import asyncio
+        # Use background task pattern (properly supervised) instead of raw create_task
         asyncio.create_task(
             broadcast_message(str(ctx.tenant_id), str(channel_id), msg_data)
         )
@@ -198,10 +200,11 @@ async def add_reaction(
             raise HTTPException(status_code=404, detail="Message not found")
 
         reaction = MessageReaction(
-            message_id=message_id,
-            user_id=ctx.user_id,
-            emoji=emoji,
-        )
+                    message_id=message_id,
+                    channel_id=channel_id,
+                    user_id=ctx.user_id,
+                    emoji=emoji,
+                )
         session.add(reaction)
         await session.flush()
         await session.refresh(reaction)

@@ -621,14 +621,19 @@ export default function SmartHomePage() {
       setLoading(true);
       setError(null);
 
-      // Attempt to fetch from the IoT dashboard API
-      // Falls back to mock data if the endpoint is unavailable
+      // Attempt to fetch from the IoT dashboard API. Never silently
+      // substitute fake data in a real build — that masks outages and shows
+      // customers devices/events that don't exist. Only the dev mock flag
+      // (NEXT_PUBLIC_USE_MOCK=true) falls back to getMockData().
       try {
         const result = await api.request<IoTDashboardData>("/portal/iot/dashboard");
         setData(result);
-      } catch {
-        // API not available — use mock data for development
-        setData(getMockData());
+      } catch (err) {
+        if (process.env.NEXT_PUBLIC_USE_MOCK === "true") {
+          setData(getMockData());
+        } else {
+          throw err;
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load dashboard data");
@@ -709,7 +714,26 @@ export default function SmartHomePage() {
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    if (error) {
+      return (
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-6">
+          <div className="max-w-md w-full bg-gray-800 border border-gray-700 rounded-2xl p-6 text-center space-y-4">
+            <WifiOff size={32} className="text-amber-400 mx-auto" />
+            <h2 className="text-lg font-semibold text-white">Couldn&apos;t load your smart home</h2>
+            <p className="text-sm text-gray-400">{error}</p>
+            <button
+              onClick={fetchData}
+              className="px-4 py-2 rounded-xl bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors"
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  }
 
   // ── Loaded State ────────────────────────────────────────────────────────
   return (

@@ -22,6 +22,7 @@ SERVICE_URLS = {
     "call_center": os.getenv("CALL_CENTER_SERVICE_URL", "http://call_center:8007"),
     "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
     "memory": os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025"),
+    "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno-intelligence:8024"),
 }
 
 
@@ -316,6 +317,72 @@ class ToolRegistry:
             },
         ))
 
+        self.register(Tool(
+            name="fno_intelligence.web_intel_product_research",
+            description="Research an FNO's (fibre network operator's) products, packages, speeds and prices via live web search. Returns an LLM-summarised product lineup. Use when a user asks what packages/products an FNO offers.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/product-research",
+            parameters={"type": "object", "properties": {
+                "fno_name": {"type": "string", "description": "FNO name, e.g. 'Vuma Fibre', 'Vumatel', 'Openserve', 'Frogfoot'"},
+                "product_query": {"type": "string", "description": "Optional custom search query override"},
+            }, "required": ["fno_name"]},
+        ))
+        self.register(Tool(
+            name="fno_intelligence.web_intel_fno_site_message",
+            description="Scrape the latest message or announcement banner from an FNO's portal/website. Use to fetch current FNO notices, outage comms, or portal messages.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/fno-site-message",
+            parameters={"type": "object", "properties": {
+                "portal_url": {"type": "string", "description": "Full URL of the FNO portal or announcement page to scrape"},
+            }, "required": ["portal_url"]},
+        ))
+        self.register(Tool(
+            name="fno_intelligence.web_intel_new_site_releases",
+            description="Discover newly-released fibre coverage areas / build sites for an FNO via web search. Use when checking where an FNO has just launched or is launching coverage.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/new-site-releases",
+            parameters={"type": "object", "properties": {
+                "fno_name": {"type": "string", "description": "FNO name"},
+                "city": {"type": "string", "description": "Optional city filter"},
+            }, "required": ["fno_name"]},
+        ))
+        self.register(Tool(
+            name="fno_intelligence.web_intel_cancellation_processing",
+            description="Extract an FNO's cancellation / termination procedure and required steps from its website. Use when a customer wants to cancel or when processing a cancellation request.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/cancellation-processing",
+            parameters={"type": "object", "properties": {
+                "fno_name": {"type": "string", "description": "FNO name"},
+                "portal_url": {"type": "string", "description": "Optional explicit cancellation-page URL"},
+            }, "required": ["fno_name"]},
+        ))
+        self.register(Tool(
+            name="fno_intelligence.web_intel_address_lookup",
+            description="Resolve a street address to fibre coverage / available FNOs via web search. Use to check which fibre networks service a given address.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/address-lookup",
+            parameters={"type": "object", "properties": {
+                "address": {"type": "string", "description": "Street address to look up"},
+                "fno_name": {"type": "string", "description": "Optional FNO to scope the lookup to"},
+            }, "required": ["address"]},
+        ))
+        self.register(Tool(
+            name="fno_intelligence.web_intel_competitor_analysis",
+            description="Compare an FNO against named competitors (pricing, speeds, coverage, reliability) using web data and LLM analysis. Use for competitive intelligence questions.",
+            service="fno_intelligence",
+            method="POST",
+            endpoint="/api/fno/web-intel/competitor-analysis",
+            parameters={"type": "object", "properties": {
+                "fno_name": {"type": "string", "description": "FNO to analyse"},
+                "competitors": {"type": "array", "items": {"type": "string"}, "description": "Competitor FNO names to compare against"},
+            }, "required": ["fno_name"]},
+        ))
+
     def register(self, tool: Tool):
         self._tools[tool.name] = tool
 
@@ -327,45 +394,58 @@ class ToolRegistry:
 
     def filter_for_agent(self, agent_type: str) -> List[Tool]:
         """Return only tools an agent type is allowed to use."""
+
+        FNO_TOOLS = [
+            "fno_intelligence.web_intel_product_research",
+            "fno_intelligence.web_intel_fno_site_message",
+            "fno_intelligence.web_intel_new_site_releases",
+            "fno_intelligence.web_intel_cancellation_processing",
+            "fno_intelligence.web_intel_address_lookup",
+            "fno_intelligence.web_intel_competitor_analysis",
+        ]
         AGENT_TOOL_PERMISSIONS = {
             "customer_facing": [
                 "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
-                "network_check_coverage", "network_get_service_status",
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
-            ],
+            ] + FNO_TOOLS,
             "retention": [
-                "crm_get_customer", "crm_get_customer_360",
-                "billing_get_balance", "billing_get_payment_history",
-                "retention_get_predictions", "retention_get_cases",
-                "analytics_get_executive_summary",
-                "memory.recall", "memory.write_entry", "memory.upsert_summary",
-            ],
-            "provisioning": [
-                "crm_get_customer", "crm_create_customer",
-                "network_check_coverage", "network_get_service_status",
-                "support_create_ticket",
-                "memory.recall", "memory.write_entry",
-            ],
-            "executive": [
-                "analytics_get_executive_summary",
-                "retention_get_predictions",
-                "billing_get_balance", "billing_get_payment_history",
-                "network_get_service_status",
-                "call_center_get_intelligence",
-                "sales_get_pipeline",
-                "finance_get_financial_summary",
-                "memory.recall", "memory.write_entry", "memory.upsert_summary",
-            ],
-            "support": [
+                "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
                 "support_create_ticket", "support_get_tickets",
-                "crm_get_customer", "crm_get_customer_360",
-                "network_run_diagnostics",
-                "call_center_get_intelligence",
                 "memory.recall", "memory.write_entry",
-            ],
+            ] + FNO_TOOLS,
+            "provisioning": [
+                "crm_get_customer", "crm_get_customer_360",
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
+            "executive": [
+                "crm_get_customer", "crm_get_customer_360",
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
+            "support": [
+                "crm_get_customer", "crm_get_customer_360",
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
+            "billing": [
+                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "crm_get_customer", "crm_get_customer_360",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
+            "crm": [
+                "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
+                "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
         }
+
         allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, [])
         return [t for t in self._tools.values() if t.name in allowed]
 

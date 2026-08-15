@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Customer Portal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="brand">
+      <img id="brand-logo" src="" alt="" hidden />
+      <span id="brand-name">Customer Portal</span>
+    </div>
+    <nav class="main-nav">
+      <a href="#usage">Usage</a>
+      <a href="#billing">Billing</a>
+      <a href="#support">Support</a>
+      <a href="#account">Account</a>
+    </nav>
+  </header>
+
+  <section class="hero" id="hero">
+    <h1 id="hero-title">Welcome</h1>
+    <p id="hero-subtitle"></p>
+  </section>
+
+  <main class="cards">
+    <section class="card" id="usage">
+      <h2>My Usage</h2>
+      <p class="card-body" data-endpoint="/usage">Sign in to view your data usage.</p>
+      <div class="card-state" data-state="unconnected">Not connected</div>
+    </section>
+    <section class="card" id="billing">
+      <h2>Billing &amp; Top-up</h2>
+      <p class="card-body" data-endpoint="/billing">View invoices and top up your prepaid balance.</p>
+      <div class="card-state" data-state="unconnected">Not connected</div>
+    </section>
+    <section class="card" id="support">
+      <h2>Support</h2>
+      <p class="card-body" data-endpoint="/support">Log a fault or track an existing ticket.</p>
+      <div class="card-state" data-state="unconnected">Not connected</div>
+    </section>
+    <section class="card" id="account">
+      <h2>My Account</h2>
+      <p class="card-body" data-endpoint="/account">Manage your details, package and RICA status.</p>
+      <div class="card-state" data-state="unconnected">Not connected</div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <span id="footer-brand"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

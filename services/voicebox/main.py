@@ -121,10 +121,15 @@ async def _cleanup_startup() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
-    await run_with_db_retry(init_tables, logger=logger)
+    skip_db = os.getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
+    if skip_db:
+        logger.warning("VOICE_DEV_SKIP_DB enabled; skipping voicebox table initialization")
+    else:
+        await run_with_db_retry(init_tables, logger=logger)
     await engine_client.init_client()
     asyncio.create_task(_prewarm_models())
-    asyncio.create_task(_cleanup_startup())
+    if not skip_db:
+        asyncio.create_task(_cleanup_startup())
 
 
 @app.on_event("shutdown")

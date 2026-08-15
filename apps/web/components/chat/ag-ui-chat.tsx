@@ -34,6 +34,7 @@ import {
 } from "@/lib/orchestrator-api"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
+import { getSavedMicId, saveMicId, resolvePreferredMicId, micAudioConstraints } from "@/lib/mic-device"
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -96,7 +97,12 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const startVoiceRecording = useCallback(async () => {
     setVoiceError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone recording is not available in this browser.")
+      }
+      const resolvedMicId = await resolvePreferredMicId(getSavedMicId())
+      saveMicId(resolvedMicId)
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: micAudioConstraints(resolvedMicId) })
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : ""
@@ -113,7 +119,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
         const stats = await toWavWithStats(rawBlob).catch(() => null)
         if (stats && stats.rms < SILENCE_RMS_THRESHOLD) {
           setVoiceError(
-            "The recording contains no sound — Windows is likely capturing the wrong microphone. Check Settings → System → Sound → Input.",
+            "The recording contains no sound. Pick the correct microphone in Call Center → Speech to Text, then try again here.",
           )
           return
         }

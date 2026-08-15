@@ -482,6 +482,102 @@ ALL_TOOLS: List[Tool] = [
         service_url=settings.billing_service_url,
         timeout=10,
     ),
+    # ── FNO Intelligence (Firecrawl-powered web intelligence) ──────────────
+    Tool(
+        name="fno_intelligence.web_intel_product_research",
+        description="Research an FNO's (fibre network operator's) products, packages, speeds and prices via live web search. Returns an LLM-summarised product lineup. Use when a user asks about what packages/products an FNO offers.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "fno_name": {"type": "string", "description": "FNO name, e.g. 'Vuma Fibre', 'Vumatel', 'Openserve', 'Frogfoot'"},
+                "product_query": {"type": "string", "description": "Optional custom search query override"},
+            },
+            required=["fno_name"],
+        ),
+        endpoint="/api/fno/web-intel/product-research",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["fno_name"],
+    ),
+    Tool(
+        name="fno_intelligence.web_intel_fno_site_message",
+        description="Scrape the latest message or announcement banner from an FNO's portal/website. Use to fetch current FNO notices, outage comms, or portal messages.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "portal_url": {"type": "string", "description": "Full URL of the FNO portal or announcement page to scrape"},
+            },
+            required=["portal_url"],
+        ),
+        endpoint="/api/fno/web-intel/fno-site-message",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["portal_url"],
+    ),
+    Tool(
+        name="fno_intelligence.web_intel_new_site_releases",
+        description="Discover newly-released fibre coverage areas / build sites for an FNO via web search. Use when checking where an FNO has just launched or is launching coverage.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "fno_name": {"type": "string", "description": "FNO name"},
+                "city": {"type": "string", "description": "Optional city filter"},
+            },
+            required=["fno_name"],
+        ),
+        endpoint="/api/fno/web-intel/new-site-releases",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["fno_name"],
+    ),
+    Tool(
+        name="fno_intelligence.web_intel_cancellation_processing",
+        description="Extract an FNO's cancellation / termination procedure and required steps from its website. Use when a customer wants to cancel or when processing a cancellation request.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "fno_name": {"type": "string", "description": "FNO name"},
+                "portal_url": {"type": "string", "description": "Optional explicit cancellation-page URL"},
+            },
+            required=["fno_name"],
+        ),
+        endpoint="/api/fno/web-intel/cancellation-processing",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["fno_name"],
+    ),
+    Tool(
+        name="fno_intelligence.web_intel_address_lookup",
+        description="Resolve a street address to fibre coverage / available FNOs via web search. Use to check which fibre networks service a given address.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "address": {"type": "string", "description": "Street address to look up"},
+                "fno_name": {"type": "string", "description": "Optional FNO to scope the lookup to"},
+            },
+            required=["address"],
+        ),
+        endpoint="/api/fno/web-intel/address-lookup",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["address"],
+    ),
+    Tool(
+        name="fno_intelligence.web_intel_competitor_analysis",
+        description="Compare an FNO against named competitors (pricing, speeds, coverage, reliability) using web data and LLM analysis. Use for competitive intelligence questions.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "fno_name": {"type": "string", "description": "FNO to analyse"},
+                "competitors": {"type": "array", "items": {"type": "string"}, "description": "Competitor FNO names to compare against"},
+            },
+            required=["fno_name"],
+        ),
+        endpoint="/api/fno/web-intel/competitor-analysis",
+        method="POST",
+        service_url=settings.fno_intelligence_service_url,
+        timeout=60,
+        required_params=["fno_name"],
+    ),
 ]
 
 

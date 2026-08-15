@@ -22,6 +22,11 @@ COPY services/common/ ./services/common/
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Document uploads / processed files are written under /opt/data by
+# document_architect.process_file. Create it owned by appuser so the
+# non-root runtime can write there.
+RUN mkdir -p /opt/data/uploads/compliance /opt/data/uploads && chown -R appuser:appuser /opt/data
+
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

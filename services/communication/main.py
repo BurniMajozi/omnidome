@@ -71,6 +71,7 @@ from services.communication.routes.module_data import router as module_data_rout
 from services.communication.routes.channel_preferences import router as channel_preferences_router
 from services.communication.routes.messages_state import router as messages_state_router
 from services.communication.routes.ws import router as ws_router
+from services.communication.routes.schedule import router as schedule_router
 
 app.include_router(channels_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
@@ -83,6 +84,7 @@ app.include_router(module_data_router, prefix="/api/v1")
 app.include_router(channel_preferences_router, prefix="/api/v1")
 app.include_router(messages_state_router, prefix="/api/v1")
 app.include_router(ws_router, prefix="/api/v1")  # WebSocket real-time channel updates
+app.include_router(schedule_router, prefix="/api/v1")  # Schedule events
 
 
 if __name__ == "__main__":

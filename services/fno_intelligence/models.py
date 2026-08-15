@@ -38,20 +38,20 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 FNO_PORTAL = SAEnum(
     "vumatel_active", "vumatel_passive", "openserve", "frogfoot",
     "octotel", "metrofibre", "liquid", "other",
-    name="fno_portal", create_type=True,
+    name="fno_portal", create_type=False,
 )
 
 AUTOMATION_STATUS = SAEnum(
     "queued", "running", "waiting_captcha", "waiting_2fa",
     "completed", "failed", "retrying", "cancelled", "manual_intervention",
-    name="automation_status", create_type=True,
+    name="automation_status", create_type=False,
 )
 
 AUTOMATION_ACTION = SAEnum(
     "login", "navigate", "fill_form", "submit", "screenshot",
     "extract_data", "click", "wait", "scroll", "download", "upload",
     "record_start", "record_stop", "playback",
-    name="automation_action", create_type=True,
+    name="automation_action", create_type=False,
 )
 
 JOB_TYPE = SAEnum(
@@ -63,25 +63,25 @@ JOB_TYPE = SAEnum(
     "new_area_detection", "network_status_check",
     # Reporting
     "report_generation", "bulk_data_extraction",
-    name="job_type", create_type=True,
+    name="job_type", create_type=False,
 )
 
 LEAD_SOURCE = SAEnum(
     "fno_coverage_map", "fno_promotion_page", "fno_new_area",
     "fno_network_status", "fno_pricing_page", "fno_deactivation_list",
-    name="lead_source", create_type=True,
+    name="lead_source", create_type=False,
 )
 
 LEAD_STATUS = SAEnum(
     "new", "qualified", "contacted", "converted", "disqualified",
-    name="lead_status", create_type=True,
+    name="lead_status", create_type=False,
 )
 
 REPORT_TYPE = SAEnum(
     "competitive_pricing", "coverage_comparison", "promotion_tracker",
     "new_area_alert", "network_uptime", "lead_pipeline",
     "operational_summary", "fno_sla_compliance",
-    name="report_type", create_type=True,
+    name="report_type", create_type=False,
 )
 
 
@@ -707,7 +707,7 @@ class FNOReport(Base):
 
 KML_IMPORT_STATUS = SAEnum(
     "uploaded", "parsing", "imported", "failed", "partial",
-    name="kml_import_status", create_type=True,
+    name="kml_import_status", create_type=False,
 )
 
 
@@ -758,17 +758,17 @@ class FNOKMLImport(Base):
 FAULT_STATUS = SAEnum(
     "submitted", "acknowledged", "investigating", "escalated",
     "resolved", "closed", "rejected",
-    name="fault_status", create_type=True,
+    name="fault_status", create_type=False,
 )
 
 FAULT_SEVERITY = SAEnum(
     "low", "medium", "high", "critical",
-    name="fault_severity", create_type=True,
+    name="fault_severity", create_type=False,
 )
 
 FAULT_SOURCE = SAEnum(
     "customer", "fno_portal", "network_monitor", "field_tech", "system",
-    name="fault_source", create_type=True,
+    name="fault_source", create_type=False,
 )
 
 
@@ -790,9 +790,11 @@ class NetworkFaultReport(Base):
     fno_portal: Mapped[Optional[str]] = mapped_column(FNO_PORTAL, nullable=True)
     fno_account_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
-    # Affected service (if known)
+    # Affected service (if known). References the `网络` service's NetworkService
+    # (services/网络/models.py) — resolved in Python at query time, not via a
+    # cross-service FK, so this is a plain UUID column.
     service_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("network_services.id", ondelete="SET NULL"), nullable=True
+        PG_UUID(as_uuid=True), nullable=True
     )
 
     # Location

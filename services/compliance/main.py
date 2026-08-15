@@ -8,35 +8,51 @@ Covers: Contract Management, Tax, H&S, CIPC, Bylaw, BBBEE, Leave, Vehicles,
 """
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.common.entitlements import EntitlementGuard
 from services.common.db import get_async_session as get_db
 from services.common.middleware import configure_production
 
 logger = logging.getLogger("compliance")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
-app = FastAPI(
-    title="OmniDome Compliance Service",
-    version="2.0.0",
-    description="Comprehensive compliance management for South African telecom operators",
+guard = EntitlementGuard(
+    module_id="compliance",
+    public_paths={"/health", "/docs", "/openapi.json"},
 )
 
-configure_production(app)
 
-
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    guard.ensure_startup()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         from services.compliance.database import Base
         from services.common.db import get_async_engine
         async with get_async_engine().begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         logger.info("Compliance tables ensured")
+    yield
+
+
+app = FastAPI(
+    title="OmniDome Compliance Service",
+    version="2.0.0",
+    description="Comprehensive compliance management for South African telecom operators",
+    lifespan=_lifespan,
+)
+
+configure_production(app)
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
 
 # ── Route Registration ──────────────────────────────────────────────────
 
@@ -98,7 +114,10 @@ async def health():
 # ── Compliance Overview Dashboard ───────────────────────────────────────
 
 @app.get("/api/v1/dashboard/overview")
-async def compliance_overview(db: AsyncSession = Depends(get_db)):
+async def compliance_overview(
+    db: AsyncSession = Depends(get_db),
+    ctx=Depends(lambda: None),  # auth enforced by middleware; ctx available via request.state
+):
     """Aggregated compliance overview — scores, counts, and category breakdown."""
     from services.compliance.database import (
         ComplianceScore, Contract, ContractStatus,

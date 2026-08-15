@@ -1,7 +1,7 @@
 """Approval routes — CRUD and decision workflow for approval requests."""
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -112,7 +112,7 @@ async def decide_approval(
 
         approval.status = body.status
         approval.decided_by = ctx.user_id
-        approval.decided_at = datetime.utcnow()
+        approval.decided_at = datetime.now(timezone.utc)
         await session.flush()
         await session.refresh(approval)
         return approval

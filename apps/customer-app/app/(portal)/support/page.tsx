@@ -12,13 +12,14 @@
  *  - No context-switching required.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   MessageSquare, Ticket, Clock, CheckCircle, AlertCircle,
   ChevronRight, Plus, Phone, Mail,
 } from "lucide-react";
 import { AgentChat } from "@/components/chat/AgentChat";
 import { useAuthStore } from "@/lib/stores/auth-store";
+import { api } from "@/lib/api/client";
 import brandConfig from "@/config/brand.json";
 
 interface SupportTicket {
@@ -37,33 +38,64 @@ const STATUS_CONFIG: Record<SupportTicket["status"], { label: string; color: str
   resolved: { label: "Resolved", color: "bg-green-50 text-green-700", icon: CheckCircle },
 };
 
-// Seed with realistic mock data — replace with api.getTickets() when ready
-const INITIAL_TICKETS: SupportTicket[] = [
-  {
-    id: "TKT-1001",
-    subject: "Intermittent connection drops",
-    status: "open",
-    priority: "high",
-    created_at: "2026-06-03",
-    last_reply: "2026-06-04",
-  },
-  {
-    id: "TKT-1000",
-    subject: "Router replacement request",
-    status: "resolved",
-    priority: "medium",
-    created_at: "2026-05-28",
-    last_reply: "2026-05-30",
-  },
-];
+// Maps an API SupportTicket (lib/api/types) into this page's local shape.
+// API status values (in_progress, waiting_customer, closed) are normalized
+// to the page's display states (pending / resolved).
+function toLocalTicket(t: {
+  id: string;
+  subject: string;
+  status: string;
+  priority: string;
+  createdAt: string;
+  lastCommentAt?: string;
+}): SupportTicket {
+  const status =
+    t.status === "open"
+      ? "open"
+      : t.status === "resolved" || t.status === "closed"
+        ? "resolved"
+        : "pending"; // in_progress | waiting_customer -> pending
+  return {
+    id: t.id,
+    subject: t.subject,
+    status,
+    priority: t.priority as SupportTicket["priority"],
+    created_at: t.createdAt,
+    last_reply: t.lastCommentAt,
+    source: "form",
+  };
+}
 
 type Tab = "chat" | "tickets";
 
 export default function SupportPage() {
   const customer = useAuthStore((s) => s.customer);
   const [tab, setTab] = useState<Tab>("chat");
-  const [tickets, setTickets] = useState<SupportTicket[]>(INITIAL_TICKETS);
+  const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [newTicketBadge, setNewTicketBadge] = useState(false);
+
+  // Load the customer's real tickets on mount. Starts empty (no mock data);
+  // AI-created tickets are prepended by handleTicketCreated below.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getTickets()
+      .then((res) => {
+        if (cancelled) return;
+        const fetched = (res?.items ?? []).map(toLocalTicket);
+        setTickets((prev) => {
+          const ai = prev.filter((t) => t.source === "ai");
+          return [...ai, ...fetched];
+        });
+      })
+      .catch((err) => {
+        // Leave the list empty rather than showing fabricated tickets.
+        console.error("Failed to load support tickets:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Fired by AgentChat when the AI creates a ticket via the create_support_ticket tool
   const handleTicketCreated = useCallback(

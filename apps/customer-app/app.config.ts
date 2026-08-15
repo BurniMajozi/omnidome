@@ -1,6 +1,11 @@
 import { existsSync } from 'node:fs';
 import type { ExpoConfig, ConfigContext } from 'expo/config';
 
+// EAS project ID is supplied via environment (set with `eas secret:create EAS_PROJECT_ID <id>`
+// or export it locally). It is intentionally NOT hardcoded here — a fake placeholder would
+// silently break OTA updates / EAS Submit. If unset, EAS build/submit will fail loudly.
+const EAS_PROJECT_ID = process.env.EAS_PROJECT_ID;
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'OmniDome',
@@ -84,7 +89,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       {
         icon: './assets/notification-icon.png',
         color: '#2563eb',
-        sounds: ['./assets/notification-sound.wav'],
       },
     ],
     [
@@ -112,7 +116,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       origin: false,
     },
     eas: {
-      projectId: 'your-eas-project-id',
+      // Provided at build time via EAS_PROJECT_ID (set in EAS secrets / .env).
+      // Never hardcode the real ID — it is account/project specific.
+      projectId: EAS_PROJECT_ID ?? '',
     },
   },
 
@@ -121,7 +127,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   },
 
   updates: {
-    url: 'https://u.expo.dev/your-eas-project-id',
+    url: EAS_PROJECT_ID
+      ? `https://u.expo.dev/${EAS_PROJECT_ID}`
+      : 'https://u.expo.dev/',
     checkAutomatically: 'ON_LOAD',
     fallbackToCacheTimeout: 0,
   },

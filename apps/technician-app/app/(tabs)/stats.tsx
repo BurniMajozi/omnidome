@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Wrench, Clock, CheckCircleStar, DollarSign, Star, TrendingUp } from "lucide-react";
-import { technicianApi } from "../../../lib/api/client";
-import type { TechStats } from "../../../lib/api/types";
+import { Wrench, Clock, CheckCircle2, DollarSign, Star, TrendingUp } from "lucide-react";
+import { technicianApi } from "@/lib/api/client";
+import type { TechStats } from "@/lib/api/types";
 
 // ── Stat Card Component ───────────────────────────────────────────────
 
@@ -94,7 +94,7 @@ export default function StatsPage() {
           <h2 className="text-sm font-semibold text-slate-300 mb-3">This Week</h2>
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-slate-800 border border-slate-700 rounded-lg p-4 text-center">
-              <CheckCircleStar className="h-5 w-5 text-emerald-400 mx-auto mb-1" />
+              <CheckCircle2 className="h-5 w-5 text-emerald-400 mx-auto mb-1" />
               <p className="text-2xl font-bold text-emerald-400">{stats.jobs_week}</p>
               <p className="text-xs text-slate-400">Jobs Completed</p>
             </div>

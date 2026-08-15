@@ -1,6 +1,15 @@
 // Technician App — Shared TypeScript Types
 // Mirrors the mobile-technician-api.ts types for standalone use
 
+export interface TechnicianProfile {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  role: string;
+  zone?: string;
+}
+
 export interface TechJob {
   id: string
   tenant_id: string

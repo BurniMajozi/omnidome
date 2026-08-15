@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { LogOut, User, Mail, Phone, MapPin, Shield, Bell, ChevronRight } from "lucide-react";
-import { useAuthStore } from "../../../lib/stores/auth-store";
+import { useAuthStore } from "@/lib/stores/auth-store";
 
 export default function ProfilePage() {
   const { technician, logout } = useAuthStore();

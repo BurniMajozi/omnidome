@@ -3,6 +3,8 @@
 import { Tabs } from 'expo-router';
 import { Wrench, TrendingUp, User, Cpu, Bot } from 'lucide-react';
 
+type TabIconProps = { color: string; size: number };
+
 export default function TabLayout() {
   return (
     <Tabs
@@ -28,35 +30,35 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'Jobs',
-          tabBarIcon: ({ color, size }) => <Wrench size={size} color={color} />,
+          tabBarIcon: ({ color, size }: TabIconProps) => <Wrench size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="stats"
         options={{
           title: 'Stats',
-          tabBarIcon: ({ color, size }) => <TrendingUp size={size} color={color} />,
+          tabBarIcon: ({ color, size }: TabIconProps) => <TrendingUp size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',
-          tabBarIcon: ({ color, size }) => <User size={size} color={color} />,
+          tabBarIcon: ({ color, size }: TabIconProps) => <User size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="site-iot"
         options={{
           title: "Site IoT",
-          tabBarIcon: ({ color, size }) => <Cpu size={size} color={color} />,
+          tabBarIcon: ({ color, size }: TabIconProps) => <Cpu size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="assistant"
         options={{
           title: "Assist",
-          tabBarIcon: ({ color, size }) => <Bot size={size} color={color} />,
+          tabBarIcon: ({ color, size }: TabIconProps) => <Bot size={size} color={color} />,
         }}
       />
     </Tabs>

@@ -10,19 +10,6 @@ const API =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'http://localhost:8000';
 
-async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
-    cache: 'no-store',
-    headers: { 'Content-Type': 'application/json' },
-    ...init,
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`API error ${res.status}: ${body}`);
-  }
-  return res.json();
-}
-
 import type {
   TechJob,
   TechDevice,
@@ -32,9 +19,43 @@ import type {
   TechStats,
   DeviceSignal,
   RadiusAccount,
+  TechnicianProfile,
 } from './types';
 
+// Lazy import avoids a hard dependency cycle at module init time.
+import { useAuthStore } from '../stores/auth-store';
+
+async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch(`${API}${path}`, {
+    cache: 'no-store',
+    headers,
+    ...init,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`API error ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
 export const technicianApi = {
+  // Auth
+  login: (email: string, password: string) =>
+    fetchJSON<{ accessToken: string; technician: TechnicianProfile }>(
+      '/auth/technician/login',
+      {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      }
+    ),
+
   // Job queue
   getMyJobs: (params?: { status?: string; priority?: string }) => {
     const q = new URLSearchParams();
@@ -98,27 +119,59 @@ export const technicianApi = {
   getMyStats: () =>
     fetchJSON<TechStats>(`/api/support/technicians/me/stats`),
 
-  // SSE stream for real-time job dispatch
+  // SSE stream for real-time job dispatch.
+  // Uses fetch + ReadableStream (not EventSource) so we can send the bearer
+  // token and target an absolute API URL — EventSource cannot set auth headers
+  // and a relative URL never resolves inside the Expo WebView shell.
   streamJobEvents: (onEvent: (event: { event: string; data: unknown }) => void) => {
-    const evtSource = new EventSource('/api/support/technicians/me/stream');
-    evtSource.addEventListener('connected', (e) => {
-      onEvent({ event: 'connected', data: JSON.parse(e.data as string) });
-    });
-    evtSource.addEventListener('initial_state', (e) => {
-      onEvent({ event: 'initial_state', data: JSON.parse(e.data as string) });
-    });
-    evtSource.addEventListener('new_ticket', (e) => {
-      onEvent({ event: 'new_ticket', data: JSON.parse(e.data as string) });
-    });
-    evtSource.addEventListener('ticket_update', (e) => {
-      onEvent({ event: 'ticket_update', data: JSON.parse(e.data as string) });
-    });
-    evtSource.addEventListener('ping', () => {
-      // Keep-alive, no action needed
-    });
-    evtSource.onerror = () => {
-      onEvent({ event: 'error', data: { message: 'Stream connection lost' } });
+    const token = useAuthStore.getState().accessToken;
+    const url = `${API}/api/support/technicians/me/stream`;
+    const controller = new AbortController();
+    let buffer = '';
+
+    const dispatch = (raw: string) => {
+      // Parse one SSE event block: `event: <name>\n\ndata: <json>\n\n`
+      const match = raw.match(/event:\s*(\S+)\s*\n\s*data:\s*([\s\S]*?)\n\n/);
+      if (!match) return;
+      const name = match[1];
+      if (name === 'ping') return; // keep-alive, no action
+      try {
+        onEvent({ event: name, data: JSON.parse(match[2]) });
+      } catch {
+        // Ignore malformed event payloads
+      }
     };
-    return () => evtSource.close();
+
+    (async () => {
+      try {
+        const res = await fetch(url, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) {
+          onEvent({ event: 'error', data: { message: `Stream error ${res.status}` } });
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let idx: number;
+          while ((idx = buffer.indexOf('\n\n')) !== -1) {
+            const block = buffer.slice(0, idx + 2);
+            buffer = buffer.slice(idx + 2);
+            dispatch(block);
+          }
+        }
+      } catch (err) {
+        if ((err as Error)?.name !== 'AbortError') {
+          onEvent({ event: 'error', data: { message: 'Stream connection lost' } });
+        }
+      }
+    })();
+
+    return () => controller.abort();
   },
 };

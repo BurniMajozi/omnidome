@@ -1,10 +1,11 @@
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 import uuid
 
+import jwt
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
@@ -27,6 +28,27 @@ from services.call_center.voicebox_adapter import (
     VoiceboxUnavailable,
 )
 
+
+# WS JWT auth helper — mirrors services.common.auth._decode_jwt
+def _decode_ws_jwt(token: str) -> Dict[str, Any]:
+    verify = os.getenv("AUTH_JWT_VERIFY", "true").lower() in {"1", "true", "yes", "on"}
+    algorithm = os.getenv("AUTH_JWT_ALGORITHM", "HS256")
+    options = {"verify_aud": False}
+    if verify:
+        key = os.getenv("AUTH_JWT_PUBLIC_KEY") or os.getenv("AUTH_JWT_SECRET")
+        if not key:
+            raise ValueError("JWT verification key not configured")
+        try:
+            return jwt.decode(token, key, algorithms=[algorithm], options=options)
+        except jwt.PyJWTError as exc:
+            raise ValueError("Invalid token") from exc
+    # Unverified decode (dev-only, requires AUTH_JWT_VERIFY=false)
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError as exc:
+        raise ValueError("Invalid token") from exc
+
+
 app = FastAPI(title="OmniDome Call Center Service", version="0.3.0")
 guard = EntitlementGuard(module_id="call_center")
 logger = logging.getLogger("call_center")
@@ -39,10 +61,27 @@ async def health():
     return {"status": "ok", "service": "call_center"}
 
 
-@app.on_event("startup")
-async def startup() -> None:
+# Lifespan replaces the deprecated @app.on_event("startup") (removed in FastAPI >=0.110).
+# Mirrors the pattern used in services/iot/main.py.
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
     guard.ensure_startup()
-    await run_with_db_retry(init_tables, logger=logger)
+    # DEV ONLY — VOICE_DEV_SKIP_DB must never be set in a production deployment.
+    # If set, call-center tables are never created and the service cannot persist data.
+    if os.getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}:
+        logger.critical(
+            "VOICE_DEV_SKIP_DB enabled; SKIPPING call-center table initialization "
+            "(dev-only escape hatch — must not be set in production)"
+        )
+    else:
+        await run_with_db_retry(init_tables, logger=logger)
+    yield
+
+
+app.router.lifespan_context = _lifespan
 
 
 @app.middleware("http")
@@ -86,7 +125,7 @@ def _session_to_dict(session: CallSession) -> dict:
         "start_time": session.start_time.isoformat() if session.start_time else None,
         "end_time": session.end_time.isoformat() if session.end_time else None,
         "duration_seconds": session.duration_seconds,
-        "sentiment_score": float(session.sentiment_score) if session.sentiment_score else None,
+        "sentiment_score": float(session.sentiment_score) if session.sentiment_score is not None else None,
         "recording_url": session.recording_url,
         "transcript": session.transcript,
         "live_transcript": session.live_transcript,
@@ -110,7 +149,19 @@ def _queue_to_dict(q: CallQueue) -> dict:
     }
 
 
+def _demo_mode_enabled() -> bool:
+    """Sample/seed data is only written when DEMO_MODE is explicitly enabled.
+
+    Defaults to OFF so live tenants are never polluted with invented agents,
+    queues, or call transcripts. Set DEMO_MODE=true to seed demo data.
+    """
+    raw = os.getenv("DEMO_MODE", "false")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 async def _ensure_sample_data(tenant_id: uuid.UUID, db) -> None:
+    if not _demo_mode_enabled():
+        return
     result = await db.execute(select(Agent).where(Agent.tenant_id == tenant_id).limit(1))
     if result.scalar_one_or_none():
         return
@@ -126,7 +177,7 @@ async def _ensure_sample_data(tenant_id: uuid.UUID, db) -> None:
     db.add(Script(tenant_id=tenant_id, title="Sales: Fiber Upgrade", category="Sales", content="Targeting existing customers with a fiber upgrade offer...", active=True))
     db.add(Script(tenant_id=tenant_id, title="Support: Troubleshooting", category="Support", content="Step-by-step guide for troubleshooting connectivity issues...", active=True))
     # Seed sessions
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     db.add(CallSession(tenant_id=tenant_id, agent_id=agent1.id, direction="INBOUND", start_time=now, end_time=now, duration_seconds=312, sentiment_score=0.85, transcript="Customer inquired about upgrading their fiber package."))
     db.add(CallSession(tenant_id=tenant_id, agent_id=agent2.id, direction="INBOUND", start_time=now, end_time=now, duration_seconds=185, sentiment_score=0.72, transcript="Customer reported intermittent connectivity issues."))
     await db.flush()
@@ -265,6 +316,10 @@ class CallSessionEnd(BaseModel):
     notes: Optional[str] = None
 
 
+class LiveTranscriptUpdate(BaseModel):
+    transcript: str
+
+
 @app.get("/sessions")
 async def list_sessions(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -292,7 +347,7 @@ async def create_session(session: CallSessionCreate, tenant_id: uuid.UUID = Depe
 
 
 @app.get("/sessions/{session_id}")
-async def get_session(session_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+async def get_call_session(session_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallSession).where(CallSession.id == session_id, CallSession.tenant_id == tenant_id))
     session = result.scalar_one_or_none()
     if not session:
@@ -318,7 +373,7 @@ async def end_session(session_id: uuid.UUID, payload: CallSessionEnd, tenant_id:
 @app.put("/sessions/{session_id}/live-transcript")
 async def update_live_transcript(
     session_id: uuid.UUID,
-    transcript: str,
+    payload: LiveTranscriptUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
@@ -327,7 +382,7 @@ async def update_live_transcript(
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Call session not found")
-    session.live_transcript = transcript
+    session.live_transcript = payload.transcript
     await db.flush()
     return {"id": str(session.id), "live_transcript": session.live_transcript}
 
@@ -431,7 +486,7 @@ async def get_queue_stats(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(ge
     )
     active_calls = active_result.scalar() or 0
     # Count completed calls today
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     completed_result = await db.execute(
         select(func.count(CallSession.id)).where(
             CallSession.tenant_id == tenant_id,
@@ -501,43 +556,61 @@ async def whisper_websocket(
 ):
     """
     WebSocket endpoint for real-time Whisper AI streaming STT.
-    
+
     Client sends audio chunks as binary messages.
     Server responds with JSON: {"transcript": "...", "is_final": false, "confidence": 0.95}
-    
+
     Query params:
-    - tenant_id: UUID
-    - agent_id: UUID
+    - token: JWT bearer token (required) — validated via AUTH_JWT_VERIFY/AUTH_JWT_SECRET
     - language: str (default "en")
     """
-    await websocket.accept()
-    
-    tenant_id = websocket.query_params.get("tenant_id", "00000000-0000-0000-0000-000000000001")
-    agent_id = websocket.query_params.get("agent_id", "")
+    # Authenticate before accept: extract JWT from query param
+    token = websocket.query_params.get("token", "")
+    if not token:
+        await websocket.close(code=4001, reason="Missing JWT token")
+        return
+
+    try:
+        payload = _decode_ws_jwt(token)
+    except ValueError as e:
+        await websocket.close(code=4001, reason=str(e))
+        return
+
+    user_id = payload.get("sub") or payload.get("user_id")
+    tenant_raw = payload.get("tenant_id") or payload.get("org_id")
+    if not user_id or not tenant_raw:
+        await websocket.close(code=4001, reason="Invalid token: missing sub/user_id or tenant_id/org_id")
+        return
+
+    tenant_id = str(tenant_raw)
+    # agent_id is optional in token; can also be passed as query param for routing
+    agent_id = websocket.query_params.get("agent_id", user_id)
     language = websocket.query_params.get("language", "en")
-    
+
+    await websocket.accept()
+
     session_key = call_session_id
     if session_key not in whisper_connections:
         whisper_connections[session_key] = {"agents": {}}
     whisper_connections[session_key]["agents"][agent_id] = websocket
-    
+
     logger.info(f"Whisper WS connected: session={call_session_id}, agent={agent_id}")
-    
+
     audio_buffer = bytearray()
-    
+
     try:
         while True:
             data = await websocket.receive()
-            
+
             if "bytes" in data:
                 # Audio chunk received
                 audio_buffer.extend(data["bytes"])
-                
+
                 # Process every ~2 seconds of audio (approx 64KB at 16kHz 16-bit mono)
                 if len(audio_buffer) >= 65536:
                     audio_chunk = bytes(audio_buffer)
                     audio_buffer = bytearray()
-                    
+
                     try:
                         result = await transcribe_audio(
                             audio_bytes=audio_chunk,
@@ -547,7 +620,7 @@ async def whisper_websocket(
                         )
                         transcript = result.get("transcript", "").strip()
                         confidence = result.get("confidence", 0)
-                        
+
                         if transcript:
                             response = {
                                 "type": "transcript",
@@ -559,14 +632,13 @@ async def whisper_websocket(
                             await websocket.send_json(response)
                     except Exception as e:
                         logger.error(f"Whisper STT error: {e}")
-                        await websocket.send_json({"type": "error", "message": str(e)})
-            
+                        await websocket.send_json({"type": "error", "message": "Transcription failed"})
             elif "text" in data:
                 # Control message (JSON)
                 try:
                     msg = json.loads(data["text"])
                     action = msg.get("action")
-                    
+
                     if action == "finalize":
                         # Process remaining buffer
                         if audio_buffer:
@@ -588,13 +660,14 @@ async def whisper_websocket(
                             except Exception as e:
                                 logger.error(f"Whisper finalize error: {e}")
                         await websocket.send_json({"type": "ended"})
-                    
+
                     elif action == "ping":
                         await websocket.send_json({"type": "pong"})
-                
+
                 except json.JSONDecodeError:
+                    # Silently ignore invalid JSON control messages
                     pass
-    
+
     except WebSocketDisconnect:
         logger.info(f"Whisper WS disconnected: session={call_session_id}, agent={agent_id}")
     finally:
@@ -643,7 +716,7 @@ async def stop_whisper_session(
     if not ws:
         raise HTTPException(status_code=404, detail="Whisper session not found")
     ws.status = "STOPPED"
-    ws.stopped_at = datetime.utcnow()
+    ws.stopped_at = datetime.now(timezone.utc)
     await db.flush()
     return {"id": str(ws.id), "status": "STOPPED"}
 
@@ -767,7 +840,6 @@ async def get_customer_360(
                             customer_data["network"]["devices"] = dev_resp.json().get("items", [])
 
                         # Get recent performance metrics (last hour)
-                        from datetime import datetime, timedelta, timezone
                         from_time = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
                         met_resp = await client.get(
                             f"{network_url}/api/network/performance/metrics",
@@ -784,7 +856,9 @@ async def get_customer_360(
                         # Check for active FNO outages affecting this service
                         fno_provider = services_list[0].get("fno_provider")
                         if fno_provider:
-                            # This would call FNO Intelligence service in production
+                            # TODO(call_center): enrich with live FNO Intelligence outage
+                            # data when the integration is wired; for now we surface the
+                            # provider identifier only.
                             customer_data["network"]["fno_provider"] = fno_provider
     except Exception as e:
         logger.warning(f"Network fetch failed for customer 360: {e}")
@@ -909,7 +983,7 @@ async def deploy_voice_agent(
         tenant_id=tenant_id,
         agent_id=agent.id,
         direction=direction,
-        start_time=datetime.utcnow(),
+        start_time=datetime.now(timezone.utc),
         notes=f"[Voice Agent] {body.agent_name} | {body.mode.upper()} | {body.phone_number}",
     )
     db.add(sess)
@@ -952,7 +1026,7 @@ async def stop_voice_agent(
     if not deployment:
         raise HTTPException(status_code=404, detail="Deployment not found")
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     deployment.status = "stopped"
     deployment.stopped_at = now
 

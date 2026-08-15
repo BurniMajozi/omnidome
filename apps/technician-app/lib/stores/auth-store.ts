@@ -5,16 +5,8 @@
  * Uses expo-secure-store for native builds and localStorage for web/PWA.
  */
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-
-export interface TechnicianProfile {
-  id: string
-  name: string
-  email: string
-  phone?: string
-  role: string
-  zone?: string
-}
+import { persist, type PersistStorage, type StorageValue } from 'zustand/middleware';
+import type { TechnicianProfile } from '../api/types';
 
 interface AuthState {
   technician: TechnicianProfile | null
@@ -30,25 +22,29 @@ interface AuthState {
   clearError: () => void
 }
 
-// Platform-aware storage adapter
-// On native (Expo), uses SecureStore. On web/PWA, uses localStorage.
-const getStorageAdapter = () => {
+// Platform-aware storage adapter.
+// On native (Expo WebView shell), `window` is undefined, so we use
+// expo-secure-store. On web/PWA, `window` exists and we fall through to
+// Zustand's default localStorage. (The earlier comment was inverted — the
+// `!hasWindow` branch below is the native path, not the web path.)
+const getStorageAdapter = (): PersistStorage<AuthState> | undefined => {
   try {
     const hasWindow = typeof window !== 'undefined';
     if (!hasWindow) {
       const SecureStore = require('expo-secure-store');
-      return {
+      const adapter: PersistStorage<AuthState> = {
         getItem: async (name: string) => {
           const value = await SecureStore.getItemAsync(name);
-          return value ?? null;
+          return value ? JSON.parse(value) : null;
         },
-        setItem: async (name: string, value: string) => {
-          await SecureStore.setItemAsync(name, value);
+        setItem: async (name: string, value: StorageValue<AuthState>) => {
+          await SecureStore.setItemAsync(name, JSON.stringify(value));
         },
         removeItem: async (name: string) => {
           await SecureStore.deleteItemAsync(name);
         },
       };
+      return adapter;
     }
   } catch {
     // expo-secure-store not available, fall through to web storage
@@ -85,7 +81,13 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'technician-auth',
-      storage: getStorageAdapter(),
+      // persist infers the persisted-state type from `partialize` (a 4-field
+      // subset of AuthState). Our adapter is a shape-agnostic JSON serializer
+      // typed as PersistStorage<AuthState>, so cast it to the inferred subset
+      // type — the runtime serialization is identical either way.
+      storage: getStorageAdapter() as unknown as PersistStorage<
+        Pick<AuthState, 'technician' | 'isAuthenticated' | 'accessToken' | 'refreshToken'>
+      >,
       partialize: (state) => ({
         technician: state.technician,
         isAuthenticated: state.isAuthenticated,

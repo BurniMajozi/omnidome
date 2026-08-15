@@ -4,11 +4,22 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import { supabase } from "@/lib/supabase/client"
 import { listVoices, speak as voiceboxSpeak, type VoiceProfile } from "@/lib/voicebox-api"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
+import {
+  MIC_STORAGE_KEY,
+  DEFAULT_MIC_ID,
+  isBrowserPseudoMic,
+  findPreferredPhysicalMic,
+  stripMicAliasPrefix,
+  resolvePreferredMicId,
+  micAudioConstraints,
+  saveMicId,
+} from "@/lib/mic-device"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   Mic,
   MicOff,
@@ -38,6 +49,7 @@ import {
   CheckCircle2,
   X,
   Radio,
+  RefreshCw,
 } from "lucide-react"
 import { deployVoiceAgent, stopVoiceAgent, listVoiceAgentDeployments } from "@/lib/call-center-api"
 
@@ -127,14 +139,125 @@ function SpeechToTextPanel() {
   const [result, setResult] = useState<TranscriptResult | null>(null)
   const [language, setLanguage] = useState("en")
   const [error, setError] = useState<string | null>(null)
+  const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([])
+  const [selectedMicId, setSelectedMicId] = useState(DEFAULT_MIC_ID)
+  const [activeMicLabel, setActiveMicLabel] = useState<string | null>(null)
+  const [micListError, setMicListError] = useState<string | null>(null)
   const mediaRecorder = useRef<MediaRecorder | null>(null)
   const chunks = useRef<Blob[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const refreshAudioInputs = useCallback(async (requestPermission = false) => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setMicListError("Microphone device listing is not available in this browser.")
+      return
+    }
+
+    let permissionStream: MediaStream | null = null
+    setMicListError(null)
+
+    try {
+      if (requestPermission) {
+        permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      const inputs = devices.filter((device) => device.kind === "audioinput")
+      const preferredMic = findPreferredPhysicalMic(inputs)
+      setAudioInputs(inputs)
+      setSelectedMicId((current) =>
+        current && !isBrowserPseudoMic(current) && inputs.some((device) => device.deviceId === current)
+          ? current
+          : preferredMic?.deviceId ?? DEFAULT_MIC_ID,
+      )
+    } catch (err) {
+      console.error("Could not list microphone devices", err)
+      setMicListError(err instanceof Error ? err.message : "Could not list microphone devices.")
+    } finally {
+      permissionStream?.getTracks().forEach((track) => track.stop())
+    }
+  }, [])
+
+  useEffect(() => {
+    try {
+      const savedMicId = window.localStorage.getItem(MIC_STORAGE_KEY)
+      if (savedMicId) setSelectedMicId(savedMicId)
+    } catch {
+      // Ignore private browsing / blocked storage.
+    }
+
+    refreshAudioInputs(false)
+
+    const handleDeviceChange = () => refreshAudioInputs(false)
+    navigator.mediaDevices?.addEventListener?.("devicechange", handleDeviceChange)
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.("devicechange", handleDeviceChange)
+    }
+  }, [refreshAudioInputs])
+
+  const selectableAudioInputs = audioInputs.filter(
+    (device) => device.deviceId && !isBrowserPseudoMic(device.deviceId),
+  )
+  const defaultMicLabel =
+    audioInputs.find((device) => device.deviceId === DEFAULT_MIC_ID)?.label || "System default microphone"
+  const defaultMicOptionLabel =
+    defaultMicLabel === "System default microphone"
+      ? "Browser default microphone"
+      : `Browser default (${stripMicAliasPrefix(defaultMicLabel)})`
+  const selectedMicLabel =
+    selectedMicId === DEFAULT_MIC_ID
+      ? defaultMicOptionLabel
+      : audioInputs.find((device) => device.deviceId === selectedMicId)?.label || "Selected microphone"
+
+  const handleMicChange = useCallback((deviceId: string) => {
+    setSelectedMicId(deviceId)
+    setActiveMicLabel(null)
+    saveMicId(deviceId)
+  }, [])
+
+  const sendAudioForTranscription = useCallback(async (blob: Blob) => {
+    setIsProcessing(true)
+    setResult(null)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append("file", blob, blob.type === "audio/wav" ? "recording.wav" : "recording.webm")
+      form.append("language", language)
+
+      const res = await fetch(`${API_BASE}/ai/speech-to-text`, {
+        method: "POST",
+        headers: await getAuthHeaders(),
+        body: form,
+      })
+      if (!res.ok) throw new Error(await res.text())
+      const data = await res.json()
+      setResult(data)
+    } catch (err) {
+      console.error(err)
+      setError(err instanceof Error ? err.message : "Transcription failed")
+    } finally {
+      setIsProcessing(false)
+    }
+  }, [language])
+
   const startRecording = useCallback(async () => {
     setError(null)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("Microphone recording is not available in this browser.")
+      }
+
+      const resolvedMicId = await resolvePreferredMicId(selectedMicId)
+      if (resolvedMicId !== selectedMicId) {
+        setSelectedMicId(resolvedMicId)
+        saveMicId(resolvedMicId)
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: micAudioConstraints(resolvedMicId) })
+      const recordingMicLabel = stream.getAudioTracks()[0]?.label || selectedMicLabel
+      setActiveMicLabel(recordingMicLabel)
+      refreshAudioInputs(false)
+
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : ""
@@ -158,7 +281,7 @@ function SpeechToTextPanel() {
         const stats = await toWavWithStats(rawBlob).catch(() => null)
         if (stats && stats.rms < SILENCE_RMS_THRESHOLD) {
           setError(
-            "The recording contains no sound — Windows is likely capturing the wrong microphone. Check Settings → System → Sound → Input: speak and confirm the level bar moves, then try again.",
+            `The recording from "${recordingMicLabel}" contains no sound. Select the Senary Audio microphone here and try again.`,
           )
           return
         }
@@ -178,37 +301,12 @@ function SpeechToTextPanel() {
             : `Could not start recording: ${err instanceof Error ? err.message : String(err)}`,
       )
     }
-  }, [language])
+  }, [refreshAudioInputs, selectedMicId, selectedMicLabel, sendAudioForTranscription])
 
   const stopRecording = useCallback(() => {
     mediaRecorder.current?.stop()
     setIsRecording(false)
   }, [])
-
-  const sendAudioForTranscription = async (blob: Blob) => {
-    setIsProcessing(true)
-    setResult(null)
-    setError(null)
-    try {
-      const form = new FormData()
-      form.append("file", blob, "recording.webm")
-      form.append("language", language)
-
-      const res = await fetch(`${API_BASE}/ai/speech-to-text`, {
-        method: "POST",
-        headers: await getAuthHeaders(),
-        body: form,
-      })
-      if (!res.ok) throw new Error(await res.text())
-      const data = await res.json()
-      setResult(data)
-    } catch (err) {
-      console.error(err)
-      setError(err instanceof Error ? err.message : "Transcription failed")
-    } finally {
-      setIsProcessing(false)
-    }
-  }
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -257,6 +355,45 @@ function SpeechToTextPanel() {
               <option value="zu">Zulu</option>
               <option value="af">Afrikaans</option>
             </select>
+          </div>
+
+          <div>
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <label className="block text-sm font-medium text-foreground">Microphone</label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => refreshAudioInputs(true)}
+                disabled={isRecording || isProcessing}
+                title="Refresh microphones"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
+            <Select
+              value={selectedMicId}
+              onValueChange={handleMicChange}
+              disabled={isRecording || isProcessing}
+            >
+              <SelectTrigger className="w-full rounded-lg border-border bg-card text-sm text-foreground">
+                <SelectValue placeholder="System default microphone" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DEFAULT_MIC_ID}>{defaultMicOptionLabel}</SelectItem>
+                {selectableAudioInputs.map((device, index) => (
+                  <SelectItem key={`${device.deviceId}-${index}`} value={device.deviceId}>
+                    {device.label || `Microphone ${index + 1}`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Active: {activeMicLabel || selectedMicLabel}
+            </p>
+            {micListError ? (
+              <p className="mt-1 text-xs text-red-400">{micListError}</p>
+            ) : null}
           </div>
 
           {/* Mic button */}

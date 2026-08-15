@@ -20,12 +20,16 @@ async def pin_message(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
-        stmt = select(Message).where(Message.id == message_id)
+        stmt = select(Message).where(
+            Message.id == message_id
+        ).join(
+            Channel, Message.channel_id == Channel.id
+        ).where(
+            Channel.tenant_id == ctx.tenant_id
+        )
         result = await session.execute(stmt)
         message = result.scalar_one_or_none()
         if not message:
-            raise HTTPException(status_code=404, detail="Message not found")
-        if message.channel_id is None:
             raise HTTPException(status_code=404, detail="Message not found")
         message.is_pinned = body.is_pinned
         await session.flush()

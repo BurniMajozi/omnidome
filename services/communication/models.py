@@ -215,13 +215,14 @@ class ModuleData(Base):
     __tablename__ = "module_data"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    module_name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    module_name: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     updated_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index("ix_module_data_name", "module_name"),
+        Index("ix_module_data_tenant_name", "tenant_id", "module_name", unique=True),
     )
 
 
@@ -244,4 +245,39 @@ class MessageReaction(Base):
     __table_args__ = (
         Index("ix_reactions_message", "message_id", "emoji"),
         Index("ix_reactions_user", "message_id", "user_id"),
+    )
+
+
+# ── Schedule Event ────────────────────────────────────────────────────────
+
+class ScheduleEvent(Base):
+    __tablename__ = "schedule_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # meeting, call, reminder, etc.
+    start_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    end_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    date_label: Mapped[str] = mapped_column(String(50), nullable=True)
+    time_label: Mapped[str] = mapped_column(String(50), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    source_message_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    linked_task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="upcoming")  # upcoming, in_progress, completed, cancelled
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_schedule_channel", "channel_id", "start_time"),
+        Index("ix_schedule_tenant_user", "tenant_id", "user_id", "start_time"),
     )

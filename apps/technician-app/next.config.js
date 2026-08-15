@@ -52,6 +52,10 @@ const withPWA = require("@ducanh2912/next-pwa").default({
 
 const nextConfig = {
   output: "standalone",
+  // Next 16 enables Turbopack by default; a webpack-only config (next-pwa)
+  // conflicts with it. An empty turbopack config silences the error and lets
+  // the build proceed under Turbopack's WASM fallback.
+  turbopack: {},
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**" },

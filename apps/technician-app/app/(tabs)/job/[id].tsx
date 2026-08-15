@@ -6,8 +6,8 @@ import {
   ArrowLeft, Play, Zap, AlertTriangle, RotateCcw, CheckCircle,
   Plus, Phone, MapPin, Signal, Thermometer, Wifi,
 } from "lucide-react";
-import { technicianApi } from "../../../lib/api/client";
-import type { TechJob, TechDevice, SpeedTestResult } from "../../../lib/api/types";
+import { technicianApi } from "@/lib/api/client";
+import type { TechJob, TechDevice, SpeedTestResult } from "@/lib/api/types";
 
 // ── Brand Colors ──────────────────────────────────────────────────────
 

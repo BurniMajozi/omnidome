@@ -1416,6 +1416,35 @@ export default function LandingPage() {
                         </ShineBorder>
                     </div>
 
+                    {/* White-Label App Suite */}
+                    <div className="mb-16">
+                        <div className="inline-flex items-center gap-2 mb-5">
+                            <Palette className="h-4 w-4 text-indigo-400" />
+                            <span className="text-xs font-black tracking-[2px] uppercase text-muted-foreground">
+                                White-Label App Suite — Your Brand, Every Screen
+                            </span>
+                        </div>
+                        <div className="flex flex-wrap items-center justify-center gap-3">
+                            {[
+                                { icon: Users, label: "Customer App" },
+                                { icon: UserCog, label: "Technician App" },
+                                { icon: Handshake, label: "Field Sales App" },
+                                { icon: Globe, label: "Web Portal" },
+                            ].map(({ icon: Icon, label }) => (
+                                <div
+                                    key={label}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-full border border-indigo-500/20 bg-indigo-500/5 backdrop-blur-md text-sm font-semibold text-foreground/80 hover:bg-indigo-500/10 hover:border-indigo-500/40 hover:text-foreground transition-all"
+                                >
+                                    <Icon className="h-4 w-4 text-indigo-400" />
+                                    {label}
+                                </div>
+                            ))}
+                        </div>
+                        <p className="mt-4 text-sm text-muted-foreground">
+                            Ship all four under your own name, logo, and colours — one platform behind them.
+                        </p>
+                    </div>
+
                     {/* Dashboard Preview */}
                     <div className="relative max-w-6xl mx-auto mb-24">
                         <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent z-10 pointer-events-none" />

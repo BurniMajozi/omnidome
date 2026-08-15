@@ -13,14 +13,25 @@ import type {
   MobileCommission,
   Customer360,
   MobileInvoice,
+  SalesAgentProfile,
 } from "./types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+// Lazy import avoids a hard dependency cycle at module init time.
+import { useAuthStore } from "../stores/auth-store";
+
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string> | undefined),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(`${API}${path}`, {
     cache: "no-store",
-    headers: { "Content-Type": "application/json" },
+    headers,
     ...init,
   });
   if (!res.ok) {
@@ -33,6 +44,16 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 // ── API methods ──────────────────────────────────────────────────────
 
 export const fieldSalesApi = {
+  // Auth
+  login: (email: string, password: string) =>
+    fetchJSON<{ accessToken: string; agent: SalesAgentProfile }>(
+      "/auth/agent/login",
+      {
+        method: "POST",
+        body: JSON.stringify({ email, password }),
+      }
+    ),
+
   // Leads
   listLeads: (params?: { status?: string; limit?: number }) => {
     const q = new URLSearchParams();

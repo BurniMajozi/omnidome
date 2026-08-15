@@ -174,46 +174,51 @@ async def invoke_agent(
     and appends new messages to it. If not provided, a new conversation is created.
     """
     conversation_id = body.conversation_id
+    skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
 
-    async with get_session() as session:
-        # Load history if continuing a conversation
-        history = None
-        if conversation_id:
-            # Verify conversation exists and belongs to tenant
-            conv_result = await session.execute(
-                select(AgentConversation).where(
-                    AgentConversation.id == conversation_id,
-                    AgentConversation.tenant_id == ctx.tenant_id,
-                )
-            )
-            conv = conv_result.scalar_one_or_none()
-            if not conv:
-                raise HTTPException(status_code=404, detail="Conversation not found")
-
-            # Load message history
-            msg_result = await session.execute(
-                select(AgentMessage)
-                .where(AgentMessage.conversation_id == conversation_id)
-                .order_by(AgentMessage.created_at.asc())
-            )
-            messages = msg_result.scalars().all()
-            history = [
-                {"role": m.role, "content": m.content or ""}
-                for m in messages
-                if m.role in ("user", "assistant")
-            ]
-
-        # Create new conversation if not continuing
+    history = None
+    if skip_db:
         if not conversation_id:
-            conv = AgentConversation(
-                tenant_id=ctx.tenant_id,
-                agent_type=body.agent_type,
-                channel="api",
-                context=body.context,
-            )
-            session.add(conv)
-            await session.flush()
-            conversation_id = conv.id
+            conversation_id = uuid.uuid4()
+    else:
+        async with get_session() as session:
+            # Load history if continuing a conversation
+            if conversation_id:
+                # Verify conversation exists and belongs to tenant
+                conv_result = await session.execute(
+                    select(AgentConversation).where(
+                        AgentConversation.id == conversation_id,
+                        AgentConversation.tenant_id == ctx.tenant_id,
+                    )
+                )
+                conv = conv_result.scalar_one_or_none()
+                if not conv:
+                    raise HTTPException(status_code=404, detail="Conversation not found")
+
+                # Load message history
+                msg_result = await session.execute(
+                    select(AgentMessage)
+                    .where(AgentMessage.conversation_id == conversation_id)
+                    .order_by(AgentMessage.created_at.asc())
+                )
+                messages = msg_result.scalars().all()
+                history = [
+                    {"role": m.role, "content": m.content or ""}
+                    for m in messages
+                    if m.role in ("user", "assistant")
+                ]
+
+            # Create new conversation if not continuing
+            if not conversation_id:
+                conv = AgentConversation(
+                    tenant_id=ctx.tenant_id,
+                    agent_type=body.agent_type,
+                    channel="api",
+                    context=body.context,
+                )
+                session.add(conv)
+                await session.flush()
+                conversation_id = conv.id
 
     # Run the agent (outside the DB session to avoid long-held locks)
     tenant_id = body.tenant_id or ctx.tenant_id
@@ -236,16 +241,17 @@ async def invoke_agent(
         )
 
     # Persist messages
-    async with get_session() as session:
-        await _persist_messages(
-            session=session,
-            conversation_id=conversation_id,
-            agent_type=body.agent_type,
-            user_message=body.message,
-            assistant_content=result["content"],
-            tool_calls=result.get("tool_calls", []),
-        )
-        await session.flush()
+    if not skip_db:
+        async with get_session() as session:
+            await _persist_messages(
+                session=session,
+                conversation_id=conversation_id,
+                agent_type=body.agent_type,
+                user_message=body.message,
+                assistant_content=result["content"],
+                tool_calls=result.get("tool_calls", []),
+            )
+            await session.flush()
 
     return AgentInvokeResponse(
         conversation_id=conversation_id,
@@ -269,9 +275,13 @@ async def invoke_agent_stream(
     tenant_id = body.tenant_id or ctx.tenant_id
     conversation_id = body.conversation_id
 
+    skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
+
     async def _ensure_conversation() -> uuid.UUID:
         if conversation_id:
             return conversation_id
+        if skip_db:
+            return uuid.uuid4()
         async with get_session() as session:
             conv = AgentConversation(
                 tenant_id=tenant_id,
@@ -333,16 +343,17 @@ async def invoke_agent_stream(
             ))
             return
 
-        async with get_session() as session:
-            await _persist_messages(
-                session=session,
-                conversation_id=conv_id,
-                agent_type=body.agent_type,
-                user_message=body.message,
-                assistant_content=full_content,
-                tool_calls=[],
-            )
-            await session.flush()
+        if not skip_db:
+            async with get_session() as session:
+                await _persist_messages(
+                    session=session,
+                    conversation_id=conv_id,
+                    agent_type=body.agent_type,
+                    user_message=body.message,
+                    assistant_content=full_content,
+                    tool_calls=[],
+                )
+                await session.flush()
 
         yield emit(AGUIEvent(type="RUN_FINISHED", run_id=run_id, tenant_id=tenant_id, conversation_id=conv_id))
 

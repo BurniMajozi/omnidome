@@ -49,7 +49,10 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
-    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+    skip_db = os.getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
+    if skip_db:
+        logger.warning("VOICE_DEV_SKIP_DB enabled; skipping agent-orchestrator table initialization")
+    elif os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         import asyncio
 
         from services.common.db import get_engine, run_with_db_retry

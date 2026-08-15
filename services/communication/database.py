@@ -1,7 +1,7 @@
 """Database session management for the Communication Service."""
 
 from services.communication.models import Base
-from services.common.db import get_async_engine, session_scope
+from services.common.db import get_async_engine, session_scope, get_session
 
 
 async def init_tables() -> None:
@@ -12,4 +12,4 @@ async def init_tables() -> None:
 
 
 # Re-export for route convenience
-__all__ = ["session_scope", "init_tables", "Base"]
+__all__ = ["session_scope", "get_session", "init_tables", "Base"]

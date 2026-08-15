@@ -1,12 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput } from "react-native";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { useState, useEffect, useRef } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, TextInput, ActivityIndicator } from "react-native";
+import { CameraView, useCameraPermissions, type CameraCapturedPicture } from "expo-camera";
 import * as ImagePicker from "expo-image-picker";
 import * as Notifications from 'expo-notifications';
-import * as SecureStore from 'expo-secure-store';
 import { useRouter } from "expo-router";
+
+// Base URL for the customer API. Mirrors NEXT_PUBLIC_API_URL used by the web client.
+const API_BASE = process.env.EXPO_PUBLIC_API_URL || "http://localhost:8000";
+const RICA_ENDPOINT = `${API_BASE}/portal/rica/submit`;
 
 interface NativeBridge {
   setSecureValue: (key: string, value: string) => Promise<void>;
@@ -24,15 +27,23 @@ declare global {
   }
 }
 
+const DOC_TYPE_MAP = {
+  id: "south_african_id",
+  passport: "passport",
+  smart_id: "smart_id",
+} as const;
+
 export default function RicaCapturePage() {
   const router = useRouter();
   const [permission, requestPermission] = useCameraPermissions();
   const [capturing, setCapturing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [idNumber, setIdNumber] = useState("");
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [documentType, setDocumentType] = useState<"id" | "passport" | "smart_id">("id");
   const [capturedImages, setCapturedImages] = useState<string[]>([]);
+  const cameraRef = useRef<CameraView>(null);
 
   useEffect(() => {
     registerForPushNotifications();
@@ -62,6 +73,22 @@ export default function RicaCapturePage() {
     setCapturing(true);
   };
 
+  const takePicture = async () => {
+    try {
+      const photo: CameraCapturedPicture | undefined = cameraRef.current
+        ? await cameraRef.current.takePictureAsync({ quality: 0.8 })
+        : undefined;
+      if (photo?.uri) {
+        setCapturedImages((prev) => [...prev, photo.uri]);
+      }
+    } catch (err) {
+      console.error("Failed to capture document:", err);
+      Alert.alert("Capture failed", "Could not capture the document. Please try again or use the gallery.");
+    } finally {
+      setCapturing(false);
+    }
+  };
+
   const pickFromGallery = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -75,20 +102,28 @@ export default function RicaCapturePage() {
   };
 
   const submitRica = async () => {
-    if (!idNumber || !firstName || !lastName || capturedImages.length === 0) {
+    // Require at least one REAL captured/gallery image (a valid file:// or content:// URI).
+    const realImages = capturedImages.filter(
+      (uri) => uri && !uri.startsWith("captured_image_uri")
+    );
+    if (!idNumber || !firstName || !lastName || realImages.length === 0) {
       Alert.alert("Missing Information", "Please fill in all fields and capture at least one document image.");
       return;
     }
 
     try {
-      // Upload images and submit RICA verification
+      setSubmitting(true);
+
+      const bridge = typeof window !== "undefined" ? window.__NATIVE_BRIDGE__ : null;
+      const token = bridge ? await bridge.getSecureValue("access_token") : null;
+
       const formData = new FormData();
       formData.append("id_number", idNumber);
       formData.append("first_name", firstName);
       formData.append("last_name", lastName);
-      formData.append("document_type", documentType);
+      formData.append("document_type", DOC_TYPE_MAP[documentType]);
 
-      capturedImages.forEach((uri, i) => {
+      realImages.forEach((uri, i) => {
         formData.append(`document_${i}`, {
           uri,
           type: "image/jpeg",
@@ -96,24 +131,39 @@ export default function RicaCapturePage() {
         } as any);
       });
 
-      // In production: API call
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
+
+      const response = await fetch(RICA_ENDPOINT, {
+        method: "POST",
+        headers,
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errBody = await response.json().catch(() => ({}));
+        throw new Error(errBody?.message || `Submission failed (${response.status})`);
+      }
+
       Alert.alert("Success", "RICA verification submitted. You will be notified once verified.");
       router.back();
     } catch (err) {
-      Alert.alert("Error", "Failed to submit RICA verification. Please try again.");
+      console.error("RICA submission error:", err);
+      Alert.alert(
+        "Error",
+        err instanceof Error ? err.message : "Failed to submit RICA verification. Please try again."
+      );
+    } finally {
+      setSubmitting(false);
     }
   };
 
   if (capturing) {
     return (
       <View style={styles.cameraContainer}>
-        <CameraView style={styles.camera} facing="back">
+        <CameraView ref={cameraRef} style={styles.camera} facing="back">
           <View style={styles.cameraOverlay}>
-            <TouchableOpacity style={styles.captureButton} onPress={async () => {
-              // Capture logic
-              setCapturing(false);
-              setCapturedImages((prev) => [...prev, "captured_image_uri"]);
-            }}>
+            <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
               <View style={styles.captureButtonInner} />
             </TouchableOpacity>
             <TouchableOpacity style={styles.cancelButton} onPress={() => setCapturing(false)}>
@@ -171,8 +221,16 @@ export default function RicaCapturePage() {
         </View>
       </View>
 
-      <TouchableOpacity style={styles.submitButton} onPress={submitRica}>
-        <Text style={styles.submitButtonText}>Submit for Verification</Text>
+      <TouchableOpacity
+        style={[styles.submitButton, submitting && { opacity: 0.7 }]}
+        onPress={submitRica}
+        disabled={submitting}
+      >
+        {submitting ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.submitButtonText}>Submit for Verification</Text>
+        )}
       </TouchableOpacity>
     </ScrollView>
   );

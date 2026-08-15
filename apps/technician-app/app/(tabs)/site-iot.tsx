@@ -7,6 +7,8 @@ import {
   CheckSquare, Square, Signal, Clock, MapPin, ChevronRight,
   Activity, Play, CheckCircle2, AlertTriangle, Loader2,
 } from "lucide-react";
+import { technicianApi } from "@/lib/api/client";
+import type { TechDevice } from "@/lib/api/types";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -39,70 +41,61 @@ interface ChecklistItem {
   checked: boolean;
 }
 
-// ── Mock Data ──────────────────────────────────────────────────────────
+// ── Data mapping (TechDevice → UI IoTDevice) ──────────────────────────
 
-const MOCK_DEVICES: IoTDevice[] = [
-  {
-    id: "gw-001", name: "Main Gateway", type: "gateway", room: "Living Room",
-    status: "online", battery: undefined, signal: 95, lastSeen: "Just now",
-    readings: { "Connected Devices": 12 },
-  },
-  {
-    id: "cam-001", name: "Front Door Camera", type: "camera", room: "Entrance",
-    status: "online", battery: 78, signal: 82, lastSeen: "2 min ago",
-  },
-  {
-    id: "cam-002", name: "Backyard Camera", type: "camera", room: "Garden",
-    status: "online", battery: 45, signal: 61, lastSeen: "1 min ago",
-  },
-  {
-    id: "cam-003", name: "Garage Camera", type: "camera", room: "Garage",
-    status: "offline", battery: 12, signal: 0, lastSeen: "3 hours ago",
-  },
-  {
-    id: "sens-001", name: "Motion Sensor", type: "sensor", room: "Hallway",
-    status: "online", battery: 92, signal: 88, lastSeen: "30 sec ago",
-    readings: { Motion: "Clear", Temperature: "22°C" },
-  },
-  {
-    id: "sens-002", name: "Window Sensor", type: "sensor", room: "Bedroom",
-    status: "online", battery: 67, signal: 74, lastSeen: "5 min ago",
-    readings: { State: "Closed", Temperature: "21°C" },
-  },
-  {
-    id: "sens-003", name: "Smoke Detector", type: "sensor", room: "Kitchen",
-    status: "warning", battery: 23, signal: 55, lastSeen: "10 min ago",
-    readings: { Smoke: "Clear", CO: "0 ppm" },
-  },
-  {
-    id: "lock-001", name: "Front Door Lock", type: "smartlock", room: "Entrance",
-    status: "online", battery: 84, signal: 90, lastSeen: "Just now",
-    readings: { State: "Locked", "Last User": "Homeowner" },
-  },
-  {
-    id: "lock-002", name: "Side Gate Lock", type: "smartlock", room: "Garden",
-    status: "offline", battery: 5, signal: 0, lastSeen: "1 day ago",
-    readings: { State: "Unknown" },
-  },
-  {
-    id: "therm-001", name: "Smart Thermostat", type: "thermostat", room: "Living Room",
-    status: "online", battery: undefined, signal: 91, lastSeen: "Just now",
-    readings: { Temperature: "22°C", Humidity: "45%", Target: "21°C" },
-  },
-];
+function mapTechDevice(d: TechDevice): IoTDevice {
+  const status: IoTDevice["status"] =
+    d.status === "ONLINE" ? "online" : d.status === "OFFLINE" ? "offline" : "warning";
+  // Derive a rough signal % from RX power (typical fibre CPE range -10 to -30 dBm).
+  const signal =
+    d.rx_power_dbm != null
+      ? Math.max(0, Math.min(100, Math.round(((d.rx_power_dbm + 40) / 30) * 100)))
+      : undefined;
+  const readings: Record<string, string | number> = {};
+  if (d.rx_power_dbm != null) readings["RX Power"] = `${d.rx_power_dbm} dBm`;
+  if (d.tx_power_dbm != null) readings["TX Power"] = `${d.tx_power_dbm} dBm`;
+  if (d.temperature_c != null) readings["Temperature"] = `${d.temperature_c}°C`;
+  if (d.firmware_version) readings["Firmware"] = d.firmware_version;
+  return {
+    id: d.id,
+    name: d.device_name,
+    type:
+      (d.device_type.toLowerCase().includes("camera")
+        ? "camera"
+        : d.device_type.toLowerCase().includes("lock")
+        ? "smartlock"
+        : d.device_type.toLowerCase().includes("therm")
+        ? "thermostat"
+        : d.device_type.toLowerCase().includes("sensor")
+        ? "sensor"
+        : d.device_type.toLowerCase().includes("gateway")
+        ? "gateway"
+        : "gateway") as IoTDevice["type"],
+    room: "Site",
+    status,
+    signal,
+    lastSeen: d.last_seen || "Unknown",
+    readings,
+  };
+}
 
-const MOCK_SENSOR_READINGS: SensorReading[] = [
-  { id: "r1", device: "Motion Sensor", metric: "Motion", value: "Clear", unit: "", timestamp: "14:32", status: "normal" },
-  { id: "r2", device: "Thermostat", metric: "Temperature", value: "22.3", unit: "°C", timestamp: "14:31", status: "normal" },
-  { id: "r3", device: "Thermostat", metric: "Humidity", value: "45", unit: "%", timestamp: "14:31", status: "normal" },
-  { id: "r4", device: "Smoke Detector", metric: "Smoke Level", value: "0.02", unit: "%", timestamp: "14:30", status: "normal" },
-  { id: "r5", device: "Smoke Detector", metric: "Battery", value: "23", unit: "%", timestamp: "14:30", status: "warning" },
-  { id: "r6", device: "Window Sensor", metric: "State", value: "Closed", unit: "", timestamp: "14:28", status: "normal" },
-  { id: "r7", device: "Garage Camera", metric: "Battery", value: "12", unit: "%", timestamp: "11:15", status: "critical" },
-  { id: "r8", device: "Side Gate Lock", metric: "Battery", value: "5", unit: "%", timestamp: "Yesterday", status: "critical" },
-  { id: "r9", device: "Front Door Lock", metric: "Access Events", value: "3", unit: "", timestamp: "14:20", status: "normal" },
-  { id: "r10", device: "Gateway", metric: "Uptime", value: "99.8", unit: "%", timestamp: "14:32", status: "normal" },
-];
+function buildReadings(devices: IoTDevice[]): SensorReading[] {
+  const rows: SensorReading[] = [];
+  for (const d of devices) {
+    for (const [metric, value] of Object.entries(d.readings ?? {})) {
+      rows.push({
+        id: `${d.id}-${metric}`,
+        device: d.name,
+        metric,
+        value: String(value),
+        unit: "",
+        timestamp: d.lastSeen,
+        status: d.status === "offline" ? "critical" : d.status === "warning" ? "warning" : "normal",
+      });
+    }
+  }
+  return rows;
+}
 
 const INITIAL_CHECKLIST: ChecklistItem[] = [
   { id: "c1", label: "Gateway powered on and connected", checked: false },
@@ -422,30 +415,29 @@ function InstallationChecklist({
 
 // ── Section: On-Site Diagnostic ────────────────────────────────────────
 
-function DiagnosticPanel() {
+function DiagnosticPanel({ devices }: { devices: IoTDevice[] }) {
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState<{ device: string; status: string }[] | null>(null);
 
-  const runDiagnostic = useCallback(() => {
+  const runDiagnostic = useCallback(async () => {
+    if (devices.length === 0) return;
     setRunning(true);
     setResults(null);
-    // Simulate diagnostic run
-    setTimeout(() => {
-      setResults([
-        { device: "Main Gateway", status: "Synced" },
-        { device: "Front Door Camera", status: "Synced" },
-        { device: "Backyard Camera", status: "Synced" },
-        { device: "Garage Camera", status: "Failed" },
-        { device: "Motion Sensor", status: "Synced" },
-        { device: "Window Sensor", status: "Synced" },
-        { device: "Smoke Detector", status: "Synced" },
-        { device: "Front Door Lock", status: "Synced" },
-        { device: "Side Gate Lock", status: "Failed" },
-        { device: "Smart Thermostat", status: "Synced" },
-      ]);
-      setRunning(false);
-    }, 2500);
-  }, []);
+    // Poll real signal for each device; report offline ones as Failed.
+    const outcomes = await Promise.all(
+      devices.map(async (d) => {
+        try {
+          if (d.status === "offline") return { device: d.name, status: "Failed" };
+          await technicianApi.getDeviceSignal(d.id);
+          return { device: d.name, status: "Synced" };
+        } catch {
+          return { device: d.name, status: "Failed" };
+        }
+      })
+    );
+    setResults(outcomes);
+    setRunning(false);
+  }, [devices]);
 
   return (
     <div>
@@ -503,15 +495,46 @@ function DiagnosticPanel() {
 // ── Main Page ──────────────────────────────────────────────────────────
 
 export default function SiteIoTPage() {
-  const [devices] = useState<IoTDevice[]>(MOCK_DEVICES);
-  const [readings] = useState<SensorReading[]>(MOCK_SENSOR_READINGS);
+  const [devices, setDevices] = useState<IoTDevice[]>([]);
+  const [readings, setReadings] = useState<SensorReading[]>([]);
   const [checklist, setChecklist] = useState<ChecklistItem[]>(INITIAL_CHECKLIST);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const toggleChecklist = useCallback((id: string) => {
     setChecklist((prev) =>
       prev.map((item) => (item.id === id ? { ...item, checked: !item.checked } : item))
     );
   }, []);
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      // Resolve the active customer from the technician's open job queue
+      // (matches the job-detail device-loading pattern).
+      const jobs = await technicianApi.getMyJobs({ status: "OPEN" });
+      const contactId = jobs[0]?.customer_id;
+      if (!contactId) {
+        setDevices([]);
+        setReadings([]);
+        return;
+      }
+      const techDevices: TechDevice[] = await technicianApi.getCustomerDevices(contactId);
+      const mapped = techDevices.map(mapTechDevice);
+      setDevices(mapped);
+      setReadings(buildReadings(mapped));
+    } catch (e) {
+      console.error("Failed to load site IoT:", e);
+      setError(e instanceof Error ? e.message : "Failed to load site devices");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -529,23 +552,37 @@ export default function SiteIoTPage() {
       </div>
 
       <div className="px-4 py-4 space-y-6 pb-24">
-        {/* a) Device Health Overview */}
-        <HealthOverview devices={devices} />
+        {loading ? (
+          <p className="text-xs text-slate-400 text-center py-8">Loading site devices...</p>
+        ) : error ? (
+          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-sm text-red-400">
+            {error}
+          </div>
+        ) : devices.length === 0 ? (
+          <p className="text-xs text-slate-400 text-center py-8">
+            No active job with site devices. Accept an open job to view its IoT devices.
+          </p>
+        ) : (
+          <>
+            {/* a) Device Health Overview */}
+            <HealthOverview devices={devices} />
 
-        {/* b) Camera Snapshots Grid */}
-        <CameraSnapshots devices={devices} />
+            {/* b) Camera Snapshots Grid */}
+            <CameraSnapshots devices={devices} />
 
-        {/* c) Sensor Readings Table */}
-        <SensorReadingsTable readings={readings} />
+            {/* c) Sensor Readings Table */}
+            <SensorReadingsTable readings={readings} />
 
-        {/* d) Device List by Room */}
-        <DeviceListByRoom devices={devices} />
+            {/* d) Device List by Room */}
+            <DeviceListByRoom devices={devices} />
 
-        {/* e) Installation Checklist */}
-        <InstallationChecklist items={checklist} onToggle={toggleChecklist} />
+            {/* e) Installation Checklist */}
+            <InstallationChecklist items={checklist} onToggle={toggleChecklist} />
 
-        {/* f) On-Site Diagnostic */}
-        <DiagnosticPanel />
+            {/* f) On-Site Diagnostic */}
+            <DiagnosticPanel devices={devices} />
+          </>
+        )}
       </div>
     </div>
   );

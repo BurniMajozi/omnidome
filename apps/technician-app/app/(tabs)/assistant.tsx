@@ -7,7 +7,6 @@ export default function AssistantPage() {
     <div className="h-full">
       <AgentChat
         initialAgent="support"
-        theme="dark"
         context={{
           source: "technician-app",
         }}

@@ -63,8 +63,8 @@
       },
       "ios": {
         "ascApiKeyPath": "./AppStoreConnect-API-Key.p8",
-        "ascApiKeyIssuerId": "your-issuer-id",
-        "ascApiKeyId": "your-key-id",
+        "ascApiKeyIssuerId": "",
+        "ascApiKeyId": "",
         "bundleId": "com.omnidome.fieldsales"
       }
     }

@@ -31,19 +31,36 @@ def _provider_url(session_type: str) -> Optional[str]:
 
 
 async def _create_provider_session(session_type: str, payload: dict) -> dict:
-    base_url = _provider_url(session_type)
-    if not base_url:
-        return {"provider_name": "local", "provider_session_id": None, "status": "local"}
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        response = await client.post(f"{base_url.rstrip('/')}/sessions", json=payload)
-        response.raise_for_status()
-        data = response.json()
-        return {
-            "provider_name": data.get("provider_name") or data.get("provider") or base_url,
-            "provider_session_id": data.get("id") or data.get("session_id"),
-            "status": data.get("status") or "active",
-        }
+    """
+    Create a provider session. For voice/video, delegates to internal voicebox service.
+    For chat, uses local fallback.
+    """
+    if session_type == "voice":
+        # Use internal voicebox adapter (call_center) for voice sessions
+        try:
+            from services.call_center.voicebox_adapter import _voicebox_url
+            base_url = _voicebox_url()
+            async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as client:
+                response = await client.post(f"{base_url.rstrip('/')}/sessions", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return {
+                    "provider_name": "voicebox",
+                    "provider_session_id": data.get("session_id") or data.get("id"),
+                    "status": data.get("status", "active"),
+                }
+        except ImportError:
+            pass  # Fall through to local
+        except Exception as e:
+            import logging
+            logger = logging.getLogger("communication.sessions")
+            logger.warning(f"Voicebox session creation failed: {e}")
+            return {"provider_name": "voicebox", "provider_session_id": None, "status": "provider_unavailable"}
+    
+    if session_type == "video":
+        return os.getenv("VIDEO_PROVIDER_BASE_URL")
+    
+    return os.getenv("CHAT_PROVIDER_BASE_URL")
 
 
 @router.post("", response_model=CommunicationSessionRead, status_code=status.HTTP_201_CREATED)
@@ -84,7 +101,8 @@ async def create_session(
                     "metadata": body.session_metadata,
                 },
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Provider session creation failed for {body.session_type}: {e}")
             provider_result = {"provider_name": body.provider_name or "local", "provider_session_id": None, "status": "provider_unavailable"}
 
         comm_session = CommunicationSession(

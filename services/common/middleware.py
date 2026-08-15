@@ -17,12 +17,15 @@ logger = logging.getLogger("omnidome.middleware")
 
 
 def get_cors_origins() -> list[str]:
-    """Parse CORS origins from environment."""
-    default_origins = ["http://localhost:3000", "http://localhost:3001"]
-    extra = os.getenv("CORS_ORIGINS", "")
-    if extra:
-        default_origins.extend([o.strip() for o in extra.split(",") if o.strip()])
-    return default_origins
+    """Parse CORS origins from environment.
+
+    Origins are strictly env-driven (CORS_ORIGINS). No localhost origins are
+    hardcoded, so a misconfigured deploy does not silently allow credentialed
+    cross-origin requests from dev ports. Set CORS_ORIGINS explicitly per env.
+    """
+    raw = os.getenv("CORS_ORIGINS", "")
+    origins = [o.strip() for o in raw.split(",") if o.strip()]
+    return origins
 
 
 def add_cors_middleware(app: FastAPI) -> None:

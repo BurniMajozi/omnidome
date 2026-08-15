@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     auth_mode: str = "header"
-    auth_db_enforce: bool = False
+    auth_db_enforce: bool = True
     auth_enforce_modules: bool = True
     auth_enforce_rbac: bool = True
     license_enforcement: str = "warn"
