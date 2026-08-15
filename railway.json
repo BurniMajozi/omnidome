@@ -1,0 +1,9 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "services": {
+    "medusa": {
+      "predeployCommand": "",
+      "startCommand": "npm run start"
+    }
+  }
+}
