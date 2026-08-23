@@ -301,10 +301,12 @@ CREATE TABLE billing_plans (
     tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     description TEXT,
+    category VARCHAR(30), -- Fibre, LTE, VoIP, TV
     price DECIMAL(12, 2) NOT NULL,
     currency TEXT DEFAULT 'ZAR',
     billing_cycle TEXT DEFAULT 'MONTHLY', -- MONTHLY, QUARTERLY, ANNUAL
     fno_provider TEXT, -- Openserve, Vumatel, etc.
+    is_active BOOLEAN DEFAULT TRUE,
     paystack_plan_code VARCHAR(100), -- PLN_xxx (Paystack recurring plan)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

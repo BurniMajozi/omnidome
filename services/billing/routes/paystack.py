@@ -8,12 +8,13 @@ from decimal import Decimal
 from typing import Optional
 
 import uuid
+import httpx
 from services.common.http_client import service_post
 from fastapi import APIRouter, Depends, HTTPException, Header, Request, status
 
 from services.common.auth import AuthContext, get_auth_context
 from services.billing.database import get_session
-from services.billing.models import Invoice, Payment
+from services.billing.models import Invoice, Payment, Subscription
 from services.billing.schemas import (
     PaymentRead,
     PaystackInitializeRequest,
@@ -172,11 +173,37 @@ async def paystack_webhook(
 
     if event == "charge.success":
         await _handle_charge_success(data)
-    elif event == "transfer.success":
-        logger.info("Transfer success: %s", data.get("reference"))
+    elif event in ("subscription.disable", "subscription.not_renew"):
+        _handle_subscription_status(data, "cancelled")
+    elif event == "subscription.create":
+        logger.info("Subscription created: %s", data.get("subscription_code"))
+    elif event == "invoice.payment_failed":
+        _handle_subscription_status(data.get("subscription", data), "past_due")
+    elif event in ("transfer.success", "transfer.failed", "transfer.reversed"):
+        # Payroll payouts (services/hr) initiate transfers on this same Paystack
+        # account; record the terminal state here for visibility.
+        logger.info("Transfer %s: %s", event.split(".")[1], data.get("reference"))
     # Add more event handlers as needed
 
     return {"status": "accepted"}
+
+
+def _handle_subscription_status(data: dict, new_status: str) -> None:
+    """Reflect a Paystack subscription lifecycle event on our subscriptions row."""
+    code = data.get("subscription_code") or (data.get("subscription") or {}).get("subscription_code")
+    if not code:
+        logger.info("subscription webhook without subscription_code; ignored")
+        return
+    with get_session() as session:
+        sub = (
+            session.query(Subscription)
+            .filter(Subscription.paystack_subscription_code == code)
+            .first()
+        )
+        if sub:
+            sub.status = new_status
+            session.commit()
+            logger.info("Subscription %s -> %s", code, new_status)
 
 
 async def _handle_charge_success(data: dict) -> None:

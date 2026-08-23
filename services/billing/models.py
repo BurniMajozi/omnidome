@@ -364,6 +364,7 @@ class BillingPlan(Base):
     billing_cycle: Mapped[str] = mapped_column(Text, nullable=False, default="MONTHLY")
     fno_provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    paystack_plan_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # PLN_xxx (recurring)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -446,6 +447,10 @@ class Subscription(Base):
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     metadata_: Mapped[Optional[dict[str, Any]]] = mapped_column("metadata", JSONB, nullable=True)
+    # Paystack recurring-billing linkage (see routes/paystack_recurring.py)
+    paystack_subscription_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # SUB_xxx
+    paystack_customer_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)       # CUS_xxx
+    paystack_email_token: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)         # needed to disable
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
