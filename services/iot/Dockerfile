@@ -14,13 +14,14 @@ COPY services/common/ ./services/common/
 COPY services/iot/ ./services/iot/
 
 # Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser \
-    && chown -R appuser:appuser /app
-USER appuser
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Skip chown on Windows/Docker Desktop - runs as root for compatibility
+# RUN chown -R appuser:appuser /app
+# USER appuser
 
 EXPOSE 8006
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8006/health')" || exit 1
 
-CMD ["uvicorn", "services.iot.main:app", "--host", "0.0.0.0", "--port", "8006", "--workers", "2"]
+CMD ["uvicorn", "services.iot.main:app", "--host", "0.0.0.0", "--port", "8006", "--workers", "1"]

@@ -3,12 +3,13 @@ Compliance Service — Pydantic Schemas for Request/Response Validation
 """
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 # ── Enums ──────────────────────────────────────────────────────────────
 
-class ContractType(str):
+class ContractType(str, Enum):
     fno = "fno"
     supplier = "supplier"
     customer = "customer"
@@ -19,14 +20,14 @@ class ContractType(str):
     infrastructure = "infrastructure"
     maintenance = "maintenance"
 
-class ContractStatus(str):
+class ContractStatus(str, Enum):
     draft = "draft"
     active = "active"
     expired = "expired"
     terminated = "terminated"
     suspended = "suspended"
 
-class SlaComparison(str):
+class SlaComparison(str, Enum):
     lower_is_worse = "lower_is_worse"
     higher_is_worse = "higher_is_worse"
 
@@ -77,7 +78,7 @@ class ContractUpdate(BaseModel):
     risk_level: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
-class ContractSLAStatus(str):
+class ContractSLAStatus(str, Enum):
     active = "active"
     inactive = "inactive"
     suspended = "suspended"
@@ -103,7 +104,7 @@ class SlaMeasurementCreate(BaseModel):
 
 # ── Document Schemas ──────────────────────────────────────────────────
 
-class DocumentType(str):
+class DocumentType(str, Enum):
     contract = "contract"
     tax_return = "tax_return"
     hs_report = "hs_report"
@@ -204,20 +205,20 @@ class RicaVerificationCreate(BaseModel):
 
 # ── Breach Register Schemas ───────────────────────────────────────────
 
-class BreachSeverity(str):
+class BreachSeverity(str, Enum):
     low = "low"
     medium = "medium"
     high = "high"
     critical = "critical"
 
-class BreachStatus(str):
+class BreachStatus(str, Enum):
     identified = "identified"
     investigating = "investigating"
     contained = "contained"
     resolved = "resolved"
     closed = "closed"
 
-class BreachCategory(str):
+class BreachCategory(str, Enum):
     data_breach = "data_breach"
     security_incident = "security_incident"
     compliance_failure = "compliance_failure"
@@ -243,7 +244,7 @@ class BreachRegisterCreate(BaseModel):
 
 # ── Funding Schemas ───────────────────────────────────────────────────
 
-class FundingType(str):
+class FundingType(str, Enum):
     grant = "grant"
     loan = "loan"
     equity = "equity"
@@ -267,7 +268,7 @@ class FundingOpportunityCreate(BaseModel):
 
 # ── Regulatory (Tax, H&S, CIPC, Bylaw, BBBEE) Schemas ─────────────────
 
-class TaxType(str):
+class TaxType(str, Enum):
     vat = "vat"
     paye = "paye"
     uif = "uif"
@@ -277,7 +278,7 @@ class TaxType(str):
     customs = "customs"
     excise = "excise"
 
-class TaxReturnStatus(str):
+class TaxReturnStatus(str, Enum):
     pending = "pending"
     submitted = "submitted"
     assessed = "assessed"
@@ -306,7 +307,7 @@ class HsIncidentCreate(BaseModel):
 
 # ── HR Operations Schemas ─────────────────────────────────────────────
 
-class LeaveType(str):
+class LeaveType(str, Enum):
     annual = "annual"
     sick = "sick"
     maternity = "maternity"
