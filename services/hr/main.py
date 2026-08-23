@@ -5,7 +5,7 @@ from typing import Optional, List
 import uuid
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, status, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File
 from pydantic import BaseModel
 from sqlalchemy import select, desc, and_, func
 
@@ -107,12 +107,16 @@ async def list_employees(
     db=Depends(get_session),
     department: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    q: Optional[str] = Query(None, description="Search by name or employee ID"),
 ):
     stmt = select(Employee).where(Employee.tenant_id == tenant_id)
     if department:
         stmt = stmt.where(Employee.department == department)
     if status:
         stmt = stmt.where(Employee.status == status)
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(Employee.full_name.ilike(like) | Employee.employee_id.ilike(like))
     result = await db.execute(stmt.order_by(Employee.created_at))
     return [_emp_to_dict(e) for e in result.scalars().all()]
 
@@ -1579,6 +1583,209 @@ async def pay_payroll_run(
         select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
     )).scalars().all()
     return {"initiated": paid, "failed": failed, **_run_to_dict(run, slips_all)}
+
+
+# ── Bulk spreadsheet import + roster (onboarding / demo) ───────────────────
+
+def _norm_header(h) -> str:
+    return (str(h) if h is not None else "").strip().lower().replace(" ", "_")
+
+_HEADER_ALIASES = {
+    "name": "full_name", "employee": "full_name", "employee_name": "full_name",
+    "staff_id": "employee_id", "id": "employee_id", "emp_id": "employee_id",
+    "title": "job_title", "role": "job_title", "position": "job_title",
+    "dept": "department",
+    "salary": "base_salary", "gross": "base_salary", "gross_salary": "base_salary", "monthly_salary": "base_salary",
+    "bank": "bank_code", "account": "account_number", "acc_number": "account_number", "account_no": "account_number",
+    "account_holder": "account_name",
+    "start_date": "hire_date", "date_hired": "hire_date", "hired": "hire_date",
+    "cell": "phone", "mobile": "phone", "contact": "phone",
+}
+
+
+def _parse_spreadsheet(filename: str, content: bytes) -> List[dict]:
+    """Parse a CSV or XLSX into a list of row dicts with normalized/aliased keys."""
+    name = (filename or "").lower()
+    rows: List[dict] = []
+    if name.endswith(".xlsx") or content[:2] == b"PK":
+        try:
+            import io
+            import openpyxl
+        except ImportError:
+            raise HTTPException(status_code=400, detail="XLSX not supported on this build; upload a CSV instead")
+        wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        ws = wb.active
+        it = ws.iter_rows(values_only=True)
+        raw_headers = next(it, []) or []
+        headers = [_HEADER_ALIASES.get(_norm_header(h), _norm_header(h)) for h in raw_headers]
+        for raw in it:
+            if raw is None or all(c is None for c in raw):
+                continue
+            row = {}
+            for i, h in enumerate(headers):
+                if h:
+                    v = raw[i] if i < len(raw) else None
+                    row[h] = str(v).strip() if v is not None else ""
+            rows.append(row)
+    else:
+        import csv
+        import io
+        text = content.decode("utf-8-sig", errors="replace")
+        for raw in csv.DictReader(io.StringIO(text)):
+            row = {}
+            for k, v in raw.items():
+                h = _HEADER_ALIASES.get(_norm_header(k), _norm_header(k))
+                row[h] = (v or "").strip()
+            rows.append(row)
+    return rows
+
+
+@app.get("/payroll/roster")
+async def payroll_roster(
+    q: Optional[str] = Query(None, description="Search name / employee id / department"),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Active employees joined with their payroll profile — powers the payroll table."""
+    stmt = select(Employee).where(Employee.tenant_id == tenant_id, Employee.status != "INACTIVE")
+    if q:
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            Employee.full_name.ilike(like)
+            | Employee.employee_id.ilike(like)
+            | Employee.department.ilike(like)
+        )
+    emps = (await db.execute(stmt.order_by(Employee.full_name))).scalars().all()
+    profiles = {
+        p.employee_id: p for p in (await db.execute(
+            select(PayrollProfile).where(PayrollProfile.tenant_id == tenant_id)
+        )).scalars().all()
+    }
+    items = []
+    for e in emps:
+        p = profiles.get(e.id)
+        acct = p.account_number if p else None
+        items.append({
+            "id": e.id, "employee_id": e.employee_id, "full_name": e.full_name,
+            "job_title": e.job_title, "department": e.department, "status": e.status,
+            "email": e.email, "phone": e.phone,
+            "base_salary": float(p.base_salary) if p else None,
+            "currency": p.currency if p else "ZAR",
+            "bank_code": p.bank_code if p else None,
+            "account_number_masked": ("••••" + acct[-4:]) if acct and len(acct) >= 4 else acct,
+            "has_recipient": bool(p and p.paystack_recipient_code),
+        })
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/payroll/import")
+async def import_payroll(
+    file: UploadFile = File(...),
+    create_recipients: bool = Query(False, description="Also create Paystack transfer recipients (slower)"),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Bulk-onboard employees + payroll profiles from a CSV/XLSX spreadsheet.
+
+    Header row (case-insensitive, common aliases accepted): employee_id,
+    full_name, job_title, department, hire_date (YYYY-MM-DD), email, phone,
+    base_salary, bank_code, account_number, account_name. Rows upsert by
+    employee_id. A bad row is reported in `errors` and does not abort the import.
+    """
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    rows = _parse_spreadsheet(file.filename or "", content)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No data rows found in the file")
+
+    existing = {
+        e.employee_id: e for e in (await db.execute(
+            select(Employee).where(Employee.tenant_id == tenant_id)
+        )).scalars().all()
+    }
+    existing_profiles = {
+        p.employee_id: p for p in (await db.execute(
+            select(PayrollProfile).where(PayrollProfile.tenant_id == tenant_id)
+        )).scalars().all()
+    }
+
+    created = updated = profiles_set = recipients = 0
+    errors: List[dict] = []
+    for idx, row in enumerate(rows, start=2):  # row 1 is the header
+        try:
+            full_name = row.get("full_name") or ""
+            if not full_name:
+                errors.append({"row": idx, "message": "missing full_name"})
+                continue
+            emp_code = row.get("employee_id") or f"STF-{idx:04d}"
+            try:
+                hire_d = date.fromisoformat((row.get("hire_date") or "")[:10])
+            except ValueError:
+                hire_d = date.today()
+
+            emp = existing.get(emp_code)
+            if emp:
+                emp.full_name = full_name
+                emp.job_title = row.get("job_title") or emp.job_title
+                emp.department = row.get("department") or emp.department
+                emp.email = row.get("email") or emp.email
+                emp.phone = row.get("phone") or emp.phone
+                if emp.status == "INACTIVE":
+                    emp.status = "ACTIVE"
+                updated += 1
+            else:
+                emp = Employee(
+                    tenant_id=tenant_id, employee_id=emp_code, full_name=full_name,
+                    job_title=row.get("job_title") or "Staff",
+                    department=row.get("department") or "General",
+                    hire_date=hire_d, status="ACTIVE",
+                    email=row.get("email") or None, phone=row.get("phone") or None,
+                )
+                db.add(emp)
+                await db.flush()  # assign emp.id
+                existing[emp_code] = emp
+                created += 1
+
+            salary_raw = row.get("base_salary") or ""
+            if salary_raw:
+                try:
+                    salary = float(str(salary_raw).replace(",", "").replace("R", "").strip())
+                except ValueError:
+                    errors.append({"row": idx, "message": f"bad base_salary '{salary_raw}'"})
+                    salary = None
+                if salary is not None:
+                    prof = existing_profiles.get(emp.id)
+                    if not prof:
+                        prof = PayrollProfile(employee_id=emp.id, tenant_id=tenant_id, base_salary=salary)
+                        db.add(prof)
+                        existing_profiles[emp.id] = prof
+                    prof.base_salary = salary
+                    prof.bank_code = row.get("bank_code") or prof.bank_code
+                    prof.account_number = row.get("account_number") or prof.account_number
+                    prof.account_name = row.get("account_name") or prof.account_name or full_name
+                    profiles_set += 1
+                    if create_recipients and prof.bank_code and prof.account_number and not prof.paystack_recipient_code:
+                        try:
+                            res = await ps.create_transfer_recipient(
+                                name=prof.account_name or full_name,
+                                account_number=prof.account_number,
+                                bank_code=prof.bank_code, currency=prof.currency or "ZAR",
+                            )
+                            if res["ok"]:
+                                prof.paystack_recipient_code = res["recipient_code"]
+                                recipients += 1
+                        except ps.PaystackError as exc:
+                            errors.append({"row": idx, "message": f"recipient: {exc}"})
+        except Exception as exc:  # noqa: BLE001 — one bad row shouldn't abort the whole import
+            errors.append({"row": idx, "message": str(exc)})
+
+    await db.flush()
+    return {
+        "total_rows": len(rows), "created": created, "updated": updated,
+        "profiles_set": profiles_set, "recipients_created": recipients,
+        "errors": errors,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

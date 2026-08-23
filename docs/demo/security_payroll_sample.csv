@@ -1,0 +1,16 @@
+employee_id,full_name,job_title,department,hire_date,email,phone,base_salary,bank_code,account_number,account_name
+SEC-001,Sipho Mthembu,Security Officer,Guarding,2023-03-14,sipho.mthembu@fortguard.co.za,0721234501,8500,632005,4071234501,Sipho Mthembu
+SEC-002,Lerato Molefe,Senior Security Officer,Guarding,2022-07-01,lerato.molefe@fortguard.co.za,0721234502,11200,250655,6212345602,Lerato Molefe
+SEC-003,Johan Pretorius,Site Supervisor,Guarding,2021-11-20,johan.pretorius@fortguard.co.za,0721234503,16500,051001,1012345603,Johan Pretorius
+SEC-004,Nomsa Dlamini,Control Room Operator,Control Room,2023-01-09,nomsa.dlamini@fortguard.co.za,0721234504,13800,470010,1472345604,Nomsa Dlamini
+SEC-005,Thabo Nkosi,Armed Response Officer,Armed Response,2022-05-16,thabo.nkosi@fortguard.co.za,0721234505,18900,198765,1982345605,Thabo Nkosi
+SEC-006,Ayesha Patel,Payroll Administrator,Administration,2020-09-01,ayesha.patel@fortguard.co.za,0721234506,24500,632005,4071234506,Ayesha Patel
+SEC-007,Bongani Zulu,Security Officer,Guarding,2024-02-03,bongani.zulu@fortguard.co.za,0721234507,8500,678910,1002345607,Bongani Zulu
+SEC-008,Chantelle Adams,Security Officer,Guarding,2023-08-22,chantelle.adams@fortguard.co.za,0721234508,8500,470010,1472345608,Chantelle Adams
+SEC-009,Pieter van Wyk,Armed Response Officer,Armed Response,2021-04-11,pieter.vanwyk@fortguard.co.za,0721234509,18900,051001,1012345609,Pieter van Wyk
+SEC-010,Zanele Khumalo,Control Room Operator,Control Room,2022-12-05,zanele.khumalo@fortguard.co.za,0721234510,13800,250655,6212345610,Zanele Khumalo
+SEC-011,Mandla Sithole,Security Officer,Guarding,2024-06-17,mandla.sithole@fortguard.co.za,0721234511,8500,632005,4071234511,Mandla Sithole
+SEC-012,Rethabile Sekhoto,Site Supervisor,Guarding,2020-10-28,rethabile.sekhoto@fortguard.co.za,0721234512,16500,198765,1982345612,Rethabile Sekhoto
+SEC-013,Willem Botha,Operations Manager,Operations,2019-02-14,willem.botha@fortguard.co.za,0721234513,38000,051001,1012345613,Willem Botha
+SEC-014,Fatima Ismail,Senior Security Officer,Guarding,2023-05-30,fatima.ismail@fortguard.co.za,0721234514,11200,470010,1472345614,Fatima Ismail
+SEC-015,Kagiso Mahlangu,Armed Response Officer,Armed Response,2022-08-08,kagiso.mahlangu@fortguard.co.za,0721234515,18900,678910,1002345615,Kagiso Mahlangu

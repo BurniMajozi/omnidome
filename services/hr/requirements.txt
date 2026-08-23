@@ -1,3 +1,4 @@
 ﻿-r ../common/requirements.txt
 sqlalchemy==2.0.30
 psycopg2-binary==2.9.9
+openpyxl==3.1.5  # XLSX payroll spreadsheet import (/payroll/import)
