@@ -260,3 +260,58 @@ class PaginatedResponse(BaseModel):
     page: int
     page_size: int
     pages: int
+
+
+# ── Schedule Events ────────────────────────────────────────────────────────
+# Mirrors the ScheduleEvent model (services/communication/models.py). tenant_id
+# and created_by are set from the auth context in the route, not the request body.
+
+class ScheduleEventCreate(BaseModel):
+    channel_id: uuid.UUID
+    user_id: uuid.UUID
+    title: str = Field(..., min_length=1, max_length=200)
+    type: str = Field(..., min_length=1, max_length=50)
+    start_time: datetime
+    end_time: datetime
+    date_label: Optional[str] = Field(default=None, max_length=50)
+    time_label: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = None
+    source_message_id: Optional[uuid.UUID] = None
+    linked_task_id: Optional[uuid.UUID] = None
+    status: Optional[str] = Field(default=None, max_length=20)
+
+
+class ScheduleEventUpdate(BaseModel):
+    channel_id: Optional[uuid.UUID] = None
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    type: Optional[str] = Field(default=None, min_length=1, max_length=50)
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    date_label: Optional[str] = Field(default=None, max_length=50)
+    time_label: Optional[str] = Field(default=None, max_length=50)
+    notes: Optional[str] = None
+    source_message_id: Optional[uuid.UUID] = None
+    linked_task_id: Optional[uuid.UUID] = None
+    status: Optional[str] = Field(default=None, max_length=20)
+
+
+class ScheduleEventRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    channel_id: uuid.UUID
+    user_id: uuid.UUID
+    title: str
+    type: str
+    start_time: datetime
+    end_time: datetime
+    date_label: Optional[str] = None
+    time_label: Optional[str] = None
+    notes: Optional[str] = None
+    source_message_id: Optional[uuid.UUID] = None
+    linked_task_id: Optional[uuid.UUID] = None
+    status: str
+    created_by: uuid.UUID
+    created_at: datetime
+    updated_at: datetime
