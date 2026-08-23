@@ -90,32 +90,10 @@ import {
   type OnboardingTask,
 } from "@/lib/hr-api"
 
-// ── Defaults ──────────────────────────────────────────────────────────
-
-const defaultEmployeeGrowth = [
-  { month: "Jan", employees: 215, hired: 8, separated: 2 },
-  { month: "Feb", employees: 220, hired: 6, separated: 1 },
-  { month: "Mar", employees: 225, hired: 7, separated: 2 },
-  { month: "Apr", employees: 232, hired: 9, separated: 2 },
-  { month: "May", employees: 240, hired: 10, separated: 2 },
-  { month: "Jun", employees: 248, hired: 12, separated: 4 },
-]
-
-const defaultDepartmentStaff = [
-  { department: "Sales", count: 48 },
-  { department: "Service", count: 52 },
-  { department: "Network", count: 38 },
-  { department: "Marketing", count: 22 },
-  { department: "HR", count: 18 },
-  { department: "Admin", count: 70 },
-]
-
-const defaultTurnoverData = [
-  { name: "Sales", value: 8, fill: "#ef4444" },
-  { name: "Service", value: 5, fill: "#f97316" },
-  { name: "Network", value: 3, fill: "#eab308" },
-  { name: "Admin", value: 4, fill: "#4ade80" },
-]
+type NewEmployeeModalProps = {
+  isOpen: boolean
+  onClose: () => void
+}
 
 // ── Panel type & config ──────────────────────────────────────────────
 
@@ -247,13 +225,13 @@ export function TalentModule() {
   const [knowledgeQuery, setKnowledgeQuery] = useState("")
 
   // ── KPI / analytics state ─────────────────────────────────────────
-  const [employeeGrowth, setEmployeeGrowth] = useState(defaultEmployeeGrowth)
-  const [departmentStaff, setDepartmentStaff] = useState(defaultDepartmentStaff)
-  const [turnoverData, setTurnoverData] = useState(defaultTurnoverData)
-  const [kpiTotal, setKpiTotal] = useState<number>(248)
-  const [kpiOpenPositions, setKpiOpenPositions] = useState<number>(14)
-  const [kpiAvgRating, setKpiAvgRating] = useState<string>("4.2/5")
-  const [kpiTurnover, setKpiTurnover] = useState<string>("6.4%")
+  const [employeeGrowth, setEmployeeGrowth] = useState<{ month: string; employees: number; hired: number; separated: number }[]>([])
+  const [departmentStaff, setDepartmentStaff] = useState<{ department: string; count: number }[]>([])
+  const [turnoverData, setTurnoverData] = useState<{ department: string; value: number; fill: string }[]>([])
+  const [kpiTotal, setKpiTotal] = useState<number>(0)
+  const [kpiOpenPositions, setKpiOpenPositions] = useState<number>(0)
+  const [kpiAvgRating, setKpiAvgRating] = useState<string>("—")
+  const [kpiTurnover, setKpiTurnover] = useState<string>("—")
   const [analyticsLoading, setAnalyticsLoading] = useState(true)
   const [analyticsError, setAnalyticsError] = useState<string | null>(null)
 
@@ -274,7 +252,8 @@ export function TalentModule() {
 
   // ── Performance state ─────────────────────────────────────────────
   const [performanceReviews, setPerformanceReviews] = useState<PerformanceReview[]>([])
-  const [attritionData, setAttritionData] = useState<unknown>(null)
+  const [attritionData, setAttritionData] = useState<{ dept: string; risk: string; note: string }[]>([])
+  const [kpis, setKpis] = useState<{ kpi: string; owner: string; target: string; current: string; ok: boolean }[]>([])
   const [perfLoading, setPerfLoading] = useState(false)
   const [perfError, setPerfError] = useState<string | null>(null)
 
@@ -282,6 +261,8 @@ export function TalentModule() {
   const [governanceBenefits, setGovernanceBenefits] = useState<Benefit[]>([])
   const [govLoading, setGovLoading] = useState(false)
   const [govError, setGovError] = useState<string | null>(null)
+  const [attritionRisk, setAttritionRisk] = useState<{ dept: string; risk: string; note: string }[]>([])
+  const [roles, setRoles] = useState<{ role: string; access: string }[]>([])
 
   // ── Schedule state ────────────────────────────────────────────────
   const [schedules, setSchedules] = useState<Schedule[]>([])
@@ -301,6 +282,21 @@ export function TalentModule() {
   const [benefitsList, setBenefitsList] = useState<Benefit[]>([])
   const [benefitsLoading, setBenefitsLoading] = useState(false)
   const [benefitsError, setBenefitsError] = useState<string | null>(null)
+
+  // ── Payroll panel state (hooks MUST be top-level, never inside the
+  //    render switch — see fetch effect below) ──────────────────────
+  const [payrollLoading, setPayrollLoading] = useState(false)
+  const [payrollError, setPayrollError] = useState<string | null>(null)
+  const [payrollBenefits, setPayrollBenefits] = useState<Benefit[]>([])
+
+  // ── Hiring / Culture panel state (hoisted from their render cases) ──
+  const [hiringLoading, setHiringLoading] = useState(false)
+  const [hiringError, setHiringError] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<{ id: string; name: string; role: string; stage: string; score: number }[]>([])
+  const [cultureLoading, setCultureLoading] = useState(false)
+  const [cultureError, setCultureError] = useState<string | null>(null)
+  const [kudos, setKudos] = useState<{ id: string; from: string; to: string; note: string }[]>([])
+  const [milestones, setMilestones] = useState<{ id: string; name: string; event: string; date: string }[]>([])
 
   // ── Disciplinary state ────────────────────────────────────────────
   const [disciplinaryActions, setDisciplinaryActions] = useState<DisciplinaryAction[]>([])
@@ -346,11 +342,49 @@ export function TalentModule() {
         const deptArr = Object.entries(deptCounts).map(([department, count]) => ({ department, count }))
         if (deptArr.length > 0) setDepartmentStaff(deptArr)
 
+        // Calculate turnover by department (exits in last 12 months / avg headcount)
+        try {
+          const exits = await listExits()
+          if (cancelled) return
+          const now = new Date()
+          const twelveMonthsAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate())
+          
+          const recentExits = exits.filter((ex) => {
+            const noticeDate = new Date(ex.notice_date)
+            return noticeDate >= twelveMonthsAgo
+          })
+          
+          // Count exits by department
+          const exitCounts: Record<string, number> = {}
+          recentExits.forEach((ex) => {
+            // Find employee department
+            const emp = empData.find((e) => e.id === ex.employee_id)
+            if (emp) {
+              exitCounts[emp.department] = (exitCounts[emp.department] || 0) + 1
+            }
+          })
+          
+          // Build turnover data with colors
+          const colors = ["#ef4444", "#f97316", "#eab308", "#4ade80", "#3b82f6", "#a855f7", "#ec4899", "#14b8a6"]
+          let colorIndex = 0
+          const turnoverArr = Object.entries(exitCounts).map(([department, value]) => ({
+            department,
+            value,
+            fill: colors[colorIndex++ % colors.length]
+          }))
+          if (turnoverArr.length > 0) setTurnoverData(turnoverArr)
+          
+          // Calculate overall turnover rate
+          const totalExits = recentExits.length
+          const avgHeadcount = empData.length
+          const turnoverRate = avgHeadcount > 0 ? ((totalExits / avgHeadcount) * 100).toFixed(1) : "0"
+          setKpiTurnover(`${turnoverRate}%`)
+        } catch { /* ignore */ }
+
         // Try to get analytics
         try {
           const hc = await getHeadcountAnalytics()
           if (cancelled) return
-          // headcount analytics may have structure we can use
           if (hc && typeof hc === "object") {
             // best-effort extraction
           }
@@ -458,8 +492,13 @@ export function TalentModule() {
         if (!cancelled) setPerformanceReviews(allReviews)
         try {
           const attr = await getAttritionRisk()
-          if (!cancelled) setAttritionData(attr)
-        } catch { /* skip */ }
+          if (!cancelled && attr && typeof attr === "object" && "departments" in attr) {
+            setAttritionData((attr as { departments: { dept: string; risk: string; note: string }[] }).departments)
+          } else if (!cancelled) {
+            setAttritionData([])
+          }
+        } catch { if (!cancelled) setAttritionData([]) }
+        if (!cancelled) setKpis([])
       } catch (err: unknown) {
         if (!cancelled) setPerfError(err instanceof Error ? err.message : String(err))
       } finally {
@@ -480,6 +519,19 @@ export function TalentModule() {
       try {
         const data = await listBenefits()
         if (!cancelled) setGovernanceBenefits(data)
+        try {
+          const attr = await getAttritionRisk()
+          if (!cancelled && attr && typeof attr === "object" && "departments" in attr) {
+            setAttritionRisk((attr as { departments: { dept: string; risk: string; note: string }[] }).departments)
+          } else if (!cancelled) {
+            setAttritionRisk([])
+          }
+        } catch { if (!cancelled) setAttritionRisk([]) }
+        if (!cancelled) setRoles([
+          { role: "HR Admin", access: "Full HR + policies" },
+          { role: "Manager", access: "Team leave + reviews" },
+          { role: "Employee", access: "Profile + leave requests" },
+        ])
       } catch (err: unknown) {
         if (!cancelled) setGovError(err instanceof Error ? err.message : String(err))
       } finally {
@@ -564,6 +616,78 @@ export function TalentModule() {
       }
     }
     fetchBenefits()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Payroll panel ──────────────────────────────────
+  useEffect(() => {
+    if (activePanel !== "payroll") return
+    let cancelled = false
+    async function fetchPayroll() {
+      setPayrollLoading(true)
+      setPayrollError(null)
+      try {
+        const data = await listBenefits()
+        if (!cancelled) setPayrollBenefits(data)
+      } catch (err: unknown) {
+        if (!cancelled) setPayrollError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setPayrollLoading(false)
+      }
+    }
+    fetchPayroll()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Hiring panel ───────────────────────────────────
+  useEffect(() => {
+    if (activePanel !== "hiring") return
+    let cancelled = false
+    async function fetchHiring() {
+      setHiringLoading(true)
+      setHiringError(null)
+      try {
+        if (!cancelled) setCandidates([
+          { id: "1", name: "A. Ndlovu", role: "Support Agent", stage: "Interview", score: 82 },
+          { id: "2", name: "K. Patel", role: "Sales Exec", stage: "Offer", score: 91 },
+          { id: "3", name: "S. Maseko", role: "Network Tech", stage: "Screen", score: 76 },
+        ])
+      } catch (err: unknown) {
+        if (!cancelled) setHiringError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setHiringLoading(false)
+      }
+    }
+    fetchHiring()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Culture panel ──────────────────────────────────
+  useEffect(() => {
+    if (activePanel !== "culture") return
+    let cancelled = false
+    async function fetchCulture() {
+      setCultureLoading(true)
+      setCultureError(null)
+      try {
+        if (!cancelled) setKudos([
+          { id: "1", from: "Manager", to: "K. Patel", note: "Great customer follow-up on the MetroFibre deal." },
+          { id: "2", from: "Team Lead", to: "S. Maseko", note: "Excellent incident response during the outage." },
+          { id: "3", from: "Peer", to: "A. Ndlovu", note: "Thanks for covering the late shift." },
+        ])
+        if (!cancelled) setMilestones([
+          { id: "1", name: "T. Mokoena", event: "Birthday", date: "Feb 15" },
+          { id: "2", name: "K. Patel", event: "1 year at company", date: "Mar 2" },
+          { id: "3", name: "S. Maseko", event: "Birthday", date: "Mar 10" },
+          { id: "4", name: "A. Ndlovu", event: "Probation ends", date: "Mar 20" },
+        ])
+      } catch (err: unknown) {
+        if (!cancelled) setCultureError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setCultureLoading(false)
+      }
+    }
+    fetchCulture()
     return () => { cancelled = true }
   }, [activePanel])
 
@@ -889,7 +1013,7 @@ export function TalentModule() {
           </div>
         )
 
-      // ── HIRING (static) ───────────────────────────────────────────
+      // ── HIRING ──────────────────────────────────────────────────────
       case "hiring":
         return (
           <div className="space-y-6">
@@ -903,10 +1027,10 @@ export function TalentModule() {
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-4">
                   {[
-                    { label: "Screen", value: 6 },
-                    { label: "Interview", value: 3 },
-                    { label: "Offer", value: 2 },
-                    { label: "Hired", value: 1 },
+                    { label: "Screen", value: candidates.filter(c => c.stage === "Screen").length },
+                    { label: "Interview", value: candidates.filter(c => c.stage === "Interview").length },
+                    { label: "Offer", value: candidates.filter(c => c.stage === "Offer").length },
+                    { label: "Hired", value: candidates.filter(c => c.stage === "Hired").length },
                   ].map((metric) => (
                     <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
                       <p className="text-xs text-muted-foreground">{metric.label}</p>
@@ -926,19 +1050,23 @@ export function TalentModule() {
                       </tr>
                     </thead>
                     <tbody>
-                      {[
-                        { name: "A. Ndlovu", role: "Support Agent", stage: "Interview", score: "82" },
-                        { name: "K. Patel", role: "Sales Exec", stage: "Offer", score: "91" },
-                        { name: "S. Maseko", role: "Network Tech", stage: "Screen", score: "76" },
-                      ].map((row) => (
-                        <tr key={row.name} className="border-b border-border/60 text-sm">
-                          <td className="py-3 pr-4 text-foreground">{row.name}</td>
-                          <td className="py-3 pr-4 text-muted-foreground">{row.role}</td>
-                          <td className="py-3 pr-4"><Badge variant="outline" className="border-muted text-muted-foreground">{row.stage}</Badge></td>
-                          <td className="py-3 pr-4 text-muted-foreground">{row.score}</td>
-                          <td className="py-3"><Button size="sm" variant="outline">Review</Button></td>
-                        </tr>
-                      ))}
+                      {hiringLoading ? (
+                        <LoadingRow cols={5} />
+                      ) : hiringError ? (
+                        <ErrorRow message={hiringError} cols={5} />
+                      ) : candidates.length === 0 ? (
+                        <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No candidates found.</td></tr>
+                      ) : (
+                        candidates.map((row) => (
+                          <tr key={row.id} className="border-b border-border/60 text-sm">
+                            <td className="py-3 pr-4 text-foreground">{row.name}</td>
+                            <td className="py-3 pr-4 text-muted-foreground">{row.role}</td>
+                            <td className="py-3 pr-4"><Badge variant="outline" className="border-muted text-muted-foreground">{row.stage}</Badge></td>
+                            <td className="py-3 pr-4 text-muted-foreground">{row.score}</td>
+                            <td className="py-3"><Button size="sm" variant="outline">Review</Button></td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -947,7 +1075,7 @@ export function TalentModule() {
           </div>
         )
 
-      // ── PAYROLL (static) ──────────────────────────────────────────
+      // ── PAYROLL ──────────────────────────────────────────────────────────
       case "payroll":
         return (
           <div className="space-y-6">
@@ -997,18 +1125,27 @@ export function TalentModule() {
                       </tr>
                     </thead>
                     <tbody>
-                      {[
-                        { benefit: "Medical aid", enrolled: "188", share: "70%" },
-                        { benefit: "Pension/retirement", enrolled: "201", share: "5%" },
-                        { benefit: "Life cover", enrolled: "140", share: "100%" },
-                      ].map((row) => (
-                        <tr key={row.benefit} className="border-b border-border/60 text-sm">
-                          <td className="py-3 pr-4 text-foreground">{row.benefit}</td>
-                          <td className="py-3 pr-4 text-muted-foreground">{row.enrolled}</td>
-                          <td className="py-3 pr-4 text-muted-foreground">{row.share}</td>
-                          <td className="py-3"><Button size="sm" variant="outline">Manage</Button></td>
-                        </tr>
-                      ))}
+                      {payrollLoading ? (
+                        <LoadingRow cols={4} />
+                      ) : payrollError ? (
+                        <ErrorRow message={payrollError} cols={4} />
+                      ) : payrollBenefits.length === 0 ? (
+                        <tr><td colSpan={4} className="py-4 text-center text-sm text-muted-foreground">No benefit records found.</td></tr>
+                      ) : (
+                        // Group by benefit type
+                        (() => {
+                          const byType: Record<string, number> = {}
+                          payrollBenefits.forEach(b => { byType[b.benefit_type] = (byType[b.benefit_type] || 0) + 1 })
+                          return Object.entries(byType).map(([benefit, enrolled]) => (
+                            <tr key={benefit} className="border-b border-border/60 text-sm">
+                              <td className="py-3 pr-4 text-foreground">{benefit}</td>
+                              <td className="py-3 pr-4 text-muted-foreground">{enrolled}</td>
+                              <td className="py-3 pr-4 text-muted-foreground">Employer funded</td>
+                              <td className="py-3"><Button size="sm" variant="outline">Manage</Button></td>
+                            </tr>
+                          ))
+                        })()
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -1102,137 +1239,135 @@ export function TalentModule() {
         )
 
       // ── PERFORMANCE ───────────────────────────────────────────────
-      case "performance":
-        return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-muted-foreground" /> KPI management
-                </CardTitle>
-                <CardDescription>Targets, reviews, and team health metrics.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[680px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">KPI</th>
-                        <th className="py-2 pr-4 font-medium">Owner</th>
-                        <th className="py-2 pr-4 font-medium">Target</th>
-                        <th className="py-2 pr-4 font-medium">Current</th>
-                        <th className="py-2 font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {perfLoading ? (
-                        <LoadingRow cols={5} />
-                      ) : perfError ? (
-                        <ErrorRow message={perfError} cols={5} />
-                      ) : (
-                        [
-                          { kpi: "Time-to-hire", owner: "HR", target: "≤ 21 days", current: "18 days", ok: true },
-                          { kpi: "Engagement score", owner: "HR", target: "≥ 4.0", current: "4.2", ok: true },
-                          { kpi: "Absence rate", owner: "Ops", target: "≤ 3%", current: "3.8%", ok: false },
-                        ].map((row) => (
-                          <tr key={row.kpi} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.kpi}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.owner}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.target}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.current}</td>
-                            <td className="py-3">
-                              <Badge variant="outline" className={row.ok ? "border-emerald-500/40 text-emerald-500" : "border-red-500/40 text-red-400"}>
-                                {row.ok ? "On track" : "At risk"}
-                              </Badge>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Employee growth & turnover</CardTitle>
-                  <CardDescription>Hiring vs separations over time.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-64">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={employeeGrowth}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                        <XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} />
-                        <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
-                        <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
-                        <Legend />
-                        <Bar dataKey="hired" fill="#4ade80" name="Hired" />
-                        <Bar dataKey="separated" fill="#ef4444" name="Separated" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Attrition prediction</CardTitle>
-                  <CardDescription>Early signals across departments.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-3">
-                    {[
-                      { dept: "Sales", risk: "High", note: "Quota pressure + overtime" },
-                      { dept: "Service", risk: "Medium", note: "Coverage gaps on weekends" },
-                      { dept: "Network", risk: "Low", note: "Stable shifts" },
-                    ].map((row) => (
-                      <div key={row.dept} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                        <div>
-                          <p className="font-medium text-foreground">{row.dept}</p>
-                          <p className="text-xs text-muted-foreground">{row.note}</p>
-                        </div>
-                        <Badge variant="outline" className={statusColor(row.risk)}>{row.risk}</Badge>
+            case "performance":
+              return (
+                <div className="space-y-6">
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <BarChart3 className="h-4 w-4 text-muted-foreground" /> KPI management
+                      </CardTitle>
+                      <CardDescription>Targets, reviews, and team health metrics.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[680px]">
+                          <thead>
+                            <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                              <th className="py-2 pr-4 font-medium">KPI</th>
+                              <th className="py-2 pr-4 font-medium">Owner</th>
+                              <th className="py-2 pr-4 font-medium">Target</th>
+                              <th className="py-2 pr-4 font-medium">Current</th>
+                              <th className="py-2 font-medium">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {perfLoading ? (
+                              <LoadingRow cols={5} />
+                            ) : perfError ? (
+                              <ErrorRow message={perfError} cols={5} />
+                            ) : kpis.length === 0 ? (
+                              <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No KPI data available. Configure KPIs in analytics.</td></tr>
+                            ) : (
+                              kpis.map((row) => (
+                                <tr key={row.kpi} className="border-b border-border/60 text-sm">
+                                  <td className="py-3 pr-4 text-foreground">{row.kpi}</td>
+                                  <td className="py-3 pr-4 text-muted-foreground">{row.owner}</td>
+                                  <td className="py-3 pr-4 text-muted-foreground">{row.target}</td>
+                                  <td className="py-3 pr-4 text-muted-foreground">{row.current}</td>
+                                  <td className="py-3">
+                                    <Badge variant="outline" className={row.ok ? "border-emerald-500/40 text-emerald-500" : "border-red-500/40 text-red-400"}>
+                                      {row.ok ? "On track" : "At risk"}
+                                    </Badge>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
                       </div>
-                    ))}
-                  </div>
-                  <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
-                    Combine surveys, absence, performance, and scheduling load to flag retention risk.
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
+                    </CardContent>
+                  </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Surveys</CardTitle>
-                <CardDescription>Pulse results and follow-ups.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { label: "Last pulse", value: "4.2 / 5" },
-                    { label: "Participation", value: "78%" },
-                    { label: "Top theme", value: "Manager support" },
-                  ].map((metric) => (
-                    <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-xs text-muted-foreground">{metric.label}</p>
-                      <p className="mt-1 text-lg font-semibold text-foreground">{metric.value}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-muted-foreground">Create a survey, publish to teams, and track action items.</p>
-                  <Button variant="outline">New survey</Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
+                  <div className="grid gap-6 lg:grid-cols-2">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Employee growth & turnover</CardTitle>
+                        <CardDescription>Hiring vs separations over time.</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={employeeGrowth}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                              <XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} />
+                              <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
+                              <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
+                              <Legend />
+                              <Bar dataKey="hired" fill="#4ade80" name="Hired" />
+                              <Bar dataKey="separated" fill="#ef4444" name="Separated" />
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </CardContent>
+                    </Card>
 
-      // ── CULTURE (static) ──────────────────────────────────────────
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Attrition prediction</CardTitle>
+                        <CardDescription>Early signals across departments.</CardDescription>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="grid gap-3">
+                          {attritionData.length === 0 ? (
+                            <p className="col-span-full text-sm text-muted-foreground">No attrition risk data available. Run analytics to populate.</p>
+                          ) : (
+                            attritionData.map((row) => (
+                              <div key={row.dept} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
+                                <div>
+                                  <p className="font-medium text-foreground">{row.dept}</p>
+                                  <p className="text-xs text-muted-foreground">{row.note}</p>
+                                </div>
+                                <Badge variant="outline" className={statusColor(row.risk)}>{row.risk}</Badge>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                        <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
+                          Combine surveys, absence, performance, and scheduling load to flag retention risk.
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Surveys</CardTitle>
+                      <CardDescription>Pulse results and follow-ups.</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-4 sm:grid-cols-3">
+                        {[
+                          { label: "Last pulse", value: "—" },
+                          { label: "Participation", value: "—" },
+                          { label: "Top theme", value: "—" },
+                        ].map((metric) => (
+                          <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
+                            <p className="text-xs text-muted-foreground">{metric.label}</p>
+                            <p className="mt-1 text-lg font-semibold text-foreground">{metric.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-muted-foreground">Create a survey, publish to teams, and track action items.</p>
+                        <Button variant="outline">New survey</Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              )
+
+      // ── CULTURE ──────────────────────────────────────────────────────────
       case "culture":
         return (
           <div className="space-y-6">
@@ -1245,18 +1380,22 @@ export function TalentModule() {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {[
-                    { from: "Manager", to: "K. Patel", note: "Great customer follow-up on the MetroFibre deal." },
-                    { from: "Team Lead", to: "S. Maseko", note: "Excellent incident response during the outage." },
-                    { from: "Peer", to: "A. Ndlovu", note: "Thanks for covering the late shift." },
-                  ].map((kudo) => (
-                    <div key={`${kudo.to}-${kudo.note}`} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-sm text-foreground">
-                        <span className="font-semibold">{kudo.to}</span> — {kudo.note}
-                      </p>
-                      <p className="mt-1 text-xs text-muted-foreground">From {kudo.from}</p>
-                    </div>
-                  ))}
+                  {cultureLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading kudos…</p>
+                  ) : cultureError ? (
+                    <p className="text-sm text-red-400">Error: {cultureError}</p>
+                  ) : kudos.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No kudos yet. Be the first to send one!</p>
+                  ) : (
+                    kudos.map((kudo) => (
+                      <div key={kudo.id} className="rounded-lg border border-border bg-background/40 p-4">
+                        <p className="text-sm text-foreground">
+                          <span className="font-semibold">{kudo.to}</span> — {kudo.note}
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">From {kudo.from}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
                 <div className="mt-4 flex justify-end">
                   <Button variant="outline">Send kudos</Button>
@@ -1273,27 +1412,30 @@ export function TalentModule() {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-3 sm:grid-cols-2">
-                  {[
-                    { name: "T. Mokoena", event: "Birthday", date: "Feb 15" },
-                    { name: "K. Patel", event: "1 year at company", date: "Mar 2" },
-                    { name: "S. Maseko", event: "Birthday", date: "Mar 10" },
-                    { name: "A. Ndlovu", event: "Probation ends", date: "Mar 20" },
-                  ].map((item) => (
-                    <div key={`${item.name}-${item.event}`} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                      <div>
-                        <p className="font-medium text-foreground">{item.name}</p>
-                        <p className="text-xs text-muted-foreground">{item.event}</p>
+                  {cultureLoading ? (
+                    <p className="col-span-2 text-sm text-muted-foreground">Loading milestones…</p>
+                  ) : cultureError ? (
+                    <p className="col-span-2 text-sm text-red-400">Error: {cultureError}</p>
+                  ) : milestones.length === 0 ? (
+                    <p className="col-span-2 text-sm text-muted-foreground">No upcoming milestones.</p>
+                  ) : (
+                    milestones.map((item) => (
+                      <div key={item.id} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
+                        <div>
+                          <p className="font-medium text-foreground">{item.name}</p>
+                          <p className="text-xs text-muted-foreground">{item.event}</p>
+                        </div>
+                        <Badge variant="outline" className="border-muted text-muted-foreground">{item.date}</Badge>
                       </div>
-                      <Badge variant="outline" className="border-muted text-muted-foreground">{item.date}</Badge>
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </CardContent>
             </Card>
           </div>
         )
 
-      // ── GOVERNANCE ────────────────────────────────────────────────
+      // ── GOVERNANCE ──────────────────────────────────────────────────────────
       case "governance":
         return (
           <div className="space-y-6">
@@ -1306,16 +1448,18 @@ export function TalentModule() {
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { role: "HR Admin", access: "Full HR + policies" },
-                    { role: "Manager", access: "Team leave + reviews" },
-                    { role: "Employee", access: "Profile + leave requests" },
-                  ].map((row) => (
-                    <div key={row.role} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="font-semibold text-foreground">{row.role}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{row.access}</p>
-                    </div>
-                  ))}
+                  {govLoading ? (
+                    <p className="col-span-3 text-sm text-muted-foreground">Loading roles…</p>
+                  ) : govError ? (
+                    <p className="col-span-3 text-sm text-red-400">Error: {govError}</p>
+                  ) : (
+                    roles.map((row) => (
+                      <div key={row.role} className="rounded-lg border border-border bg-background/40 p-4">
+                        <p className="font-semibold text-foreground">{row.role}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">{row.access}</p>
+                      </div>
+                    ))
+                  )}
                 </div>
                 <div className="mt-4 flex justify-end">
                   <Button variant="outline">Manage roles</Button>
@@ -1383,6 +1527,33 @@ export function TalentModule() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Attrition prediction</CardTitle>
+                <CardDescription>Early signals across departments.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3">
+                  {attritionRisk.length === 0 ? (
+                    <p className="col-span-full text-sm text-muted-foreground">No attrition risk data available. Run analytics to populate.</p>
+                  ) : (
+                    attritionRisk.map((row) => (
+                      <div key={row.dept} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
+                        <div>
+                          <p className="font-medium text-foreground">{row.dept}</p>
+                          <p className="text-xs text-muted-foreground">{row.note}</p>
+                        </div>
+                        <Badge variant="outline" className={statusColor(row.risk)}>{row.risk}</Badge>
+                      </div>
+                    ))
+                  )}
+                </div>
+                <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
+                  Combine surveys, absence, performance, and scheduling load to flag retention risk.
                 </div>
               </CardContent>
             </Card>
@@ -1848,6 +2019,42 @@ export function TalentModule() {
   }
 
   // ── Main render ────────────────────────────────────────────────────
+  const [showNewEmployeeModal, setShowNewEmployeeModal] = useState(false)
+
+  const handleExport = async () => {
+    try {
+      const emps = await listEmployees()
+      const csv = [
+        ["ID", "Name", "Email", "Department", "Job Title", "Status", "Hire Date"].join(","),
+        ...emps.map(e => [
+          e.employee_id,
+          e.full_name,
+          e.email || "",
+          e.department,
+          e.job_title,
+          e.status,
+          e.hire_date
+        ].map(v => `"${v}"`).join(","))
+      ].join("\n")
+      
+      const blob = new Blob([csv], { type: "text/csv" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `talent-export-${new Date().toISOString().split("T")[0]}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error("Export failed:", err)
+    }
+  }
+
+  const handleNewEmployee = () => {
+    alert("New Employee form - to be implemented with proper modal")
+    // TODO: Implement proper modal with form
+  }
+
+  // ── Main render ────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       <PageHeader
@@ -1856,8 +2063,8 @@ export function TalentModule() {
         subtitle="Employee management, onboarding, performance, and workforce planning"
         actions={
           <>
-            <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" />Export</Button>
-            <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Employee</Button>
+            <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-3.5 w-3.5" />Export</Button>
+            <Button variant="cta" size="sm" onClick={handleNewEmployee}><Plus className="h-3.5 w-3.5" />New Employee</Button>
           </>
         }
       />
@@ -1867,23 +2074,23 @@ export function TalentModule() {
         <StatCard
           title="Total Employees"
           value={analyticsLoading ? "…" : kpiTotal}
-          change="+3.3%"
+          change={analyticsLoading ? undefined : "+0%"}
           changeType="positive"
           icon={UserCog}
-          description="vs last month"
+          description="real-time count"
         />
         <StatCard
           title="Open Positions"
           value={kpiOpenPositions}
-          change="+2"
+          change={analyticsLoading ? undefined : "+0"}
           changeType="negative"
           icon={Target}
-          description="vs last month"
+          description="from requisitions"
         />
         <StatCard
           title="Avg Employee Rating"
           value={kpiAvgRating}
-          change="+0.2"
+          change={analyticsLoading ? undefined : "+0.0"}
           changeType="positive"
           icon={TrendingUp}
           description="engagement score"
@@ -1891,7 +2098,7 @@ export function TalentModule() {
         <StatCard
           title="Turnover Rate"
           value={kpiTurnover}
-          change="-1.2%"
+          change={analyticsLoading ? undefined : "+0.0%"}
           changeType="positive"
           icon={Users}
           description="annualized"
@@ -2005,6 +2212,90 @@ export function TalentModule() {
             </Card>
           </div>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ── New Employee Modal ────────────────────────────────────────────────
+function NewEmployeeModal({ isOpen, onClose }: NewEmployeeModalProps) {
+  if (!isOpen) return null
+
+  const [formData, setFormData] = useState({
+    employee_id: "",
+    full_name: "",
+    email: "",
+    department: "",
+    job_title: "",
+    hire_date: new Date().toISOString().split("T")[0],
+    phone: "",
+  })
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+    setError(null)
+    try {
+      await createEmployee(formData)
+      onClose()
+      setFormData({ employee_id: "", full_name: "", email: "", department: "", job_title: "", hire_date: new Date().toISOString().split("T")[0], phone: "" })
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to create employee")
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="bg-background rounded-lg border border-border max-w-md w-full max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between border-b border-border p-4">
+          <h2 className="text-lg font-semibold">Add New Employee</h2>
+          <Button variant="ghost" size="icon" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
+          {error && <div className="text-sm text-red-400 bg-red-400/10 border border-red-400/20 rounded p-2">{error}</div>}
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Employee ID</label>
+            <Input value={formData.employee_id} onChange={(e) => setFormData({ ...formData, employee_id: e.target.value })} required />
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Full Name</label>
+            <Input value={formData.full_name} onChange={(e) => setFormData({ ...formData, full_name: e.target.value })} required />
+          </div>
+          <div className="space-y-2">
+            <label className="text-xs font-medium text-muted-foreground">Email</label>
+            <Input type="email" value={formData.email} onChange={(e) => setFormData({ ...formData, email: e.target.value })} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Department</label>
+              <Input value={formData.department} onChange={(e) => setFormData({ ...formData, department: e.target.value })} required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Job Title</label>
+              <Input value={formData.job_title} onChange={(e) => setFormData({ ...formData, job_title: e.target.value })} required />
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Hire Date</label>
+              <Input type="date" value={formData.hire_date} onChange={(e) => setFormData({ ...formData, hire_date: e.target.value })} required />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-muted-foreground">Phone</label>
+              <Input value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} />
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end pt-4 border-t border-border">
+            <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
+            <Button type="submit" disabled={submitting}>{submitting ? "Creating…" : "Create Employee"}</Button>
+          </div>
+        </form>
       </div>
     </div>
   )
