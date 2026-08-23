@@ -5,6 +5,12 @@ node_modules
 __pycache__
 .env.local
 .env.*.local
+# Host-dev env overrides point *_SERVICE_URL at localhost:* — they must NOT
+# leak into the image build, or Next.js bakes localhost into the /svc/* rewrite
+# destinations and every rewrite-proxied service 500s (ECONNREFUSED) in-container.
+# Root-level patterns above don't match nested paths; these do.
+**/.env.local
+**/.env.*.local
 apps/web/node_modules
 apps/web/.next
 apps/web/.turbo
