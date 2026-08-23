@@ -51,21 +51,25 @@ export default function AuthPage() {
     setError(null)
     setNotice(null)
 
-    const { error: signInError } = await supabase.auth.signInWithOtp({
-      email,
-      options: {
-        emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
-      },
-    })
+    try {
+      const { error: signInError } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
+        },
+      })
 
-    if (signInError) {
-      setError(signInError.message)
+      if (signInError) {
+        setError(signInError.message)
+        return
+      }
+
+      setNotice("Check your inbox for a sign-in link.")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.")
+    } finally {
       setIsLoading(false)
-      return
     }
-
-    setNotice("Check your inbox for a sign-in link.")
-    setIsLoading(false)
   }
 
   const handlePasswordSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -83,39 +87,41 @@ export default function AuthPage() {
     setError(null)
     setNotice(null)
 
-    if (isSignUp) {
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
-        },
-      })
+    try {
+      if (isSignUp) {
+        const { error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: getAuthRedirectUrl("/auth/callback"),
+          },
+        })
 
-      if (signUpError) {
-        setError(signUpError.message)
-        setIsLoading(false)
+        if (signUpError) {
+          setError(signUpError.message)
+          return
+        }
+
+        setNotice("Account created. Check your email to confirm and sign in.")
         return
       }
 
-      setNotice("Account created. Check your email to confirm and sign in.")
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
+
+      if (signInError) {
+        setError(signInError.message)
+        return
+      }
+
+      router.replace("/dashboard")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.")
+    } finally {
       setIsLoading(false)
-      return
     }
-
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-
-    if (signInError) {
-      setError(signInError.message)
-      setIsLoading(false)
-      return
-    }
-
-    router.replace("/dashboard")
-    setIsLoading(false)
   }
 
   const handlePasswordReset = async () => {
