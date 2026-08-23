@@ -728,6 +728,7 @@ CREATE TABLE employees (
     email VARCHAR(200),
     phone VARCHAR(20),
     profile_photo_url TEXT,
+    call_center_agent_id UUID, -- optional link to a call-center agent (services/hr link-call-center)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
