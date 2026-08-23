@@ -17,7 +17,9 @@ from services.hr.database import (
     Employee, LeaveRequest, PerformanceReview,
     StaffSchedule, TrainingCourse, TrainingEnrollment,
     BenefitEnrollment, DisciplinaryAction, StaffExit, OnboardingTask,
+    PayrollProfile, PayrollRun, Payslip,
 )
+from services.hr import paystack as ps
 
 app = FastAPI(title="OmniDome HR Service", version="0.2.0")
 guard = EntitlementGuard(module_id="hr")
@@ -1214,7 +1216,373 @@ async def get_headcount_analytics(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PAYROLL  (existing, kept for compatibility)
+# PAYROLL  (profiles, runs, payslips, Paystack payouts)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── SA deduction helper (simplified estimate) ──────────────────────────────
+# Monthly PAYE from 2024/25 SARS annual brackets / 12, less the primary rebate.
+# UIF is 1% of gross capped at the R17,712 monthly remuneration ceiling.
+# This is a reasonable estimate for demo payroll, not tax advice.
+_SARS_BRACKETS = [
+    (237100, 0.0, 0.18),
+    (370500, 42678.0, 0.26),
+    (512800, 77362.0, 0.31),
+    (673000, 121475.0, 0.36),
+    (857900, 179147.0, 0.39),
+    (1817000, 251258.0, 0.41),
+    (float("inf"), 644489.0, 0.45),
+]
+_PRIMARY_REBATE_ANNUAL = 17235.0
+_UIF_MONTHLY_CEILING = 17712.0
+
+
+def _payroll_deductions(gross_month: float) -> dict:
+    annual = gross_month * 12.0
+    lower = 0.0
+    tax_annual = 0.0
+    for upper, base, rate in _SARS_BRACKETS:
+        if annual <= upper:
+            tax_annual = base + (annual - lower) * rate
+            break
+        lower = upper
+    tax_month = max(0.0, (tax_annual - _PRIMARY_REBATE_ANNUAL) / 12.0)
+    uif = round(min(gross_month, _UIF_MONTHLY_CEILING) * 0.01, 2)
+    tax = round(tax_month, 2)
+    net = round(gross_month - tax - uif, 2)
+    return {"tax": tax, "uif": uif, "other": 0.0, "net": net}
+
+
+class PayrollProfileUpsert(BaseModel):
+    base_salary: float
+    currency: str = "ZAR"
+    pay_frequency: str = "MONTHLY"
+    bank_code: Optional[str] = None
+    account_number: Optional[str] = None
+    account_name: Optional[str] = None
+
+
+class PayrollRunCreate(BaseModel):
+    period: str
+    employee_ids: Optional[List[uuid.UUID]] = None
+
+
+def _profile_to_dict(p: PayrollProfile) -> dict:
+    return {
+        "employee_id": p.employee_id,
+        "base_salary": float(p.base_salary),
+        "currency": p.currency,
+        "pay_frequency": p.pay_frequency,
+        "bank_code": p.bank_code,
+        "account_number": p.account_number,
+        "account_name": p.account_name,
+        "paystack_recipient_code": p.paystack_recipient_code,
+        "updated_at": p.updated_at,
+    }
+
+
+def _payslip_to_dict(s: Payslip) -> dict:
+    return {
+        "id": s.id,
+        "run_id": s.run_id,
+        "employee_id": s.employee_id,
+        "gross": float(s.gross),
+        "tax": float(s.tax),
+        "uif": float(s.uif),
+        "other_deductions": float(s.other_deductions),
+        "net": float(s.net),
+        "currency": s.currency,
+        "payout_status": s.payout_status,
+        "paystack_transfer_code": s.paystack_transfer_code,
+        "paystack_reference": s.paystack_reference,
+        "payout_message": s.payout_message,
+    }
+
+
+def _run_to_dict(r: PayrollRun, payslips: Optional[List[Payslip]] = None) -> dict:
+    d = {
+        "id": r.id,
+        "period": r.period,
+        "status": r.status,
+        "currency": r.currency,
+        "employee_count": r.employee_count,
+        "total_gross": float(r.total_gross),
+        "total_deductions": float(r.total_deductions),
+        "total_net": float(r.total_net),
+        "finance_entry_id": r.finance_entry_id,
+        "created_at": r.created_at,
+    }
+    if payslips is not None:
+        d["payslips"] = [_payslip_to_dict(s) for s in payslips]
+    return d
+
+
+@app.put("/employees/{emp_id}/payroll-profile")
+async def upsert_payroll_profile(
+    emp_id: uuid.UUID,
+    body: PayrollProfileUpsert,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Create/update an employee's salary + bank payout details.
+
+    If full bank details are supplied, a Paystack Transfer Recipient is created
+    (or refreshed) so payouts can target it later. Recipient creation failure
+    does not block saving the profile — it's reported in the response.
+    """
+    await _get_employee_or_404(emp_id, tenant_id, db)
+
+    existing = (await db.execute(
+        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id)
+    )).scalars().first()
+
+    if existing is None:
+        existing = PayrollProfile(employee_id=emp_id, tenant_id=tenant_id, base_salary=body.base_salary)
+        db.add(existing)
+
+    existing.base_salary = body.base_salary
+    existing.currency = body.currency
+    existing.pay_frequency = body.pay_frequency
+    existing.bank_code = body.bank_code
+    existing.account_number = body.account_number
+    existing.account_name = body.account_name
+
+    recipient_msg = None
+    # (Re)create the Paystack recipient when bank details are complete.
+    if body.bank_code and body.account_number and body.account_name:
+        try:
+            res = await ps.create_transfer_recipient(
+                name=body.account_name,
+                account_number=body.account_number,
+                bank_code=body.bank_code,
+                currency=body.currency,
+            )
+            if res["ok"]:
+                existing.paystack_recipient_code = res["recipient_code"]
+            recipient_msg = res["message"]
+        except ps.PaystackError as exc:
+            recipient_msg = f"recipient not created: {exc}"
+
+    await db.flush()
+    await db.refresh(existing)
+    return {"profile": _profile_to_dict(existing), "recipient_status": recipient_msg}
+
+
+@app.get("/employees/{emp_id}/payroll-profile")
+async def get_payroll_profile(
+    emp_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    await _get_employee_or_404(emp_id, tenant_id, db)
+    p = (await db.execute(
+        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id)
+    )).scalars().first()
+    if not p:
+        raise HTTPException(status_code=404, detail="No payroll profile for this employee")
+    return _profile_to_dict(p)
+
+
+@app.post("/payroll/runs", status_code=201)
+async def create_payroll_run(
+    payload: PayrollRunCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Create a payroll run for a period and generate payslips.
+
+    Gross comes from each employee's payroll_profile (employees without a
+    profile are skipped). Does NOT pay anyone — call /payroll/runs/{id}/pay
+    for that. Posts a summary journal entry to Finance (best-effort).
+    """
+    stmt = select(Employee).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
+    if payload.employee_ids:
+        stmt = stmt.where(Employee.id.in_(payload.employee_ids))
+    employees = (await db.execute(stmt)).scalars().all()
+    if not employees:
+        raise HTTPException(status_code=400, detail="No active employees found")
+
+    profiles = {
+        p.employee_id: p for p in (await db.execute(
+            select(PayrollProfile).where(PayrollProfile.tenant_id == tenant_id)
+        )).scalars().all()
+    }
+
+    run = PayrollRun(tenant_id=tenant_id, period=payload.period, status="DRAFT")
+    db.add(run)
+    await db.flush()  # assign run.id
+
+    total_gross = total_ded = total_net = 0.0
+    skipped = []
+    payslips: List[Payslip] = []
+    for emp in employees:
+        prof = profiles.get(emp.id)
+        if not prof:
+            skipped.append(str(emp.id))
+            continue
+        gross = float(prof.base_salary)
+        d = _payroll_deductions(gross)
+        slip = Payslip(
+            tenant_id=tenant_id, run_id=run.id, employee_id=emp.id,
+            gross=gross, tax=d["tax"], uif=d["uif"], other_deductions=d["other"],
+            net=d["net"], currency=prof.currency,
+            paystack_recipient_code=prof.paystack_recipient_code,
+        )
+        db.add(slip)
+        payslips.append(slip)
+        total_gross += gross
+        total_ded += d["tax"] + d["uif"] + d["other"]
+        total_net += d["net"]
+
+    if not payslips:
+        raise HTTPException(
+            status_code=400,
+            detail="No employees have a payroll profile; set base salaries first.",
+        )
+
+    run.employee_count = len(payslips)
+    run.total_gross = round(total_gross, 2)
+    run.total_deductions = round(total_ded, 2)
+    run.total_net = round(total_net, 2)
+
+    # Best-effort Finance journal entry (mirrors the legacy stub).
+    finance_url = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{finance_url}/journal-entries",
+                json={
+                    "entry_date": date.today().isoformat(),
+                    "reference": f"PAYROLL-{payload.period}",
+                    "description": f"Payroll {payload.period} ({len(payslips)} employees)",
+                    "source": "PAYROLL",
+                    "lines": [
+                        {"account_code": "6000", "account_name": "Salaries & Wages", "debit": round(total_gross, 2), "credit": 0},
+                        {"account_code": "2600", "account_name": "PAYE/UIF Payable", "debit": 0, "credit": round(total_ded, 2)},
+                        {"account_code": "1000", "account_name": "Cash & Bank", "debit": 0, "credit": round(total_net, 2)},
+                    ],
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+            if resp.status_code in (200, 201):
+                run.finance_entry_id = str(resp.json().get("id"))
+    except Exception:
+        logger.info("payroll: finance journal entry skipped (finance unavailable)")
+
+    await db.flush()
+    result = _run_to_dict(run, payslips)
+    result["skipped_employees_without_profile"] = skipped
+    return result
+
+
+@app.get("/payroll/runs")
+async def list_payroll_runs(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    runs = (await db.execute(
+        select(PayrollRun).where(PayrollRun.tenant_id == tenant_id).order_by(desc(PayrollRun.created_at))
+    )).scalars().all()
+    return {"items": [_run_to_dict(r) for r in runs], "total": len(runs)}
+
+
+@app.get("/payroll/runs/{run_id}")
+async def get_payroll_run(
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    run = (await db.execute(
+        select(PayrollRun).where(PayrollRun.id == run_id, PayrollRun.tenant_id == tenant_id)
+    )).scalars().first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Payroll run not found")
+    slips = (await db.execute(
+        select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
+    )).scalars().all()
+    return _run_to_dict(run, slips)
+
+
+@app.post("/payroll/runs/{run_id}/pay")
+async def pay_payroll_run(
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Initiate Paystack transfers for every unpaid payslip in the run.
+
+    Safe-guarded: this is the ONLY endpoint that moves money, and only when
+    called explicitly. Each payslip records the Paystack transfer_code/status;
+    a payslip with no recipient is marked FAILED and skipped. Whatever Paystack
+    returns (including 'pending' on an unfunded test balance) is recorded.
+    """
+    run = (await db.execute(
+        select(PayrollRun).where(PayrollRun.id == run_id, PayrollRun.tenant_id == tenant_id)
+    )).scalars().first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Payroll run not found")
+
+    slips = (await db.execute(
+        select(Payslip).where(Payslip.run_id == run_id, Payslip.payout_status.in_(["PENDING", "FAILED"]))
+    )).scalars().all()
+    if not slips:
+        return {"run_id": run_id, "message": "nothing to pay (all payslips already paid)", **_run_to_dict(run)}
+
+    paid = failed = 0
+    for slip in slips:
+        recipient = slip.paystack_recipient_code
+        if not recipient:
+            prof = (await db.execute(
+                select(PayrollProfile).where(PayrollProfile.employee_id == slip.employee_id)
+            )).scalars().first()
+            recipient = prof.paystack_recipient_code if prof else None
+        if not recipient:
+            slip.payout_status = "FAILED"
+            slip.payout_message = "no Paystack recipient (set bank details on payroll profile)"
+            failed += 1
+            continue
+
+        reference = f"PAY-{run.period}-{str(slip.employee_id)[:8]}"
+        try:
+            res = await ps.initiate_transfer(
+                amount_zar=float(slip.net),
+                recipient_code=recipient,
+                reason=f"Payroll {run.period}",
+                reference=reference,
+            )
+        except ps.PaystackError as exc:
+            slip.payout_status = "FAILED"
+            slip.payout_message = str(exc)
+            failed += 1
+            continue
+
+        slip.paystack_recipient_code = recipient
+        slip.paystack_transfer_code = res.get("transfer_code")
+        slip.paystack_reference = res.get("reference")
+        slip.payout_message = res.get("message")
+        if res["ok"]:
+            # 'success' (or mock) -> PAID; 'pending'/'otp' -> PROCESSING
+            slip.payout_status = "PAID" if res.get("status") == "success" else "PROCESSING"
+            paid += 1
+        else:
+            slip.payout_status = "FAILED"
+            failed += 1
+
+    if failed == 0:
+        run.status = "PAID"
+    elif paid == 0:
+        run.status = "FAILED"
+    else:
+        run.status = "PARTIALLY_PAID"
+
+    await db.flush()
+    slips_all = (await db.execute(
+        select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
+    )).scalars().all()
+    return {"initiated": paid, "failed": failed, **_run_to_dict(run, slips_all)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PAYROLL  (legacy quick-run, kept for compatibility)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class PayrollRunRequest(BaseModel):

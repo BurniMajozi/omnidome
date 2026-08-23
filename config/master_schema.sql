@@ -305,6 +305,7 @@ CREATE TABLE billing_plans (
     currency TEXT DEFAULT 'ZAR',
     billing_cycle TEXT DEFAULT 'MONTHLY', -- MONTHLY, QUARTERLY, ANNUAL
     fno_provider TEXT, -- Openserve, Vumatel, etc.
+    paystack_plan_code VARCHAR(100), -- PLN_xxx (Paystack recurring plan)
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -318,6 +319,9 @@ CREATE TABLE subscriptions (
     next_billing_date DATE,
     cancel_date DATE,
     paystack_customer_token TEXT,
+    paystack_subscription_code VARCHAR(100), -- SUB_xxx (Paystack recurring subscription)
+    paystack_customer_code VARCHAR(100),     -- CUS_xxx
+    paystack_email_token VARCHAR(100),       -- token required to disable a subscription
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -741,6 +745,62 @@ CREATE TABLE onboarding_tasks (
     due_date DATE,
     completed_at TIMESTAMP WITH TIME ZONE
 );
+
+-- ── Payroll (services/hr) — shapes MUST match services/hr/database.py models,
+--    since HR's create_all only creates a table if it doesn't already exist.
+CREATE TABLE payroll_profiles (
+    employee_id UUID PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+    tenant_id UUID NOT NULL,
+    base_salary NUMERIC(14,2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'ZAR',
+    pay_frequency VARCHAR(20) DEFAULT 'MONTHLY',
+    bank_code VARCHAR(20),
+    account_number VARCHAR(30),
+    account_name VARCHAR(200),
+    paystack_recipient_code VARCHAR(100), -- RCP_xxx
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE payroll_runs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL,
+    period VARCHAR(20) NOT NULL, -- e.g. '2026-08'
+    status VARCHAR(20) DEFAULT 'DRAFT', -- DRAFT, PAID, PARTIALLY_PAID, FAILED
+    currency VARCHAR(3) DEFAULT 'ZAR',
+    employee_count INTEGER DEFAULT 0,
+    total_gross NUMERIC(16,2) DEFAULT 0,
+    total_deductions NUMERIC(16,2) DEFAULT 0,
+    total_net NUMERIC(16,2) DEFAULT 0,
+    finance_entry_id VARCHAR(100),
+    notes TEXT,
+    created_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE payslips (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL,
+    run_id UUID REFERENCES payroll_runs(id) ON DELETE CASCADE,
+    employee_id UUID REFERENCES employees(id) ON DELETE CASCADE,
+    gross NUMERIC(14,2) NOT NULL,
+    tax NUMERIC(14,2) DEFAULT 0,     -- PAYE
+    uif NUMERIC(14,2) DEFAULT 0,     -- UIF employee portion
+    other_deductions NUMERIC(14,2) DEFAULT 0,
+    net NUMERIC(14,2) NOT NULL,
+    currency VARCHAR(3) DEFAULT 'ZAR',
+    payout_status VARCHAR(20) DEFAULT 'PENDING', -- PENDING, PROCESSING, PAID, FAILED
+    paystack_recipient_code VARCHAR(100),
+    paystack_transfer_code VARCHAR(100), -- TRF_xxx
+    paystack_reference VARCHAR(100),
+    payout_message TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX idx_payslips_run ON payslips(run_id);
+CREATE INDEX idx_payslips_tenant ON payslips(tenant_id);
+CREATE INDEX idx_payroll_runs_tenant ON payroll_runs(tenant_id);
 
 CREATE TABLE training_records (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

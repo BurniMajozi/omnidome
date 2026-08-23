@@ -209,6 +209,76 @@ class OnboardingTask(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ── Payroll ──────────────────────────────────────────────────────────────
+
+class PayrollProfile(Base):
+    """Per-employee compensation + payout details. One row per employee."""
+    __tablename__ = "payroll_profiles"
+
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), primary_key=True
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    base_salary: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)  # gross per period
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR")
+    pay_frequency: Mapped[str] = mapped_column(String(20), default="MONTHLY")  # MONTHLY, WEEKLY
+    # Bank / payout details (for Paystack Transfer Recipient)
+    bank_code: Mapped[Optional[str]] = mapped_column(String(20))
+    account_number: Mapped[Optional[str]] = mapped_column(String(30))
+    account_name: Mapped[Optional[str]] = mapped_column(String(200))
+    paystack_recipient_code: Mapped[Optional[str]] = mapped_column(String(100))  # RCP_xxx
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PayrollRun(Base):
+    """A payroll batch for a pay period."""
+    __tablename__ = "payroll_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    period: Mapped[str] = mapped_column(String(20), nullable=False)  # e.g. "2026-08"
+    status: Mapped[str] = mapped_column(String(20), default="DRAFT")  # DRAFT, PAID, PARTIALLY_PAID, FAILED
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR")
+    employee_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_gross: Mapped[float] = mapped_column(Numeric(16, 2), default=0)
+    total_deductions: Mapped[float] = mapped_column(Numeric(16, 2), default=0)
+    total_net: Mapped[float] = mapped_column(Numeric(16, 2), default=0)
+    finance_entry_id: Mapped[Optional[str]] = mapped_column(String(100))
+    notes: Mapped[Optional[str]] = mapped_column(Text)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Payslip(Base):
+    """One employee's pay for one run."""
+    __tablename__ = "payslips"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("payroll_runs.id", ondelete="CASCADE"), index=True
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), index=True
+    )
+    gross: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    tax: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # PAYE
+    uif: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # UIF employee portion
+    other_deductions: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    net: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), default="ZAR")
+    # Payout tracking (Paystack Transfer)
+    payout_status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING, PROCESSING, PAID, FAILED
+    paystack_recipient_code: Mapped[Optional[str]] = mapped_column(String(100))
+    paystack_transfer_code: Mapped[Optional[str]] = mapped_column(String(100))  # TRF_xxx
+    paystack_reference: Mapped[Optional[str]] = mapped_column(String(100))
+    payout_message: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ── Session factory ────────────────────────────────────────────────────
 
 _session_factory: Optional[async_sessionmaker] = None
