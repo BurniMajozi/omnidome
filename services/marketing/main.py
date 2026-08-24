@@ -700,17 +700,18 @@ async def create_campaign(
         conn.execute(
             text("""
                 INSERT INTO marketing_campaigns
-                    (id, tenant_id, name, channel, description, budget_zar, start_date, end_date, audience_segment_id)
+                    (id, tenant_id, name, channel, status, description, budget_zar, start_date, end_date, audience_segment_id)
                 VALUES
-                    (:id, :tid, :name, :ch, :desc, :budget, :sd, :ed, :asid)
+                    (:id, :tid, :name, :ch, :status, :desc, :budget, :sd, :ed, :asid)
             """),
             {
                 "id": str(cid),
                 "tid": str(tenant_id),
                 "name": body.name,
                 "ch": body.channel,
+                "status": "draft",
                 "desc": body.description,
-                "budget": float(body.budget_zar),
+                "budget": float(body.budget_zar) if body.budget_zar is not None else 0.0,
                 "sd": body.start_date,
                 "ed": body.end_date,
                 "asid": str(body.audience_segment_id) if body.audience_segment_id else None,
