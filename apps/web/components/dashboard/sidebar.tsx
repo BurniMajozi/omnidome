@@ -34,47 +34,26 @@ import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
-  { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
   { icon: MessageSquare, label: "Communication", href: "/dashboard/comms", section: "communication" },
+  { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
   { icon: DollarSign, label: "Sales", href: "#sales", section: "sales" },
+  { icon: Megaphone, label: "Marketing", href: "#marketing", section: "marketing" },
+  { icon: Phone, label: "Call Center", href: "#call-center", section: "call-center" },
   { icon: Users, label: "CRM", href: "#crm", section: "crm" },
   { icon: Headset, label: "Service", href: "#service", section: "service" },
-  {
-    icon: HeartHandshake,
-    label: "Retention",
-    href: "#retention",
-    section: "retention",
-    children: [
-      { label: "Overview", target: "overview" },
-      { label: "Journeys", target: "journeys" },
-      { label: "Watchlist", target: "watchlist" },
-      { label: "Events", target: "events" },
-    ],
-  },
-  { icon: Wifi, label: "Network", href: "#network", section: "network" },
-  { icon: Phone, label: "Call Center", href: "#call-center", section: "call-center" },
-  { icon: Megaphone, label: "Marketing", href: "#marketing", section: "marketing" },
-  { icon: ShieldCheck, label: "Compliance", href: "#compliance", section: "compliance" },
+  { icon: HeartHandshake, label: "Retention", href: "#retention", section: "retention" },
   { icon: UserCog, label: "Talent", href: "#talent", section: "talent" },
-  { icon: Receipt, label: "Billing & Collection", href: "#billing", section: "billing" },
+  { icon: ShieldCheck, label: "Compliance", href: "#compliance", section: "compliance" },
   { icon: FileText, label: "Finance", href: "#finance", section: "finance" },
+  { icon: Receipt, label: "Billing & Collection", href: "#billing", section: "billing" },
   { icon: Package, label: "Product Management", href: "#products", section: "products" },
-  {
-    icon: Globe,
-    label: "Portal Management",
-    href: "#portal",
-    section: "portal",
-    children: [
-      { label: "Overview", target: "overview" },
-      { label: "Landing Pages", target: "website" },
-      { label: "Website Analytics", target: "web-analytics" },
-      { label: "Retention Journey", target: "journeys" },
-    ],
-  },
-  { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
   { icon: Boxes, label: "Inventory & Stock", href: "#inventory", section: "inventory" },
   { icon: Radio, label: "IoT & Devices", href: "#iot", section: "iot" },
+  { icon: Wifi, label: "Network", href: "#network", section: "network" },
+  { icon: Globe, label: "Portal Management", href: "#portal", section: "portal" },
   { icon: ServerCog, label: "Admin", href: "#admin", section: "admin" },
+  // Not in the requested order — kept at the bottom so it isn't lost.
+  { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
 ]
 
 interface SidebarProps {
