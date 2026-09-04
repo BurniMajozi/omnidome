@@ -311,6 +311,8 @@ services:
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
       - AGENT_ORCHESTRATOR_ENABLE_TELEGRAM=false
       - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
+      - SIM_API_URL=${SIM_API_URL:-}
+      - SIM_API_KEY=${SIM_API_KEY:-}
     ports:
       - "8021:8021"
     depends_on:

@@ -854,6 +854,25 @@ export default function AgentDetailPage() {
                   <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Description</dt>
                   <dd className="mt-1 text-sm text-muted-foreground">{agent.description}</dd>
                 </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Flow Builder</dt>
+                  <dd className="mt-1 text-sm">
+                    {process.env.NEXT_PUBLIC_SIM_URL ? (
+                      <a
+                        href={`${process.env.NEXT_PUBLIC_SIM_URL}/workspaces?agent=${encodeURIComponent(agent.agent_type)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary hover:underline text-sm"
+                      >
+                        Open in Sim Flow Builder
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Set NEXT_PUBLIC_SIM_URL to link a hosted Sim workspace.
+                      </span>
+                    )}
+                  </dd>
+                </div>
               </dl>
             </CardContent>
           </Card>
