@@ -1,0 +1,33 @@
+# Hermes config for the Railway cloud deployment.
+# Separate from hermes_data/config.yaml (your local agent) on purpose — do not
+# point the local agent at this file. Seeded into /opt/data on first boot by
+# entrypoint.sh only if /opt/data/config.yaml is absent.
+#
+# Model: OpenRouter (no Ollama). The default model is read from the HERMES_MODEL
+# env var at seed time; edit it there or here. OPENROUTER_API_KEY is picked up
+# from the environment.
+model:
+  default: anthropic/claude-3.5-sonnet
+  provider: openrouter
+  base_url: https://openrouter.ai/api/v1
+providers: {}
+fallback_providers: []
+credential_pool_strategies: {}
+toolsets:
+- hermes-cli
+agent:
+  max_turns: 60
+  gateway_timeout: 1800
+  restart_drain_timeout: 180
+  api_max_retries: 3
+  tool_use_enforcement: auto
+  task_completion_guidance: true
+  environment_probe: true
+  reasoning_effort: medium
+openrouter:
+  response_cache: true
+  response_cache_ttl: 300
+  min_coding_score: 0.65
+  max_output_tokens: 2048
+prompt_caching:
+  cache_ttl: 5m
