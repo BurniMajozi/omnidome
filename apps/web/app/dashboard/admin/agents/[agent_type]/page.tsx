@@ -19,7 +19,7 @@ import {
 
 // ─── Types (mirror backend contracts) ───────────────────────────────────────
 // AgentInfo: services/agent_orchestrator/schemas.py (via GET /api/orchestrator/agents list)
-// ActionItem: audit_actions rows via GET /api/orchestrator/actions (NEWEST-FIRST, do NOT re-sort)
+// ActionItem: audit_actions rows via GET /api/orchestrator/agents/actions (NEWEST-FIRST, do NOT re-sort)
 // ConversationItem: via GET /api/orchestrator/conversations (proxy → /api/conversations)
 
 interface AgentInfo {
@@ -95,10 +95,11 @@ function formatTime(iso: string): string {
 function previewJson(value: unknown, maxLen = 160): string {
   let s: string
   try {
-    s = typeof value === "string" ? value : JSON.stringify(value)
+    s = typeof value === "string" ? value : (JSON.stringify(value) ?? "null")
   } catch {
     s = String(value)
   }
+  if (!s) return "null"
   if (s.length > maxLen) return `${s.slice(0, maxLen)}…`
   return s
 }
