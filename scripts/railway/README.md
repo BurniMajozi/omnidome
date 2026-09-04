@@ -59,7 +59,7 @@ railway run -- psql "$DATABASE_URL" -f config/master_schema.sql
   ever see internal calls hang (legacy IPv6-only env), set a **custom start
   command** per Python service binding `::`, e.g. gateway:
   `uvicorn services.gateway.main:app --host :: --port 8000 --workers 2`
-- **Licenses:** phase 1 runs with `LICENSE_ENFORCEMENT=false` (no bind mounts on
+- **Licenses:** phase 1 runs with `LICENSE_ENFORCEMENT=warn` (no bind mounts on
   Railway). To enforce later, bake `licenses/license.json` into each image.
 - **gateway public port:** gateway listens on 8000; if the generated domain 502s,
   set the service's public target port to 8000 (Networking tab).

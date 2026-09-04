@@ -69,7 +69,7 @@ fno_intelligence, portal (static nginx), eCommerce/Medusa (has its own plan in
 
 3. **No bind mounts.** Two files are bind-mounted locally:
    - `licenses/license.json` → `/etc/coreconnect/license.json`. On Railway there are
-     no bind mounts. For phase 1 set **`LICENSE_ENFORCEMENT=false`** on every service
+     no bind mounts. For phase 1 set **`LICENSE_ENFORCEMENT=warn`** on every service
      (staging posture). To enforce later, bake the file into each image (add a
      `COPY licenses/license.json /etc/coreconnect/license.json` line) — it's 399 bytes.
    - `config/master_schema.sql` → auto-loaded by the local postgres entrypoint. On
@@ -90,7 +90,7 @@ Create a Railway **shared variable group** and attach to every Python service:
 
 ```
 DATABASE_URL=${{Postgres.DATABASE_URL}}
-LICENSE_ENFORCEMENT=false
+LICENSE_ENFORCEMENT=warn
 INTERNAL_SERVICE_KEY=<copy from .env>
 CORS_ORIGINS=https://<web-public-domain>
 ```
