@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from guardrails.pii import mask_text, scan_pii
-from guardrails.validate import validate_json
+try:  # production: PYTHONPATH=/app, repo-root-absolute imports
+    from services.agent_orchestrator.guardrails.pii import mask_text, scan_pii
+    from services.agent_orchestrator.guardrails.validate import validate_json
+except ImportError:  # pytest: service-dir-relative imports
+    from guardrails.pii import mask_text, scan_pii
+    from guardrails.validate import validate_json
 
 
 def run_gate(

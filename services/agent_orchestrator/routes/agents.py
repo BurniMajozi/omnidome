@@ -22,7 +22,8 @@ from services.agent_orchestrator.conversation.models import (
     AgentMessage,
     AgentAction,
 )
-from guardrails.gate import run_gate
+from services.agent_orchestrator.guardrails.gate import run_gate
+from services.agent_orchestrator.audit_actions import GUARDRAILS_INPUT, GUARDRAILS_OUTPUT
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +103,11 @@ async def _persist_messages(
         side = verdict.get("side", "")
         hits = verdict.get("hits", [])
         action = verdict.get("action", "")
+        tool_name = GUARDRAILS_INPUT if side == "input" else GUARDRAILS_OUTPUT
         session.add(AgentAction(
             conversation_id=conversation_id,
             agent_type=agent_type,
-            tool_name=f"guardrails.{side}",
+            tool_name=tool_name,
             tool_input={"hits": hits},
             tool_output={"action": action},
             success=(action != "block"),
@@ -174,6 +176,72 @@ async def list_agents():
         ),
     ]
     return agents
+
+
+# ---------------------------------------------------------------------------
+# GET /api/agents/actions — Audit-trail query (Task 4 / D2)
+# ---------------------------------------------------------------------------
+
+def _parse_since(since: Optional[str]):
+    """Parse an ISO-8601 datetime string; None in → None out, bad → ValueError."""
+    if since is None:
+        return None
+    try:
+        return __import__("datetime").datetime.fromisoformat(since)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid ISO datetime for 'since': {since!r}") from exc
+
+
+@router.get("/actions")
+async def list_actions(
+    agent_type: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Newest-first audit trail of AgentAction rows for this tenant.
+
+    AgentAction has no tenant_id column, so tenant scoping goes through the
+    conversation join (same ctx.tenant_id pattern as invoke_agent).
+    """
+    try:
+        since_dt = _parse_since(since)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    async with get_session() as session:
+        stmt = (
+            select(AgentAction)
+            .join(
+                AgentConversation,
+                AgentAction.conversation_id == AgentConversation.id,
+            )
+            .where(AgentConversation.tenant_id == ctx.tenant_id)
+            .order_by(AgentAction.created_at.desc())
+            .limit(limit)
+        )
+        if agent_type:
+            stmt = stmt.where(AgentAction.agent_type == agent_type)
+        if since_dt is not None:
+            stmt = stmt.where(AgentAction.created_at >= since_dt)
+        result = await session.execute(stmt)
+        actions = result.scalars().all()
+
+    return {
+        "items": [
+            {
+                "id": str(a.id),
+                "conversation_id": str(a.conversation_id),
+                "agent_type": a.agent_type,
+                "tool_name": a.tool_name,
+                "tool_input": a.tool_input,
+                "tool_output": a.tool_output,
+                "success": a.success,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in actions
+        ]
+    }
 
 
 # ---------------------------------------------------------------------------
