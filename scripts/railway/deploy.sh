@@ -28,7 +28,9 @@ ENV_DIR="$SCRIPT_DIR/env"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 DOTENV="$REPO_ROOT/.env"
 REPO="BurniMajozi/omnidome"
-BRANCH="main"
+# Branch Railway tracks/builds from. Defaults to main; override for phase-1
+# bring-up from a feature branch: RAILWAY_DEPLOY_BRANCH=my-branch deploy.sh create
+BRANCH="${RAILWAY_DEPLOY_BRANCH:-main}"
 
 # Creation / deploy order (dependency-aware). web + hermes handled after backends.
 BACKENDS=(admin crm sales billing finance rica network compliance tenant-memory agent-orchestrator gateway)
