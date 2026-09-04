@@ -291,6 +291,10 @@ interface ChatBubble {
   text: string
 }
 
+function escapeSnippetAttr(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+}
+
 function suggestedIdentifier(agentType: string): string {
   const base = (agentType ?? "").toLowerCase().replace(/_/g, "-").replace(/[^a-z0-9-]/g, "")
   return `${base}-chat`.replace(/^-+/, "") || "agent-chat"
@@ -315,6 +319,7 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
   const [chatError, setChatError] = useState<string | null>(null)
   const [keyInput, setKeyInput] = useState("")
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   const [origin, setOrigin] = useState("")
   const [copied, setCopied] = useState(false)
@@ -417,6 +422,7 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
 
   async function handleDelete(id: string) {
     setDeleting(id)
+    setDeleteError(null)
     try {
       const res = await fetch(`/api/orchestrator/chat-deployments/${encodeURIComponent(id)}`, {
         method: "DELETE",
@@ -432,7 +438,7 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
         setConversationId(null)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Delete failed")
+      setDeleteError(err instanceof Error ? err.message : "Delete failed")
     } finally {
       setDeleting(null)
     }
@@ -447,7 +453,6 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
       return
     }
     const text = draft.trim()
-    setDraft("")
     setMessages((prev) => [...prev, { role: "user", text }])
     setSending(true)
     try {
@@ -475,6 +480,7 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
       const r = reply as ChatReply
       if (!r || typeof r.message !== "string") throw new Error("Unexpected chat response shape")
       if (typeof r.conversation_id === "string" && r.conversation_id) setConversationId(r.conversation_id)
+      setDraft("")
       setMessages((prev) => [...prev, { role: "assistant", text: r.message }])
     } catch (err) {
       setChatError(err instanceof Error ? err.message : "Chat failed")
@@ -533,7 +539,7 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
   }
 
   const embedSnippet = selected
-    ? `<iframe src="${origin}/dashboard/admin/agents/${encodeURIComponent(agentType)}?tab=chat&deploy=${encodeURIComponent(selected.identifier)}" width="100%" height="600" frameborder="0" title="Chat with ${displayName(selected.display_name ?? selected.identifier)}"></iframe>`
+    ? `<iframe src="${origin}/dashboard/admin/agents/${encodeURIComponent(agentType)}?tab=chat&deploy=${encodeURIComponent(selected.identifier)}" width="100%" height="600" frameborder="0" title="Chat with ${escapeSnippetAttr(displayName(selected.display_name ?? selected.identifier))}"></iframe>`
     : ""
 
   return (
@@ -587,6 +593,9 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
               ))}
             </ul>
           )}
+          {deleteError ? (
+            <p className="pt-1 text-xs text-destructive">{deleteError}</p>
+          ) : null}
         </CardContent>
       </Card>
 
