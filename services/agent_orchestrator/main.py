@@ -103,12 +103,18 @@ from services.agent_orchestrator.routes.protocols import router as protocols_rou
 from services.agent_orchestrator.routes.tools import router as tools_router
 from services.agent_orchestrator.routes.voice import router as voice_router
 from services.agent_orchestrator.routes.mcp import router as mcp_router, sse_transport as mcp_sse_transport
+from services.agent_orchestrator.routes.chat_deployments import (
+    router as chat_deployments_router,
+    public_router as chat_public_router,
+)
 
 app.include_router(agents_router, prefix="/api/agents")
 app.include_router(conversations_router, prefix="/api/conversations")
 app.include_router(protocols_router)
 app.include_router(tools_router, prefix="/api/tools")
 app.include_router(voice_router, prefix="/api/agents")
+app.include_router(chat_deployments_router, prefix="/api/chat-deployments")
+app.include_router(chat_public_router, prefix="/api/chat")
 app.include_router(mcp_router)
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 

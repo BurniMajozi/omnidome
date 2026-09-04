@@ -152,3 +152,36 @@ class AgentAction(Base):
         Index("ix_agent_actions_conversation", "conversation_id", "created_at"),
         Index("ix_agent_actions_tool", "agent_type", "tool_name", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat Deployment (Task 7: per-agent deployable public chat)
+# ---------------------------------------------------------------------------
+# NOTE on audit: AgentAction.conversation_id is NON-NULLABLE, so a
+# `chat.deployed` action row can only be written once a conversation exists.
+# The deployment row itself (created_at/created_by) is the creation audit
+# record, and every public message already yields guardrails.input/output
+# action rows — so no chat.deployed row is written here.
+
+
+class ChatDeployment(Base):
+    __tablename__ = "chat_deployments"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    # Plain String(60) like AgentAction.agent_type — avoids PG enum migration pain.
+    agent_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    identifier: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    display_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    # sha256 hex of the access key, or None = public deployment. Never plaintext.
+    access_key_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

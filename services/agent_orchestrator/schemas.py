@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ── Agent Invocation ─────────────────────────────────────────────────────
@@ -88,3 +88,49 @@ class ToolInvokeResponse(BaseModel):
     result: Any
     success: bool
     error: Optional[str] = None
+
+
+# ── Chat Deployments (Task 7: per-agent deployable public chat) ──────────
+
+VALID_AGENT_TYPES = ("customer_facing", "retention", "provisioning", "executive", "support")
+
+
+class ChatDeploymentCreate(BaseModel):
+    agent_type: str = Field(..., description="Agent type: customer_facing, retention, provisioning, executive, support")
+    identifier: str = Field(..., min_length=4, max_length=64)
+    display_name: Optional[str] = Field(default=None, max_length=120)
+    access_key: Optional[str] = Field(default=None, min_length=8, max_length=256)
+
+    @field_validator("agent_type")
+    @classmethod
+    def _check_agent_type(cls, v: str) -> str:
+        if v not in VALID_AGENT_TYPES:
+            raise ValueError(f"Invalid agent_type: {v!r}. Must be one of {', '.join(VALID_AGENT_TYPES)}")
+        return v
+
+
+class ChatDeploymentRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    agent_type: str
+    identifier: str
+    display_name: Optional[str] = None
+    is_active: bool = True
+    has_key: bool = False  # NEVER expose the hash
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatPublicRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    conversation_id: Optional[uuid.UUID] = None
+    key: Optional[str] = None
+
+
+class ChatPublicResponse(BaseModel):
+    identifier: str
+    conversation_id: uuid.UUID
+    message: str
+    agent_type: str
