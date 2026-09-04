@@ -599,17 +599,12 @@ fallback_model:
   provider: openrouter
   model: google/gemini-2.5-flash
 
-mcp_servers:
-  omnidome:
-    url: "http://agent-orchestrator:8021/mcp/"
-    transport: sse
-    headers:
-      Authorization: "Bearer hermes_secure_token_3b1693d2"
-      # REPLACE with a real tenant UUID before this can call tenant-scoped
-      # tools (CRM/billing/etc). No demo tenant exists in this DB yet --
-      # config/seed_platform_admin.sql only seeds a platform-level admin
-      # (tenant_id IS NULL), not a real tenant.
-      X-Tenant-Id: "REPLACE_WITH_REAL_TENANT_ID"
+# Hermes→OmniDome MCP server intentionally omitted for the cloud deploy.
+# The local config pointed this at http://agent-orchestrator:8021/mcp/ with an
+# embedded internal token — that 404s on Railway and must never be committed.
+# To wire it later, set it via env/secret using agent-orchestrator.railway.internal
+# and a real tenant id — do NOT hardcode credentials in this file (public repo).
+mcp_servers: {}
 
 
 
