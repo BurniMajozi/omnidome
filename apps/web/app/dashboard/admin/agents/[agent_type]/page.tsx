@@ -399,11 +399,11 @@ function DeploymentChatTab({ agentType }: { agentType: string }) {
         }
         throw new Error(detail)
       }
-      const mine = await refresh()
-      setDeployments(mine)
       const created = (await res.json().catch(() => null)) as ChatDeployment | null
       const createdId =
         created && typeof created.identifier === "string" ? created.identifier : body.identifier
+      const mine = await refresh()
+      setDeployments(mine)
       setSelectedId(createdId)
       setMessages([])
       setConversationId(null)
