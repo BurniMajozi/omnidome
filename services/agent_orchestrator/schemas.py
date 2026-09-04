@@ -124,7 +124,7 @@ class ChatDeploymentRead(BaseModel):
 
 
 class ChatPublicRequest(BaseModel):
-    message: str = Field(..., min_length=1)
+    message: str = Field(..., min_length=1, max_length=8000)
     conversation_id: Optional[uuid.UUID] = None
     key: Optional[str] = None
 

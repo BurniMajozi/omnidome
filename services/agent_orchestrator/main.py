@@ -33,6 +33,10 @@ guard = EntitlementGuard(
         # in routes/mcp.py, not the platform's per-tenant module licensing.
         "/mcp/", "/mcp/messages/",
     },
+    # Public chat deployments (Task 7): identifier-keyed chat is reachable
+    # without platform auth — tenant comes from the deployment row itself.
+    # Prefix match: exact public_paths can't cover /api/chat/{identifier}.
+    public_prefixes=("/api/chat",),
 )
 
 configure_production(app)

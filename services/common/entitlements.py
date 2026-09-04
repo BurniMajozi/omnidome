@@ -35,11 +35,15 @@ class EntitlementGuard:
         module_name: Optional[str] = None,
         public_paths: Optional[Iterable[str]] = None,
         module_id: Optional[str] = None,
+        public_prefixes: Optional[Iterable[str]] = None,
     ):
         self.module_name = module_name or module_id or os.getenv("MODULE_ID", "")
         self.public_paths = {"/health", "/docs", "/openapi.json"}
         if public_paths:
             self.public_paths.update(public_paths)
+        # Prefix matches for public subtrees with dynamic segments
+        # (exact public_paths can't cover e.g. /api/chat/{identifier}).
+        self.public_prefixes = tuple(public_prefixes or ())
         self.enforce_modules = _bool_env("AUTH_ENFORCE_MODULES", True)
         self.license = LicenseVerifier()
 
@@ -101,7 +105,11 @@ class EntitlementGuard:
 
     async def middleware(self, request: Request, call_next) -> Response:
         path = request.url.path
-        if path in self.public_paths or request.method.upper() == "OPTIONS":
+        if (
+            path in self.public_paths
+            or request.method.upper() == "OPTIONS"
+            or any(path == p or path.startswith(p.rstrip("/") + "/") for p in self.public_prefixes)
+        ):
             return await call_next(request)
 
         if not self.is_licensed():

@@ -168,6 +168,16 @@ async def create_deployment(
             )
         ).scalar_one_or_none()
         if existing:
+            if existing.tenant_id == ctx.tenant_id and not existing.is_active:
+                # Owner recycle: reactivate own soft-deleted row instead of
+                # deadlocking on the global unique identifier.
+                existing.is_active = True
+                existing.agent_type = body.agent_type
+                existing.display_name = body.display_name
+                existing.access_key_hash = access_key_hash
+                await session.flush()
+                await session.refresh(existing)
+                return _to_read(existing)
             raise HTTPException(status_code=409, detail="Identifier already taken")
         dep = ChatDeployment(
             tenant_id=ctx.tenant_id,
@@ -275,6 +285,11 @@ async def public_chat(identifier: str, body: ChatPublicRequest):
                         select(AgentConversation).where(
                             AgentConversation.id == conversation_id,
                             AgentConversation.tenant_id == tenant_id,
+                            # Pin resume to this deployment: don't let one
+                            # identifier continue another's conversation and
+                            # mix histories across agents.
+                            AgentConversation.external_id == identifier,
+                            AgentConversation.agent_type == agent_type,
                         )
                     )
                 ).scalar_one_or_none()
