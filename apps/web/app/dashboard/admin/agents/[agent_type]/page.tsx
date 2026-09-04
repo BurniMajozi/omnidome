@@ -123,7 +123,7 @@ function ActionTrailTab({ agentType }: { agentType: string }) {
     async function load() {
       try {
         const res = await fetch(
-          `/api/orchestrator/actions?agent_type=${encodeURIComponent(agentType)}&limit=200`,
+          `/api/orchestrator/agents/actions?agent_type=${encodeURIComponent(agentType)}&limit=200`,
           { cache: "no-store" }
         )
         if (!res.ok) throw new Error(`Failed to load action trail: ${res.status}`)
