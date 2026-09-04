@@ -71,8 +71,9 @@ export default function AgentsPage() {
       try {
         const res = await fetch("/api/orchestrator/agents", { cache: "no-store" })
         if (!res.ok) throw new Error(`Failed to load agents: ${res.status}`)
-        const json = (await res.json()) as AgentInfo[]
-        if (!cancelled) setAgents(json)
+        const json: unknown = await res.json()
+        if (!Array.isArray(json)) throw new Error("Unexpected agents response shape")
+        if (!cancelled) setAgents(json as AgentInfo[])
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load agents")
       } finally {
@@ -136,7 +137,7 @@ export default function AgentsPage() {
                   <TableRow key={agent.agent_type}>
                     <TableCell>
                       <Link
-                        href={`/dashboard/admin/agents/${agent.agent_type}`}
+                        href={`/dashboard/admin/agents/${encodeURIComponent(agent.agent_type)}`}
                         className="font-medium text-primary hover:underline"
                       >
                         {displayName(agent.agent_type)}
@@ -157,12 +158,12 @@ export default function AgentsPage() {
                     <TableCell>
                       <span className="inline-flex items-center gap-1 text-sm">
                         <Wrench className="h-3.5 w-3.5 text-muted-foreground" />
-                        {agent.tools.length}
+                        {(agent.tools ?? []).length}
                       </span>
-                      {agent.tools.length > 0 && (
+                      {(agent.tools ?? []).length > 0 && (
                         <div className="mt-1 flex max-w-xs flex-wrap gap-1">
-                          {agent.tools.map((tool) => (
-                            <Badge key={tool} variant="outline" className="font-mono text-[11px]">
+                          {(agent.tools ?? []).map((tool, i) => (
+                            <Badge key={`${tool}-${i}`} variant="outline" className="font-mono text-[11px]">
                               {tool}
                             </Badge>
                           ))}
