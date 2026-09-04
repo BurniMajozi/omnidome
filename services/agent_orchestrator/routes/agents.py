@@ -22,6 +22,7 @@ from services.agent_orchestrator.conversation.models import (
     AgentMessage,
     AgentAction,
 )
+from guardrails.gate import run_gate
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ async def _persist_messages(
     user_message: str,
     assistant_content: str,
     tool_calls: list,
+    gate_verdicts: list | None = None,
 ):
     """Persist user message, tool calls, and assistant response to the conversation."""
     # User message
@@ -93,6 +95,21 @@ async def _persist_messages(
         content=assistant_content,
     )
     session.add(assistant_msg)
+
+    # Guardrail gate verdicts (if any) — audit trail of PII hits on either side.
+    # TODO(Task 4+): forward PII hits to compliance breach register.
+    for verdict in gate_verdicts or []:
+        side = verdict.get("side", "")
+        hits = verdict.get("hits", [])
+        action = verdict.get("action", "")
+        session.add(AgentAction(
+            conversation_id=conversation_id,
+            agent_type=agent_type,
+            tool_name=f"guardrails.{side}",
+            tool_input={"hits": hits},
+            tool_output={"action": action},
+            success=(action != "block"),
+        ))
 
     # Update conversation timestamp
     conv_result = await session.execute(
@@ -176,6 +193,18 @@ async def invoke_agent(
     conversation_id = body.conversation_id
     skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
 
+    # Guardrails pre-gate on the inbound user message (before any DB/agent work
+    # so a blocked input leaves no stray conversation or LLM call behind).
+    policy = settings.guardrails_policy
+    gate_in = run_gate(body.message, policy)
+    if gate_in["action"] == "block":
+        raise HTTPException(
+            status_code=422,
+            detail={"error": gate_in.get("error", "Input blocked by guardrails"),
+                    "hits": gate_in["hits"]},
+        )
+    safe_message = gate_in["text"]
+
     history = None
     if skip_db:
         if not conversation_id:
@@ -229,16 +258,29 @@ async def invoke_agent(
     )
 
     if settings.chat_backend == "hermes":
-        messages = agent._build_messages(body.message, history)
+        messages = agent._build_messages(safe_message, history)
         messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
         content = await hermes_client.chat(messages)
         result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
     else:
         result = await agent.run(
-            user_message=body.message,
+            user_message=safe_message,
             history=history,
             conversation_id=conversation_id,
         )
+
+    # Guardrails post-gate on the assistant output.
+    gate_out = run_gate(result["content"], policy)
+    if gate_out["action"] == "mask":
+        final_content = gate_out["text"]
+    elif gate_out["action"] == "block":
+        final_content = "[Response withheld by guardrails]"
+    else:
+        final_content = result["content"]
+    gate_verdicts = [
+        {"side": "input", "hits": gate_in["hits"], "action": gate_in["action"]},
+        {"side": "output", "hits": gate_out["hits"], "action": gate_out["action"]},
+    ]
 
     # Persist messages
     if not skip_db:
@@ -247,15 +289,16 @@ async def invoke_agent(
                 session=session,
                 conversation_id=conversation_id,
                 agent_type=body.agent_type,
-                user_message=body.message,
-                assistant_content=result["content"],
+                user_message=safe_message,
+                assistant_content=final_content,
                 tool_calls=result.get("tool_calls", []),
+                gate_verdicts=gate_verdicts,
             )
             await session.flush()
 
     return AgentInvokeResponse(
         conversation_id=conversation_id,
-        message=result["content"],
+        message=final_content,
         tool_calls=result.get("tool_calls", []),
         agent_type=body.agent_type,
     )
@@ -295,10 +338,26 @@ async def invoke_agent_stream(
 
     async def event_stream():
         run_id = uuid.uuid4()
-        conv_id = await _ensure_conversation()
 
         def emit(event: AGUIEvent) -> str:
             return f"data: {event.model_dump_json()}\n\n"
+
+        # Guardrails pre-gate on the inbound user message. On block, emit
+        # RUN_ERROR without creating a conversation or calling the LLM.
+        policy = settings.guardrails_policy
+        gate_in = run_gate(body.message, policy)
+        if gate_in["action"] == "block":
+            conv_id = conversation_id or uuid.uuid4()
+            yield emit(AGUIEvent(
+                type="RUN_ERROR", run_id=run_id, tenant_id=tenant_id,
+                conversation_id=conv_id,
+                data={"error": gate_in.get("error", "Input blocked by guardrails"),
+                      "hits": gate_in["hits"]},
+            ))
+            return
+        safe_message = gate_in["text"]
+
+        conv_id = await _ensure_conversation()
 
         yield emit(AGUIEvent(
             type="RUN_STARTED",
@@ -314,7 +373,7 @@ async def invoke_agent_stream(
 
         try:
             if settings.chat_backend == "hermes":
-                messages = agent._build_messages(body.message, history)
+                messages = agent._build_messages(safe_message, history)
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
                 async for delta in hermes_client.chat_stream(messages):
                     full_content += delta
@@ -326,7 +385,7 @@ async def invoke_agent_stream(
                 from services.agent_orchestrator.llm import llm_client
 
                 tools_for_llm = tool_registry.to_openai_format(agent.tools)
-                messages = agent._build_messages(body.message, history)
+                messages = agent._build_messages(safe_message, history)
                 async for token in llm_client.chat_stream(
                     agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
                 ):
@@ -343,15 +402,27 @@ async def invoke_agent_stream(
             ))
             return
 
+        # Guardrails post-gate on the accumulated assistant output.
+        gate_out = run_gate(full_content, policy)
+        if gate_out["action"] == "mask":
+            full_content = gate_out["text"]
+        elif gate_out["action"] == "block":
+            full_content = "[Response withheld by guardrails]"
+        gate_verdicts = [
+            {"side": "input", "hits": gate_in["hits"], "action": gate_in["action"]},
+            {"side": "output", "hits": gate_out["hits"], "action": gate_out["action"]},
+        ]
+
         if not skip_db:
             async with get_session() as session:
                 await _persist_messages(
                     session=session,
                     conversation_id=conv_id,
                     agent_type=body.agent_type,
-                    user_message=body.message,
+                    user_message=safe_message,
                     assistant_content=full_content,
                     tool_calls=[],
+                    gate_verdicts=gate_verdicts,
                 )
                 await session.flush()
 

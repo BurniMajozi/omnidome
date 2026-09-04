@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     tool_timeout: int = 30
     max_tool_calls_per_agent: int = 10
 
+    # Guardrails — PII policy gate (strict=block, standard=mask, audit=log only).
+    # Env-overridable via GUARDRAILS_POLICY.
+    guardrails_policy: str = "standard"
+
     # Database
     database_url: str = "postgresql://postgres:postgres@localhost:5432/omnidome"
 
