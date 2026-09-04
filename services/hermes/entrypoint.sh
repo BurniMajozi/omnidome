@@ -13,14 +13,13 @@ CONFIG_SRC="/opt/hermes-seed/config.railway.yaml"
 
 mkdir -p "$WORKSPACE"
 
-# 1. Seed config only if the volume doesn't already have one (don't clobber edits).
-if [ ! -f "$CONFIG_DST" ]; then
-  echo "[entrypoint] seeding config -> $CONFIG_DST"
-  cp "$CONFIG_SRC" "$CONFIG_DST"
-  # Let HERMES_MODEL override the default model at seed time.
-  if [ -n "${HERMES_MODEL:-}" ]; then
-    sed -i "s#^  default: .*#  default: ${HERMES_MODEL}#" "$CONFIG_DST"
-  fi
+# 1. Apply the committed config on every boot (config is version-controlled in
+# the image; the volume persists auth/cache/workspace, not config).
+echo "[entrypoint] applying config -> $CONFIG_DST"
+cp "$CONFIG_SRC" "$CONFIG_DST"
+# Let HERMES_MODEL override the default model.
+if [ -n "${HERMES_MODEL:-}" ]; then
+  sed -i "s#^  default: .*#  default: ${HERMES_MODEL}#" "$CONFIG_DST"
 fi
 
 # 2. Clone or update the working repo the agent operates on.

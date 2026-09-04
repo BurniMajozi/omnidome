@@ -17,10 +17,12 @@ COPY services/hermes/config.railway.yaml /opt/hermes-seed/config.railway.yaml
 COPY services/hermes/entrypoint.sh /usr/local/bin/hermes-entrypoint.sh
 RUN chmod +x /usr/local/bin/hermes-entrypoint.sh
 
-# API server for the agent (matches local API_SERVER_* usage); bind IPv6 so it
-# is reachable over Railway private networking if you expose it.
+# API server bound to LOOPBACK only. We interact via Telegram, so the HTTP API
+# stays internal (not network-accessible) — this closes the unsandboxed-RCE
+# surface Hermes warns about. To expose it later, override API_SERVER_HOST to ::
+# on the service and generate a domain (accept the RCE risk / sandbox first).
 ENV API_SERVER_ENABLED=true \
-    API_SERVER_HOST=:: \
+    API_SERVER_HOST=127.0.0.1 \
     HERMES_DATA_DIR=/opt/data
 
 ENTRYPOINT ["/usr/local/bin/hermes-entrypoint.sh"]
