@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
 import { supabase } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
+import { AgentChannelChat } from "@/components/chat/agent-channel-chat"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import {
   Mic,
@@ -2005,12 +2006,7 @@ export function CommunicationModule() {
 
           {/* Agent Channel Tab — AI agents with full OmniDome context */}
           <TabsContent value="agents" className="flex-1 m-0 overflow-hidden">
-            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-              <Bot className="h-10 w-10 text-cyan-400" />
-              <div className="max-w-md">
-                Agent routing belongs in the orchestrator. Use chat to start the conversation and let the system choose the right agent.
-              </div>
-            </div>
+            <AgentChannelChat channelId={activeChannelId} channelName={activeChannel?.name} />
           </TabsContent>
 
           {/* Tasks Tab — with agent assistance */}
