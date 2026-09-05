@@ -191,11 +191,15 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
             else:
                 from services.agent_orchestrator.llm import llm_client
                 messages = agent._build_messages(body.message, history)
-                tools_for_llm = tool_registry.to_openai_format(agent.tools)
+                # NOTE: the streaming path only emits text deltas — it does not
+                # execute tool calls (the parser ignores delta.tool_calls). Passing
+                # tools here made the model reply with a tool call instead of text,
+                # yielding an empty answer. Until a streaming tool-exec loop exists,
+                # keep AG-UI chat conversational (no tools) so agents reliably reply.
                 token_stream = llm_client.chat_stream(
                     agent_type=body.agent_type,
                     messages=messages,
-                    tools=tools_for_llm,
+                    tools=None,
                 )
 
             async for token in token_stream:
