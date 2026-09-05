@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
 import { supabase } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
-import { AgentChannelChat } from "@/components/chat/agent-channel-chat"
+import { AgentArtifactChat } from "@/components/chat/agent-artifact-chat"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import {
   Mic,
@@ -77,6 +77,7 @@ interface Channel {
   id: string
   name: string
   isPrivate?: boolean
+  is_private?: boolean
   unread?: number
 }
 
@@ -503,7 +504,7 @@ export function CommunicationModule() {
   const [dmExpanded, setDmExpanded] = useState(true)
   const [systemMsgExpanded, setSystemMsgExpanded] = useState(true)
   const [agentMsgExpanded, setAgentMsgExpanded] = useState(true)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [selectedChannel, setSelectedChannel] = useState("sales-team")
   const [messageInput, setMessageInput] = useState("")
   const [floatingChatOpen, setFloatingChatOpen] = useState(false)
@@ -549,8 +550,8 @@ export function CommunicationModule() {
   const [startChatNotes, setStartChatNotes] = useState("")
   const [eventTitle, setEventTitle] = useState("")
   const [eventType, setEventType] = useState<ScheduleEvent["type"]>("meeting")
-  const [eventDate, setEventDate] = useState("Today")
-  const [eventTime, setEventTime] = useState("09:00")
+  const [eventDate, setEventDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [eventTime, setEventTime] = useState(() => new Date().toTimeString().slice(0, 5))
   const [eventAssignee, setEventAssignee] = useState("")
   const [eventNotes, setEventNotes] = useState("")
   const [taskTitle, setTaskTitle] = useState("")
@@ -568,6 +569,10 @@ export function CommunicationModule() {
   const [escalationNotes, setEscalationNotes] = useState("")
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [channelMenuId, setChannelMenuId] = useState<string | null>(null)
+  const [channelDialogOpen, setChannelDialogOpen] = useState(false)
+  const [newChannelName, setNewChannelName] = useState("")
+  const [newChannelPrivate, setNewChannelPrivate] = useState(false)
+  const [creatingChannel, setCreatingChannel] = useState(false)
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -697,6 +702,112 @@ export function CommunicationModule() {
     }
   }, [activeChannelId])
 
+  // ── Load tasks + schedule from the backend (kanban/list/to-do live data) ──
+  useEffect(() => {
+    let isMounted = true
+    const loadTasks = async () => {
+      try {
+        const r = await fetch("/api/tasks")
+        const b = await r.json()
+        if (!isMounted || !Array.isArray(b.data) || b.data.length === 0) return
+        setTasks(
+          b.data.map((t: any) => ({
+            id: t.id,
+            title: t.title,
+            assignee: t.assignee_name ?? "Unassigned",
+            avatar: formatInitials(t.assignee_name) || "NA",
+            status: (t.status as Task["status"]) ?? "todo",
+            priority: (t.priority as Task["priority"]) ?? "medium",
+            dueDate: t.due_date ? friendlyDate(t.due_date) : "No due date",
+          })),
+        )
+      } catch (e) {
+        console.error("Failed to load tasks", e)
+      }
+    }
+    const loadSchedule = async () => {
+      try {
+        const r = await fetch("/api/schedule")
+        const b = await r.json()
+        if (!isMounted || !Array.isArray(b.data) || b.data.length === 0) return
+        setScheduleEvents(
+          b.data.map((e: any) => ({
+            id: e.id,
+            title: e.title,
+            type: (e.type as ScheduleEvent["type"]) ?? "meeting",
+            date: e.date_label || friendlyDate(e.start_time),
+            time: e.time_label || formatTime(e.start_time),
+            assignee: e.assignee_name || undefined,
+            avatar: e.assignee_name ? formatInitials(e.assignee_name) : undefined,
+            status: (e.status as ScheduleEvent["status"]) ?? "upcoming",
+          })),
+        )
+      } catch (e) {
+        console.error("Failed to load schedule", e)
+      }
+    }
+    void loadTasks()
+    void loadSchedule()
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  // ── Per-channel unread counts (message_count − locally-stored last-seen) ──
+  const [channelUnread, setChannelUnread] = useState<Record<string, number>>({})
+  const channelCounts = useRef<Record<string, number>>({})
+
+  const refreshUnread = useCallback(async () => {
+    try {
+      const r = await fetch("/api/chat/channels/summary")
+      const b = await r.json()
+      if (!Array.isArray(b.data)) return
+      let seen: Record<string, number> = {}
+      try {
+        seen = JSON.parse(localStorage.getItem("comm:lastSeen") || "{}")
+      } catch {
+        seen = {}
+      }
+      const counts: Record<string, number> = {}
+      const unread: Record<string, number> = {}
+      for (const row of b.data) {
+        const id = row.channel_id
+        const count = Number(row.message_count || 0)
+        counts[id] = count
+        unread[id] = Math.max(0, count - (seen[id] ?? 0))
+      }
+      channelCounts.current = counts
+      setChannelUnread(unread)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshUnread()
+    const t = setInterval(() => void refreshUnread(), 30_000)
+    return () => clearInterval(t)
+  }, [refreshUnread])
+
+  // Opening a channel marks it read: store its current count as last-seen.
+  useEffect(() => {
+    if (!isUuid(activeChannelId)) return
+    const id = activeChannelId as string
+    const markRead = () => {
+      try {
+        const seen = JSON.parse(localStorage.getItem("comm:lastSeen") || "{}")
+        seen[id] = channelCounts.current[id] ?? seen[id] ?? 0
+        localStorage.setItem("comm:lastSeen", JSON.stringify(seen))
+      } catch {
+        /* ignore */
+      }
+      setChannelUnread((prev) => ({ ...prev, [id]: 0 }))
+    }
+    // small delay so a freshly-loaded count is available
+    const t = setTimeout(markRead, 800)
+    return () => clearTimeout(t)
+  }, [activeChannelId, messages.length])
+
   const formatTime = (value?: string | null) => {
     if (!value) return ""
     const date = new Date(value)
@@ -713,6 +824,41 @@ export function CommunicationModule() {
       .map((part) => part[0]?.toUpperCase())
       .join("")
   }
+
+  // Friendly relative label from an ISO datetime, using the real system date.
+  const friendlyDate = (iso?: string | null) => {
+    if (!iso) return ""
+    const d = new Date(iso)
+    if (Number.isNaN(d.getTime())) return iso || ""
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const target = new Date(d)
+    target.setHours(0, 0, 0, 0)
+    const diff = Math.round((target.getTime() - today.getTime()) / 86_400_000)
+    if (diff === 0) return "Today"
+    if (diff === 1) return "Tomorrow"
+    if (diff === -1) return "Yesterday"
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+  }
+
+  // Digest of upcoming schedule + open tasks, handed to the agent chat so the
+  // agent is aware of what the team has planned.
+  const agentScheduleContext = (() => {
+    const up = scheduleEvents.filter((e) => e.status !== "completed").slice(0, 8)
+    const td = tasks.filter((t) => t.status !== "done").slice(0, 8)
+    const parts: string[] = []
+    if (up.length)
+      parts.push(
+        "Upcoming schedule:\n" +
+          up.map((e) => `- ${e.title} (${e.date} ${e.time}${e.assignee ? `, ${e.assignee}` : ""})`).join("\n"),
+      )
+    if (td.length)
+      parts.push(
+        "Open tasks:\n" +
+          td.map((t) => `- ${t.title} [${t.status}, ${t.priority}${t.dueDate ? `, due ${t.dueDate}` : ""}]`).join("\n"),
+      )
+    return parts.join("\n\n")
+  })()
 
   const openPanel = (
     type: "start-chat" | "add-event" | "add-task" | "add-approval" | "add-escalation",
@@ -1050,41 +1196,79 @@ export function CommunicationModule() {
     })
   }
 
+  const handleCreateChannel = async () => {
+    const name = newChannelName.trim().toLowerCase().replace(/\s+/g, "-")
+    if (!name || creatingChannel) return
+    setCreatingChannel(true)
+    try {
+      const r = await fetch("/api/chat/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, is_private: newChannelPrivate }),
+      })
+      const created = await r.json()
+      if (r.ok && created?.id) {
+        setChannels((prev) => [
+          { id: created.id, name: created.name, isPrivate: created.is_private },
+          ...prev.filter((c) => c.id !== created.id),
+        ])
+        setSelectedChannel(created.name)
+        addActivity({
+          id: `activity-${Date.now()}-channel`,
+          type: "chat",
+          title: `Channel created: #${created.name}`,
+          actor: currentUserName,
+          time: "just now",
+          meta: created.is_private ? "Private" : "Public",
+        })
+        setChannelDialogOpen(false)
+        setNewChannelName("")
+        setNewChannelPrivate(false)
+      }
+    } catch (e) {
+      console.error("Failed to create channel", e)
+    } finally {
+      setCreatingChannel(false)
+    }
+  }
+
   const handleAddEvent = () => {
     if (!eventTitle.trim()) return
     const contextId = contextMessageId && isUuid(contextMessageId) ? contextMessageId : null
+    // Build real start/end datetimes from the picked date + time (system tz).
+    const start = new Date(`${eventDate}T${eventTime || "09:00"}`)
+    const validStart = Number.isNaN(start.getTime()) ? new Date() : start
+    const end = new Date(validStart.getTime() + 60 * 60 * 1000)
+    const timeLabel = validStart.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     const newEvent: ScheduleEvent = {
       id: `event-${Date.now()}`,
       title: eventTitle.trim(),
       type: eventType,
-      date: eventDate,
-      time: eventTime,
+      date: friendlyDate(validStart.toISOString()),
+      time: timeLabel,
       assignee: eventAssignee || undefined,
-      avatar: eventAssignee
-        ? eventAssignee
-            .split(" ")
-            .filter(Boolean)
-            .slice(0, 2)
-            .map((part) => part[0]?.toUpperCase())
-            .join("")
-        : undefined,
+      avatar: eventAssignee ? formatInitials(eventAssignee) : undefined,
       status: "upcoming",
     }
     setScheduleEvents((prev) => [newEvent, ...prev])
     void (async () => {
+      if (!isUuid(activeChannelId)) return
       const result = await postJson("/api/schedule", {
+        channel_id: activeChannelId,
         title: newEvent.title,
         type: newEvent.type,
-        start_at: new Date().toISOString(),
-        date_label: eventDate,
-        time_label: eventTime,
+        start_time: validStart.toISOString(),
+        end_time: end.toISOString(),
+        date_label: newEvent.date,
+        time_label: timeLabel,
         notes: eventNotes,
         source_message_id: contextId,
         status: newEvent.status,
       })
-      const created = result?.data?.[0]
-      if (created?.id) {
-        setScheduleEvents((prev) => prev.map((event) => (event.id === newEvent.id ? { ...event, id: created.id } : event)))
+      const created = result?.data
+      const createdId = Array.isArray(created) ? created[0]?.id : created?.id
+      if (createdId) {
+        setScheduleEvents((prev) => prev.map((event) => (event.id === newEvent.id ? { ...event, id: createdId } : event)))
       }
     })()
     addActivity({
@@ -1122,15 +1306,14 @@ export function CommunicationModule() {
     }
     setTasks((prev) => [newTask, ...prev])
     void (async () => {
+      if (!isUuid(activeChannelId)) return
       const result = await postJson("/api/tasks", {
+        channel_id: activeChannelId,
         title: newTask.title,
-        status: newTask.status,
-        priority: newTask.priority,
-        due_date_label: taskDueDate,
-        notes: taskNotes,
-        source_message_id: contextId,
+        description: taskNotes || null,
+        message_id: contextId,
       })
-      const created = result?.data?.[0]
+      const created = result?.data?.[0] ?? result?.data
       if (created?.id) {
         setTasks((prev) => prev.map((task) => (task.id === newTask.id ? { ...task, id: created.id } : task)))
       }
@@ -1461,6 +1644,8 @@ export function CommunicationModule() {
                 )}
                 {channels.map((channel) => {
                   const isActive = selectedChannel === channel.name
+                  const isPrivate = channel.isPrivate ?? (channel as any).is_private
+                  const unread = channelUnread[channel.id] ?? channel.unread ?? 0
                   return (
                     <div key={channel.id} className="relative">
                       <div className="flex items-center gap-1">
@@ -1477,11 +1662,11 @@ export function CommunicationModule() {
                               : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                           )}
                         >
-                          {channel.isPrivate ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
+                          {isPrivate ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
                           <span className="flex-1 truncate text-left">{channel.name}</span>
-                          {channel.unread && (
+                          {unread > 0 && (
                             <Badge variant="secondary" className="h-5 min-w-5 bg-primary text-primary-foreground text-xs">
-                              {channel.unread}
+                              {unread}
                             </Badge>
                           )}
                         </button>
@@ -1556,7 +1741,10 @@ export function CommunicationModule() {
                     </div>
                   )
                 })}
-                <button className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground">
+                <button
+                  onClick={() => setChannelDialogOpen(true)}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                >
                   <Plus className="h-4 w-4" />
                   {!sidebarCollapsed && <span>Add Channel</span>}
                 </button>
@@ -2006,7 +2194,11 @@ export function CommunicationModule() {
 
           {/* Agent Channel Tab — AI agents with full OmniDome context */}
           <TabsContent value="agents" className="flex-1 m-0 overflow-hidden">
-            <AgentChannelChat channelId={activeChannelId} channelName={activeChannel?.name} />
+            <AgentArtifactChat
+              channelId={activeChannelId}
+              channelName={activeChannel?.name}
+              extraContext={agentScheduleContext}
+            />
           </TabsContent>
 
           {/* Tasks Tab — with agent assistance */}
@@ -2751,6 +2943,70 @@ export function CommunicationModule() {
         </Tabs>
       </div>
 
+      {channelDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setChannelDialogOpen(false)} />
+          <div className="relative w-full max-w-sm rounded-xl border border-border bg-background p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-semibold">Create a channel</h3>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setChannelDialogOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <label className="text-xs text-muted-foreground">Channel name</label>
+            <Input
+              autoFocus
+              value={newChannelName}
+              onChange={(e) => setNewChannelName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleCreateChannel()
+              }}
+              placeholder="e.g. product-launch"
+              className="mt-1.5"
+            />
+            <div className="mt-4 space-y-2">
+              <p className="text-xs text-muted-foreground">Visibility</p>
+              <button
+                type="button"
+                onClick={() => setNewChannelPrivate(false)}
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+                  !newChannelPrivate ? "border-primary bg-primary/10" : "border-border hover:bg-secondary/50",
+                )}
+              >
+                <Hash className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                <div>
+                  <div className="text-sm font-medium">Public</div>
+                  <div className="text-xs text-muted-foreground">Anyone on the team can find and join.</div>
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewChannelPrivate(true)}
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors",
+                  newChannelPrivate ? "border-primary bg-primary/10" : "border-border hover:bg-secondary/50",
+                )}
+              >
+                <Lock className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                <div>
+                  <div className="text-sm font-medium">Private</div>
+                  <div className="text-xs text-muted-foreground">Only invited people can see it.</div>
+                </div>
+              </button>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={() => void handleCreateChannel()} disabled={creatingChannel || !newChannelName.trim()}>
+                {creatingChannel ? <Loader2 className="h-4 w-4 animate-spin" /> : "Create channel"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {panelOpen && (
         <div className="fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/40" onClick={closePanel} />
@@ -2859,18 +3115,18 @@ export function CommunicationModule() {
                     <div>
                       <label className="text-xs text-muted-foreground">Date</label>
                       <Input
+                        type="date"
                         value={eventDate}
                         onChange={(e) => setEventDate(e.target.value)}
-                        placeholder="Today"
                         className="mt-2"
                       />
                     </div>
                     <div>
                       <label className="text-xs text-muted-foreground">Time</label>
                       <Input
+                        type="time"
                         value={eventTime}
                         onChange={(e) => setEventTime(e.target.value)}
-                        placeholder="09:00"
                         className="mt-2"
                       />
                     </div>

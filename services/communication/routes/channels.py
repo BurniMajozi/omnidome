@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
-from services.communication.models import Channel
+from services.communication.models import Channel, Message
 from services.communication.schemas import (
     ChannelCreate,
     ChannelRead,
@@ -69,6 +69,36 @@ async def list_channels(
             page_size=page_size,
             pages=pages,
         )
+
+
+@router.get("/summary")
+async def channels_summary(ctx: AuthContext = Depends(get_auth_context)):
+    """Per-channel message counts + latest timestamp for unread badges.
+
+    Declared before /{channel_id} so the literal path wins. The client keeps a
+    per-channel last-seen count locally; unread = message_count - last_seen.
+    """
+    async with session_scope() as session:
+        stmt = (
+            select(
+                Message.channel_id,
+                func.count(Message.id),
+                func.max(Message.created_at),
+            )
+            .where(Message.tenant_id == ctx.tenant_id)
+            .group_by(Message.channel_id)
+        )
+        rows = (await session.execute(stmt)).all()
+        return {
+            "items": [
+                {
+                    "channel_id": str(cid),
+                    "message_count": int(cnt or 0),
+                    "last_message_at": ts.isoformat() if ts else None,
+                }
+                for cid, cnt, ts in rows
+            ]
+        }
 
 
 @router.get("/{channel_id}", response_model=ChannelRead)

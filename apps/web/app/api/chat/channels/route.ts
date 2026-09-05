@@ -33,3 +33,23 @@ async function proxy(request: NextRequest) {
 export function GET(request: NextRequest) {
   return proxy(request)
 }
+
+// Create a channel (public or private). Proxies to the communication service.
+export async function POST(request: NextRequest) {
+  try {
+    const { headers, identity } = await identityHeaders(request)
+    if (!identity) return NextResponse.json({ error: "unauthenticated" }, { status: 401 })
+
+    const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/channels`, {
+      method: "POST",
+      headers,
+      body: await request.text(),
+      cache: "no-store",
+    })
+    const payload = await response.json().catch(() => null)
+    return NextResponse.json(payload ?? {}, { status: response.status })
+  } catch (error) {
+    console.error("Error creating channel:", error)
+    return NextResponse.json({ error: "failed to create channel" }, { status: 500 })
+  }
+}

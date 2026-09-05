@@ -36,3 +36,24 @@ export function PUT(request: NextRequest) {
 export function DELETE(request: NextRequest) {
   return forward(request, "DELETE")
 }
+
+// Update a schedule event (e.g. status from a kanban drag). Body: { id, ...fields }.
+// The backend update is PUT /api/v1/schedule/{id}, so route the id into the path.
+export async function PATCH(request: NextRequest) {
+  const { headers, identity } = await identityHeaders(request)
+  if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
+
+  const body = await request.json().catch(() => null)
+  const { id, ...fields } = body ?? {}
+  if (!id) return NextResponse.json({ error: "id required" }, { status: 400 })
+
+  const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/schedule/${id}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(fields),
+    cache: "no-store",
+  })
+  const payload = await response.json().catch(() => null)
+  const data = payload?.items ?? payload
+  return NextResponse.json({ data }, { status: response.status })
+}

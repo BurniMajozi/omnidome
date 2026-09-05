@@ -269,7 +269,7 @@ class PaginatedResponse(BaseModel):
 
 class ScheduleEventCreate(BaseModel):
     channel_id: uuid.UUID
-    user_id: uuid.UUID
+    user_id: Optional[uuid.UUID] = None  # falls back to the authenticated user
     title: str = Field(..., min_length=1, max_length=200)
     type: str = Field(..., min_length=1, max_length=50)
     start_time: datetime

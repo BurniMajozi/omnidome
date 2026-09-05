@@ -32,7 +32,7 @@ async def create_event(
         event = ScheduleEvent(
             tenant_id=ctx.tenant_id,
             channel_id=body.channel_id,
-            user_id=body.user_id,
+            user_id=body.user_id or ctx.user_id,
             title=body.title,
             type=body.type,
             start_time=body.start_time,
