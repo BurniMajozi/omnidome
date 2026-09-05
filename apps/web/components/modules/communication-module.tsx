@@ -710,13 +710,19 @@ export function CommunicationModule() {
         const r = await fetch("/api/tasks")
         const b = await r.json()
         if (!isMounted || !Array.isArray(b.data) || b.data.length === 0) return
+        const normalizeTaskStatus = (s?: string): Task["status"] => {
+          const v = (s || "").toLowerCase()
+          if (["in-progress", "in_progress", "doing", "active"].includes(v)) return "in-progress"
+          if (["done", "completed", "complete", "closed"].includes(v)) return "done"
+          return "todo" // pending / open / new / unknown → to-do
+        }
         setTasks(
           b.data.map((t: any) => ({
             id: t.id,
             title: t.title,
             assignee: t.assignee_name ?? "Unassigned",
             avatar: formatInitials(t.assignee_name) || "NA",
-            status: (t.status as Task["status"]) ?? "todo",
+            status: normalizeTaskStatus(t.status),
             priority: (t.priority as Task["priority"]) ?? "medium",
             dueDate: t.due_date ? friendlyDate(t.due_date) : "No due date",
           })),
