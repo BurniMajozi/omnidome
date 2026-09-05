@@ -16,7 +16,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # OpenRouter model used for all agents when Ollama is unavailable (i.e. on
 # Railway, where there is no local Ollama). Env-driven so it can be swapped
 # without a code change; sent to OpenRouter verbatim, so use a real slug.
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5")
 
 # Model routing per agent type: (ollama_model, openrouter_fallback).
 MODEL_ROUTES: Dict[str, tuple] = {
