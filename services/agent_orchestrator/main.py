@@ -85,6 +85,16 @@ async def startup() -> None:
         await run_with_db_retry(lambda: asyncio.to_thread(_create_tables), logger=logger)
         logger.info("Agent orchestrator conversation + protocol tables ensured")
 
+    # Workflow cron scheduler. Every worker starts the loop, but each tick grabs
+    # a Postgres advisory lock so scheduled workflows fire exactly once.
+    if not skip_db and os.getenv("WORKFLOW_SCHEDULER_ENABLED", "true").lower() == "true":
+        import asyncio
+
+        from services.agent_orchestrator.scheduler import scheduler_loop
+
+        asyncio.create_task(scheduler_loop())
+        logger.info("Workflow cron scheduler started")
+
 
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):

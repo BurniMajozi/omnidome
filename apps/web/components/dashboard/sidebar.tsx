@@ -29,12 +29,16 @@ import {
   Boxes,
   Radio,
   ServerCog,
+  Bot,
+  Workflow,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
   { icon: MessageSquare, label: "Communication", href: "/dashboard/comms", section: "communication" },
+  { icon: Bot, label: "Agent Manager", href: "/dashboard/admin/agents", section: "agent-manager" },
+  { icon: Workflow, label: "Workflows", href: "/dashboard/admin/workflows", section: "workflows" },
   { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
   { icon: DollarSign, label: "Sales", href: "#sales", section: "sales" },
   { icon: Megaphone, label: "Marketing", href: "#marketing", section: "marketing" },

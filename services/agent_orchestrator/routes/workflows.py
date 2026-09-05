@@ -7,6 +7,7 @@ phases; this exposes the runnable core.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,6 +27,8 @@ class WorkflowCreate(BaseModel):
     description: Optional[str] = None
     definition: dict = {}
     status: str = "draft"
+    schedule_cron: Optional[str] = None
+    schedule_enabled: Optional[bool] = None
 
 
 class WorkflowUpdate(BaseModel):
@@ -33,16 +36,42 @@ class WorkflowUpdate(BaseModel):
     description: Optional[str] = None
     definition: Optional[dict] = None
     status: Optional[str] = None
+    schedule_cron: Optional[str] = None
+    schedule_enabled: Optional[bool] = None
 
 
 class RunRequest(BaseModel):
     input: dict = {}
 
 
+def _compute_next_run(cron_expr: Optional[str], enabled: bool) -> Optional[datetime]:
+    """Next fire time for an enabled cron, or None when disabled/blank/invalid."""
+    if not enabled or not cron_expr:
+        return None
+    try:
+        from croniter import croniter
+        return croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    except Exception as exc:
+        raise HTTPException(400, f"invalid cron expression: {exc}")
+
+
+def _apply_schedule(w: Workflow, cron: Optional[str], enabled: Optional[bool]) -> None:
+    """Apply schedule fields from a create/update body and recompute next_run_at."""
+    if cron is not None:
+        w.schedule_cron = cron or None
+    if enabled is not None:
+        w.schedule_enabled = bool(enabled)
+    if cron is not None or enabled is not None:
+        w.next_run_at = _compute_next_run(w.schedule_cron, w.schedule_enabled)
+
+
 def _wf_json(w: Workflow) -> dict:
     return {
         "id": str(w.id), "name": w.name, "description": w.description,
         "definition": w.definition, "status": w.status,
+        "schedule_cron": w.schedule_cron, "schedule_enabled": w.schedule_enabled,
+        "last_run_at": w.last_run_at.isoformat() if w.last_run_at else None,
+        "next_run_at": w.next_run_at.isoformat() if w.next_run_at else None,
         "created_at": w.created_at.isoformat() if w.created_at else None,
         "updated_at": w.updated_at.isoformat() if w.updated_at else None,
     }
@@ -62,6 +91,7 @@ async def create_workflow(body: WorkflowCreate, ctx: AuthContext = Depends(get_a
     async with session_scope() as s:
         w = Workflow(tenant_id=ctx.tenant_id, name=body.name, description=body.description,
                      definition=body.definition or {}, status=body.status)
+        _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
         s.add(w)
         await s.flush()
         return _wf_json(w)
@@ -92,6 +122,7 @@ async def update_workflow(workflow_id: uuid.UUID, body: WorkflowUpdate, ctx: Aut
             w.definition = body.definition
         if body.status is not None:
             w.status = body.status
+        _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
         await s.flush()
         return _wf_json(w)
 

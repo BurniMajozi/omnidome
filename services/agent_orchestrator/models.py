@@ -82,6 +82,10 @@ class Workflow(Base):
     description: Mapped[str] = mapped_column(Text, nullable=True)
     definition: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)  # {nodes:[], edges:[]}
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    schedule_cron: Mapped[str] = mapped_column(String(120), nullable=True)  # 5-field cron, e.g. "*/5 * * * *"
+    schedule_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
+    last_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

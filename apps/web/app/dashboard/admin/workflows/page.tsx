@@ -8,7 +8,7 @@
  * editor + a read-only visual flow of the nodes.
  */
 import { useEffect, useState, useCallback } from "react"
-import { Play, Plus, Save, Loader2, RefreshCw } from "lucide-react"
+import { Play, Plus, Save, Loader2, RefreshCw, Clock } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FlowCanvas } from "@/components/workflows/flow-canvas"
@@ -19,6 +19,10 @@ interface WF {
   description?: string | null
   definition: { nodes?: any[]; edges?: any[] }
   status: string
+  schedule_cron?: string | null
+  schedule_enabled?: boolean
+  last_run_at?: string | null
+  next_run_at?: string | null
 }
 
 const STARTER = {
@@ -34,6 +38,8 @@ export default function WorkflowsPage() {
   const [list, setList] = useState<WF[]>([])
   const [selected, setSelected] = useState<WF | null>(null)
   const [defText, setDefText] = useState("")
+  const [schedCron, setSchedCron] = useState("")
+  const [schedEnabled, setSchedEnabled] = useState(false)
   const [runOut, setRunOut] = useState<any>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +61,8 @@ export default function WorkflowsPage() {
     setSelected(w)
     setRunOut(null)
     setDefText(JSON.stringify(w.definition ?? { nodes: [], edges: [] }, null, 2))
+    setSchedCron(w.schedule_cron ?? "")
+    setSchedEnabled(Boolean(w.schedule_enabled))
   }
 
   const create = async () => {
@@ -76,9 +84,11 @@ export default function WorkflowsPage() {
     try {
       const definition = JSON.parse(defText)
       const r = await fetch(`/api/orchestrator/workflows/${selected.id}`, {
-        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ definition }),
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ definition, schedule_cron: schedCron.trim() || null, schedule_enabled: schedEnabled }),
       })
       const w = await r.json()
+      if (!r.ok) throw new Error(w?.detail || `save failed (${r.status})`)
       select(w); await load()
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(null) }
   }
@@ -133,6 +143,29 @@ export default function WorkflowsPage() {
                   {busy === "run" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 mr-1" />} Run
                 </Button>
               </div>
+            </div>
+
+            {/* Schedule (cron) */}
+            <div className="rounded-lg border border-border p-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={schedEnabled} onChange={(e) => setSchedEnabled(e.target.checked)} />
+                  <Clock className="h-4 w-4 text-muted-foreground" /> Schedule
+                </label>
+                <Input
+                  value={schedCron}
+                  onChange={(e) => setSchedCron(e.target.value)}
+                  placeholder="*/5 * * * *  (min hour dom mon dow, UTC)"
+                  className="h-8 max-w-xs font-mono text-xs"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {selected.next_run_at ? `Next: ${new Date(selected.next_run_at).toLocaleString()}` : "not scheduled"}
+                  {selected.last_run_at ? ` · Last: ${new Date(selected.last_run_at).toLocaleString()}` : ""}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Runs on the server (UTC). Save to apply. Fires once per due tick, even across workers (advisory-lock guarded).
+              </p>
             </div>
 
             {/* Interactive drag-drop canvas */}
