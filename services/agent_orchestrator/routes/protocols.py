@@ -187,30 +187,45 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
             if settings.chat_backend == "hermes":
                 messages = agent._build_messages(body.message, history)
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context)})
-                token_stream = hermes_client.chat_stream(messages)
+                async for token in hermes_client.chat_stream(messages):
+                    full_content += token
+                    yield await emit(AGUIEvent(
+                        type="TEXT_MESSAGE_CONTENT",
+                        run_id=run_id,
+                        tenant_id=ctx.tenant_id,
+                        conversation_id=body.conversation_id,
+                        data={"delta": token},
+                    ))
             else:
-                from services.agent_orchestrator.llm import llm_client
-                messages = agent._build_messages(body.message, history)
-                # NOTE: the streaming path only emits text deltas — it does not
-                # execute tool calls (the parser ignores delta.tool_calls). Passing
-                # tools here made the model reply with a tool call instead of text,
-                # yielding an empty answer. Until a streaming tool-exec loop exists,
-                # keep AG-UI chat conversational (no tools) so agents reliably reply.
-                token_stream = llm_client.chat_stream(
-                    agent_type=body.agent_type,
-                    messages=messages,
-                    tools=None,
-                )
-
-            async for token in token_stream:
-                full_content += token
-                yield await emit(AGUIEvent(
-                    type="TEXT_MESSAGE_CONTENT",
-                    run_id=run_id,
-                    tenant_id=ctx.tenant_id,
-                    conversation_id=body.conversation_id,
-                    data={"delta": token},
-                ))
+                # Real tool-executing loop: agent.run() calls the LLM with the
+                # agent's tools, executes them (CRM/billing/support/etc.) against
+                # OmniDome services, and loops to a final answer. Non-streaming, so
+                # we emit each tool call + the final text as AG-UI events.
+                run_result = await agent.run(body.message, history)
+                for tc in run_result.get("tool_calls", []):
+                    yield await emit(AGUIEvent(
+                        type="TOOL_CALL_START",
+                        run_id=run_id,
+                        tenant_id=ctx.tenant_id,
+                        conversation_id=body.conversation_id,
+                        data={"name": tc.get("name"), "arguments": tc.get("arguments")},
+                    ))
+                    yield await emit(AGUIEvent(
+                        type="TOOL_CALL_RESULT",
+                        run_id=run_id,
+                        tenant_id=ctx.tenant_id,
+                        conversation_id=body.conversation_id,
+                        data={"name": tc.get("name"), "result": tc.get("result")},
+                    ))
+                full_content = run_result.get("content", "")
+                if full_content:
+                    yield await emit(AGUIEvent(
+                        type="TEXT_MESSAGE_CONTENT",
+                        run_id=run_id,
+                        tenant_id=ctx.tenant_id,
+                        conversation_id=body.conversation_id,
+                        data={"delta": full_content},
+                    ))
 
             # Write memory with correlation
             await _write_protocol_memory(
