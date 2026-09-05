@@ -1,7 +1,15 @@
 """Tool registry — wraps OmniDome microservice APIs as agent tools."""
 
 import os
+import re
 import logging
+
+
+def sanitize_tool_name(name: str) -> str:
+    """LLM providers (Anthropic via OpenRouter) require tool names to match
+    ^[a-zA-Z0-9_-]{1,64}$ — our tool ids use dots (e.g. memory.recall), which
+    get a 400. Map invalid chars to '_' deterministically so we can reverse it."""
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", name)[:64]
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
@@ -387,7 +395,14 @@ class ToolRegistry:
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Optional[Tool]:
-        return self._tools.get(name)
+        tool = self._tools.get(name)
+        if tool:
+            return tool
+        # The LLM may return a sanitized name (dots→underscores); reverse-map it.
+        for t in self._tools.values():
+            if sanitize_tool_name(t.name) == name:
+                return t
+        return None
 
     def list_tools(self) -> List[Tool]:
         return list(self._tools.values())
@@ -454,7 +469,7 @@ class ToolRegistry:
         result = []
         for t in tools:
             result.append({
-                "name": t.name,
+                "name": sanitize_tool_name(t.name),
                 "description": t.description,
                 "parameters": t.parameters,
             })
