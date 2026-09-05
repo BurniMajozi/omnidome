@@ -69,6 +69,7 @@ class MessageRead(BaseModel):
     is_pinned: bool = False
     created_at: datetime
     updated_at: datetime
+    author_name: Optional[str] = None
 
 
 class MessagePinUpdate(BaseModel):

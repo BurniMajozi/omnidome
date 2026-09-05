@@ -4,7 +4,7 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
@@ -103,8 +103,27 @@ async def list_messages(
         result = await session.execute(stmt)
         items = result.scalars().all()
 
+        # Resolve author display names from the shared users table (best-effort).
+        names: dict = {}
+        user_ids = list({m.user_id for m in items})
+        if user_ids:
+            try:
+                name_rows = await session.execute(
+                    text("SELECT id, COALESCE(full_name, email) AS name FROM users WHERE id = ANY(:ids)"),
+                    {"ids": user_ids},
+                )
+                names = {str(r[0]): r[1] for r in name_rows}
+            except Exception:
+                names = {}
+
+        reads = []
+        for m in items:
+            r = MessageRead.model_validate(m)
+            r.author_name = names.get(str(m.user_id))
+            reads.append(r)
+
         return PaginatedResponse(
-            items=[MessageRead.model_validate(m) for m in items],
+            items=reads,
             total=total,
             page=page,
             page_size=page_size,
