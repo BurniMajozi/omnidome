@@ -74,6 +74,8 @@ async def startup() -> None:
 
             from services.agent_orchestrator.models import Base as MainBase  # workflows, agents, etc.
 
+            from sqlalchemy import text
+
             engine = get_engine()
             MainBase.metadata.create_all(bind=engine)
             ConvBase.metadata.create_all(bind=engine)
@@ -81,6 +83,15 @@ async def startup() -> None:
             AP2IntentMandateRecord.metadata.create_all(bind=engine)
             AP2PaymentMandateRecord.metadata.create_all(bind=engine)
             AP2PaymentReceiptRecord.metadata.create_all(bind=engine)
+
+            # Idempotent schema backfill — create_all() never ALTERs an existing
+            # table, so add the workflow-schedule columns here (safe to re-run).
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS schedule_cron VARCHAR(120)"))
+                conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN NOT NULL DEFAULT false"))
+                conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ"))
+                conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ"))
+                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_next_run ON workflows (next_run_at)"))
 
         await run_with_db_retry(lambda: asyncio.to_thread(_create_tables), logger=logger)
         logger.info("Agent orchestrator conversation + protocol tables ensured")
