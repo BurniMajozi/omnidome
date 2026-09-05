@@ -227,6 +227,7 @@ class LLMClient:
                             except json.JSONDecodeError:
                                 args = {}
                         result["tool_calls"].append({
+                            "id": tc.get("id", ""),
                             "name": tc["function"]["name"],
                             "arguments": args,
                         })

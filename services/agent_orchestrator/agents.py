@@ -118,7 +118,8 @@ class Agent:
                     )
 
                 executed_calls.append({
-                    "name": tool_name,
+                    "id": tc.get("id", ""),
+                    "name": tc.get("name", tool_name),
                     "arguments": tool_args,
                     "result": tool_result,
                 })
@@ -129,15 +130,31 @@ class Agent:
                 })
                 tool_count += 1
 
-            # Feed results back into the conversation
+            # Feed results back in OpenAI/Anthropic tool-calling format: an
+            # assistant message carrying the tool_calls (with ids), then one
+            # tool message per result keyed by tool_call_id. Providers 400 if
+            # a tool message lacks tool_call_id.
+            import json as _json
             messages.append({
                 "role": "assistant",
-                "content": content,
+                "content": content or "",
+                "tool_calls": [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {"name": c["name"], "arguments": _json.dumps(c["arguments"])},
+                    }
+                    for c in executed_calls
+                    if c.get("id")
+                ],
             })
             for call in executed_calls:
+                if not call.get("id"):
+                    continue
                 messages.append({
                     "role": "tool",
-                    "content": str(call["result"]),
+                    "tool_call_id": call["id"],
+                    "content": _json.dumps(call["result"], default=str),
                 })
 
         # Max tool calls reached — return last assistant content
