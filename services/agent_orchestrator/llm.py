@@ -13,13 +13,18 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Model routing per agent type
+# OpenRouter model used for all agents when Ollama is unavailable (i.e. on
+# Railway, where there is no local Ollama). Env-driven so it can be swapped
+# without a code change; sent to OpenRouter verbatim, so use a real slug.
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+
+# Model routing per agent type: (ollama_model, openrouter_fallback).
 MODEL_ROUTES: Dict[str, tuple] = {
-    "customer_facing": ("qwen2.5:7b", "openrouter/owl-alpha"),
-    "retention": ("llama3.1:70b", "openrouter/owl-alpha"),
-    "provisioning": ("qwen2.5:7b", "openrouter/owl-alpha"),
-    "executive": ("llama3.1:70b", "openrouter/owl-alpha"),
-    "support": ("qwen2.5:7b", "openrouter/owl-alpha"),
+    "customer_facing": ("qwen2.5:7b", OPENROUTER_MODEL),
+    "retention": ("llama3.1:70b", OPENROUTER_MODEL),
+    "provisioning": ("qwen2.5:7b", OPENROUTER_MODEL),
+    "executive": ("llama3.1:70b", OPENROUTER_MODEL),
+    "support": ("qwen2.5:7b", OPENROUTER_MODEL),
 }
 
 # Agent system prompts
@@ -104,7 +109,7 @@ class LLMClient:
     ) -> Dict[str, Any]:
         """Send a chat completion request. Returns {content, tool_calls}."""
         primary_model, fallback_model = MODEL_ROUTES.get(
-            agent_type, ("qwen2.5:7b", "openrouter/owl-alpha")
+            agent_type, ("qwen2.5:7b", OPENROUTER_MODEL)
         )
 
         system_prompt = SYSTEM_PROMPTS.get(agent_type, "You are a helpful AI assistant.")
@@ -243,7 +248,7 @@ class LLMClient:
         system_prompt = SYSTEM_PROMPTS.get(agent_type, "You are a helpful AI assistant.")
         full_messages = [{"role": "system", "content": system_prompt}] + messages
 
-        model, fallback = MODEL_ROUTES.get(agent_type, ("qwen2.5:7b", "openrouter/ollama"))
+        model, fallback = MODEL_ROUTES.get(agent_type, ("qwen2.5:7b", OPENROUTER_MODEL))
 
         ollama_ok = await self._check_ollama()
         if ollama_ok:

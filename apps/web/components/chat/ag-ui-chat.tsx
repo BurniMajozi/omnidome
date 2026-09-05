@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import {
   invokeAgentAGUI,
+  listAgents,
   AGENT_CATALOG,
   type AGUIEvent,
   type AGUIStreamState,
@@ -198,8 +199,8 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
   useEffect(() => {
     if (!isOpen) return
-    fetch("/api/orchestrator/agents")
-      .then((r) => r.json())
+    // listAgents() uses authFetch (Supabase bearer); a raw fetch here 401s.
+    listAgents()
       .then((data: AgentInfo[]) => setAgents(data))
       .catch(() => {})
   }, [isOpen])

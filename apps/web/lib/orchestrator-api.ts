@@ -279,7 +279,9 @@ export const AGENT_CATALOG: Record<string, { name: string; description: string; 
 // ── API functions ────────────────────────────────────────────────────────
 
 export async function listAgents(): Promise<AgentInfo[]> {
-  const res = await fetch(`${ORCHESTRATOR_BASE}/agents`)
+  // authFetch attaches the Supabase bearer; the orchestrator proxy resolves
+  // identity ONLY from that header (not cookies), so a plain fetch here 401s.
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents`)
   if (!res.ok) throw new Error(`Failed to list agents: ${res.status}`)
   return res.json()
 }
