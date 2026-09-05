@@ -33,7 +33,12 @@ REPO="BurniMajozi/omnidome"
 BRANCH="${RAILWAY_DEPLOY_BRANCH:-main}"
 
 # Creation / deploy order (dependency-aware). web + hermes handled after backends.
-BACKENDS=(admin crm sales billing finance rica network compliance tenant-memory agent-orchestrator gateway)
+# ALL Python backend services must be listed here so _shared.env (DATABASE_URL,
+# LICENSE_ENFORCEMENT, INTERNAL_SERVICE_KEY) is applied — a service missing from
+# this list gets created without a DB URL and crashes/500s.
+BACKENDS=(admin crm sales billing finance rica network compliance tenant-memory agent-orchestrator gateway \
+          iot support hr inventory communication voicebox portal-builder retention marketing \
+          customer-journey billing-collections fno-intelligence call-center journey-engine web-analytics lifecycle)
 PUBLIC=(gateway web)
 # Backends that read CORS_ORIGINS (harmless on the others, but keep it tight).
 CORS_SERVICES=(gateway compliance tenant-memory)
