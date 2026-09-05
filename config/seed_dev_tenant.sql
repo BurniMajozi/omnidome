@@ -8,6 +8,17 @@ INSERT INTO tenants (id, name, subdomain, tier, status, active)
 VALUES ('00000000-0000-0000-0000-000000000001', 'Dev Tenant', 'dev', 'ENTERPRISE', 'ACTIVE', true)
 ON CONFLICT (id) DO NOTHING;
 
+-- Modules used by services (EntitlementGuard module_id) that master_schema.sql
+-- never seeded — without these rows the guard 403s "Module not enabled".
+INSERT INTO modules (key, name, description, is_core) VALUES
+  ('agents', 'Agents', 'AI agent orchestrator', FALSE),
+  ('communication', 'Communication', 'Team chat + communication hub', FALSE),
+  ('compliance', 'Compliance', 'Compliance and audit', FALSE),
+  ('customer_journey', 'Customer Journey', 'Journey orchestration', FALSE),
+  ('journey_engine', 'Journey Engine', 'Journey execution engine', FALSE),
+  ('lifecycle', 'Lifecycle', 'Customer lifecycle management', FALSE)
+ON CONFLICT (key) DO NOTHING;
+
 INSERT INTO users (id, tenant_id, email, full_name, role, hashed_password, is_active)
 VALUES ('687fc528-cee6-4021-9e29-28344b3d6d0d',
         '00000000-0000-0000-0000-000000000001',
