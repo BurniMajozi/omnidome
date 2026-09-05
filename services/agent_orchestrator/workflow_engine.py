@@ -144,8 +144,9 @@ async def run_workflow(
             if not node:
                 break
             step = RunStep(
-                run_id=run_id, node_id=current, node_type=node.get("type", "?"),
-                status="running", input={"config": node.get("config", {})},
+                run_id=run_id, tenant_id=uuid.UUID(tenant_id), node_id=current,
+                node_type=node.get("type", "?"), status="running",
+                input={"config": node.get("config", {})},
             )
             session.add(step)
             await session.flush()
