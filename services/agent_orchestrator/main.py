@@ -70,7 +70,10 @@ async def startup() -> None:
                 AP2PaymentReceiptRecord,
             )
 
+            from services.agent_orchestrator.models import Base as MainBase  # workflows, agents, etc.
+
             engine = get_engine()
+            MainBase.metadata.create_all(bind=engine)
             ConvBase.metadata.create_all(bind=engine)
             UCPCheckoutSessionRecord.metadata.create_all(bind=engine)
             AP2IntentMandateRecord.metadata.create_all(bind=engine)
@@ -120,6 +123,9 @@ app.include_router(voice_router, prefix="/api/agents")
 app.include_router(chat_deployments_router, prefix="/api/chat-deployments")
 app.include_router(chat_public_router, prefix="/api/chat")
 app.include_router(mcp_router)
+
+from services.agent_orchestrator.routes.workflows import router as workflows_router
+app.include_router(workflows_router, prefix="/api/workflows")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 
 
