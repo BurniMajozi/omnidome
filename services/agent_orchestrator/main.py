@@ -36,7 +36,9 @@ guard = EntitlementGuard(
     # Public chat deployments (Task 7): identifier-keyed chat is reachable
     # without platform auth — tenant comes from the deployment row itself.
     # Prefix match: exact public_paths can't cover /api/chat/{identifier}.
-    public_prefixes=("/api/chat",),
+    # /api/workflows/hooks/{id} = public webhook trigger; tenant resolved from
+    # the workflow row. The rest of /api/workflows stays auth-gated.
+    public_prefixes=("/api/chat", "/api/workflows/hooks"),
 )
 
 configure_production(app)
