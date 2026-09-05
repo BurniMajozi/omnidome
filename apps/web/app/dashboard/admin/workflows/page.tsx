@@ -11,6 +11,7 @@ import { useEffect, useState, useCallback } from "react"
 import { Play, Plus, Save, Loader2, RefreshCw } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { FlowCanvas } from "@/components/workflows/flow-canvas"
 
 interface WF {
   id: string
@@ -94,8 +95,6 @@ export default function WorkflowsPage() {
     } catch (e) { setError(String(e)) } finally { setBusy(null) }
   }
 
-  const nodes = selected?.definition?.nodes ?? []
-
   return (
     <div className="flex h-full gap-4 p-4">
       {/* List */}
@@ -136,18 +135,12 @@ export default function WorkflowsPage() {
               </div>
             </div>
 
-            {/* Read-only visual flow */}
-            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border p-3">
-              {nodes.map((n: any, i: number) => (
-                <div key={n.id} className="flex items-center gap-2">
-                  <div className="rounded-md border border-primary/40 bg-primary/5 px-3 py-2 text-xs">
-                    <div className="font-medium">{n.name || n.id}</div>
-                    <div className="text-muted-foreground">{n.type}</div>
-                  </div>
-                  {i < nodes.length - 1 && <span className="text-muted-foreground">→</span>}
-                </div>
-              ))}
-            </div>
+            {/* Interactive drag-drop canvas */}
+            <FlowCanvas
+              key={selected.id}
+              definition={selected.definition ?? { nodes: [], edges: [] }}
+              onChange={(d) => setDefText(JSON.stringify(d, null, 2))}
+            />
 
             {/* JSON editor */}
             <div>
