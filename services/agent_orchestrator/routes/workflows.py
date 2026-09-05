@@ -116,6 +116,23 @@ async def run(workflow_id: uuid.UUID, body: RunRequest, ctx: AuthContext = Depen
     return result
 
 
+@router.post("/hooks/{workflow_id}")
+async def webhook_run(workflow_id: uuid.UUID, body: dict):
+    """Public webhook trigger (no user session). Runs the workflow in its own
+    tenant. Gated by X-Webhook-Key... enforced at the web proxy layer; here we
+    resolve the workflow's tenant from the row and run it."""
+    async with session_scope() as s:
+        w = (await s.execute(select(Workflow).where(Workflow.id == workflow_id))).scalar_one_or_none()
+        if not w or w.status != "active":
+            raise HTTPException(404, "workflow not found or inactive")
+        tenant_id = str(w.tenant_id)
+    result = await run_workflow(
+        workflow_id=workflow_id, tenant_id=tenant_id,
+        user_id="00000000-0000-0000-0000-000000000000", input_data=body or {}, trigger="webhook",
+    )
+    return result
+
+
 @router.get("/{workflow_id}/runs")
 async def list_runs(workflow_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as s:
