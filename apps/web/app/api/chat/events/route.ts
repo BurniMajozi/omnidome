@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { identityHeaders } from "@/lib/api-auth"
 
 const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://communication:8020"
 
@@ -14,11 +15,8 @@ async function proxyPost(request: NextRequest) {
   }
 
   const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/events`)
-  const headers = new Headers()
-  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
-    const value = request.headers.get(header)
-    if (value) headers.set(header, value)
-  }
+  const { headers, identity } = await identityHeaders(request)
+  if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
 
   const response = await fetch(url.toString(), {
     method: "POST",
