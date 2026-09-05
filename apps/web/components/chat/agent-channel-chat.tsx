@@ -31,11 +31,50 @@ export function AgentChannelChat({
   const [input, setInput] = useState("")
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Recent channel messages, framed as context turns so the agent answers about
+  // what the team actually discussed (not just the channel name).
+  const [history, setHistory] = useState<{ role: string; content: string }[]>([])
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
+
+  useEffect(() => {
+    if (!channelId) {
+      setHistory([])
+      return
+    }
+    let cancelled = false
+    fetch(`/api/chat/messages?channel_id=${channelId}`)
+      .then((r) => r.json())
+      .then((res) => {
+        if (cancelled) return
+        const msgs = Array.isArray(res?.data) ? res.data : []
+        const transcript = msgs
+          .slice(-20)
+          .map((m: { content?: string }) => m.content || "")
+          .filter(Boolean)
+          .join("\n")
+        setHistory(
+          transcript
+            ? [
+                {
+                  role: "user",
+                  content: `For context, here are the recent messages in the #${channelName ?? "team"} channel:\n${transcript}`,
+                },
+                { role: "assistant", content: "Understood — I have the channel context and will use it." },
+              ]
+            : [],
+        )
+      })
+      .catch(() => {
+        if (!cancelled) setHistory([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [channelId, channelName])
 
   const send = useCallback(async () => {
     const text = input.trim()
@@ -56,7 +95,7 @@ export function AgentChannelChat({
         {
           agent_type: "customer_facing",
           message: text,
-          context: { channel_id: channelId, channel_name: channelName },
+          context: { channel_id: channelId, channel_name: channelName, history },
           stream_tokens: true,
         },
         (e: AGUIEvent) => {
@@ -72,7 +111,7 @@ export function AgentChannelChat({
       setSending(false)
       setMessages((p) => p.map((m) => (m.id === aId ? { ...m, streaming: false } : m)))
     }
-  }, [input, sending, channelId, channelName])
+  }, [input, sending, channelId, channelName, history])
 
   return (
     <div className="flex h-full flex-col">
