@@ -1,7 +1,7 @@
 # Cloud (Railway) Hermes config — full working config with model on OpenRouter.
 # Applied to /opt/data/config.yaml on every boot by entrypoint.sh.
 model:
-  default: anthropic/claude-3.5-sonnet
+  default: nvidia/nemotron-3-super-120b-a12b:free
   provider: openrouter
   base_url: https://openrouter.ai/api/v1
 providers: {}
