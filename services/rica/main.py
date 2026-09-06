@@ -9,6 +9,7 @@ import hmac
 import os
 from sqlalchemy import select, desc
 
+from services.common.auth import get_current_tenant_id
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.rica.database import get_session, init_tables

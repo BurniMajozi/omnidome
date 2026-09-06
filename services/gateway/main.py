@@ -28,15 +28,15 @@ SERVICE_ROUTES = {
     "/api/rica": ("rica", os.getenv("RICA_SERVICE_URL", "http://rica:8004")),
     "/api/network": ("network", os.getenv("NETWORK_SERVICE_URL", "http://network:8005")),
     "/api/iot": ("iot", os.getenv("IOT_SERVICE_URL", "http://iot:8006")),
-    "/api/call-center": ("call_center", os.getenv("CALL_CENTER_SERVICE_URL", "http://call_center:8007")),
+    "/api/call-center": ("call_center", os.getenv("CALL_CENTER_SERVICE_URL", "http://call-center.railway.internal:8007")),
     "/api/support": ("support", os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")),
     "/api/hr": ("hr", os.getenv("HR_SERVICE_URL", "http://hr:8009")),
     "/api/inventory": ("inventory", os.getenv("INVENTORY_SERVICE_URL", "http://inventory:8010")),
-    "/api/analytics": ("analytics", os.getenv("ANALYTICS_SERVICE_URL", "http://analytics:8011")),
+    "/api/analytics": ("analytics", os.getenv("ANALYTICS_SERVICE_URL", os.getenv("WEB_ANALYTICS_SERVICE_URL", "http://web-analytics.railway.internal:8016"))),
     "/api/retention": ("retention", os.getenv("RETENTION_SERVICE_URL", "http://retention:8012")),
     "/api/admin": ("admin", os.getenv("ADMIN_SERVICE_URL", "http://admin:8013")),
     "/api/compliance": ("compliance", os.getenv("COMPLIANCE_SERVICE_URL", "http://compliance:8019")),
-    "/api/memory": ("memory", os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")),
+    "/api/memory": ("memory", os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant-memory.railway.internal:8025")),
     "/api/voice": ("voice", os.getenv("TWILIO_VOICE_FUNCTIONS_URL", "")),
     "/api/sms": ("sms", os.getenv("TWILIO_SMS_FUNCTIONS_URL", "")),
 }
@@ -138,14 +138,19 @@ async def health():
     async with httpx.AsyncClient(timeout=3.0) as client:
         tasks = []
         for prefix, (_, base_url) in SERVICE_ROUTES.items():
+            if not base_url or not base_url.strip():
+                results[prefix] = {"status": "unconfigured"}
+                continue
             tasks.append((prefix, client.get(f"{base_url.rstrip('/')}/health")))
-        responses = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
-        for (prefix, _), resp in zip(tasks, responses):
-            if isinstance(resp, Exception):
-                results[prefix] = {"status": "down", "error": str(resp)}
-            else:
-                results[prefix] = {"status": "up" if resp.status_code == 200 else "degraded"}
-    overall = "ok" if all(item["status"] == "up" for item in results.values()) else "degraded"
+        if tasks:
+            responses = await asyncio.gather(*(task for _, task in tasks), return_exceptions=True)
+            for (prefix, _), resp in zip(tasks, responses):
+                if isinstance(resp, Exception):
+                    results[prefix] = {"status": "down", "error": str(resp)}
+                else:
+                    results[prefix] = {"status": "up" if resp.status_code == 200 else "degraded"}
+    configured = [item["status"] for item in results.values() if item["status"] != "unconfigured"]
+    overall = "ok" if (configured and all(s == "up" for s in configured)) else "degraded"
     return {"status": overall, "services": results}
 
 
@@ -190,25 +195,31 @@ async def proxy(full_path: str, request: Request):
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.request(
-                request.method,
-                url,
+            upstream = await client.request(
+                method=request.method,
+                url=url,
+                headers=headers,
                 params=request.query_params,
                 content=body,
-                headers=headers,
+            )
+            excluded_headers = {"content-encoding", "content-length", "transfer-encoding", "connection"}
+            forward_headers = {
+                key: value
+                for key, value in upstream.headers.items()
+                if key.lower() not in excluded_headers
+            }
+            return Response(
+                content=upstream.content,
+                status_code=upstream.status_code,
+                headers=forward_headers,
+                media_type=upstream.headers.get("content-type"),
             )
     except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Upstream unavailable: {exc}") from exc
-
-    response_headers = {
-        key: value
-        for key, value in resp.headers.items()
-        if key.lower() not in {"content-length", "transfer-encoding", "connection"}
-    }
-    return Response(content=resp.content, status_code=resp.status_code, headers=response_headers)
+        logger.error("Upstream error on %s: %s", url, exc)
+        raise HTTPException(status_code=502, detail=f"Bad Gateway: {exc}") from exc
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("services.gateway.main:app", host="0.0.0.0", port=8000, reload=True)
