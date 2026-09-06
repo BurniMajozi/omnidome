@@ -2252,6 +2252,7 @@ export function CommunicationModule() {
                           </Button>
                         </DropdownMenuTrigger>
                       </div>
+                    </div>
                     <DropdownMenuContent align="end" className="w-52">
                       <div className="flex items-center justify-between px-2 py-1.5 border-b border-border mb-1">
                         {REACTION_EMOJIS.slice(0, 6).map((e) => (
