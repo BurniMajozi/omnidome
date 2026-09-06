@@ -162,7 +162,7 @@ export function AgentArtifactChat({
     try {
       await invokeAgentAGUI(
         {
-          agent_type: "customer_facing",
+          agent_type: "assistant",
           message: text,
           context: { channel_id: channelId, channel_name: channelName, history },
           stream_tokens: true,

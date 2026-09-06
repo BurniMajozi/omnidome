@@ -38,6 +38,7 @@ class Settings(BaseSettings):
         "provisioning":   ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
         "executive":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
         "support":        ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "assistant":      ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
     }
 
     # Tool settings

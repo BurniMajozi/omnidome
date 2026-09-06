@@ -55,7 +55,6 @@ import {
   PanelLeft,
   PanelLeftClose,
   PanelRightClose,
-  MessageCircleMore,
   X,
   Sparkles,
 } from "lucide-react"
@@ -507,8 +506,6 @@ export function CommunicationModule() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [selectedChannel, setSelectedChannel] = useState("sales-team")
   const [messageInput, setMessageInput] = useState("")
-  const [floatingChatOpen, setFloatingChatOpen] = useState(false)
-  const [floatingMessageInput, setFloatingMessageInput] = useState("")
   const [activeTab, setActiveTab] = useState("chat")
   const [scheduleView, setScheduleView] = useState<"kanban" | "timeline" | "todo" | "activity">("kanban")
   const [scheduleFilter, setScheduleFilter] = useState<"hour" | "day" | "week" | "month">("week")
@@ -573,6 +570,8 @@ export function CommunicationModule() {
   const [newChannelName, setNewChannelName] = useState("")
   const [newChannelPrivate, setNewChannelPrivate] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
+  const [teamUsers, setTeamUsers] = useState<{ id: string; name: string; email?: string }[]>([])
+  const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set())
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -1170,16 +1169,6 @@ export function CommunicationModule() {
     closePanel()
   }
 
-  const handleFloatingSend = async () => {
-    const trimmed = floatingMessageInput.trim()
-    if (!trimmed) return
-    setMessageInput(trimmed)
-    setFloatingMessageInput("")
-    setFloatingChatOpen(false)
-    setActiveTab("chat")
-    await handleSend()
-  }
-
   const handleStartCall = (mode: "voice" | "video") => {
     if (!activeChannelId) return
     void postJson("/api/chat/sessions", {
@@ -1202,6 +1191,28 @@ export function CommunicationModule() {
     })
   }
 
+  // Load the team directory when the create-channel dialog opens.
+  useEffect(() => {
+    if (!channelDialogOpen || teamUsers.length > 0) return
+    let cancelled = false
+    fetch("/api/chat/users")
+      .then((r) => r.json())
+      .then((b) => {
+        if (!cancelled && Array.isArray(b.data)) setTeamUsers(b.data)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [channelDialogOpen, teamUsers.length])
+
+  const toggleInvite = (id: string) =>
+    setSelectedInvites((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
   const handleCreateChannel = async () => {
     const name = newChannelName.trim().toLowerCase().replace(/\s+/g, "-")
     if (!name || creatingChannel) return
@@ -1214,6 +1225,19 @@ export function CommunicationModule() {
       })
       const created = await r.json()
       if (r.ok && created?.id) {
+        // Invite selected members.
+        const invites = Array.from(selectedInvites)
+        if (invites.length > 0) {
+          try {
+            await fetch(`/api/chat/channels/${created.id}/members`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_ids: invites }),
+            })
+          } catch (e) {
+            console.error("Failed to invite members", e)
+          }
+        }
         setChannels((prev) => [
           { id: created.id, name: created.name, isPrivate: created.is_private },
           ...prev.filter((c) => c.id !== created.id),
@@ -1225,11 +1249,12 @@ export function CommunicationModule() {
           title: `Channel created: #${created.name}`,
           actor: currentUserName,
           time: "just now",
-          meta: created.is_private ? "Private" : "Public",
+          meta: `${created.is_private ? "Private" : "Public"}${invites.length ? ` · ${invites.length} invited` : ""}`,
         })
         setChannelDialogOpen(false)
         setNewChannelName("")
         setNewChannelPrivate(false)
+        setSelectedInvites(new Set())
       }
     } catch (e) {
       console.error("Failed to create channel", e)
@@ -1941,10 +1966,6 @@ export function CommunicationModule() {
             >
               <PanelLeft className="h-4 w-4 mr-2" />
               Channels
-            </Button>
-            <Button size="sm" variant="secondary" className="h-8" onClick={() => setFloatingChatOpen(true)}>
-              <MessageSquare className="h-4 w-4 mr-2" />
-              Chat
             </Button>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("voice")}>
               <Phone className="h-4 w-4" />
@@ -3001,6 +3022,35 @@ export function CommunicationModule() {
                 </div>
               </button>
             </div>
+            <div className="mt-4">
+              <p className="text-xs text-muted-foreground">
+                Invite people {selectedInvites.size > 0 && <span className="text-primary">· {selectedInvites.size} selected</span>}
+              </p>
+              <div className="mt-2 max-h-40 space-y-1 overflow-y-auto rounded-lg border border-border p-1">
+                {teamUsers.length === 0 && (
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">No teammates found.</p>
+                )}
+                {teamUsers.map((u) => (
+                  <label
+                    key={u.id}
+                    className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-secondary/50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedInvites.has(u.id)}
+                      onChange={() => toggleInvite(u.id)}
+                    />
+                    <Avatar className="h-6 w-6">
+                      <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+                        {formatInitials(u.name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="flex-1 truncate">{u.name}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-5 flex justify-end gap-2">
               <Button variant="outline" onClick={() => setChannelDialogOpen(false)}>
                 Cancel
@@ -3332,55 +3382,6 @@ export function CommunicationModule() {
         </div>
       )}
 
-      <button
-        type="button"
-        className="fixed bottom-6 right-6 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg hover:bg-primary/90"
-        onClick={() => setFloatingChatOpen((prev) => !prev)}
-      >
-        <MessageCircleMore className="h-6 w-6" />
-      </button>
-
-      {floatingChatOpen && (
-        <div className="fixed bottom-24 right-6 z-50 w-[min(92vw,380px)] rounded-xl border border-border bg-card shadow-xl">
-          <div className="flex items-center justify-between border-b border-border px-4 py-3">
-            <div>
-              <p className="text-sm font-semibold">Quick Chat</p>
-              <p className="text-xs text-muted-foreground">Compose without leaving the current module.</p>
-            </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setFloatingChatOpen(false)}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          <div className="space-y-3 p-4">
-            <div className="flex items-center justify-between text-xs text-muted-foreground">
-              <span>Orchestrator-managed routing</span>
-              <Badge variant="secondary" className="h-5 bg-muted text-xs">
-                #{activeChannel?.name ?? selectedChannel}
-              </Badge>
-            </div>
-            <Input
-              value={floatingMessageInput}
-              onChange={(e) => setFloatingMessageInput(e.target.value)}
-              placeholder="Write a message..."
-              className="h-10"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault()
-                  void handleFloatingSend()
-                }
-              }}
-            />
-            <div className="flex items-center gap-2">
-              <Button variant="outline" className="flex-1" onClick={() => setActiveTab("agents")}>
-                Agent routing
-              </Button>
-              <Button className="flex-1" onClick={() => void handleFloatingSend()} disabled={!floatingMessageInput.trim()}>
-                Send
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

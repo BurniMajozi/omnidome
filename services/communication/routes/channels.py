@@ -1,14 +1,15 @@
 """Channel routes — CRUD for communication channels."""
 
 import uuid
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from pydantic import BaseModel
+from sqlalchemy import func, select, text
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
-from services.communication.models import Channel, Message
+from services.communication.models import Channel, ChannelMember, Message
 from services.communication.schemas import (
     ChannelCreate,
     ChannelRead,
@@ -17,6 +18,10 @@ from services.communication.schemas import (
 )
 
 router = APIRouter(prefix="/channels", tags=["Channels"])
+
+
+class MembersAdd(BaseModel):
+    user_ids: List[uuid.UUID]
 
 
 @router.post("", response_model=ChannelRead, status_code=status.HTTP_201_CREATED)
@@ -34,6 +39,12 @@ async def create_channel(
         )
         session.add(channel)
         await session.flush()
+        # Creator is the channel owner.
+        session.add(
+            ChannelMember(
+                tenant_id=ctx.tenant_id, channel_id=channel.id, user_id=ctx.user_id, role="owner"
+            )
+        )
         await session.refresh(channel)
         return channel
 
@@ -138,6 +149,66 @@ async def update_channel(
         await session.flush()
         await session.refresh(channel)
         return channel
+
+
+@router.get("/{channel_id}/members")
+async def list_members(channel_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(ChannelMember).where(
+                    ChannelMember.channel_id == channel_id,
+                    ChannelMember.tenant_id == ctx.tenant_id,
+                )
+            )
+        ).scalars().all()
+        names: dict = {}
+        ids = [str(r.user_id) for r in rows]
+        if ids:
+            res = await session.execute(
+                text("SELECT id, COALESCE(full_name, email) AS name FROM users WHERE id = ANY(:ids)"),
+                {"ids": ids},
+            )
+            names = {str(row[0]): row[1] for row in res.fetchall()}
+        return {
+            "items": [
+                {"user_id": str(r.user_id), "name": names.get(str(r.user_id)), "role": r.role}
+                for r in rows
+            ]
+        }
+
+
+@router.post("/{channel_id}/members", status_code=status.HTTP_201_CREATED)
+async def add_members(
+    channel_id: uuid.UUID, body: MembersAdd, ctx: AuthContext = Depends(get_auth_context)
+):
+    async with session_scope() as session:
+        channel = (
+            await session.execute(
+                select(Channel).where(Channel.id == channel_id, Channel.tenant_id == ctx.tenant_id)
+            )
+        ).scalar_one_or_none()
+        if not channel:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        existing = set(
+            (
+                await session.execute(
+                    select(ChannelMember.user_id).where(ChannelMember.channel_id == channel_id)
+                )
+            ).scalars().all()
+        )
+        added = 0
+        for uid in body.user_ids:
+            if uid in existing:
+                continue
+            session.add(
+                ChannelMember(
+                    tenant_id=ctx.tenant_id, channel_id=channel_id, user_id=uid, role="member"
+                )
+            )
+            added += 1
+        await session.flush()
+        return {"added": added}
 
 
 @router.delete("/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)

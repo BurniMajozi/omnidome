@@ -274,6 +274,12 @@ export const AGENT_CATALOG: Record<string, { name: string; description: string; 
     icon: "🔧",
     color: "blue",
   },
+  assistant: {
+    name: "OmniAssist",
+    description: "Versatile internal assistant. Drafts docs, emails, plans, SQL, and code into the editable canvas.",
+    icon: "✨",
+    color: "cyan",
+  },
 }
 
 // ── API functions ────────────────────────────────────────────────────────

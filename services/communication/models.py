@@ -54,6 +54,23 @@ class ChannelPreference(Base):
     )
 
 
+class ChannelMember(Base):
+    __tablename__ = "channel_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="member")  # owner, member
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_channel_members_channel_user", "tenant_id", "channel_id", "user_id", unique=True),
+    )
+
+
 # ── Message ───────────────────────────────────────────────────────────────
 
 class Message(Base):
@@ -94,7 +111,7 @@ class Task(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending, in_progress, completed, cancelled
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="todo")  # todo, in-progress, done (frontend kanban vocabulary)
     assignee_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=True)
     due_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)

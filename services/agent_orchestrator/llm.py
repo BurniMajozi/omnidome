@@ -25,6 +25,7 @@ MODEL_ROUTES: Dict[str, tuple] = {
     "provisioning": ("qwen2.5:7b", OPENROUTER_MODEL),
     "executive": ("llama3.1:70b", OPENROUTER_MODEL),
     "support": ("qwen2.5:7b", OPENROUTER_MODEL),
+    "assistant": ("qwen2.5:7b", OPENROUTER_MODEL),
 }
 
 # Agent system prompts
@@ -63,6 +64,14 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "You help with ticket management, network diagnostics, knowledge base searches, "
         "and customer issue resolution. Be methodical in troubleshooting. "
         "If an issue requires field technician dispatch, create the appropriate support ticket."
+    ),
+    "assistant": (
+        "You are OmniAssist, a versatile internal AI assistant for an OmniDome ISP team. "
+        "You help staff draft and build things: documents, emails, plans, reports, SQL, code, "
+        "and configuration. Treat requests as internal team work and be genuinely helpful. "
+        "Whenever you produce a document, code, SQL, or structured artifact, wrap it in a fenced "
+        "code block with a language tag (```sql, ```json, ```markdown, ```python …) so it opens in "
+        "the editable canvas; keep chat prose brief. Use South African English."
     ),
 }
 
