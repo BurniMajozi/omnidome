@@ -17,7 +17,7 @@ import { CommunicationModule } from "@/components/modules/communication-module"
 export default function CommsPage() {
   return (
     // Full-bleed layout — CommunicationModule manages its own internal layout
-    <div className="h-screen w-full overflow-hidden">
+    <div className="h-screen w-full flex flex-col min-h-0 overflow-hidden bg-background">
       <CommunicationModule />
     </div>
   )

@@ -498,6 +498,23 @@ const seedEscalations: Escalation[] = [
   },
 ]
 
+const REACTION_EMOJIS = ["👍", "❤️", "🎉", "🔥", "👀", "✅", "🙏", "😂"]
+
+// Platform components referenced with "/" in chat.
+const PLATFORM_COMPONENTS = [
+  "sales", "marketing", "crm", "finance", "network", "support",
+  "retention", "inventory", "billing", "analytics", "provisioning",
+  "compliance", "portal", "call-center", "hr",
+]
+
+const DEFAULT_TEAM_USERS = [
+  { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
+  { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
+  { id: "u-3", name: "Emily Davis", email: "emily.davis@omnidome.co.za" },
+  { id: "u-4", name: "James Wilson", email: "james.wilson@omnidome.co.za" },
+  { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
+]
+
 export function CommunicationModule() {
   const [channelsExpanded, setChannelsExpanded] = useState(true)
   const [dmExpanded, setDmExpanded] = useState(true)
@@ -570,8 +587,10 @@ export function CommunicationModule() {
   const [newChannelName, setNewChannelName] = useState("")
   const [newChannelPrivate, setNewChannelPrivate] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
-  const [teamUsers, setTeamUsers] = useState<{ id: string; name: string; email?: string }[]>([])
+  const [teamUsers, setTeamUsers] = useState<{ id: string; name: string; email?: string }[]>(DEFAULT_TEAM_USERS)
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set())
+  const [replyTo, setReplyTo] = useState<Message | null>(null)
+  const messageInputRef = useRef<HTMLInputElement>(null)
 
   const currentUserName = "You"
   const currentUserAvatar = "ME"
@@ -1112,9 +1131,13 @@ export function CommunicationModule() {
   const handleSend = async () => {
     const trimmed = messageInput.trim()
     if (!trimmed || !activeChannelId) return
+    // Prepend a quote line when replying so the thread context is visible.
+    const content = replyTo
+      ? `↳ @${(replyTo.author_name ?? "user").replace(/\s+/g, "")}: ${(replyTo.content ?? "").slice(0, 80)}\n${trimmed}`
+      : trimmed
     const payload = {
       channel_id: activeChannelId,
-      content: trimmed,
+      content,
       author_name: currentUserName,
       author_avatar: currentUserAvatar,
     }
@@ -1130,6 +1153,7 @@ export function CommunicationModule() {
       if (created) {
         setMessages((prev) => [...prev, created])
         setMessageInput("")
+        setReplyTo(null)
       }
     } catch (error) {
       console.error("Failed to send message", error)
@@ -1191,20 +1215,32 @@ export function CommunicationModule() {
     })
   }
 
-  // Load the team directory when the create-channel dialog opens.
+  // Load the team directory on mount (for @mentions + the invite picker).
   useEffect(() => {
-    if (!channelDialogOpen || teamUsers.length > 0) return
     let cancelled = false
     fetch("/api/chat/users")
       .then((r) => r.json())
       .then((b) => {
-        if (!cancelled && Array.isArray(b.data)) setTeamUsers(b.data)
+        if (!cancelled && Array.isArray(b.data) && b.data.length > 0) setTeamUsers(b.data)
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [channelDialogOpen, teamUsers.length])
+  }, [])
+
+  // Dismiss open panels, dialogs, and replies with Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        closePanel()
+        setReplyTo(null)
+        setChannelDialogOpen(false)
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [])
 
   const toggleInvite = (id: string) =>
     setSelectedInvites((prev) => {
@@ -1261,6 +1297,44 @@ export function CommunicationModule() {
     } finally {
       setCreatingChannel(false)
     }
+  }
+
+  const addReaction = (msgId: string, emoji: string) => {
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== msgId) return m
+        const rx = m.reactions ? [...m.reactions] : []
+        const i = rx.findIndex((r) => r.emoji === emoji)
+        if (i >= 0) rx[i] = { ...rx[i], count: rx[i].count + 1 }
+        else rx.push({ emoji, count: 1 })
+        return { ...m, reactions: rx }
+      }),
+    )
+  }
+
+  const startReply = (msg: Message) => {
+    setReplyTo(msg)
+    setActiveTab("chat")
+    setTimeout(() => messageInputRef.current?.focus(), 50)
+  }
+
+  // ── @mention / /component autocomplete (computed from the current input) ──
+  const lastToken = messageInput.split(/\s/).pop() ?? ""
+  const mentionActive = lastToken.startsWith("@") && lastToken.length >= 1
+  const slashActive = lastToken.startsWith("/") && lastToken.length >= 1
+  const mentionMatches = mentionActive
+    ? teamUsers.filter((u) => u.name.toLowerCase().includes(lastToken.slice(1).toLowerCase())).slice(0, 6)
+    : []
+  const slashMatches = slashActive
+    ? PLATFORM_COMPONENTS.filter((c) => c.startsWith(lastToken.slice(1).toLowerCase())).slice(0, 8)
+    : []
+  const autocompleteOpen = (mentionActive && mentionMatches.length > 0) || (slashActive && slashMatches.length > 0)
+
+  const applyAutocomplete = (prefix: "@" | "/", value: string) => {
+    const idx = messageInput.lastIndexOf(lastToken)
+    const next = messageInput.slice(0, idx) + prefix + value + " "
+    setMessageInput(next)
+    setTimeout(() => messageInputRef.current?.focus(), 20)
   }
 
   const handleAddEvent = () => {
@@ -1585,7 +1659,7 @@ export function CommunicationModule() {
   }
 
   return (
-    <div className="flex min-h-[calc(100vh-8rem)] flex-col gap-0 rounded-xl border border-border bg-card lg:h-[calc(100vh-8rem)] lg:flex-row lg:overflow-hidden">
+    <div className="flex h-full w-full min-h-0 flex-1 flex-col gap-0 rounded-xl border border-border bg-card lg:flex-row lg:overflow-hidden">
       {mobileSidebarOpen && (
         <button
           type="button"
@@ -1603,14 +1677,17 @@ export function CommunicationModule() {
         )}
       >
         <div className="p-3 border-b border-border">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</span>
+          <div className={cn("flex items-center mb-2", sidebarCollapsed ? "justify-center" : "justify-between")}>
+            {!sidebarCollapsed && (
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Channels</span>
+            )}
             <div className="flex items-center gap-1">
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 text-muted-foreground"
                 onClick={() => setSidebarCollapsed((prev) => !prev)}
+                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
                 {sidebarCollapsed ? <PanelRightClose className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
               </Button>
@@ -1668,7 +1745,36 @@ export function CommunicationModule() {
                 Channels
               </button>
             )}
-            {sidebarCollapsed || channelsExpanded ? (
+            {sidebarCollapsed ? (
+              <div className="space-y-1">
+                {channels.map((channel) => {
+                  const isActive = selectedChannel === channel.name
+                  const isPrivate = channel.isPrivate ?? (channel as any).is_private
+                  const unread = channelUnread[channel.id] ?? channel.unread ?? 0
+                  return (
+                    <button
+                      key={channel.id}
+                      onClick={() => {
+                        setSelectedChannel(channel.name)
+                        setMobileSidebarOpen(false)
+                      }}
+                      title={`#${channel.name}${unread > 0 ? ` (${unread} unread)` : ""}`}
+                      className={cn(
+                        "relative flex h-9 w-9 mx-auto items-center justify-center rounded-lg transition-colors",
+                        isActive
+                          ? "bg-primary/10 text-primary font-bold"
+                          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                      )}
+                    >
+                      {isPrivate ? <Lock className="h-4 w-4" /> : <Hash className="h-4 w-4" />}
+                      {unread > 0 && (
+                        <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-primary" />
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            ) : channelsExpanded ? (
               <div className="space-y-0.5">
                 {loadingChannels && (
                   <div className="px-2 py-1 text-xs text-muted-foreground">Loading channels...</div>
@@ -1722,7 +1828,7 @@ export function CommunicationModule() {
                                 const nextPinned = !pinnedChannels.includes(channel.name)
                                 const nextMuted = mutedChannels.includes(channel.name)
                                 setPinnedChannels((prev) =>
-                                  nextPinned ? [channel.name, ...prev.filter((item) => item !== channel.name)] : prev.filter((item) => item !== channel.name),
+                                   nextPinned ? [channel.name, ...prev.filter((item) => item !== channel.name)] : prev.filter((item) => item !== channel.name),
                                 )
                                 void persistChannelPreference(channel.name, nextMuted, nextPinned)
                               }}
@@ -1777,49 +1883,72 @@ export function CommunicationModule() {
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
                 >
                   <Plus className="h-4 w-4" />
-                  {!sidebarCollapsed && <span>Add Channel</span>}
+                  <span>Add Channel</span>
                 </button>
               </div>
             ) : null}
 
             {/* Direct Messages Section */}
-            {!sidebarCollapsed && (
-              <button
-                onClick={() => setDmExpanded(!dmExpanded)}
-                className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
-              >
-                {dmExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                Direct Messages
-              </button>
-            )}
-            {!sidebarCollapsed && dmExpanded && (
-              <div className="space-y-0.5">
+            {sidebarCollapsed ? (
+              <div className="mt-3 space-y-1 border-t border-border pt-2">
                 {directMessages.map((dm) => (
                   <button
                     key={dm.id}
                     onClick={() => setMobileSidebarOpen(false)}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    title={dm.name}
+                    className="relative flex h-9 w-9 mx-auto items-center justify-center rounded-lg hover:bg-secondary transition-colors"
                   >
-                    <div className="relative">
-                      <Avatar className="h-6 w-6">
-                        <AvatarFallback className="text-xs bg-primary/20 text-primary">{dm.avatar}</AvatarFallback>
-                      </Avatar>
-                      <span
-                        className={cn(
-                          "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-sidebar",
-                          statusColors[dm.status],
-                        )}
-                      />
-                    </div>
-                    <span className="flex-1 text-left truncate">{dm.name}</span>
-                    {dm.unread && (
-                      <Badge variant="secondary" className="h-5 min-w-5 bg-primary text-primary-foreground text-xs">
-                        {dm.unread}
-                      </Badge>
-                    )}
+                    <Avatar className="h-7 w-7">
+                      <AvatarFallback className="text-[10px] bg-primary/20 text-primary">{dm.avatar}</AvatarFallback>
+                    </Avatar>
+                    <span
+                      className={cn(
+                        "absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-sidebar",
+                        statusColors[dm.status],
+                      )}
+                    />
                   </button>
                 ))}
               </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => setDmExpanded(!dmExpanded)}
+                  className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  {dmExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  Direct Messages
+                </button>
+                {dmExpanded && (
+                  <div className="space-y-0.5">
+                    {directMessages.map((dm) => (
+                      <button
+                        key={dm.id}
+                        onClick={() => setMobileSidebarOpen(false)}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      >
+                        <div className="relative">
+                          <Avatar className="h-6 w-6">
+                            <AvatarFallback className="text-xs bg-primary/20 text-primary">{dm.avatar}</AvatarFallback>
+                          </Avatar>
+                          <span
+                            className={cn(
+                              "absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-sidebar",
+                              statusColors[dm.status],
+                            )}
+                          />
+                        </div>
+                        <span className="flex-1 text-left truncate">{dm.name}</span>
+                        {dm.unread && (
+                          <Badge variant="secondary" className="h-5 min-w-5 bg-primary text-primary-foreground text-xs">
+                            {dm.unread}
+                          </Badge>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
 
             {!sidebarCollapsed && (
@@ -1858,79 +1987,83 @@ export function CommunicationModule() {
               </div>
             )}
 
-            <button
-              onClick={() => setAgentMsgExpanded(!agentMsgExpanded)}
-              className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
-            >
-              {agentMsgExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              <Bot className="h-3 w-3 mr-1" />
-              Agent Approvals
-              <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-orange-500/20 text-orange-400 text-[10px]">
-                {approvals.filter((a) => a.status === "pending").length}
-              </Badge>
-            </button>
-            {agentMsgExpanded && (
-              <div className="space-y-0.5">
-                {approvals
-                  .filter((a) => a.status === "pending")
-                  .slice(0, 4)
-                  .map((approval) => (
-                    <button
-                      key={approval.id}
-                      onClick={() => setActiveTab("approvals")}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-                    >
-                      <Avatar className="h-5 w-5">
-                        <AvatarFallback className="text-[10px] bg-primary/20 text-primary">
-                          {approval.avatar}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1 text-left truncate">
-                        <span className="text-xs">
-                          {approval.type} - {approval.amount}
-                        </span>
-                      </div>
-                      <Clock className="h-3 w-3 text-orange-400" />
-                    </button>
-                  ))}
+            {!sidebarCollapsed && (
+              <>
                 <button
-                  onClick={() => setActiveTab("approvals")}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-primary hover:bg-secondary"
+                  onClick={() => setAgentMsgExpanded(!agentMsgExpanded)}
+                  className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
                 >
-                  <span className="text-xs">View all approvals</span>
-                  <ArrowUpRight className="h-3 w-3" />
+                  {agentMsgExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                  <Bot className="h-3 w-3 mr-1" />
+                  Agent Approvals
+                  <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-orange-500/20 text-orange-400 text-[10px]">
+                    {approvals.filter((a) => a.status === "pending").length}
+                  </Badge>
                 </button>
-              </div>
-            )}
+                {agentMsgExpanded && (
+                  <div className="space-y-0.5">
+                    {approvals
+                      .filter((a) => a.status === "pending")
+                      .slice(0, 4)
+                      .map((approval) => (
+                        <button
+                          key={approval.id}
+                          onClick={() => setActiveTab("approvals")}
+                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        >
+                          <Avatar className="h-5 w-5">
+                            <AvatarFallback className="text-[10px] bg-primary/20 text-primary">
+                              {approval.avatar}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 text-left truncate">
+                            <span className="text-xs">
+                              {approval.type} - {approval.amount}
+                            </span>
+                          </div>
+                          <Clock className="h-3 w-3 text-orange-400" />
+                        </button>
+                      ))}
+                    <button
+                      onClick={() => setActiveTab("approvals")}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-primary hover:bg-secondary"
+                    >
+                      <span className="text-xs">View all approvals</span>
+                      <ArrowUpRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
 
-            <button
-              onClick={() => setActiveTab("schedule")}
-              className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
-            >
-              <Calendar className="h-3 w-3 mr-1" />
-              Schedule
-              <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-blue-500/20 text-blue-400 text-[10px]">
-                {scheduleEvents.filter((e) => e.date === "Today").length}
-              </Badge>
-            </button>
-            <div className="space-y-0.5 mt-1">
-              {scheduleEvents
-                .filter((e) => e.date === "Today")
-                .slice(0, 3)
-                .map((event) => (
-                  <button
-                    key={event.id}
-                    onClick={() => setActiveTab("schedule")}
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
-                  >
-                    <CalendarDays className="h-4 w-4 text-blue-400" />
-                    <div className="flex-1 text-left truncate">
-                      <span className="text-xs">{event.title}</span>
-                    </div>
-                    <span className="text-[10px] text-muted-foreground">{event.time}</span>
-                  </button>
-                ))}
-            </div>
+                <button
+                  onClick={() => setActiveTab("schedule")}
+                  className="flex w-full items-center gap-1 px-2 py-1.5 mt-4 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                >
+                  <Calendar className="h-3 w-3 mr-1" />
+                  Schedule
+                  <Badge variant="secondary" className="ml-auto h-4 min-w-4 bg-blue-500/20 text-blue-400 text-[10px]">
+                    {scheduleEvents.filter((e) => e.date === "Today").length}
+                  </Badge>
+                </button>
+                <div className="space-y-0.5 mt-1">
+                  {scheduleEvents
+                    .filter((e) => e.date === "Today")
+                    .slice(0, 3)
+                    .map((event) => (
+                      <button
+                        key={event.id}
+                        onClick={() => setActiveTab("schedule")}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground"
+                      >
+                        <CalendarDays className="h-4 w-4 text-blue-400" />
+                        <div className="flex-1 text-left truncate">
+                          <span className="text-xs">{event.title}</span>
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{event.time}</span>
+                      </button>
+                    ))}
+                </div>
+              </>
+            )}
           </div>
         </ScrollArea>
       </div>
@@ -2000,10 +2133,10 @@ export function CommunicationModule() {
           </Badge>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {/* Chat Tab - Added context menu to messages */}
-          <TabsContent value="chat" className="flex-1 flex flex-col m-0">
-            <ScrollArea className="flex-1 p-4">
+          <TabsContent value="chat" className="flex-1 flex flex-col min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="flex-1 min-h-0 p-4">
               <div className="space-y-4">
                 {loadingMessages && (
                   <div className="text-xs text-muted-foreground">Loading messages...</div>
@@ -2037,12 +2170,31 @@ export function CommunicationModule() {
                           <span className="text-xs text-muted-foreground">{formatTime(msg.created_at)}</span>
                           {msg.isPinned && <Pin className="h-3 w-3 text-yellow-500" />}
                         </div>
-                        <p className="text-sm text-foreground/90 mt-0.5">{msg.content}</p>
+                        {msg.content.startsWith("↳ @") ? (() => {
+                          const newlineIdx = msg.content.indexOf("\n")
+                          if (newlineIdx !== -1) {
+                            const quote = msg.content.slice(0, newlineIdx)
+                            const body = msg.content.slice(newlineIdx + 1)
+                            return (
+                              <>
+                                <div className="mb-1.5 flex items-center gap-1.5 rounded border-l-2 border-primary bg-secondary/50 px-2 py-1 text-xs text-muted-foreground">
+                                  <Reply className="h-3 w-3 text-primary shrink-0" />
+                                  <span className="truncate italic">{quote}</span>
+                                </div>
+                                <p className="text-sm text-foreground/90">{body}</p>
+                              </>
+                            )
+                          }
+                          return <p className="text-sm text-foreground/90 mt-0.5">{msg.content}</p>
+                        })() : (
+                          <p className="text-sm text-foreground/90 mt-0.5">{msg.content}</p>
+                        )}
                         {(msg.reactions || msg.thread) && (
                           <div className="flex items-center gap-2 mt-2">
                             {msg.reactions?.map((reaction, i) => (
                               <button
                                 key={i}
+                                onClick={() => addReaction(msg.id, reaction.emoji)}
                                 className="flex items-center gap-1 rounded-full bg-secondary px-2 py-0.5 text-xs hover:bg-secondary/80"
                               >
                                 <span>{reaction.emoji}</span>
@@ -2073,11 +2225,26 @@ export function CommunicationModule() {
                             <Volume2 className="h-4 w-4" />
                           )}
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPanel("add-approval", msg)}>
-                          <Smile className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openPanel("add-task", msg)}>
-                          <MessageSquare className="h-4 w-4" />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-7 w-7" title="React">
+                              <Smile className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="flex gap-1 p-1">
+                            {REACTION_EMOJIS.map((e) => (
+                              <button
+                                key={e}
+                                onClick={() => addReaction(msg.id, e)}
+                                className="rounded p-1 text-lg leading-none hover:bg-secondary"
+                              >
+                                {e}
+                              </button>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startReply(msg)} title="Reply">
+                          <Reply className="h-4 w-4" />
                         </Button>
                         <DropdownMenuTrigger asChild>
                           <Button variant="ghost" size="icon" className="h-7 w-7" data-context-trigger>
@@ -2085,18 +2252,33 @@ export function CommunicationModule() {
                           </Button>
                         </DropdownMenuTrigger>
                       </div>
-                    </div>
-                    <DropdownMenuContent align="end" className="w-48">
+                    <DropdownMenuContent align="end" className="w-52">
+                      <div className="flex items-center justify-between px-2 py-1.5 border-b border-border mb-1">
+                        {REACTION_EMOJIS.slice(0, 6).map((e) => (
+                          <button
+                            key={e}
+                            type="button"
+                            onClick={(ev) => {
+                              ev.stopPropagation()
+                              addReaction(msg.id, e)
+                            }}
+                            className="rounded p-1 text-base leading-none hover:bg-secondary transition-transform hover:scale-125"
+                            title={`React with ${e}`}
+                          >
+                            {e}
+                          </button>
+                        ))}
+                      </div>
+                      <DropdownMenuItem className="gap-2" onClick={() => startReply(msg)}>
+                        <Reply className="h-4 w-4" />
+                        Reply
+                      </DropdownMenuItem>
                       <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-task", msg)}>
                         <ClipboardList className="h-4 w-4" />
                         Create Task
                       </DropdownMenuItem>
-                      <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-event", msg)}>
-                        <Reply className="h-4 w-4" />
-                        Reply
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="gap-2" onClick={() => setMessageInput(`@${msg.author_name ?? "user"} `)}>
-                        <PhoneCall className="h-4 w-4" />
+                      <DropdownMenuItem className="gap-2" onClick={() => setMessageInput((v) => `${v}@${msg.author_name ?? "user"} `)}>
+                        <AtSign className="h-4 w-4" />
                         Mention
                       </DropdownMenuItem>
                       <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-event", msg)}>
@@ -2104,13 +2286,6 @@ export function CommunicationModule() {
                         Schedule
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="gap-2"
-                        onClick={() => setMessageInput(`Reply to ${msg.author_name ?? "message"}: `)}
-                      >
-                        <CheckSquare className="h-4 w-4" />
-                        Reply inline
-                      </DropdownMenuItem>
                       <DropdownMenuItem className="gap-2" onClick={() => openPanel("add-escalation", msg)}>
                         <Flag className="h-4 w-4" />
                         Escalate
@@ -2164,18 +2339,67 @@ export function CommunicationModule() {
                   <button type="button" onClick={() => setVoiceError(null)} className="ml-2 shrink-0 hover:text-red-300">×</button>
                 </div>
               )}
-              <div className="rounded-lg border border-border bg-secondary/50 p-2">
+              {replyTo && (
+                <div className="mb-2 flex items-center gap-2 rounded-lg border-l-2 border-primary bg-secondary/40 px-3 py-1.5 text-xs">
+                  <Reply className="h-3.5 w-3.5 text-primary" />
+                  <span className="text-muted-foreground">
+                    Replying to <span className="font-medium text-foreground">{replyTo.author_name ?? "message"}</span>:{" "}
+                    <span className="italic">{(replyTo.content ?? "").slice(0, 60)}</span>
+                  </span>
+                  <button type="button" onClick={() => setReplyTo(null)} className="ml-auto shrink-0 hover:text-foreground">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
+              <div className="relative rounded-lg border border-border bg-secondary/50 p-2">
+                {autocompleteOpen && (
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
+                    {mentionActive
+                      ? mentionMatches.map((u) => (
+                          <button
+                            key={u.id}
+                            onClick={() => applyAutocomplete("@", u.name.replace(/\s+/g, ""))}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
+                          >
+                            <Avatar className="h-6 w-6">
+                              <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+                                {formatInitials(u.name)}
+                              </AvatarFallback>
+                            </Avatar>
+                            <span className="truncate">{u.name}</span>
+                          </button>
+                        ))
+                      : slashMatches.map((c) => (
+                          <button
+                            key={c}
+                            onClick={() => applyAutocomplete("/", c)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm capitalize hover:bg-secondary"
+                          >
+                            <Hash className="h-4 w-4 text-muted-foreground" />
+                            {c}
+                          </button>
+                        ))}
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="icon" className="h-8 w-8">
                     <Plus className="h-4 w-4" />
                   </Button>
                   <Input
+                    ref={messageInputRef}
                     value={messageInput}
                     onChange={(e) => { setMessageInput(e.target.value); sendTyping() }}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault()
-                        handleSend()
+                        if (autocompleteOpen) {
+                          if (mentionActive && mentionMatches[0]) applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
+                          else if (slashActive && slashMatches[0]) applyAutocomplete("/", slashMatches[0])
+                        } else {
+                          handleSend()
+                        }
+                      } else if (e.key === "Escape" && replyTo) {
+                        setReplyTo(null)
                       }
                     }}
                     placeholder={`Message #${activeChannel?.name ?? selectedChannel}`}
@@ -2220,11 +2444,12 @@ export function CommunicationModule() {
           </TabsContent>
 
           {/* Agent Channel Tab — AI agents with full OmniDome context */}
-          <TabsContent value="agents" className="flex-1 m-0 overflow-hidden">
+          <TabsContent value="agents" className="flex-1 min-h-0 h-full m-0 flex flex-col overflow-hidden data-[state=inactive]:hidden">
             <AgentArtifactChat
               channelId={activeChannelId}
               channelName={activeChannel?.name}
               extraContext={agentScheduleContext}
+              teamUsers={teamUsers}
             />
           </TabsContent>
 
@@ -3065,8 +3290,14 @@ export function CommunicationModule() {
 
       {panelOpen && (
         <div className="fixed inset-0 z-50">
-          <div className="absolute inset-0 bg-black/40" onClick={closePanel} />
-          <div className="absolute right-0 top-0 h-full w-full max-w-md bg-background border-l border-border flex flex-col">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={(e) => {
+              e.stopPropagation()
+              closePanel()
+            }}
+          />
+          <div className="absolute right-0 top-0 h-full w-full max-w-md bg-background border-l border-border flex flex-col shadow-2xl">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <div>
                 <p className="text-sm text-muted-foreground">
@@ -3084,7 +3315,14 @@ export function CommunicationModule() {
                   {panelType === "add-escalation" && "Create an escalation"}
                 </h3>
               </div>
-              <Button variant="ghost" size="icon" onClick={closePanel}>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  closePanel()
+                }}
+              >
                 <X className="h-4 w-4" />
               </Button>
             </div>

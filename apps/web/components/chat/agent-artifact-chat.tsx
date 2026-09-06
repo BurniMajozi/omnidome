@@ -11,11 +11,33 @@
  * the agent is aware of what the team is doing.
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { Bot, Send, Loader2, FileCode2, Copy, Check, PanelRightClose, X } from "lucide-react"
+import { Bot, Send, Loader2, FileCode2, Copy, Check, PanelRightClose, X, Hash } from "lucide-react"
 import { invokeAgentAGUI, type AGUIEvent } from "@/lib/orchestrator-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { cn } from "@/lib/utils"
+
+const DEFAULT_TEAM_USERS = [
+  { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
+  { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
+  { id: "u-3", name: "Emily Davis", email: "emily.davis@omnidome.co.za" },
+  { id: "u-4", name: "James Wilson", email: "james.wilson@omnidome.co.za" },
+  { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
+]
+
+const PLATFORM_COMPONENTS = [
+  "sales", "marketing", "crm", "finance", "network", "support",
+  "retention", "inventory", "billing", "analytics", "provisioning",
+  "compliance", "portal", "call-center", "hr",
+]
+
+function formatInitials(name?: string) {
+  if (!name) return "??"
+  const parts = name.trim().split(/\s+/)
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+}
 
 interface Artifact {
   id: string
@@ -65,10 +87,12 @@ export function AgentArtifactChat({
   channelId,
   channelName,
   extraContext,
+  teamUsers = DEFAULT_TEAM_USERS,
 }: {
   channelId?: string
   channelName?: string
   extraContext?: string
+  teamUsers?: { id: string; name: string; email?: string }[]
 }) {
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState("")
@@ -80,6 +104,26 @@ export function AgentArtifactChat({
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // ── @mention / /component autocomplete ──
+  const lastToken = input.split(/\s/).pop() ?? ""
+  const mentionActive = lastToken.startsWith("@") && lastToken.length >= 1
+  const slashActive = lastToken.startsWith("/") && lastToken.length >= 1
+  const mentionMatches = mentionActive
+    ? teamUsers.filter((u) => u.name.toLowerCase().includes(lastToken.slice(1).toLowerCase())).slice(0, 6)
+    : []
+  const slashMatches = slashActive
+    ? PLATFORM_COMPONENTS.filter((c) => c.startsWith(lastToken.slice(1).toLowerCase())).slice(0, 8)
+    : []
+  const autocompleteOpen = (mentionActive && mentionMatches.length > 0) || (slashActive && slashMatches.length > 0)
+
+  const applyAutocomplete = (prefix: "@" | "/", value: string) => {
+    const idx = input.lastIndexOf(lastToken)
+    const next = input.slice(0, idx) + prefix + value + " "
+    setInput(next)
+    setTimeout(() => inputRef.current?.focus(), 20)
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -200,10 +244,10 @@ export function AgentArtifactChat({
   const allArtifacts = Object.values(artifactsById)
 
   return (
-    <div className="flex h-full min-h-0">
+    <div className="flex h-full w-full min-h-0 flex-1 overflow-hidden">
       {/* Chat column */}
-      <div className={cn("flex min-w-0 flex-col", canvasOpen ? "w-1/2 border-r border-border" : "flex-1")}>
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <div className={cn("flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden", canvasOpen ? "w-1/2 flex-none border-r border-border" : "flex-1")}>
+        <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
               <Bot className="h-10 w-10 text-cyan-400" />
@@ -265,17 +309,57 @@ export function AgentArtifactChat({
           <div ref={endRef} />
         </div>
         <div className="border-t border-border p-3">
-          <div className="flex items-center gap-2">
+          <div className="relative flex items-center gap-2">
+            {autocompleteOpen && (
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
+                {mentionActive
+                  ? mentionMatches.map((u) => (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={() => applyAutocomplete("@", u.name.replace(/\s+/g, ""))}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
+                      >
+                        <Avatar className="h-6 w-6">
+                          <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
+                            {formatInitials(u.name)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate">{u.name}</span>
+                      </button>
+                    ))
+                  : slashMatches.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => applyAutocomplete("/", c)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm capitalize hover:bg-secondary"
+                      >
+                        <Hash className="h-4 w-4 text-muted-foreground" />
+                        {c}
+                      </button>
+                    ))}
+              </div>
+            )}
             <Input
+              ref={inputRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault()
-                  void send()
+                  if (autocompleteOpen) {
+                    if (mentionActive && mentionMatches[0]) {
+                      applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
+                    } else if (slashActive && slashMatches[0]) {
+                      applyAutocomplete("/", slashMatches[0])
+                    }
+                  } else {
+                    void send()
+                  }
                 }
               }}
-              placeholder="Ask the agent to draft something…"
+              placeholder="Ask the agent to draft something… (use @ for team, / for components)"
               disabled={sending}
             />
             <Button size="icon" onClick={() => void send()} disabled={sending || !input.trim()}>
