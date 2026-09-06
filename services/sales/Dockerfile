@@ -4,16 +4,14 @@ WORKDIR /build
 
 COPY services/common/requirements.txt ./services/common/requirements.txt
 COPY services/sales/requirements.txt ./services/sales/requirements.txt
-RUN pip install --no-cache-dir --user --trusted-host pypi.org --trusted-host files.pythonhosted.org --default-timeout=100 --retries 5 -r services/sales/requirements.txt
+RUN pip install --no-cache-dir --trusted-host pypi.org --trusted-host files.pythonhosted.org --default-timeout=100 --retries 5 -r services/sales/requirements.txt
 
 FROM python:3.12-slim
 
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
-
 WORKDIR /app
 
-COPY --from=builder /root/.local /app/.local
-ENV PATH=/app/.local/bin:$PATH
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY services/sales/ ./services/sales/
 COPY services/common/ ./services/common/
@@ -21,10 +19,6 @@ COPY services/common/ ./services/common/
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
-
-RUN chown -R appuser:appuser /app
-
-USER appuser
 
 EXPOSE 8002
 
