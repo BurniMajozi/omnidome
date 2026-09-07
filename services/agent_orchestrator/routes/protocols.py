@@ -164,6 +164,15 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
     run_id = uuid.uuid4()
     correlation = _correlation_id()
 
+    conv_uuid: uuid.UUID
+    if body.conversation_id:
+        try:
+            conv_uuid = uuid.UUID(str(body.conversation_id))
+        except (ValueError, TypeError):
+            conv_uuid = run_id
+    else:
+        conv_uuid = run_id
+
     async def emit(event: AGUIEvent) -> str:
         return f"data: {event.model_dump_json()}\n\n"
 
@@ -173,7 +182,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 type="RUN_STARTED",
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
-                conversation_id=body.conversation_id,
+                conversation_id=str(conv_uuid),
                 data={"agent_type": body.agent_type, "correlation_id": correlation},
             ))
             agent = Agent(
@@ -194,7 +203,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                         type="TEXT_MESSAGE_CONTENT",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
-                        conversation_id=body.conversation_id,
+                        conversation_id=str(conv_uuid),
                         data={"delta": token},
                     ))
             else:
@@ -208,14 +217,14 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                         type="TOOL_CALL_START",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
-                        conversation_id=body.conversation_id,
+                        conversation_id=str(conv_uuid),
                         data={"name": tc.get("name"), "arguments": tc.get("arguments")},
                     ))
                     yield await emit(AGUIEvent(
                         type="TOOL_CALL_RESULT",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
-                        conversation_id=body.conversation_id,
+                        conversation_id=str(conv_uuid),
                         data={"name": tc.get("name"), "result": tc.get("result")},
                     ))
                 full_content = run_result.get("content", "")
@@ -224,7 +233,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                         type="TEXT_MESSAGE_CONTENT",
                         run_id=run_id,
                         tenant_id=ctx.tenant_id,
-                        conversation_id=body.conversation_id,
+                        conversation_id=str(conv_uuid),
                         data={"delta": full_content},
                     ))
 
@@ -246,20 +255,11 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 type="MEMORY_WRITE",
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
-                conversation_id=body.conversation_id,
+                conversation_id=str(conv_uuid),
                 data={"correlation_id": correlation, "status": "written"},
             ))
             # Persist messages & actions to AgentConversation / AgentMessage / AgentAction
             try:
-                conv_uuid = None
-                if body.conversation_id:
-                    try:
-                        conv_uuid = uuid.UUID(str(body.conversation_id))
-                    except (ValueError, TypeError):
-                        pass
-                if not conv_uuid:
-                    conv_uuid = run_id
-
                 async with get_session() as session:
                     # Ensure conversation exists
                     conv_res = await session.execute(
@@ -294,14 +294,14 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 type="RUN_FINISHED",
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
-                conversation_id=body.conversation_id,
+                conversation_id=str(conv_uuid),
             ))
         except Exception as exc:
             yield await emit(AGUIEvent(
                 type="RUN_ERROR",
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
-                conversation_id=body.conversation_id,
+                conversation_id=str(conv_uuid),
                 data={"error": str(exc)},
             ))
 

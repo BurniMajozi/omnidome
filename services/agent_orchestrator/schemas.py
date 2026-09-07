@@ -70,9 +70,11 @@ class ConversationRead(BaseModel):
     tenant_id: uuid.UUID
     agent_type: str
     channel: str
-    external_id: Optional[str]
+    external_id: Optional[str] = None
     status: str
-    context: Dict[str, Any]
+    context: Dict[str, Any] = Field(default_factory=dict)
+    title: Optional[str] = None
+    last_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -83,9 +85,9 @@ class MessageRead(BaseModel):
     id: uuid.UUID
     conversation_id: uuid.UUID
     role: str
-    content: Optional[str]
-    tool_calls: Optional[Dict[str, Any]]
-    tool_results: Optional[Dict[str, Any]]
+    content: Optional[str] = None
+    tool_calls: Optional[Any] = None
+    tool_results: Optional[Any] = None
     created_at: datetime
 
 

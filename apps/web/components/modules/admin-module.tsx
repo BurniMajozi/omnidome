@@ -19,6 +19,8 @@ import {
   Bot,
   Workflow,
   ArrowRight,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -26,12 +28,22 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
+import {
   listUCPSessions,
   listIntentMandates,
   listPaymentMandates,
+  listAgentActions,
   type UCPCheckoutSession,
   type IntentMandate,
   type PaymentMandate,
+  type AgentActionAuditItem,
 } from "@/lib/orchestrator-api"
 import { adminApi, type AdminUser, type AuditLogEntry, type CommissionTier, type ModuleCatalogItem, type Tenant } from "@/lib/admin-api"
 
@@ -75,25 +87,34 @@ export function AdminModule() {
   const [ucpSessions, setUcpSessions] = useState<UCPCheckoutSession[]>([])
   const [intentMandates, setIntentMandates] = useState<IntentMandate[]>([])
   const [paymentMandates, setPaymentMandates] = useState<PaymentMandate[]>([])
+  const [agentActions, setAgentActions] = useState<AgentActionAuditItem[]>([])
+  const [auditSubTab, setAuditSubTab] = useState<"agents" | "system">("agents")
+  const [agentFilter, setAgentFilter] = useState<string>("all")
 
   const selectedTenant = useMemo(
     () => tenants.find((tenant) => tenant.id === selectedTenantId) || tenants[0],
     [selectedTenantId, tenants],
   )
 
+  const filteredAgentActions = useMemo(() => {
+    if (agentFilter === "all") return agentActions
+    return agentActions.filter((a) => a.agent_type === agentFilter)
+  }, [agentActions, agentFilter])
+
   const loadAdminData = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const [tenantData, moduleData, userData, auditData, tierData, ucpData, mandateData, paymentData] = await Promise.all([
+      const [tenantData, moduleData, userData, auditData, tierData, ucpData, mandateData, paymentData, actionsData] = await Promise.all([
         adminApi.listTenants(),
         adminApi.listModules(),
         adminApi.listUsers().catch(() => []),
-        adminApi.listAuditLog({ limit: 20 }).catch(() => []),
+        adminApi.listAuditLog({ limit: 50 }).catch(() => []),
         adminApi.listCommissionTiers().catch(() => []),
         listUCPSessions(20).catch(() => []),
         listIntentMandates(20).catch(() => []),
         listPaymentMandates(20).catch(() => []),
+        listAgentActions({ limit: 100 }).catch(() => ({ items: [] })),
       ])
       setTenants(tenantData)
       setModules(moduleData)
@@ -103,6 +124,7 @@ export function AdminModule() {
       setUcpSessions(ucpData)
       setIntentMandates(mandateData)
       setPaymentMandates(paymentData)
+      setAgentActions(actionsData.items || [])
       const tenantId = selectedTenantId || tenantData[0]?.id || ""
       setSelectedTenantId(tenantId)
       if (tenantId) {
@@ -353,27 +375,188 @@ export function AdminModule() {
         </TabsContent>
 
         <TabsContent value="audit">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base"><Activity className="h-4 w-4" /> Recent Audit Events</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {auditLog.map((event) => (
-                  <div key={event.id} className="rounded-lg border border-border p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <p className="font-medium">{event.action}</p>
-                        <p className="text-xs text-muted-foreground">{event.resource_type} {event.resource_id ? `- ${event.resource_id}` : ""}</p>
-                      </div>
-                      <span className="text-xs text-muted-foreground">{fmtDate(event.created_at)}</span>
-                    </div>
-                  </div>
-                ))}
-                {auditLog.length === 0 && <p className="text-sm text-muted-foreground">No audit events returned.</p>}
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={auditSubTab === "agents" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setAuditSubTab("agents")}
+                  className="gap-2 text-xs"
+                >
+                  <Bot className="h-4 w-4 text-primary" />
+                  <span>Agent Actions & AI Audits</span>
+                  <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
+                    {agentActions.length}
+                  </Badge>
+                </Button>
+                <Button
+                  variant={auditSubTab === "system" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setAuditSubTab("system")}
+                  className="gap-2 text-xs"
+                >
+                  <Activity className="h-4 w-4 text-muted-foreground" />
+                  <span>Platform System Events</span>
+                  <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
+                    {auditLog.length}
+                  </Badge>
+                </Button>
               </div>
-            </CardContent>
-          </Card>
+
+              {auditSubTab === "agents" && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                  <span className="text-xs text-muted-foreground mr-1">Agent:</span>
+                  {["all", "executive", "retention", "customer_facing", "provisioning", "support", "assistant"].map((ag) => (
+                    <Button
+                      key={ag}
+                      variant={agentFilter === ag ? "secondary" : "outline"}
+                      size="sm"
+                      onClick={() => setAgentFilter(ag)}
+                      className="h-6 text-[11px] px-2 capitalize"
+                    >
+                      {ag === "all" ? "All" : ag.replace("_", " ")}
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {auditSubTab === "agents" ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center justify-between text-base">
+                    <span className="flex items-center gap-2">
+                      <Bot className="h-4 w-4 text-primary" /> Autonomous Agent Action Trail
+                    </span>
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {filteredAgentActions.length} actions
+                    </Badge>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {filteredAgentActions.length === 0 ? (
+                    <p className="py-10 text-center text-sm text-muted-foreground">
+                      No agent actions recorded yet. Conversations and tool invocations will appear here.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Time</TableHead>
+                            <TableHead>Agent</TableHead>
+                            <TableHead>Action / Tool</TableHead>
+                            <TableHead>User Satisfaction</TableHead>
+                            <TableHead>Prompt & AI Reply</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Payload</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredAgentActions.map((item) => (
+                            <TableRow key={item.id}>
+                              <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                                {fmtDate(item.created_at)}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline" className="font-mono text-xs">
+                                  {item.agent_type}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={item.success ? "outline" : "destructive"} className="font-mono text-[11px]">
+                                  {item.tool_name}
+                                </Badge>
+                              </TableCell>
+                              <TableCell>
+                                {item.satisfaction === "thumbs_up" ? (
+                                  <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 gap-1 text-[11px]">
+                                    <ThumbsUp className="h-3 w-3 fill-current" />
+                                    Helpful
+                                  </Badge>
+                                ) : item.satisfaction === "thumbs_down" ? (
+                                  <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/30 gap-1 text-[11px]">
+                                    <ThumbsDown className="h-3 w-3 fill-current" />
+                                    Unhelpful
+                                  </Badge>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell className="max-w-xs">
+                                {item.prompt || item.response ? (
+                                  <div className="space-y-1 text-xs">
+                                    {item.prompt && (
+                                      <p className="line-clamp-2 text-foreground font-medium" title={item.prompt}>
+                                        <span className="text-muted-foreground font-normal">Prompt: </span>
+                                        {item.prompt}
+                                      </p>
+                                    )}
+                                    {item.response && (
+                                      <p className="line-clamp-2 text-muted-foreground" title={item.response}>
+                                        <span className="font-normal text-muted-foreground/70">Reply: </span>
+                                        {item.response}
+                                      </p>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">—</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={item.success ? "default" : "destructive"}>
+                                  {item.success ? "ok" : "failed"}
+                                </Badge>
+                              </TableCell>
+                              <TableCell className="max-w-xs">
+                                <details>
+                                  <summary className="cursor-pointer font-mono text-xs text-muted-foreground hover:text-foreground">
+                                    Inspect
+                                  </summary>
+                                  <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-secondary/50 p-3 text-[11px]">
+                                    {JSON.stringify(item.tool_input, null, 2)}
+                                    {"\n--- output ---\n"}
+                                    {JSON.stringify(item.tool_output, null, 2)}
+                                  </pre>
+                                </details>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    <Activity className="h-4 w-4" /> Platform Resource Audit Events
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {auditLog.map((event) => (
+                      <div key={event.id} className="rounded-lg border border-border p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium">{event.action}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {event.resource_type} {event.resource_id ? `- ${event.resource_id}` : ""}
+                            </p>
+                          </div>
+                          <span className="text-xs text-muted-foreground">{fmtDate(event.created_at)}</span>
+                        </div>
+                      </div>
+                    ))}
+                    {auditLog.length === 0 && <p className="text-sm text-muted-foreground">No audit events returned.</p>}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent value="commission">

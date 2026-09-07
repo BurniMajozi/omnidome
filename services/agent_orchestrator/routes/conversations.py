@@ -66,9 +66,33 @@ async def list_conversations(
         result = await session.execute(stmt)
         items = result.scalars().all()
 
+        # Batch query first user message and latest message for titles
+        conv_ids = [c.id for c in items]
+        title_map: dict[uuid.UUID, str] = {}
+        last_msg_map: dict[uuid.UUID, str] = {}
+        if conv_ids:
+            msg_res = await session.execute(
+                select(AgentMessage.conversation_id, AgentMessage.role, AgentMessage.content)
+                .where(AgentMessage.conversation_id.in_(conv_ids))
+                .order_by(AgentMessage.created_at.asc())
+            )
+            for cid, role, content in msg_res.all():
+                if role == "user" and cid not in title_map and content:
+                    title_map[cid] = content[:120]
+                if content:
+                    last_msg_map[cid] = content[:120]
+
+        res_items = []
+        for c in items:
+            read_obj = ConversationRead.model_validate(c)
+            fallback_title = c.context.get("title") if isinstance(c.context, dict) else None
+            read_obj.title = title_map.get(c.id) or fallback_title or f"Chat with {c.agent_type}"
+            read_obj.last_message = last_msg_map.get(c.id)
+            res_items.append(read_obj)
+
     pages = max(1, (total + page_size - 1) // page_size)
     return {
-        "items": [ConversationRead.model_validate(c) for c in items],
+        "items": res_items,
         "total": total,
         "page": page,
         "page_size": page_size,
@@ -98,10 +122,27 @@ async def get_conversation(
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
 
-        # Eager load messages
-        await session.refresh(conv, ["messages"])
+        # Explicitly query messages sorted by created_at asc
+        msg_result = await session.execute(
+            select(AgentMessage)
+            .where(AgentMessage.conversation_id == conversation_id)
+            .order_by(AgentMessage.created_at.asc())
+        )
+        messages = msg_result.scalars().all()
 
-    return ConversationWithMessages.model_validate(conv)
+        conv_dict = {
+            "id": conv.id,
+            "tenant_id": conv.tenant_id,
+            "agent_type": conv.agent_type,
+            "channel": conv.channel,
+            "external_id": conv.external_id,
+            "status": conv.status,
+            "context": conv.context or {},
+            "created_at": conv.created_at,
+            "updated_at": conv.updated_at,
+            "messages": [MessageRead.model_validate(m) for m in messages],
+        }
+        return ConversationWithMessages.model_validate(conv_dict)
 
 
 # ---------------------------------------------------------------------------

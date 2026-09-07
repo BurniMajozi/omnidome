@@ -17,7 +17,7 @@ const ORCHESTRATOR_BASE = "/api/orchestrator"
 
 // Attaches the current Supabase session as a Bearer token so the orchestrator
 // proxy can resolve real {user_id, tenant_id} identity server-side.
-async function authFetch(url: string, init: RequestInit): Promise<Response> {
+async function authFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const { data } = await supabase.auth.getSession()
   const headers = new Headers(init.headers)
   if (data.session?.access_token) {
@@ -36,9 +36,10 @@ export interface AgentInfo {
 }
 
 export interface AgentMessage {
+  id?: string
   role: "user" | "assistant" | "system" | "tool"
   content: string
-  tool_calls?: { name: string; arguments: Record<string, unknown> }[]
+  tool_calls?: { name: string; arguments?: Record<string, unknown> }[] | unknown[]
   tool_results?: unknown[]
 }
 
@@ -66,6 +67,8 @@ export interface ConversationRead {
   channel: string
   status: string
   context: Record<string, unknown>
+  title?: string
+  last_message?: string
   created_at: string
   updated_at: string
   messages?: AgentMessage[]
@@ -509,16 +512,48 @@ export async function listPaymentMandates(limit = 50): Promise<PaymentMandate[]>
 // ── Conversation API ─────────────────────────────────────────────────────
 
 export async function getConversation(conversationId: string): Promise<ConversationRead> {
-  const res = await fetch(`${ORCHESTRATOR_BASE}/conversations/${conversationId}`)
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/conversations/${conversationId}`)
   if (!res.ok) throw new Error(`Failed to load conversation: ${res.status}`)
   return res.json()
 }
 
-export async function listConversations(agentType?: string): Promise<ConversationRead[]> {
-  const url = new URL(`${ORCHESTRATOR_BASE}/conversations`, window.location.origin)
-  if (agentType) url.searchParams.set("agent_type", agentType)
-  const res = await fetch(url.toString())
+export async function listConversations(agentType?: string, page = 1, pageSize = 20): Promise<{ items: ConversationRead[]; total: number; page: number; pages: number }> {
+  const query = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+  if (agentType) query.set("agent_type", agentType)
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/conversations?${query.toString()}`)
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.status}`)
+  return res.json()
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/conversations/${conversationId}`, {
+    method: "DELETE",
+  })
+  if (!res.ok) throw new Error(`Failed to delete conversation: ${res.status}`)
+}
+
+export interface AgentActionAuditItem {
+  id: string
+  conversation_id: string
+  agent_type: string
+  tool_name: string
+  tool_input: unknown
+  tool_output: unknown
+  success: boolean
+  prompt?: string
+  response?: string
+  satisfaction?: "thumbs_up" | "thumbs_down" | null
+  created_at: string
+}
+
+export async function listAgentActions(params?: { agentType?: string; limit?: number; since?: string }): Promise<{ items: AgentActionAuditItem[] }> {
+  const query = new URLSearchParams()
+  if (params?.agentType) query.set("agent_type", params.agentType)
+  if (params?.limit) query.set("limit", String(params.limit))
+  if (params?.since) query.set("since", params.since)
+  const suffix = query.toString() ? `?${query.toString()}` : ""
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/actions${suffix}`)
+  if (!res.ok) throw new Error(`Failed to list agent actions: ${res.status}`)
   return res.json()
 }
 

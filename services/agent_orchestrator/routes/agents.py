@@ -90,6 +90,18 @@ async def _persist_messages(
         )
         session.add(action)
 
+    # If no tools were called, record a chat_interaction action so conversational turns appear in audit trail
+    if not tool_calls and assistant_content:
+        action = AgentAction(
+            conversation_id=conversation_id,
+            agent_type=agent_type,
+            tool_name="chat_interaction",
+            tool_input={"prompt": user_message[:500]},
+            tool_output={"response": assistant_content[:500]},
+            success=True,
+        )
+        session.add(action)
+
     # Assistant response
     assistant_msg = AgentMessage(
         conversation_id=conversation_id,

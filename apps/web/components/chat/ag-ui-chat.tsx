@@ -25,6 +25,11 @@ import {
   Hash,
   ThumbsUp,
   ThumbsDown,
+  History,
+  Plus,
+  Trash2,
+  Clock,
+  MessageSquare,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -41,11 +46,15 @@ import {
   invokeAgentAGUI,
   listAgents,
   recordAgentFeedback,
+  listConversations,
+  getConversation,
+  deleteConversation,
   AGENT_CATALOG,
   type AGUIEvent,
   type AGUIStreamState,
   type ToolCallEvent,
   type AgentInfo,
+  type ConversationRead,
 } from "@/lib/orchestrator-api"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
@@ -573,16 +582,99 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     scrollToBottom()
   }, [messages, scrollToBottom])
 
+  // Conversation history state
+  const [showHistory, setShowHistory] = useState(false)
+  const [conversationsList, setConversationsList] = useState<ConversationRead[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [loadingConvId, setLoadingConvId] = useState<string | null>(null)
+
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true)
+    try {
+      const res = await listConversations(undefined, 1, 50)
+      setConversationsList(res.items || [])
+    } catch (err) {
+      console.warn("Failed to load conversation history:", err)
+    } finally {
+      setLoadingHistory(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (!isOpen) {
-      setMessages([])
-      setInputValue("")
-      setConversationId(null)
       setError(null)
-      setActiveArtifact(null)
-      setStreamState({ runId: "", status: "idle", content: "", toolCalls: [], memoryWrites: [] })
+      setShowHistory(false)
+    } else {
+      void loadHistory()
     }
-  }, [isOpen])
+  }, [isOpen, loadHistory])
+
+  const handleSelectConversation = async (id: string) => {
+    setLoadingConvId(id)
+    try {
+      const data = await getConversation(id)
+      const loaded: AGUIMessage[] = []
+      for (const m of data.messages || []) {
+        if (m.role === "user") {
+          loaded.push({
+            id: m.id || `${id}-${loaded.length}`,
+            role: "user",
+            content: m.content || "",
+          })
+        } else if (m.role === "assistant") {
+          const rawToolCalls = (m.tool_calls as any[]) || []
+          const rawToolResults = (m.tool_results as any[]) || []
+          const mappedToolCalls: ToolCallEvent[] = rawToolCalls.map((tc: any, idx: number) => ({
+            runId: id,
+            toolCallId: tc.id || `tc-${idx}`,
+            toolName: tc.name || "tool",
+            arguments: tc.arguments || {},
+            result: rawToolResults[idx] ?? tc.result,
+            status: "result" as const,
+          }))
+          loaded.push({
+            id: m.id || `${id}-${loaded.length}`,
+            role: "assistant",
+            content: m.content || "",
+            toolCalls: mappedToolCalls,
+          })
+        }
+      }
+      setMessages(loaded)
+      setConversationId(data.id)
+      if (data.agent_type && AGENT_LIST.some((a) => a.type === data.agent_type)) {
+        setSelectedAgent(data.agent_type as AgentType)
+      }
+      setShowHistory(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load conversation")
+    } finally {
+      setLoadingConvId(null)
+    }
+  }
+
+  const handleNewChat = () => {
+    setMessages([])
+    setInputValue("")
+    setConversationId(null)
+    setError(null)
+    setActiveArtifact(null)
+    setShowHistory(false)
+    setStreamState({ runId: "", status: "idle", content: "", toolCalls: [], memoryWrites: [] })
+  }
+
+  const handleDeleteConversation = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    try {
+      await deleteConversation(id)
+      setConversationsList((prev) => prev.filter((c) => c.id !== id))
+      if (conversationId === id) {
+        handleNewChat()
+      }
+    } catch (err) {
+      console.warn("Failed to delete conversation:", err)
+    }
+  }
 
   useEffect(() => {
     if (!isOpen) return
@@ -643,6 +735,9 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             switch (event.type) {
               case "RUN_STARTED":
                 next.status = "running"
+                if (event.conversation_id) {
+                  setConversationId(event.conversation_id)
+                }
                 break
 
               case "TEXT_MESSAGE_CONTENT":
@@ -720,6 +815,9 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
               case "RUN_FINISHED":
                 next.status = "finished"
+                if (event.conversation_id) {
+                  setConversationId(event.conversation_id)
+                }
                 setMessages((prevMsgs) =>
                   prevMsgs.map((m) =>
                     m.id === assistantId
@@ -727,6 +825,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                       : m,
                   ),
                 )
+                void loadHistory()
                 break
 
               case "RUN_ERROR":
@@ -800,6 +899,34 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           </div>
 
           <div className="flex items-center gap-1">
+            <Button
+              variant={showHistory ? "secondary" : "ghost"}
+              size="sm"
+              className={cn(
+                "h-7 text-xs gap-1 px-2 text-muted-foreground hover:text-foreground",
+                showHistory && "bg-secondary text-foreground",
+              )}
+              onClick={() => {
+                setShowHistory((prev) => !prev)
+                if (!showHistory) void loadHistory()
+              }}
+              title="View Chat History"
+            >
+              <History className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">History</span>
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1 px-2 text-muted-foreground hover:text-foreground"
+              onClick={handleNewChat}
+              title="Start New Chat"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">New</span>
+            </Button>
+
             {allArtifacts.length > 0 && !canvasOpen && (
               <Button
                 variant="outline"
@@ -852,8 +979,133 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           </div>
         )}
 
-        {/* Messages List */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* History Panel or Active Chat */}
+        {showHistory ? (
+          <div className="flex-1 overflow-y-auto p-3 flex flex-col space-y-3 bg-card">
+            <div className="flex items-center justify-between border-b border-border pb-2 px-1">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-primary" />
+                <span className="text-xs font-semibold text-foreground">Past Conversations</span>
+                <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                  {conversationsList.length}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewChat}
+                  className="h-6 text-[11px] gap-1 px-2 border-primary/40 text-primary hover:bg-primary/10"
+                >
+                  <Plus className="h-3 w-3" />
+                  <span>New Chat</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowHistory(false)}
+                  className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            {loadingHistory ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                <span className="text-xs">Loading conversations...</span>
+              </div>
+            ) : conversationsList.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                <MessageSquare className="h-8 w-8 text-muted-foreground/40" />
+                <p className="text-xs font-medium text-foreground">No saved conversations yet</p>
+                <p className="text-[11px] text-muted-foreground max-w-[220px]">
+                  Messages you send to autonomous agents will be saved and listed here.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewChat}
+                  className="mt-2 h-7 text-xs gap-1.5 border-primary/40 text-primary"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Start a conversation
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2 overflow-y-auto">
+                {conversationsList.map((conv) => {
+                  const agentObj = AGENT_LIST.find((a) => a.type === conv.agent_type) ?? AGENT_LIST[0]
+                  const isCurrent = conv.id === conversationId
+                  const isLoadingThis = loadingConvId === conv.id
+                  const dateStr = conv.updated_at
+                    ? new Date(conv.updated_at).toLocaleDateString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })
+                    : ""
+
+                  return (
+                    <div
+                      key={conv.id}
+                      onClick={() => !isLoadingThis && handleSelectConversation(conv.id)}
+                      className={cn(
+                        "group relative flex flex-col gap-1.5 rounded-lg border p-3 text-left transition-all cursor-pointer",
+                        isCurrent
+                          ? "border-primary bg-primary/10 shadow-xs"
+                          : "border-border/70 bg-secondary/30 hover:bg-secondary hover:border-border",
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-sm shrink-0">{agentObj.icon}</span>
+                          <span className="text-xs font-semibold text-foreground truncate">
+                            {agentObj.name}
+                          </span>
+                          {isCurrent && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 border-primary/40 text-primary font-mono shrink-0">
+                              Active
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[10px] text-muted-foreground font-mono">
+                            {dateStr}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={(e) => handleDeleteConversation(e, conv.id)}
+                            className="h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                            title="Delete conversation"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      <p className="line-clamp-2 text-xs text-muted-foreground group-hover:text-foreground transition-colors leading-relaxed">
+                        {conv.title || conv.last_message || `Conversation ${conv.id.slice(0, 8)}...`}
+                      </p>
+
+                      {isLoadingThis && (
+                        <div className="absolute inset-0 bg-background/80 backdrop-blur-xs flex items-center justify-center rounded-lg">
+                          <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Messages List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
               <div className="rounded-2xl bg-secondary/80 p-4 shadow-inner">
@@ -1251,6 +1503,8 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* Right Artifact Canvas Sidebar */}

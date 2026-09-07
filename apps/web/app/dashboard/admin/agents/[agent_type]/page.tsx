@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { listAgentActions, listConversations, listAgents, type AgentActionAuditItem } from "@/lib/orchestrator-api"
 
 // ─── Types (mirror backend contracts) ───────────────────────────────────────
 // AgentInfo: services/agent_orchestrator/schemas.py (via GET /api/orchestrator/agents list)
@@ -126,15 +127,8 @@ function ActionTrailTab({ agentType }: { agentType: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(
-          `/api/orchestrator/agents/actions?agent_type=${encodeURIComponent(agentType)}&limit=200`,
-          { cache: "no-store" }
-        )
-        if (!res.ok) throw new Error(`Failed to load action trail: ${res.status}`)
-        const json: unknown = await res.json()
-        const arr = (json as { items?: unknown }).items
-        if (!Array.isArray(arr)) throw new Error("Unexpected actions response shape")
-        if (!cancelled) setItems(arr as ActionItem[])
+        const data = await listAgentActions({ agentType, limit: 200 })
+        if (!cancelled) setItems((data.items || []) as ActionItem[])
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load action trail")
       } finally {
@@ -257,15 +251,8 @@ function ConversationsTab({ agentType }: { agentType: string }) {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch(
-          `/api/orchestrator/conversations?agent_type=${encodeURIComponent(agentType)}&page=1&page_size=20`,
-          { cache: "no-store" }
-        )
-        if (!res.ok) throw new Error(`Failed to load conversations: ${res.status}`)
-        const json: unknown = await res.json()
-        const arr = (json as { items?: unknown }).items
-        if (!Array.isArray(arr)) throw new Error("Unexpected conversations response shape")
-        if (!cancelled) setItems(arr as ConversationItem[])
+        const data = await listConversations(agentType, 1, 50)
+        if (!cancelled) setItems((data.items || []) as unknown as ConversationItem[])
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load conversations")
       } finally {
@@ -805,11 +792,8 @@ export default function AgentDetailPage() {
     let cancelled = false
     async function load() {
       try {
-        const res = await fetch("/api/orchestrator/agents", { cache: "no-store" })
-        if (!res.ok) throw new Error(`Failed to load agents: ${res.status}`)
-        const json: unknown = await res.json()
-        if (!Array.isArray(json)) throw new Error("Unexpected agents response shape")
-        const found = (json as AgentInfo[]).find((a) => a.agent_type === agentType) ?? null
+        const list = await listAgents()
+        const found = (list || []).find((a) => a.agent_type === agentType) ?? null
         if (!cancelled) setAgent(found)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load agent")
