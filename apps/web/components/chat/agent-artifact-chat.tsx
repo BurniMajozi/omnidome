@@ -50,14 +50,33 @@ const DEFAULT_TEAM_USERS = [
   { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
 ]
 
-const AGENT_ITEMS = Object.entries(AGENT_CATALOG).map(([key, info]) => ({
-  id: `agent-${key}`,
-  name: info.name,
-  role: info.description,
-  agent_type: key,
-  isAgent: true,
-  icon: info.icon,
-}))
+const AVAILABLE_AGENTS = [
+  { id: "customer_facing", name: "DomeBot", icon: "🤖", role: "Customer & Ops", description: "Handles balances, invoices, coverage checks, ticket creation" },
+  { id: "executive", name: "InsightDome", icon: "📊", role: "Executive & Finance", description: "MRR, churn, ARPU, executive summaries & pipeline metrics" },
+  { id: "retention", name: "ChurnGuard", icon: "🛡️", role: "Retention & Churn", description: "Predicts customer churn risk and retention playbooks" },
+  { id: "provisioning", name: "ProvisionBot", icon: "⚡", role: "Provisioning", description: "Onboarding automation, accounts & service provisioning" },
+  { id: "support", name: "SupportBot", icon: "🔧", role: "Support Diagnostics", description: "Customer 360° diagnostics and ticket troubleshooting" },
+  { id: "assistant", name: "OmniAssist", icon: "✨", role: "Claude Assistant", description: "Versatile assistant: code, documentation, plans into canvas" },
+]
+
+const AGENT_ITEMS = [
+  ...AVAILABLE_AGENTS.map((a) => ({
+    id: `agent-${a.id}`,
+    name: a.name,
+    role: a.description,
+    agent_type: a.id,
+    isAgent: true,
+    icon: a.icon,
+  })),
+  {
+    id: "agent-insightbot-alias",
+    name: "InsightBot",
+    role: "Executive briefings & MRR",
+    agent_type: "executive",
+    isAgent: true,
+    icon: "📊",
+  },
+]
 
 const PLATFORM_COMPONENTS = [
   "sales", "marketing", "crm", "finance", "network", "support",
@@ -138,6 +157,7 @@ export function AgentArtifactChat({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0].id)
+  const [selectedAgent, setSelectedAgent] = useState("customer_facing")
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [history, setHistory] = useState<{ role: string; content: string }[]>([])
@@ -147,6 +167,8 @@ export function AgentArtifactChat({
   const [copied, setCopied] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const currentAgent = AVAILABLE_AGENTS.find((a) => a.id === selectedAgent) ?? AVAILABLE_AGENTS[0]
 
   // ── @mention (team + agents) / /component / #channel autocomplete ──
   const lastToken = input.split(/\s/).pop() ?? ""
@@ -181,10 +203,13 @@ export function AgentArtifactChat({
     (slashActive && slashMatches.length > 0) ||
     (hashActive && hashMatches.length > 0)
 
-  const applyAutocomplete = (prefix: "@" | "/" | "#", value: string) => {
+  const applyAutocomplete = (prefix: "@" | "/" | "#", value: string, agentType?: string) => {
     const idx = input.lastIndexOf(lastToken)
     const next = input.slice(0, idx) + prefix + value + " "
     setInput(next)
+    if (agentType) {
+      setSelectedAgent(agentType)
+    }
     setTimeout(() => inputRef.current?.focus(), 20)
   }
 
@@ -269,7 +294,7 @@ export function AgentArtifactChat({
     try {
       await invokeAgentAGUI(
         {
-          agent_type: "assistant",
+          agent_type: selectedAgent,
           message: text,
           context: { channel_id: channelId, channel_name: channelName, history },
           stream_tokens: true,
@@ -287,7 +312,7 @@ export function AgentArtifactChat({
       setSending(false)
       setMessages((p) => p.map((m) => (m.id === aId ? { ...m, streaming: false } : m)))
     }
-  }, [input, sending, channelId, channelName, history])
+  }, [input, sending, channelId, channelName, history, selectedAgent])
 
   const artifactValue = (a: Artifact) => artifactEdits[a.id] ?? a.code
   const active = activeArtifact ? artifactsById[activeArtifact] : null
@@ -405,7 +430,7 @@ export function AgentArtifactChat({
                       <button
                         key={u.id}
                         type="button"
-                        onClick={() => applyAutocomplete("@", u.name.replace(/\s+/g, ""))}
+                        onClick={() => applyAutocomplete("@", u.name.replace(/\s+/g, ""), u.agent_type)}
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
                       >
                         <Avatar className="h-6 w-6">
@@ -477,7 +502,7 @@ export function AgentArtifactChat({
                     e.preventDefault()
                     if (autocompleteOpen) {
                       if (mentionActive && mentionMatches[0]) {
-                        applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
+                        applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""), (mentionMatches[0] as any).agent_type)
                       } else if (hashActive && hashMatches[0]) {
                         applyAutocomplete("#", hashMatches[0].name)
                       } else if (slashActive && slashMatches[0]) {
@@ -497,21 +522,45 @@ export function AgentArtifactChat({
             {/* Bottom Claude Action Bar */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2 px-1">
               <div className="flex items-center gap-1.5">
-                {/* Bypass Permissions toggle */}
-                <button
-                  type="button"
-                  onClick={() => setBypassPermissions(!bypassPermissions)}
-                  className={cn(
-                    "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
-                    bypassPermissions
-                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                      : "bg-secondary text-muted-foreground hover:text-foreground",
-                  )}
-                  title="Auto-approve tool calls without confirmation prompt"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>Bypass permissions</span>
-                </button>
+                {/* Agent Selector Dropdown (Replaces Bypass permissions) */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 rounded-md border border-border/80 bg-secondary/80 px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-secondary hover:border-primary/40 transition-all shadow-sm"
+                      title="Select active agent (DomeBot, InsightDome, etc.)"
+                    >
+                      <span className="text-sm leading-none">{currentAgent.icon}</span>
+                      <span className="text-primary font-bold">{currentAgent.name}</span>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground ml-0.5" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-64 p-1.5 z-50">
+                    <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Switch Active Agent
+                    </div>
+                    {AVAILABLE_AGENTS.map((agent) => (
+                      <DropdownMenuItem
+                        key={agent.id}
+                        onClick={() => setSelectedAgent(agent.id)}
+                        className={cn(
+                          "flex items-start gap-2.5 px-2 py-1.5 cursor-pointer rounded-md text-xs",
+                          selectedAgent === agent.id ? "bg-primary/15 text-primary font-medium" : "text-foreground hover:bg-secondary",
+                        )}
+                      >
+                        <span className="text-base leading-none mt-0.5">{agent.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="font-semibold">{agent.name}</span>
+                            <span className="text-[10px] text-muted-foreground font-mono">{agent.role}</span>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground truncate mt-0.5">{agent.description}</p>
+                        </div>
+                        {selectedAgent === agent.id && <Check className="h-3.5 w-3.5 text-primary shrink-0 ml-1 mt-0.5" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
 
                 <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Add file attachment">
                   <Plus className="h-4 w-4" />

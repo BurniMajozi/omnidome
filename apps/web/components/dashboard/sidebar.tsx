@@ -31,14 +31,13 @@ import {
   ServerCog,
   Bot,
   Workflow,
+  ExternalLink,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 const navItems = [
-  { icon: MessageSquare, label: "Communication", href: "/dashboard/comms", section: "communication" },
-  { icon: Bot, label: "Agent Manager", href: "/dashboard/admin/agents", section: "agent-manager" },
-  { icon: Workflow, label: "Workflows", href: "/dashboard/admin/workflows", section: "workflows" },
+  { icon: MessageSquare, label: "Communication", href: "/dashboard/comms", section: "communication", openInNewTab: true },
   { icon: LayoutDashboard, label: "Overview", href: "#overview", section: "overview" },
   { icon: DollarSign, label: "Sales", href: "#sales", section: "sales" },
   { icon: Megaphone, label: "Marketing", href: "#marketing", section: "marketing" },
@@ -55,7 +54,17 @@ const navItems = [
   { icon: Radio, label: "IoT & Devices", href: "#iot", section: "iot" },
   { icon: Wifi, label: "Network", href: "#network", section: "network" },
   { icon: Globe, label: "Portal Management", href: "#portal", section: "portal" },
-  { icon: ServerCog, label: "Admin", href: "#admin", section: "admin" },
+  {
+    icon: ServerCog,
+    label: "Admin",
+    href: "#admin",
+    section: "admin",
+    children: [
+      { label: "Admin Console", target: "admin-overview" },
+      { label: "Agent Manager", href: "/dashboard/admin/agents" },
+      { label: "Workflows", href: "/dashboard/admin/workflows" },
+    ],
+  },
   // Not in the requested order — kept at the bottom so it isn't lost.
   { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
 ]
@@ -87,6 +96,7 @@ export function Sidebar({
   const isCollapsed = collapsed && !mobileOpen
   const [retentionOpen, setRetentionOpen] = useState(true)
   const [portalOpen, setPortalOpen] = useState(true)
+  const [adminOpen, setAdminOpen] = useState(true)
   const visibleNavItems = navItems.filter((item) => {
     // Items with real routes (not hash anchors) are always visible
     if (item.href.startsWith("/")) return true
@@ -109,34 +119,37 @@ export function Sidebar({
           <div className="flex items-center gap-3 group cursor-pointer">
             <img src="/logo-new.svg" alt="OmniDome Logo" className="h-12 w-12 transition-all group-hover:scale-110" />
             <div className="flex flex-col">
-              <span className="font-bold text-xl tracking-tight text-white">OmniDome</span>
+              <span className="font-extrabold text-xl tracking-tight text-foreground group-hover:text-primary transition-colors">
+                OmniDome
+              </span>
+              <span className="text-[10px] uppercase font-bold tracking-widest text-muted-foreground">
+                Telecom Cloud OS
+              </span>
             </div>
           </div>
         )}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           <Button
             variant="ghost"
             size="icon"
-            onClick={onMobileClose}
-            className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary md:hidden"
-            title="Close sidebar"
+            className="hidden md:flex h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={() => setCollapsed(!collapsed)}
           >
-            <X className="h-4 w-4" />
+            {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </Button>
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setCollapsed(!collapsed)}
-            className="hidden h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-secondary md:inline-flex"
-            title="Collapse sidebar"
+            className="md:hidden h-8 w-8 text-muted-foreground hover:text-foreground"
+            onClick={onMobileClose}
           >
-            {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+            <X className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
       {!isCollapsed && (
-        <div className="p-4">
+        <div className="p-3">
           <div className="relative group">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground group-focus-within:text-primary transition-colors" />
             <input
@@ -153,7 +166,7 @@ export function Sidebar({
           const isActive = activeSection === section
           const hasChildren = Array.isArray(item.children) && item.children.length > 0
           const isOpen =
-            section === "retention" ? retentionOpen : section === "portal" ? portalOpen : false
+            section === "retention" ? retentionOpen : section === "portal" ? portalOpen : section === "admin" ? adminOpen : false
           const activeChild =
             section === "retention"
               ? activeSubSections?.retention
@@ -165,6 +178,12 @@ export function Sidebar({
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => {
+                    // Items marked openInNewTab or comms open in a separate window/tab
+                    if ((item as any).openInNewTab || item.href === "/dashboard/comms") {
+                      window.open(item.href, "_blank", "noopener,noreferrer")
+                      onMobileClose()
+                      return
+                    }
                     // Items with a real path (starts with "/") navigate to that route
                     if (item.href.startsWith("/")) {
                       router.push(item.href)
@@ -174,6 +193,7 @@ export function Sidebar({
                     onSectionChange(section)
                     if (section === "retention") setRetentionOpen(true)
                     if (section === "portal") setPortalOpen(true)
+                    if (section === "admin") setAdminOpen(true)
                     onMobileClose()
                   }}
                   title={isCollapsed ? item.label : undefined}
@@ -192,7 +212,10 @@ export function Sidebar({
                     <item.icon className="h-[18px] w-[18px] shrink-0" />
                   </div>
                   {!isCollapsed && <span className="tracking-tight">{item.label}</span>}
-                  {isActive && !isCollapsed && (
+                  {!isCollapsed && (item as any).openInNewTab && (
+                    <ExternalLink className="ml-auto h-3.5 w-3.5 text-muted-foreground opacity-60 group-hover:opacity-100 transition-opacity" />
+                  )}
+                  {isActive && !isCollapsed && !(item as any).openInNewTab && (
                     <div className="ml-auto h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_10px_rgba(var(--primary),1)]" />
                   )}
                 </button>
@@ -204,6 +227,7 @@ export function Sidebar({
                     onClick={() => {
                       if (section === "retention") setRetentionOpen((prev) => !prev)
                       if (section === "portal") setPortalOpen((prev) => !prev)
+                      if (section === "admin") setAdminOpen((prev) => !prev)
                     }}
                     title="Toggle section"
                   >
@@ -213,12 +237,17 @@ export function Sidebar({
               </div>
               {hasChildren && !isCollapsed && isOpen && (
                 <div className="ml-11 space-y-1">
-                  {item.children?.map((child) => {
+                  {item.children?.map((child: any) => {
                     const isChildActive = activeChild === child.target
                     return (
                       <button
-                        key={child.target}
+                        key={child.target || child.href}
                         onClick={() => {
+                          if (child.href) {
+                            router.push(child.href)
+                            onMobileClose()
+                            return
+                          }
                           if (onSubSectionSelect) {
                             onSubSectionSelect(section, child.target)
                           } else {

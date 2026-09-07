@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   Activity,
   Building2,
@@ -15,6 +16,9 @@ import {
   ToggleRight,
   Users,
   XCircle,
+  Bot,
+  Workflow,
+  ArrowRight,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -58,6 +62,7 @@ function DataRow({ label, value }: { label: string; value: string | number }) {
 }
 
 export function AdminModule() {
+  const router = useRouter()
   const [tenants, setTenants] = useState<Tenant[]>([])
   const [modules, setModules] = useState<ModuleCatalogItem[]>([])
   const [tenantModules, setTenantModules] = useState<ModuleCatalogItem[]>([])
@@ -138,10 +143,30 @@ export function AdminModule() {
         title="Platform Administration"
         subtitle="Tenant, module, user, audit, and commercial control plane"
         actions={
-          <Button variant="outline" size="sm" onClick={() => void loadAdminData()} disabled={loading}>
-            <RefreshCw className="h-3.5 w-3.5" />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push("/dashboard/admin/agents")}
+              className="border-cyan-500/30 hover:bg-cyan-500/10 text-foreground"
+            >
+              <Bot className="mr-1.5 h-3.5 w-3.5 text-cyan-400" />
+              Agent Manager
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push("/dashboard/admin/workflows")}
+              className="border-purple-500/30 hover:bg-purple-500/10 text-foreground"
+            >
+              <Workflow className="mr-1.5 h-3.5 w-3.5 text-purple-400" />
+              Workflows
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void loadAdminData()} disabled={loading}>
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          </div>
         }
       />
 
@@ -150,6 +175,45 @@ export function AdminModule() {
           <CardContent className="p-4 text-sm text-red-400">{error}</CardContent>
         </Card>
       )}
+
+      {/* Admin Modules Quick Launch */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card
+          onClick={() => router.push("/dashboard/admin/agents")}
+          className="group cursor-pointer border-cyan-500/30 bg-gradient-to-br from-cyan-500/10 via-card to-card hover:border-cyan-500/60 transition-all shadow-sm"
+        >
+          <CardContent className="flex items-center justify-between p-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-cyan-500/20 p-2.5 text-cyan-400 group-hover:scale-105 transition-transform">
+                <Bot className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="font-semibold text-foreground group-hover:text-cyan-400 transition-colors">Agent Manager</p>
+                <p className="text-xs text-muted-foreground">Manage autonomous agents, orchestrator tools, and AG-UI configuration</p>
+              </div>
+            </div>
+            <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-cyan-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
+          </CardContent>
+        </Card>
+
+        <Card
+          onClick={() => router.push("/dashboard/admin/workflows")}
+          className="group cursor-pointer border-purple-500/30 bg-gradient-to-br from-purple-500/10 via-card to-card hover:border-purple-500/60 transition-all shadow-sm"
+        >
+          <CardContent className="flex items-center justify-between p-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-purple-500/20 p-2.5 text-purple-400 group-hover:scale-105 transition-transform">
+                <Workflow className="h-6 w-6" />
+              </div>
+              <div>
+                <p className="font-semibold text-foreground group-hover:text-purple-400 transition-colors">Workflows</p>
+                <p className="text-xs text-muted-foreground">Configure automated business workflows, triggers, and state machine transitions</p>
+              </div>
+            </div>
+            <ArrowRight className="h-5 w-5 text-muted-foreground group-hover:text-purple-400 group-hover:translate-x-1 transition-all shrink-0 ml-2" />
+          </CardContent>
+        </Card>
+      </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
