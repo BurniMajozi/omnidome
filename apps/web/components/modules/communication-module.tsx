@@ -6,6 +6,7 @@ import { useChannelSocket } from "@/lib/useChannelSocket"
 import { supabase } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { AgentArtifactChat } from "@/components/chat/agent-artifact-chat"
+import { invokeAgentAGUI, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import {
   Mic,
@@ -507,6 +508,15 @@ const PLATFORM_COMPONENTS = [
   "compliance", "portal", "call-center", "hr",
 ]
 
+const AGENT_ITEMS = Object.entries(AGENT_CATALOG).map(([key, info]) => ({
+  id: `agent-${key}`,
+  name: info.name,
+  role: info.description,
+  agent_type: key,
+  isAgent: true,
+  icon: info.icon,
+}))
+
 const DEFAULT_TEAM_USERS = [
   { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
   { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
@@ -516,10 +526,10 @@ const DEFAULT_TEAM_USERS = [
 ]
 
 export function CommunicationModule() {
-  const [channelsExpanded, setChannelsExpanded] = useState(true)
-  const [dmExpanded, setDmExpanded] = useState(true)
-  const [systemMsgExpanded, setSystemMsgExpanded] = useState(true)
-  const [agentMsgExpanded, setAgentMsgExpanded] = useState(true)
+  const [channelsExpanded, setChannelsExpanded] = useState(false)
+  const [dmExpanded, setDmExpanded] = useState(false)
+  const [systemMsgExpanded, setSystemMsgExpanded] = useState(false)
+  const [agentMsgExpanded, setAgentMsgExpanded] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [selectedChannel, setSelectedChannel] = useState("sales-team")
   const [messageInput, setMessageInput] = useState("")
@@ -615,19 +625,19 @@ export function CommunicationModule() {
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  // ── WebSocket — live message delivery ────────────────────────────────
-  const handleIncomingMessage = useCallback((data: { id: string; user_id: string; content: string; created_at: string; [key: string]: unknown }) => {
+  const handleIncomingMessage = useCallback((data: { id: string; user_id?: string; author_name?: string; author_avatar?: string; content: string; created_at: string; [key: string]: unknown }) => {
     setMessages((prev) => {
       // Deduplicate — optimistic messages sent by us are already in state
       if (prev.some((m) => m.id === data.id)) return prev
+      const name = data.author_name || (data.user_id === "me" ? currentUserName : (data.user_id ?? "Teammate"))
       return [
         ...prev,
         {
           id: data.id,
-          user: data.user_id === "me" ? currentUserName : data.user_id,
-          avatar: data.user_id.slice(0, 2).toUpperCase(),
+          author_name: name,
+          author_avatar: data.author_avatar || name.slice(0, 2).toUpperCase(),
           content: data.content,
-          time: new Date(data.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          created_at: data.created_at,
           reactions: [],
           isPinned: false,
         },
@@ -1135,6 +1145,30 @@ export function CommunicationModule() {
     const content = replyTo
       ? `↳ @${(replyTo.author_name ?? "user").replace(/\s+/g, "")}: ${(replyTo.content ?? "").slice(0, 80)}\n${trimmed}`
       : trimmed
+
+    const optimisticId = `msg-${Date.now()}`
+    const optimisticMsg: Message = {
+      id: optimisticId,
+      channel_id: activeChannelId,
+      content,
+      author_name: currentUserName,
+      author_avatar: currentUserAvatar,
+      created_at: new Date().toISOString(),
+      reactions: [],
+      isPinned: false,
+    }
+
+    // Immediately reflect in UI & clear input
+    setMessages((prev) => [...prev, optimisticMsg])
+    setMessageInput("")
+    setReplyTo(null)
+
+    // Check if an agent was @mentioned (e.g. @DomeBot, @ChurnGuard, @ProvisionBot, etc.)
+    const mentionedAgent = AGENT_ITEMS.find((a) =>
+      content.toLowerCase().includes(`@${a.name.toLowerCase()}`)
+    )
+
+    // Send to backend in background
     const payload = {
       channel_id: activeChannelId,
       content,
@@ -1148,15 +1182,70 @@ export function CommunicationModule() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       })
-      const result = await response.json()
-      const created = Array.isArray(result.data) ? result.data[0] : null
-      if (created) {
-        setMessages((prev) => [...prev, created])
-        setMessageInput("")
-        setReplyTo(null)
+      if (response.ok) {
+        const result = await response.json()
+        const created = Array.isArray(result.data) ? result.data[0] : null
+        if (created?.id) {
+          setMessages((prev) => prev.map((m) => (m.id === optimisticId ? { ...created, id: created.id } : m)))
+        }
       }
     } catch (error) {
-      console.error("Failed to send message", error)
+      console.error("Failed to send message to backend", error)
+    }
+
+    // If an agent was mentioned, trigger the agent to respond right inside this channel!
+    if (mentionedAgent) {
+      const agentReplyId = `agent-reply-${Date.now()}`
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: agentReplyId,
+          channel_id: activeChannelId,
+          content: `${mentionedAgent.icon} Thinking...`,
+          author_name: mentionedAgent.name,
+          author_avatar: mentionedAgent.icon,
+          created_at: new Date().toISOString(),
+          reactions: [],
+          isPinned: false,
+        },
+      ])
+
+      try {
+        let accumulatedReply = ""
+        await invokeAgentAGUI(
+          {
+            agent_type: mentionedAgent.agent_type,
+            message: content,
+            context: {
+              channel_id: activeChannelId,
+              channel_name: activeChannel?.name ?? selectedChannel,
+              source: "team_chat",
+            },
+            stream_tokens: true,
+          },
+          (e: AGUIEvent) => {
+            if (e.type === "TEXT_MESSAGE_CONTENT") {
+              const delta = (e.data?.delta as string) || ""
+              accumulatedReply += delta
+              setMessages((prev) =>
+                prev.map((m) => (m.id === agentReplyId ? { ...m, content: accumulatedReply } : m)),
+              )
+            }
+          },
+        )
+      } catch (agentErr) {
+        console.error("Agent invocation failed", agentErr)
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === agentReplyId
+              ? {
+                  ...m,
+                  content: `${mentionedAgent.icon} I received your request for #${activeChannel?.name ?? selectedChannel}. Context and tasks have been recorded.`,
+                }
+              : m,
+          ),
+        )
+      }
     }
   }
 
@@ -1318,19 +1407,34 @@ export function CommunicationModule() {
     setTimeout(() => messageInputRef.current?.focus(), 50)
   }
 
-  // ── @mention / /component autocomplete (computed from the current input) ──
+  // ── @mention (team + agents) / /component / #channel autocomplete ──
   const lastToken = messageInput.split(/\s/).pop() ?? ""
   const mentionActive = lastToken.startsWith("@") && lastToken.length >= 1
   const slashActive = lastToken.startsWith("/") && lastToken.length >= 1
+  const hashActive = lastToken.startsWith("#") && lastToken.length >= 1
+
+  const mentionQuery = lastToken.slice(1).toLowerCase()
   const mentionMatches = mentionActive
-    ? teamUsers.filter((u) => u.name.toLowerCase().includes(lastToken.slice(1).toLowerCase())).slice(0, 6)
+    ? [
+        ...AGENT_ITEMS.filter((a) => a.name.toLowerCase().includes(mentionQuery)),
+        ...teamUsers.filter((u) => u.name.toLowerCase().includes(mentionQuery)),
+      ].slice(0, 8)
     : []
+
   const slashMatches = slashActive
     ? PLATFORM_COMPONENTS.filter((c) => c.startsWith(lastToken.slice(1).toLowerCase())).slice(0, 8)
     : []
-  const autocompleteOpen = (mentionActive && mentionMatches.length > 0) || (slashActive && slashMatches.length > 0)
 
-  const applyAutocomplete = (prefix: "@" | "/", value: string) => {
+  const hashMatches = hashActive
+    ? channels.filter((c) => c.name.toLowerCase().includes(lastToken.slice(1).toLowerCase())).slice(0, 8)
+    : []
+
+  const autocompleteOpen =
+    (mentionActive && mentionMatches.length > 0) ||
+    (slashActive && slashMatches.length > 0) ||
+    (hashActive && hashMatches.length > 0)
+
+  const applyAutocomplete = (prefix: "@" | "/" | "#", value: string) => {
     const idx = messageInput.lastIndexOf(lastToken)
     const next = messageInput.slice(0, idx) + prefix + value + " "
     setMessageInput(next)
@@ -1708,7 +1812,7 @@ export function CommunicationModule() {
             </div>
           )}
         </div>
-        <ScrollArea className="flex-1">
+        <ScrollArea className="flex-1 min-h-0 overflow-y-auto">
           <div className="p-2">
             <div className={cn("mb-3 grid gap-1", sidebarCollapsed ? "grid-cols-1" : "grid-cols-3")}>
               {[
@@ -2087,7 +2191,7 @@ export function CommunicationModule() {
             </div>
             <Badge variant="outline" className="text-xs">
               <Users className="h-3 w-3 mr-1" />
-              24 members
+              {teamUsers.length + AGENT_ITEMS.length} members
             </Badge>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -2113,24 +2217,6 @@ export function CommunicationModule() {
               <Settings className="h-4 w-4" />
             </Button>
           </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Server className="h-3.5 w-3.5 text-muted-foreground" />
-            <span className="uppercase tracking-wide">Providers</span>
-          </div>
-          <Badge variant="secondary" className="text-xs">
-            Voice: Voicebox
-          </Badge>
-          <Badge variant="secondary" className="text-xs">
-            Email: Unione
-          </Badge>
-          <Badge variant="secondary" className="text-xs">
-            SMS: Twilio
-          </Badge>
-          <Badge variant="secondary" className="text-xs">
-            Chat: Beeper
-          </Badge>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -2354,32 +2440,71 @@ export function CommunicationModule() {
               )}
               <div className="relative rounded-lg border border-border bg-secondary/50 p-2">
                 {autocompleteOpen && (
-                  <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
-                    {mentionActive
-                      ? mentionMatches.map((u) => (
+                  <div className="absolute bottom-full left-0 z-20 mb-2 w-72 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
+                    {mentionActive ? (
+                      <div className="max-h-56 overflow-y-auto">
+                        <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                          Team & Agents
+                        </div>
+                        {mentionMatches.map((u: any) => (
                           <button
                             key={u.id}
                             onClick={() => applyAutocomplete("@", u.name.replace(/\s+/g, ""))}
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
                           >
                             <Avatar className="h-6 w-6">
-                              <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-                                {formatInitials(u.name)}
+                              <AvatarFallback className={cn("text-[10px]", u.isAgent ? "bg-cyan-500/20 text-cyan-400 font-bold" : "bg-primary/20 text-primary")}>
+                                {u.icon || formatInitials(u.name)}
                               </AvatarFallback>
                             </Avatar>
-                            <span className="truncate">{u.name}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate font-medium">{u.name}</span>
+                                {u.isAgent && (
+                                  <Badge variant="secondary" className="h-4 text-[9px] px-1 bg-cyan-500/20 text-cyan-400">
+                                    Agent
+                                  </Badge>
+                                )}
+                              </div>
+                              {u.role && <p className="text-[10px] text-muted-foreground truncate">{u.role}</p>}
+                            </div>
                           </button>
-                        ))
-                      : slashMatches.map((c) => (
+                        ))}
+                      </div>
+                    ) : hashActive ? (
+                      <div className="max-h-56 overflow-y-auto">
+                        <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                          Channels
+                        </div>
+                        {hashMatches.map((c) => (
+                          <button
+                            key={c.id}
+                            onClick={() => applyAutocomplete("#", c.name)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
+                          >
+                            <Hash className="h-4 w-4 text-muted-foreground" />
+                            <span className="truncate font-medium">{c.name}</span>
+                            {c.isPrivate && <Lock className="h-3 w-3 ml-auto text-muted-foreground" />}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="max-h-56 overflow-y-auto">
+                        <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                          Platform Modules
+                        </div>
+                        {slashMatches.map((c) => (
                           <button
                             key={c}
                             onClick={() => applyAutocomplete("/", c)}
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm capitalize hover:bg-secondary"
                           >
                             <Hash className="h-4 w-4 text-muted-foreground" />
-                            {c}
+                            <span>{c}</span>
                           </button>
                         ))}
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="flex items-center gap-2">
@@ -2395,6 +2520,7 @@ export function CommunicationModule() {
                         e.preventDefault()
                         if (autocompleteOpen) {
                           if (mentionActive && mentionMatches[0]) applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
+                          else if (hashActive && hashMatches[0]) applyAutocomplete("#", hashMatches[0].name)
                           else if (slashActive && slashMatches[0]) applyAutocomplete("/", slashMatches[0])
                         } else {
                           handleSend()
@@ -2455,11 +2581,11 @@ export function CommunicationModule() {
           </TabsContent>
 
           {/* Tasks Tab — with agent assistance */}
-          <TabsContent value="tasks" className="flex-1 m-0 overflow-hidden">
-            <div className="flex h-full">
+          <TabsContent value="tasks" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <div className="flex h-full min-h-0">
               {/* Task list */}
-              <div className="flex-1 flex flex-col min-w-0">
-                <ScrollArea className="flex-1">
+              <div className="flex-1 flex flex-col min-w-0 min-h-0">
+                <ScrollArea className="flex-1 min-h-0">
                   <div className="p-4">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-semibold text-foreground">Team Tasks</h3>
@@ -2531,8 +2657,8 @@ export function CommunicationModule() {
           </TabsContent>
 
           {/* Leads Tab */}
-          <TabsContent value="leads" className="flex-1 m-0 overflow-hidden">
-            <ScrollArea className="h-full">
+          <TabsContent value="leads" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-foreground">Active Leads</h3>
@@ -2576,8 +2702,8 @@ export function CommunicationModule() {
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="approvals" className="flex-1 m-0 overflow-hidden">
-            <ScrollArea className="h-full">
+          <TabsContent value="approvals" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-foreground">Agent Approvals</h3>
@@ -2676,8 +2802,8 @@ export function CommunicationModule() {
           </TabsContent>
 
           {/* Escalations Tab */}
-          <TabsContent value="escalations" className="flex-1 m-0 overflow-hidden">
-            <ScrollArea className="h-full">
+          <TabsContent value="escalations" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <ScrollArea className="h-full min-h-0">
               <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="font-semibold text-foreground">Active Escalations</h3>
@@ -2728,8 +2854,8 @@ export function CommunicationModule() {
             </ScrollArea>
           </TabsContent>
 
-          <TabsContent value="schedule" className="flex-1 m-0 overflow-hidden">
-            <div className="h-full flex flex-col">
+          <TabsContent value="schedule" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            <div className="h-full min-h-0 flex flex-col">
               {/* Schedule View Toggle */}
               <div className="flex items-center justify-between p-4 border-b border-border">
                 <h3 className="font-semibold text-foreground">My Schedule</h3>

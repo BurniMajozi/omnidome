@@ -1,0 +1,15 @@
+.git/
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+__pycache__/
+**/__pycache__/
+*.pyc
+.hermes/
+brand_guidelines/
+docs/
+licenses/
+*.md
+!README.md
+eCommerce/

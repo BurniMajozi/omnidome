@@ -11,11 +11,35 @@
  * the agent is aware of what the team is doing.
  */
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { Bot, Send, Loader2, FileCode2, Copy, Check, PanelRightClose, X, Hash } from "lucide-react"
-import { invokeAgentAGUI, type AGUIEvent } from "@/lib/orchestrator-api"
+import {
+  Bot,
+  Send,
+  Loader2,
+  FileCode2,
+  Copy,
+  Check,
+  PanelRightClose,
+  X,
+  Hash,
+  Lock,
+  Sparkles,
+  Plus,
+  Mic,
+  MicOff,
+  ChevronDown,
+  ShieldCheck,
+} from "lucide-react"
+import { invokeAgentAGUI, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 
 const DEFAULT_TEAM_USERS = [
@@ -26,10 +50,25 @@ const DEFAULT_TEAM_USERS = [
   { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
 ]
 
+const AGENT_ITEMS = Object.entries(AGENT_CATALOG).map(([key, info]) => ({
+  id: `agent-${key}`,
+  name: info.name,
+  role: info.description,
+  agent_type: key,
+  isAgent: true,
+  icon: info.icon,
+}))
+
 const PLATFORM_COMPONENTS = [
   "sales", "marketing", "crm", "finance", "network", "support",
   "retention", "inventory", "billing", "analytics", "provisioning",
   "compliance", "portal", "call-center", "hr",
+]
+
+const CLAUDE_MODELS = [
+  { id: "opus-4.8", name: "Opus 4.8", badge: "Most Capable" },
+  { id: "claude-3-5-sonnet", name: "Claude 3.5 Sonnet", badge: "Recommended" },
+  { id: "qwen-2.5", name: "Qwen 2.5 Coder", badge: "Fast" },
 ]
 
 function formatInitials(name?: string) {
@@ -98,6 +137,9 @@ export function AgentArtifactChat({
   const [input, setInput] = useState("")
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0].id)
+  const [bypassPermissions, setBypassPermissions] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
   const [history, setHistory] = useState<{ role: string; content: string }[]>([])
   // Editable artifact store, keyed by artifact id (canvas edits live here).
   const [artifactEdits, setArtifactEdits] = useState<Record<string, string>>({})
@@ -106,19 +148,40 @@ export function AgentArtifactChat({
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // ── @mention / /component autocomplete ──
+  // ── @mention (team + agents) / /component / #channel autocomplete ──
   const lastToken = input.split(/\s/).pop() ?? ""
   const mentionActive = lastToken.startsWith("@") && lastToken.length >= 1
   const slashActive = lastToken.startsWith("/") && lastToken.length >= 1
+  const hashActive = lastToken.startsWith("#") && lastToken.length >= 1
+
+  const mentionQuery = lastToken.slice(1).toLowerCase()
   const mentionMatches = mentionActive
-    ? teamUsers.filter((u) => u.name.toLowerCase().includes(lastToken.slice(1).toLowerCase())).slice(0, 6)
+    ? [
+        ...AGENT_ITEMS.filter((a) => a.name.toLowerCase().includes(mentionQuery)),
+        ...teamUsers.filter((u) => u.name.toLowerCase().includes(mentionQuery)),
+      ].slice(0, 8)
     : []
+
   const slashMatches = slashActive
     ? PLATFORM_COMPONENTS.filter((c) => c.startsWith(lastToken.slice(1).toLowerCase())).slice(0, 8)
     : []
-  const autocompleteOpen = (mentionActive && mentionMatches.length > 0) || (slashActive && slashMatches.length > 0)
 
-  const applyAutocomplete = (prefix: "@" | "/", value: string) => {
+  const hashMatches = hashActive
+    ? [
+        { id: "c-general", name: "general" },
+        { id: "c-sales", name: "sales-team" },
+        { id: "c-support", name: "support-tickets" },
+        { id: "c-network", name: "network-alerts" },
+        { id: "c-marketing", name: "marketing" },
+      ].filter((c) => c.name.toLowerCase().includes(lastToken.slice(1).toLowerCase()))
+    : []
+
+  const autocompleteOpen =
+    (mentionActive && mentionMatches.length > 0) ||
+    (slashActive && slashMatches.length > 0) ||
+    (hashActive && hashMatches.length > 0)
+
+  const applyAutocomplete = (prefix: "@" | "/" | "#", value: string) => {
     const idx = input.lastIndexOf(lastToken)
     const next = input.slice(0, idx) + prefix + value + " "
     setInput(next)
@@ -247,6 +310,25 @@ export function AgentArtifactChat({
     <div className="flex h-full w-full min-h-0 flex-1 overflow-hidden">
       {/* Chat column */}
       <div className={cn("flex min-w-0 min-h-0 flex-1 flex-col overflow-hidden", canvasOpen ? "w-1/2 flex-none border-r border-border" : "flex-1")}>
+        {/* Claude Code Top Status Bar */}
+        <div className="flex flex-wrap items-center justify-between border-b border-border bg-secondary/30 px-4 py-2 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-foreground">omnidome</span>
+            <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0 bg-background/50">
+              railway-migration-phase1
+            </Badge>
+            <span className="font-mono text-[11px] text-emerald-400 font-semibold">+345</span>
+            <span className="font-mono text-[11px] text-red-400 font-semibold">-12</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary" className="text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+              <Sparkles className="h-2.5 w-2.5 mr-1" />
+              {channelName ? `#${channelName}` : "AI Copilot"}
+            </Badge>
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" title="Agent Online" />
+          </div>
+        </div>
+
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
@@ -308,12 +390,18 @@ export function AgentArtifactChat({
           {error && <div className="text-xs text-red-400">Error: {error}</div>}
           <div ref={endRef} />
         </div>
-        <div className="border-t border-border p-3">
-          <div className="relative flex items-center gap-2">
+
+        {/* Claude Code Style Chat Bar */}
+        <div className="border-t border-border bg-card/60 p-3">
+          <div className="relative rounded-2xl border border-border/80 bg-secondary/30 p-2 shadow-sm transition-all focus-within:border-primary/50 focus-within:bg-secondary/50">
             {autocompleteOpen && (
-              <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover shadow-xl">
-                {mentionActive
-                  ? mentionMatches.map((u) => (
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-72 overflow-hidden rounded-xl border border-border bg-popover shadow-xl">
+                {mentionActive ? (
+                  <div className="max-h-56 overflow-y-auto">
+                    <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                      Team & Autonomous Agents
+                    </div>
+                    {mentionMatches.map((u: any) => (
                       <button
                         key={u.id}
                         type="button"
@@ -321,14 +409,47 @@ export function AgentArtifactChat({
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
                       >
                         <Avatar className="h-6 w-6">
-                          <AvatarFallback className="bg-primary/20 text-primary text-[10px]">
-                            {formatInitials(u.name)}
+                          <AvatarFallback className={cn("text-[10px]", u.isAgent ? "bg-cyan-500/20 text-cyan-400 font-bold" : "bg-primary/20 text-primary")}>
+                            {u.icon || formatInitials(u.name)}
                           </AvatarFallback>
                         </Avatar>
-                        <span className="truncate">{u.name}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate font-medium">{u.name}</span>
+                            {u.isAgent && (
+                              <Badge variant="secondary" className="h-4 text-[9px] px-1 bg-cyan-500/20 text-cyan-400">
+                                Agent
+                              </Badge>
+                            )}
+                          </div>
+                          {u.role && <p className="text-[10px] text-muted-foreground truncate">{u.role}</p>}
+                        </div>
                       </button>
-                    ))
-                  : slashMatches.map((c) => (
+                    ))}
+                  </div>
+                ) : hashActive ? (
+                  <div className="max-h-56 overflow-y-auto">
+                    <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                      Channels
+                    </div>
+                    {hashMatches.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => applyAutocomplete("#", c.name)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-secondary"
+                      >
+                        <Hash className="h-4 w-4 text-muted-foreground" />
+                        <span className="truncate font-medium">{c.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="max-h-56 overflow-y-auto">
+                    <div className="px-3 py-1 text-[11px] font-semibold uppercase text-muted-foreground bg-muted/30">
+                      Platform Modules
+                    </div>
+                    {slashMatches.map((c) => (
                       <button
                         key={c}
                         type="button"
@@ -336,35 +457,118 @@ export function AgentArtifactChat({
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm capitalize hover:bg-secondary"
                       >
                         <Hash className="h-4 w-4 text-muted-foreground" />
-                        {c}
+                        <span>{c}</span>
                       </button>
                     ))}
+                  </div>
+                )}
               </div>
             )}
-            <Input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault()
-                  if (autocompleteOpen) {
-                    if (mentionActive && mentionMatches[0]) {
-                      applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
-                    } else if (slashActive && slashMatches[0]) {
-                      applyAutocomplete("/", slashMatches[0])
+
+            {/* Multiline textarea style */}
+            <div className="px-1 py-1">
+              <textarea
+                ref={inputRef as any}
+                rows={2}
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    if (autocompleteOpen) {
+                      if (mentionActive && mentionMatches[0]) {
+                        applyAutocomplete("@", mentionMatches[0].name.replace(/\s+/g, ""))
+                      } else if (hashActive && hashMatches[0]) {
+                        applyAutocomplete("#", hashMatches[0].name)
+                      } else if (slashActive && slashMatches[0]) {
+                        applyAutocomplete("/", slashMatches[0])
+                      }
+                    } else {
+                      void send()
                     }
-                  } else {
-                    void send()
                   }
-                }
-              }}
-              placeholder="Ask the agent to draft something… (use @ for team, / for components)"
-              disabled={sending}
-            />
-            <Button size="icon" onClick={() => void send()} disabled={sending || !input.trim()}>
-              {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            </Button>
+                }}
+                placeholder="Ask Claude / Agent anything… Type / for commands, @ for agents & team, # for channels"
+                className="w-full resize-none border-0 bg-transparent p-1 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
+                disabled={sending}
+              />
+            </div>
+
+            {/* Bottom Claude Action Bar */}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-2 px-1">
+              <div className="flex items-center gap-1.5">
+                {/* Bypass Permissions toggle */}
+                <button
+                  type="button"
+                  onClick={() => setBypassPermissions(!bypassPermissions)}
+                  className={cn(
+                    "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors",
+                    bypassPermissions
+                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                      : "bg-secondary text-muted-foreground hover:text-foreground",
+                  )}
+                  title="Auto-approve tool calls without confirmation prompt"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>Bypass permissions</span>
+                </button>
+
+                <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Add file attachment">
+                  <Plus className="h-4 w-4" />
+                </Button>
+
+                <Button
+                  variant={isRecording ? "destructive" : "ghost"}
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                  onClick={() => setIsRecording(!isRecording)}
+                  title="Voice input"
+                >
+                  {isRecording ? <MicOff className="h-4 w-4 animate-pulse" /> : <Mic className="h-4 w-4" />}
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {/* Model Selector Dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className="flex items-center gap-1.5 rounded-md border border-border bg-secondary/60 px-2.5 py-1 text-xs font-medium text-foreground hover:bg-secondary"
+                    >
+                      <Sparkles className="h-3.5 w-3.5 text-cyan-400" />
+                      <span>{CLAUDE_MODELS.find((m) => m.id === selectedModel)?.name ?? "Opus 4.8"}</span>
+                      <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-52">
+                    {CLAUDE_MODELS.map((m) => (
+                      <DropdownMenuItem
+                        key={m.id}
+                        onClick={() => setSelectedModel(m.id)}
+                        className="flex items-center justify-between text-xs cursor-pointer"
+                      >
+                        <span className="font-medium">{m.name}</span>
+                        <Badge variant="outline" className="text-[10px] px-1 py-0">{m.badge}</Badge>
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                <Badge variant="secondary" className="h-6 text-[10px] bg-emerald-500/15 text-emerald-400 font-mono">
+                  ● Ready
+                </Badge>
+
+                <Button
+                  size="icon"
+                  className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground"
+                  onClick={() => void send()}
+                  disabled={sending || !input.trim()}
+                >
+                  {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
