@@ -25,9 +25,11 @@ class AgentInvokeRequest(BaseModel):
     @classmethod
     def resolve_message_and_session(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            # Accept prompt as alias for message
+            # Accept prompt and message interchangeably
             if not data.get("message") and data.get("prompt"):
                 data["message"] = data["prompt"]
+            if not data.get("prompt") and data.get("message"):
+                data["prompt"] = data["message"]
             # Accept session_id if conversation_id is not set
             if not data.get("conversation_id") and data.get("session_id"):
                 try:

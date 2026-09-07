@@ -8,6 +8,8 @@ import { getSupabaseServer } from "@/lib/supabase/server"
 const ORCHESTRATOR_URL = process.env.ORCHESTRATOR_URL || "http://agent-orchestrator:8021"
 const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY || ""
+const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 // Resolves a verified Supabase session into this platform's {user_id, tenant_id}.
 // Returns null on any failure -- callers must drop identity headers entirely
@@ -59,6 +61,16 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
       headers.set("x-user-id", identity.userId)
       headers.set("x-tenant-id", identity.tenantId)
     }
+  }
+
+  // Fallback to client header or dev default if Supabase identity wasn't resolved
+  if (!headers.has("x-tenant-id")) {
+    const fallbackTenant = request.headers.get("x-tenant-id") || DEV_TENANT_ID
+    headers.set("x-tenant-id", fallbackTenant)
+  }
+  if (!headers.has("x-user-id")) {
+    const fallbackUser = request.headers.get("x-user-id") || DEV_USER_ID
+    headers.set("x-user-id", fallbackUser)
   }
 
   try {

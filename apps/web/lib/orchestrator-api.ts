@@ -45,6 +45,7 @@ export interface AgentMessage {
 export interface AgentInvokeRequest {
   agent_type: string
   message: string
+  prompt?: string
   context?: Record<string, unknown>
   tenant_id?: string
   conversation_id?: string
@@ -293,10 +294,15 @@ export async function listAgents(): Promise<AgentInfo[]> {
 }
 
 export async function invokeAgent(req: AgentInvokeRequest): Promise<AgentInvokeResponse> {
+  const payload = {
+    ...req,
+    prompt: req.prompt || req.message,
+    message: req.message || req.prompt,
+  }
   const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/invoke`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
     const err = await res.text()

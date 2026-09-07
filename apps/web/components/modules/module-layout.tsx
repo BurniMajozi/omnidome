@@ -19,6 +19,7 @@ import {
 import { useIsClient } from "@/lib/use-is-client"
 import { TableShell } from "@/components/ui/table-shell"
 import { cn } from "@/lib/utils"
+import { invokeAgent } from "@/lib/orchestrator-api"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -174,29 +175,20 @@ export function ModuleLayout({
     try {
       setActionFeedback(`Assigning to autonomous agent...`)
       const agentMsg = `Autonomous Action Request:\nTitle: ${rec.title}\nDescription: ${rec.description}\nCategory: ${rec.category}\nPlease evaluate and execute the necessary tools/data queries to fulfill this recommendation.`
-      const res = await fetch("/api/orchestrator/agents/invoke", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          agent_type: title.toLowerCase().includes("call") ? "call_center"
-            : title.toLowerCase().includes("product") ? "products"
-            : title.toLowerCase().includes("talent") || title.toLowerCase().includes("hr") ? "talent"
-            : title.toLowerCase().includes("analytic") ? "analytics"
-            : "executive",
-          message: agentMsg,
-          prompt: agentMsg,
-        }),
+      const agentType = title.toLowerCase().includes("call") ? "call_center"
+        : title.toLowerCase().includes("product") ? "products"
+        : title.toLowerCase().includes("talent") || title.toLowerCase().includes("hr") ? "talent"
+        : title.toLowerCase().includes("analytic") ? "analytics"
+        : "executive"
+      await invokeAgent({
+        agent_type: agentType,
+        message: agentMsg,
+        prompt: agentMsg,
       })
-      if (res.ok) {
-        setActionFeedback(`Agent dispatched to execute recommendation!`)
-        setTimeout(() => setActionFeedback(null), 3000)
-      } else {
-        const errData = await res.json().catch(() => null)
-        const errMsg = errData?.detail?.error || (typeof errData?.detail === "string" ? errData.detail : null) || `Status ${res.status}`
-        setActionFeedback(`Agent invocation issue: ${errMsg}`)
-      }
-    } catch (e) {
-      setActionFeedback("Error invoking agent orchestrator")
+      setActionFeedback(`Agent dispatched to execute recommendation!`)
+      setTimeout(() => setActionFeedback(null), 3000)
+    } catch (e: any) {
+      setActionFeedback(`Agent invocation issue: ${e?.message || "Error communicating with agent service"}`)
     }
   }
 
