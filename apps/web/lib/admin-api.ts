@@ -8,9 +8,29 @@
 const ADMIN_API = "/api/admin"
 
 async function fetchAdmin<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  }
+
+  // Attempt to attach Supabase session token if available
+  try {
+    const { supabase } = await import("@/lib/supabase/client")
+    if (supabase) {
+      const { data } = await supabase.auth.getSession()
+      if (data.session?.access_token) {
+        headers["Authorization"] = `Bearer ${data.session.access_token}`
+      }
+    }
+  } catch {
+    // Supabase browser client optional in dev/fallback mode
+  }
+
   const res = await fetch(`${ADMIN_API}${path}`, {
     cache: "no-store",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      ...headers,
+      ...init?.headers,
+    },
     ...init,
   })
   if (!res.ok) {
@@ -146,4 +166,25 @@ export const adminApi = {
     fetchAdmin<{ status: string }>(`/commission-tiers/${tierId}`, {
       method: "DELETE",
     }),
+
+  listRoles: () =>
+    fetchAdmin<{ id: string; name: string; description?: string; permissions?: string[] }[]>("/roles"),
+
+  inviteUser: (data: { email: string; name?: string; role_id?: string; password?: string; is_active?: boolean }) =>
+    fetchAdmin<AdminUser>("/users", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  assignUserRole: (userId: string, roleId: string) =>
+    fetchAdmin<{ status?: string; user_id: string; role_id: string }>(`/users/${userId}/roles`, {
+      method: "POST",
+      body: JSON.stringify({ role_id: roleId }),
+    }),
+
+  removeUserRole: (userId: string, roleId: string) =>
+    fetchAdmin<{ status?: string }>(`/users/${userId}/roles/${roleId}`, {
+      method: "DELETE",
+    }),
 }
+

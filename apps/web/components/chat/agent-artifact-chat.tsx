@@ -30,8 +30,22 @@ import {
   ShieldCheck,
   ThumbsUp,
   ThumbsDown,
+  History,
+  Trash2,
+  MessageSquare,
+  Search,
+  Clock,
 } from "lucide-react"
-import { invokeAgentAGUI, recordAgentFeedback, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
+import {
+  invokeAgentAGUI,
+  recordAgentFeedback,
+  listConversations,
+  getConversation,
+  deleteConversation,
+  type AGUIEvent,
+  type ConversationRead,
+  AGENT_CATALOG,
+} from "@/lib/orchestrator-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -168,6 +182,86 @@ export function AgentArtifactChat({
   const [copied, setCopied] = useState(false)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const [feedbackMap, setFeedbackMap] = useState<Record<string, "thumbs_up" | "thumbs_down">>({})
+  
+  // Conversation History state
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
+  const [conversationsList, setConversationsList] = useState<ConversationRead[]>([])
+  const [loadingHistory, setLoadingHistory] = useState(false)
+  const [loadingConvId, setLoadingConvId] = useState<string | null>(null)
+  const [historySearch, setHistorySearch] = useState("")
+
+  const loadHistory = useCallback(async () => {
+    setLoadingHistory(true)
+    try {
+      const res = await listConversations(undefined, 1, 50)
+      setConversationsList(res.items || [])
+    } catch (err) {
+      console.warn("Failed to load conversation history:", err)
+    } finally {
+      setLoadingHistory(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadHistory()
+  }, [loadHistory])
+
+  const handleSelectConversation = async (id: string) => {
+    setLoadingConvId(id)
+    try {
+      const data = await getConversation(id)
+      const loaded: Msg[] = []
+      for (const m of data.messages || []) {
+        if (m.role === "user") {
+          loaded.push({
+            id: m.id || `${id}-${loaded.length}`,
+            role: "user",
+            content: m.content || "",
+          })
+        } else if (m.role === "assistant") {
+          loaded.push({
+            id: m.id || `${id}-${loaded.length}`,
+            role: "assistant",
+            content: m.content || "",
+          })
+        }
+      }
+      setMessages(loaded)
+      setConversationId(data.id)
+      if (data.agent_type && AVAILABLE_AGENTS.some((a) => a.id === data.agent_type)) {
+        setSelectedAgent(data.agent_type)
+      }
+      setShowHistory(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load conversation")
+    } finally {
+      setLoadingConvId(null)
+    }
+  }
+
+  const handleNewChat = () => {
+    setMessages([])
+    setInput("")
+    setConversationId(null)
+    setError(null)
+    setActiveArtifact(null)
+    setShowHistory(false)
+  }
+
+  const handleDeleteConversation = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation()
+    try {
+      await deleteConversation(id)
+      setConversationsList((prev) => prev.filter((c) => c.id !== id))
+      if (conversationId === id) {
+        handleNewChat()
+      }
+    } catch (err) {
+      console.error("Failed to delete conversation:", err)
+    }
+  }
+
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -333,12 +427,17 @@ export function AgentArtifactChat({
           agent_type: selectedAgent,
           message: text,
           context: { channel_id: channelId, channel_name: channelName, history },
+          conversation_id: conversationId || undefined,
           stream_tokens: true,
         },
         (e: AGUIEvent) => {
           if (e.type === "TEXT_MESSAGE_CONTENT") {
             const delta = (e.data?.delta as string) || ""
             if (delta) setMessages((p) => p.map((m) => (m.id === aId ? { ...m, content: m.content + delta } : m)))
+          }
+          const convId = (e as any).conversation_id || (e.data as any)?.conversation_id
+          if (convId && typeof convId === "string") {
+            setConversationId(convId)
           }
         },
       )
@@ -347,8 +446,9 @@ export function AgentArtifactChat({
     } finally {
       setSending(false)
       setMessages((p) => p.map((m) => (m.id === aId ? { ...m, streaming: false } : m)))
+      void loadHistory()
     }
-  }, [input, sending, channelId, channelName, history, selectedAgent])
+  }, [input, sending, channelId, channelName, history, selectedAgent, conversationId, loadHistory])
 
   const artifactValue = (a: Artifact) => artifactEdits[a.id] ?? a.code
   const active = activeArtifact ? artifactsById[activeArtifact] : null
@@ -378,18 +478,176 @@ export function AgentArtifactChat({
             <Badge variant="outline" className="font-mono text-[10px] px-1.5 py-0 bg-background/50">
               railway-migration-phase1
             </Badge>
-            <span className="font-mono text-[11px] text-emerald-400 font-semibold">+345</span>
-            <span className="font-mono text-[11px] text-red-400 font-semibold">-12</span>
-          </div>
-          <div className="flex items-center gap-2">
             <Badge variant="secondary" className="text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
               <Sparkles className="h-2.5 w-2.5 mr-1" />
               {channelName ? `#${channelName}` : "AI Copilot"}
             </Badge>
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" title="Agent Online" />
           </div>
+          <div className="flex items-center gap-1.5">
+            <Button
+              variant={showHistory ? "secondary" : "ghost"}
+              size="sm"
+              className={cn(
+                "h-7 text-xs gap-1 px-2.5 text-muted-foreground hover:text-foreground",
+                showHistory && "bg-secondary text-foreground font-medium"
+              )}
+              onClick={() => {
+                setShowHistory((p) => !p)
+                if (!showHistory) void loadHistory()
+              }}
+              title="View Chat History"
+            >
+              <History className="h-3.5 w-3.5" />
+              <span>History</span>
+              {conversationsList.length > 0 && (
+                <Badge variant="outline" className="text-[10px] px-1 py-0 ml-0.5 font-mono">
+                  {conversationsList.length}
+                </Badge>
+              )}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1 px-2 text-muted-foreground hover:text-foreground"
+              onClick={handleNewChat}
+              title="Start New Chat"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New</span>
+            </Button>
+          </div>
         </div>
 
+        {showHistory ? (
+          <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3 bg-card/60">
+            <div className="flex items-center justify-between border-b border-border pb-2.5">
+              <div className="flex items-center gap-2">
+                <History className="h-4 w-4 text-cyan-400" />
+                <span className="text-sm font-semibold text-foreground">Past Conversations</span>
+                <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
+                  {conversationsList.length}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewChat}
+                  className="h-7 text-xs gap-1 px-2 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>New Chat</span>
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowHistory(false)}
+                  className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Filter */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search past conversations..."
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                className="h-8 pl-8 text-xs bg-background/80"
+              />
+            </div>
+
+            {loadingHistory ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-2 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin text-cyan-400" />
+                <span className="text-xs">Loading conversations...</span>
+              </div>
+            ) : conversationsList.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground gap-2">
+                <MessageSquare className="h-8 w-8 text-muted-foreground/40" />
+                <p className="text-xs font-medium text-foreground">No saved conversations yet</p>
+                <p className="text-[11px] text-muted-foreground max-w-[260px]">
+                  Messages exchanged with autonomous agents in this channel will be saved and listed here.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNewChat}
+                  className="mt-2 h-7 text-xs gap-1.5 border-cyan-500/40 text-cyan-400"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Start a conversation
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {conversationsList
+                  .filter((c) => {
+                    if (!historySearch.trim()) return true
+                    const q = historySearch.toLowerCase()
+                    const lastMsg = c.messages?.[c.messages.length - 1]?.content?.toLowerCase() || ""
+                    const agent = c.agent_type?.toLowerCase() || ""
+                    return lastMsg.includes(q) || agent.includes(q)
+                  })
+                  .map((conv) => {
+                    const isCurrent = conv.id === conversationId
+                    const isLoadingThis = loadingConvId === conv.id
+                    const lastMsg = conv.messages?.[conv.messages.length - 1]?.content || "No messages"
+                    const agentObj = AVAILABLE_AGENTS.find((a) => a.id === conv.agent_type) ?? AVAILABLE_AGENTS[0]
+                    return (
+                      <div
+                        key={conv.id}
+                        onClick={() => void handleSelectConversation(conv.id)}
+                        className={cn(
+                          "group relative flex cursor-pointer flex-col gap-1.5 rounded-lg border p-3 text-left transition-all hover:border-cyan-500/50 hover:bg-secondary/40",
+                          isCurrent ? "border-cyan-500 bg-cyan-500/10 shadow-sm" : "border-border bg-card/60"
+                        )}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs">{agentObj.icon}</span>
+                            <span className="text-xs font-semibold text-foreground">{agentObj.name}</span>
+                            {isCurrent && (
+                              <Badge variant="secondary" className="h-4 text-[9px] px-1 bg-cyan-500/20 text-cyan-400 font-mono">
+                                Active
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                              <Clock className="h-3 w-3" />
+                              {new Date(conv.updated_at || conv.created_at).toLocaleDateString(undefined, {
+                                month: "short",
+                                day: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-400 transition-opacity"
+                              onClick={(e) => void handleDeleteConversation(e, conv.id)}
+                              title="Delete conversation"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+                        <p className="line-clamp-2 text-xs text-muted-foreground font-mono">
+                          {isLoadingThis ? "Loading conversation..." : lastMsg}
+                        </p>
+                      </div>
+                    )
+                  })}
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-sm text-muted-foreground">
@@ -494,6 +752,7 @@ export function AgentArtifactChat({
           {error && <div className="text-xs text-red-400">Error: {error}</div>}
           <div ref={endRef} />
         </div>
+        )}
 
         {/* Claude Code Style Chat Bar */}
         <div className="border-t border-border bg-card/60 p-3">

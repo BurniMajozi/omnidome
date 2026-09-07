@@ -42,9 +42,11 @@ import {
   UserCog,
   Target,
   TrendingUp,
+  X,
 } from "lucide-react"
 import {
   listEmployees,
+  createEmployee,
   listLeaveRequests,
   approveLeave,
   declineLeave,
