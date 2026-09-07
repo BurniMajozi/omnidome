@@ -4,20 +4,45 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ── Agent Invocation ─────────────────────────────────────────────────────
 
 class AgentInvokeRequest(BaseModel):
-    agent_type: str = Field(..., description="Agent type: customer_facing, retention, provisioning, executive, support")
-    message: str = Field(..., min_length=1)
+    agent_type: str = Field(..., description="Agent type: customer_facing, retention, provisioning, executive, support, call_center, products, talent, analytics, assistant")
+    message: Optional[str] = Field(None, min_length=1)
+    prompt: Optional[str] = None
     context: Dict[str, Any] = Field(default_factory=dict)
     tenant_id: Optional[uuid.UUID] = None
     conversation_id: Optional[uuid.UUID] = Field(
         None,
         description="Existing conversation ID to continue. If omitted, a new conversation is created."
     )
+    session_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_message_and_session(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # Accept prompt as alias for message
+            if not data.get("message") and data.get("prompt"):
+                data["message"] = data["prompt"]
+            # Accept session_id if conversation_id is not set
+            if not data.get("conversation_id") and data.get("session_id"):
+                try:
+                    data["conversation_id"] = uuid.UUID(str(data["session_id"]))
+                except (ValueError, TypeError):
+                    pass
+        return data
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: Optional[str]) -> str:
+        if not v or not v.strip():
+            raise ValueError("message or prompt must not be empty")
+        return v
+
 
 
 class AgentInvokeResponse(BaseModel):

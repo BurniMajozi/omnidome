@@ -173,6 +173,7 @@ export function ModuleLayout({
   const handleAssignToAgent = async (rec: AIRecommendation) => {
     try {
       setActionFeedback(`Assigning to autonomous agent...`)
+      const agentMsg = `Autonomous Action Request:\nTitle: ${rec.title}\nDescription: ${rec.description}\nCategory: ${rec.category}\nPlease evaluate and execute the necessary tools/data queries to fulfill this recommendation.`
       const res = await fetch("/api/orchestrator/agents/invoke", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -182,14 +183,17 @@ export function ModuleLayout({
             : title.toLowerCase().includes("talent") || title.toLowerCase().includes("hr") ? "talent"
             : title.toLowerCase().includes("analytic") ? "analytics"
             : "executive",
-          prompt: `Autonomous Action Request:\nTitle: ${rec.title}\nDescription: ${rec.description}\nCategory: ${rec.category}\nPlease evaluate and execute the necessary tools/data queries to fulfill this recommendation.`,
+          message: agentMsg,
+          prompt: agentMsg,
         }),
       })
       if (res.ok) {
         setActionFeedback(`Agent dispatched to execute recommendation!`)
         setTimeout(() => setActionFeedback(null), 3000)
       } else {
-        setActionFeedback(`Agent invocation returned status ${res.status}`)
+        const errData = await res.json().catch(() => null)
+        const errMsg = errData?.detail?.error || (typeof errData?.detail === "string" ? errData.detail : null) || `Status ${res.status}`
+        setActionFeedback(`Agent invocation issue: ${errMsg}`)
       }
     } catch (e) {
       setActionFeedback("Error invoking agent orchestrator")
