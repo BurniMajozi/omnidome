@@ -105,19 +105,61 @@ class Agent:
                     except (json.JSONDecodeError, TypeError):
                         tool_args = {}
 
-                tool = tool_registry.get(tool_name)
-                if not tool:
-                    tool_result = {"success": False, "error": f"Unknown tool: {tool_name}"}
+                # Intercept cross-agent consultation for in-process specialist reasoning
+                if tool_name in ("orchestrator_consult_specialist", "orchestrator.consult_specialist"):
+                    specialist = str(tool_args.get("specialist", "support")).lower()
+                    query = str(tool_args.get("query", ""))
+                    extra_ctx = str(tool_args.get("context", ""))
+                    full_query = f"{query}\nContext: {extra_ctx}" if extra_ctx else query
+
+                    spec_map = {
+                        "churnguard": "retention",
+                        "retention": "retention",
+                        "supportbot": "support",
+                        "support": "support",
+                        "domebot": "customer_facing",
+                        "customer_facing": "customer_facing",
+                        "provisionbot": "provisioning",
+                        "provisioning": "provisioning",
+                        "analytics": "analytics",
+                        "metricbot": "analytics",
+                        "talent": "talent",
+                        "staffbot": "talent",
+                    }
+                    target_agent = spec_map.get(specialist, "support")
+                    try:
+                        logger.info("Executing cross-agent consultation with specialist %s (agent=%s)", specialist, target_agent)
+                        sub_agent = Agent(
+                            agent_type=target_agent,
+                            tenant_id=self.tenant_id,
+                            channel="internal_consultation",
+                            context=self.context,
+                        )
+                        sub_result = await sub_agent.run(user_message=full_query)
+                        tool_result = {
+                            "success": True,
+                            "specialist": specialist,
+                            "agent_type": target_agent,
+                            "findings": sub_result.get("content", ""),
+                            "sub_tools_called": [t.get("name") for t in sub_result.get("tool_calls", [])],
+                        }
+                    except Exception as err:
+                        logger.error("Cross-agent consultation failed: %s", err)
+                        tool_result = {"success": False, "error": f"Failed to consult {specialist}: {str(err)}"}
                 else:
-                    # Inject context IDs into tool input
-                    enriched_args = dict(tool_args)
-                    if "customer_id" in self.context and "customer_id" not in enriched_args:
-                        enriched_args["customer_id"] = self.context["customer_id"]
-                    tool_result = await tool.execute(
-                        tool_input=enriched_args,
-                        tenant_id=str(self.tenant_id) if self.tenant_id else None,
-                        user_id=str(self.context.get("user_id", "")),
-                    )
+                    tool = tool_registry.get(tool_name)
+                    if not tool:
+                        tool_result = {"success": False, "error": f"Unknown tool: {tool_name}"}
+                    else:
+                        # Inject context IDs into tool input
+                        enriched_args = dict(tool_args)
+                        if "customer_id" in self.context and "customer_id" not in enriched_args:
+                            enriched_args["customer_id"] = self.context["customer_id"]
+                        tool_result = await tool.execute(
+                            tool_input=enriched_args,
+                            tenant_id=str(self.tenant_id) if self.tenant_id else None,
+                            user_id=str(self.context.get("user_id", "")),
+                        )
 
                 executed_calls.append({
                     "id": tc.get("id", ""),

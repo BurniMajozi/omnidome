@@ -465,6 +465,39 @@ class ToolRegistry:
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
+        # ── Cross-Agent Orchestration Tools ──────────────────────────
+        self.register(Tool(
+            name="orchestrator_consult_specialist",
+            description=(
+                "Consult an internal specialist agent to gather domain expertise and multi-agent findings. "
+                "Available specialists: 'churnguard' (retention risks & LTV), 'supportbot' (troubleshooting & tickets), "
+                "'domebot' (customer service & plans), 'provisionbot' (onboarding & fibre provisioning), "
+                "'analytics' (telemetry & metrics), 'talent' (HR & call center performance)."
+            ),
+            service="orchestrator",
+            method="POST",
+            endpoint="/api/agents/internal/consult",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "specialist": {
+                        "type": "string",
+                        "description": "Specialist agent name: churnguard, supportbot, domebot, provisionbot, analytics, talent",
+                        "enum": ["churnguard", "supportbot", "domebot", "provisionbot", "analytics", "talent"],
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "The specific question or directive for the specialist",
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional context such as customer_id, ticket_id, or background details",
+                    },
+                },
+                "required": ["specialist", "query"],
+            },
+        ))
+
     def register(self, tool: Tool):
         self._tools[tool.name] = tool
 
@@ -517,6 +550,7 @@ class ToolRegistry:
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "executive": [
+                "orchestrator_consult_specialist", "orchestrator.consult_specialist",
                 "analytics_get_executive_summary", "analytics_get_mrr_trends", "analytics_get_network_health",
                 "finance_get_financial_summary", "sales_get_pipeline",
                 "retention_get_predictions", "retention_get_cases",
@@ -565,6 +599,7 @@ class ToolRegistry:
                 "memory.recall", "memory.write_entry",
             ],
             "assistant": [
+                "orchestrator_consult_specialist", "orchestrator.consult_specialist",
                 "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_invoice",
                 "products_list_plans", "products_list_bundles",
@@ -578,9 +613,10 @@ class ToolRegistry:
         return [t for t in self._tools.values() if t.name in allowed]
 
     def to_openai_format(self, tools: List[Tool]) -> List[Dict]:
-        """Convert tool list to OpenAI/Ollama tool-calling format."""
+        """Convert tool list to OpenAI/Ollama tool-calling format, deterministically sorted for prompt caching."""
+        sorted_tools = sorted(tools, key=lambda t: t.name)
         result = []
-        for t in tools:
+        for t in sorted_tools:
             result.append({
                 "name": sanitize_tool_name(t.name),
                 "description": t.description,

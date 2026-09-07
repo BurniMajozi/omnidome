@@ -5,6 +5,7 @@ import { ModuleCard } from "@/components/dashboard/module-card"
 import { ActivityFeed } from "@/components/dashboard/activity-feed"
 import { QuickStats } from "@/components/dashboard/quick-stats"
 import { TicketsTable } from "@/components/dashboard/tickets-table"
+import { ExecutiveApprovalQueue } from "@/components/dashboard/executive-approval-queue"
 import {
   DollarSign,
   Users,
@@ -244,7 +245,10 @@ export function DashboardOverview() {
         ))}
       </div>
 
-      {/* ── 2. Hero Sales Graph + Live Activity & Quick Actions (CX Core) ─ */}
+      {/* ── 2. Executive Approval Queue ('Needs You' Review Inbox) ──── */}
+      <ExecutiveApprovalQueue />
+
+      {/* ── 3. Hero Sales Graph + Live Activity & Quick Actions (CX Core) ─ */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left 2 Cols: Main Sales Chart & Deal Highlights */}
         <div className="space-y-6 lg:col-span-2">

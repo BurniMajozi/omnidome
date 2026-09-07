@@ -194,14 +194,26 @@ class OllamaClient:
         if not settings.openrouter_api_key:
             raise RuntimeError("OpenRouter API key not configured")
 
+        # Prompt caching optimization: Cache system prompt
+        cached_messages = []
+        for i, m in enumerate(messages):
+            msg = dict(m)
+            if i == 0 and msg.get("role") == "system":
+                msg["cache_control"] = {"type": "ephemeral"}
+            cached_messages.append(msg)
+
         payload: Dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": cached_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
         if tools:
-            payload["tools"] = tools
+            # Deterministically sort tools by name so prefix remains stable across calls
+            sorted_tools = sorted(tools, key=lambda t: t.get("function", {}).get("name", t.get("name", "")))
+            if sorted_tools:
+                sorted_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            payload["tools"] = sorted_tools
 
         headers = {
             "Authorization": f"Bearer {settings.openrouter_api_key}",
@@ -241,15 +253,26 @@ class OllamaClient:
         if not settings.openrouter_api_key:
             raise RuntimeError("OpenRouter API key not configured")
 
+        # Prompt caching optimization: Cache system prompt
+        cached_messages = []
+        for i, m in enumerate(messages):
+            msg = dict(m)
+            if i == 0 and msg.get("role") == "system":
+                msg["cache_control"] = {"type": "ephemeral"}
+            cached_messages.append(msg)
+
         payload: Dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": cached_messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": True,
         }
         if tools:
-            payload["tools"] = tools
+            sorted_tools = sorted(tools, key=lambda t: t.get("function", {}).get("name", t.get("name", "")))
+            if sorted_tools:
+                sorted_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            payload["tools"] = sorted_tools
 
         headers = {
             "Authorization": f"Bearer {settings.openrouter_api_key}",

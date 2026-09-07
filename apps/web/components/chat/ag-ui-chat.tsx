@@ -196,6 +196,99 @@ function formatInitials(name?: string) {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
+function formatActionChip(toolName?: string, args?: Record<string, unknown>): {
+  label: string
+  detail?: string
+  icon: string
+} {
+  const name = (toolName || "").toLowerCase()
+  const a = args || {}
+
+  if (name.includes("consult_specialist")) {
+    const specialist = String(a.specialist || "Specialist").toUpperCase()
+    return {
+      label: `Consulted Specialist: ${specialist}`,
+      detail: a.query ? String(a.query).slice(0, 80) : undefined,
+      icon: "👥",
+    }
+  }
+
+  if (name.includes("coverage") || name.includes("network")) {
+    const loc = a.suburb || a.address || a.location || "Network Node"
+    return {
+      label: `Verified FNO Coverage (${loc})`,
+      detail: a.provider ? `Provider: ${a.provider}` : undefined,
+      icon: "⚡",
+    }
+  }
+
+  if (name.includes("email") || name.includes("agentmail")) {
+    const to = a.to || a.recipient || "Subscriber"
+    return {
+      label: `Dispatched Email to ${to}`,
+      detail: a.subject ? String(a.subject) : undefined,
+      icon: "✉️",
+    }
+  }
+
+  if (name.includes("ticket")) {
+    const tId = a.ticket_id || a.id || ""
+    return {
+      label: `Created Trouble Ticket ${tId ? `#${tId}` : ""}`,
+      detail: a.title ? String(a.title) : undefined,
+      icon: "🎫",
+    }
+  }
+
+  if (name.includes("customer") || name.includes("crm")) {
+    const cId = a.customer_id || a.query || "Profile"
+    return {
+      label: `Retrieved Customer 360 (${cId})`,
+      icon: "👤",
+    }
+  }
+
+  if (name.includes("billing") || name.includes("invoice")) {
+    return {
+      label: `Processed Invoicing & Balance`,
+      detail: a.amount ? `R${a.amount}` : undefined,
+      icon: "📄",
+    }
+  }
+
+  if (name.includes("schedule") || name.includes("task")) {
+    return {
+      label: `Scheduled Follow-up Action`,
+      detail: a.title ? String(a.title) : undefined,
+      icon: "📅",
+    }
+  }
+
+  if (name.includes("ucp") || name.includes("checkout")) {
+    return {
+      label: `Initialized UCP Checkout Session`,
+      detail: a.purpose ? String(a.purpose) : undefined,
+      icon: "🛒",
+    }
+  }
+
+  if (name.includes("ap2") || name.includes("mandate")) {
+    return {
+      label: `Authorized AP2 Payment Mandate`,
+      detail: a.max_amount ? `Max: R${a.max_amount}` : undefined,
+      icon: "💳",
+    }
+  }
+
+  // Generic clean fallback
+  const cleanName = name.replace(/^(crm|billing|support|network|sales|orchestrator)\./, "").replace(/_/g, " ")
+  return {
+    label: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
+    detail: Object.keys(a).length > 0 ? JSON.stringify(a).slice(0, 60) : undefined,
+    icon: "⚡",
+  }
+}
+
 // ── Component ────────────────────────────────────────────────────────────
 
 interface AGUIChatProps {
@@ -818,37 +911,41 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                   )}
                 </div>
 
-                {/* Tool call events */}
+                {/* Visual Action Chips */}
                 {message.toolCalls && message.toolCalls.length > 0 && (
-                  <div className="mt-2 ml-2 space-y-1.5">
-                    <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                      Tool Calls:
-                    </p>
-                    {message.toolCalls.map((tc, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center gap-2 rounded-md border border-border/50 bg-background/50 px-2.5 py-1.5"
-                      >
-                        <Wrench className={cn(
-                          "h-3 w-3",
-                          tc.status === "start" && "text-amber-400",
-                          tc.status === "result" && "text-cyan-400",
-                          tc.status === "end" && "text-emerald-400",
-                        )} />
-                        <span className="text-xs font-mono text-foreground">{tc.toolName}</span>
-                        {tc.status === "start" && (
-                          <Loader2 className="h-3 w-3 animate-spin text-amber-400" />
-                        )}
-                        {tc.status === "end" && (
-                          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
-                        )}
-                        {tc.arguments && (
-                          <span className="text-[10px] text-muted-foreground truncate">
-                            {JSON.stringify(tc.arguments).slice(0, 60)}
-                          </span>
-                        )}
-                      </div>
-                    ))}
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {message.toolCalls.map((tc, idx) => {
+                      const chip = formatActionChip(tc.toolName, tc.arguments as Record<string, unknown>)
+                      const isRunning = tc.status === "start"
+                      const isDone = tc.status === "end" || tc.status === "result"
+                      return (
+                        <div
+                          key={idx}
+                          className={cn(
+                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all duration-150 shadow-sm",
+                            isRunning
+                              ? "bg-amber-500/10 border-amber-500/30 text-amber-400 animate-pulse"
+                              : isDone
+                              ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                              : "bg-muted/50 border-border/60 text-foreground"
+                          )}
+                          title={`${tc.toolName}: ${JSON.stringify(tc.arguments || {})}`}
+                        >
+                          <span className="text-xs select-none">{chip.icon}</span>
+                          <span className="font-semibold text-foreground/90">{chip.label}</span>
+                          {chip.detail && (
+                            <span className="text-[11px] opacity-75 max-w-[220px] truncate hidden sm:inline">
+                              · {chip.detail}
+                            </span>
+                          )}
+                          {isRunning ? (
+                            <Loader2 className="h-3 w-3 animate-spin text-amber-400 ml-0.5" />
+                          ) : (
+                            <CheckCircle2 className="h-3 w-3 text-emerald-400 ml-0.5" />
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
 

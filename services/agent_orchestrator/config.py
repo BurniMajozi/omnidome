@@ -106,6 +106,7 @@ class Settings(BaseSettings):
             "fno_intelligence.*",
         ],
         "executive": [
+            "orchestrator.consult_specialist", "orchestrator_consult_specialist",
             "analytics.get_executive_summary",
             "retention.get_predictions", "retention.get_cases",
             "billing.get_balance", "billing.get_invoice",
@@ -124,6 +125,10 @@ class Settings(BaseSettings):
             "network.get_service_status",
             "call_center.get_intelligence",
             "fno_intelligence.*",
+        ],
+        "assistant": [
+            "orchestrator.consult_specialist", "orchestrator_consult_specialist",
+            "crm.*", "billing.*", "network.*", "support.*", "fno_intelligence.*",
         ],
     }
 

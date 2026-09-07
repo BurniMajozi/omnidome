@@ -578,6 +578,36 @@ ALL_TOOLS: List[Tool] = [
         timeout=60,
         required_params=["fno_name"],
     ),
+    # ── Cross-Agent Orchestration ──────────────────────────────────────────
+    Tool(
+        name="orchestrator.consult_specialist",
+        description=(
+            "Consult an internal specialist agent (churnguard, supportbot, domebot, provisionbot, analytics) "
+            "to gather domain insights, diagnostics, or retention predictions."
+        ),
+        parameters=_pydantic_to_json_schema(
+            {
+                "specialist": {
+                    "type": "string",
+                    "description": "Specialist agent name: churnguard, supportbot, domebot, provisionbot, analytics",
+                    "enum": ["churnguard", "supportbot", "domebot", "provisionbot", "analytics"],
+                },
+                "query": {
+                    "type": "string",
+                    "description": "The inquiry or question for the specialist agent",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Optional context such as customer_id, ticket_id, or background details",
+                },
+            },
+            required=["specialist", "query"],
+        ),
+        endpoint="/api/agents/internal/consult",
+        method="POST",
+        service_url=settings.public_agent_url,
+        required_params=["specialist", "query"],
+    ),
 ]
 
 
@@ -621,8 +651,9 @@ filter_for_agent = get_tools_for_agent
 
 
 def to_openai_format(tools: list) -> list:
-    """Convert a list of Tool objects to OpenAI/Ollama tool format."""
-    return [t.to_schema() for t in tools]
+    """Convert a list of Tool objects to OpenAI/Ollama tool format, deterministically sorted for prompt caching."""
+    sorted_tools = sorted(tools, key=lambda t: t.name)
+    return [t.to_schema() for t in sorted_tools]
 
 
 async def execute_tool(tool_name: str, params: Dict[str, Any], tenant_id: str = "", user_id: str = "") -> Dict[str, Any]:

@@ -47,10 +47,20 @@ def _system_prompt(agent_type: str) -> str:
             "and installation ticket generation. Be thorough and systematic."
         ),
         "insightbot": (
-            "You are InsightBot, an executive intelligence AI agent. "
+            "You are InsightBot (InsightDome), an executive intelligence AI agent. "
             "You generate natural-language briefings with key metrics: MRR, churn, ARPU, "
             "subscriber growth, support load, network health, and financial performance. "
-            "Be concise and highlight trends and anomalies."
+            "You have access to orchestrator.consult_specialist to consult specialist agents "
+            "(churnguard, supportbot, domebot, provisionbot) for in-depth data and synthesize multi-agent findings. "
+            "Be concise and highlight trends, anomalies, and strategic insights."
+        ),
+        "executive": (
+            "You are InsightDome, an executive intelligence AI agent for an ISP platform. "
+            "You generate natural-language briefings with key metrics: MRR, churn, ARPU, "
+            "subscriber growth, support load, network health, and financial performance. "
+            "You have access to orchestrator.consult_specialist to consult specialist agents "
+            "(churnguard, supportbot, domebot, provisionbot) for in-depth data and synthesize multi-agent findings. "
+            "Be concise and highlight trends, anomalies, and strategic insights."
         ),
         "supportbot": (
             "You are SupportBot, a technical support AI assistant for a South African ISP. "
@@ -233,12 +243,45 @@ class BaseAgent:
                 })
 
                 # Execute
-                result = await execute_tool(
-                    tool_name=tool_name,
-                    params=args,
-                    tenant_id=self.tenant_id,
-                    user_id=self.user_id,
-                )
+                if tool_name in ("orchestrator.consult_specialist", "orchestrator_consult_specialist"):
+                    specialist = str(args.get("specialist", "supportbot")).lower()
+                    query = str(args.get("query", ""))
+                    ctx = str(args.get("context", ""))
+                    full_query = f"{query}\nContext: {ctx}" if ctx else query
+                    spec_map = {
+                        "churnguard": "churnguard",
+                        "retention": "churnguard",
+                        "supportbot": "supportbot",
+                        "support": "supportbot",
+                        "domebot": "domebot",
+                        "customer_facing": "domebot",
+                        "provisionbot": "provisionbot",
+                        "provisioning": "provisionbot",
+                    }
+                    target_type = spec_map.get(specialist, "supportbot")
+                    try:
+                        logger.info("BaseAgent consulting specialist %s (target=%s)", specialist, target_type)
+                        sub_agent = BaseAgent(
+                            agent_type=target_type,
+                            tenant_id=self.tenant_id,
+                            user_id=self.user_id,
+                            max_tool_calls=3,
+                        )
+                        sub_res = await sub_agent.run(full_query)
+                        result = {
+                            "success": True,
+                            "specialist": specialist,
+                            "findings": sub_res.content,
+                        }
+                    except Exception as exc:
+                        result = {"success": False, "error": str(exc)}
+                else:
+                    result = await execute_tool(
+                        tool_name=tool_name,
+                        params=args,
+                        tenant_id=self.tenant_id,
+                        user_id=self.user_id,
+                    )
                 all_tool_results.append({
                     "tool": tool_name,
                     "result": result,
@@ -356,12 +399,45 @@ class BaseAgent:
 
                 all_tool_calls.append({"tool": tool_name, "arguments": args})
 
-                result = await execute_tool(
-                    tool_name=tool_name,
-                    params=args,
-                    tenant_id=self.tenant_id,
-                    user_id=self.user_id,
-                )
+                if tool_name in ("orchestrator.consult_specialist", "orchestrator_consult_specialist"):
+                    specialist = str(args.get("specialist", "supportbot")).lower()
+                    query = str(args.get("query", ""))
+                    ctx = str(args.get("context", ""))
+                    full_query = f"{query}\nContext: {ctx}" if ctx else query
+                    spec_map = {
+                        "churnguard": "churnguard",
+                        "retention": "churnguard",
+                        "supportbot": "supportbot",
+                        "support": "supportbot",
+                        "domebot": "domebot",
+                        "customer_facing": "domebot",
+                        "provisionbot": "provisionbot",
+                        "provisioning": "provisionbot",
+                    }
+                    target_type = spec_map.get(specialist, "supportbot")
+                    try:
+                        logger.info("BaseAgent streaming consulting specialist %s (target=%s)", specialist, target_type)
+                        sub_agent = BaseAgent(
+                            agent_type=target_type,
+                            tenant_id=self.tenant_id,
+                            user_id=self.user_id,
+                            max_tool_calls=3,
+                        )
+                        sub_res = await sub_agent.run(full_query)
+                        result = {
+                            "success": True,
+                            "specialist": specialist,
+                            "findings": sub_res.content,
+                        }
+                    except Exception as exc:
+                        result = {"success": False, "error": str(exc)}
+                else:
+                    result = await execute_tool(
+                        tool_name=tool_name,
+                        params=args,
+                        tenant_id=self.tenant_id,
+                        user_id=self.user_id,
+                    )
                 all_tool_results.append({"tool": tool_name, "result": result})
 
                 yield f"→ {tool_name}: {json.dumps(result)[:100]}\n"

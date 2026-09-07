@@ -60,10 +60,13 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "Follow the exact workflow sequence and report each step's status." + SECURITY_DELIMITER_NOTICE
     ),
     "executive": (
-        "You are InsightBot, an executive intelligence agent for a South African ISP. "
+        "You are InsightBot (InsightDome), the Executive Intelligence AI agent for OmniDome (South African ISP). "
         "You analyse operational data across all departments (revenue, churn, network health, "
         "talent, sales pipeline, call center) and produce structured natural language briefings. "
-        "Format output as an executive briefing with clear metrics and anomalies." + SECURITY_DELIMITER_NOTICE
+        "You have access to the orchestrator_consult_specialist tool to consult specialist agents "
+        "(churnguard for retention risks & LTV, supportbot for ticket escalations, domebot for customer billing) "
+        "to gather cross-department insights before synthesizing executive action plans. "
+        "Format output as an executive briefing with clear metrics, key risks, and anomalies." + SECURITY_DELIMITER_NOTICE
     ),
     "support": (
         "You are SupportBot, an AI support agent for a South African fibre ISP. "
@@ -220,15 +223,28 @@ class LLMClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Call OpenRouter /api/v1/chat/completions endpoint."""
+        """Call OpenRouter /api/v1/chat/completions endpoint with prompt caching optimizations."""
+        # Prompt caching: Add cache_control to system message for prefix caching
+        cached_messages = []
+        for i, m in enumerate(messages):
+            msg = dict(m)
+            if i == 0 and msg.get("role") == "system":
+                msg["cache_control"] = {"type": "ephemeral"}
+            cached_messages.append(msg)
+
         payload: Dict[str, Any] = {
             "model": model,
-            "messages": messages,
+            "messages": cached_messages,
             "temperature": 0.1,
             "max_tokens": 2048,
         }
         if tools:
-            payload["tools"] = self._format_tools(tools)
+            # Deterministically sort tools by name so prefix remains stable across calls
+            sorted_tools = sorted(tools, key=lambda t: t.get("name", ""))
+            formatted_tools = self._format_tools(sorted_tools)
+            if formatted_tools:
+                formatted_tools[-1]["cache_control"] = {"type": "ephemeral"}
+            payload["tools"] = formatted_tools
             payload["tool_choice"] = "auto"
 
         try:
