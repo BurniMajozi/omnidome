@@ -123,7 +123,47 @@ const CHANNELS_LIST = [
   { id: "c-marketing", name: "marketing" },
 ]
 
-const FENCE = /```(\w+)?\n?([\s\S]*?)```/g
+const FENCE = /```([^\n\r`]+)?\n?([\s\S]*?)```/g
+
+function extractArtifactTitle(code: string, langInfo: string, idx: number): string {
+  const titleAttr = langInfo.match(/title=["']([^"']+)["']/i)
+  if (titleAttr && titleAttr[1].trim()) {
+    return titleAttr[1].trim()
+  }
+
+  const lines = code.trim().split("\n")
+  for (let i = 0; i < Math.min(lines.length, 6); i++) {
+    const line = lines[i].trim()
+    const headingMatch = line.match(/^#{1,3}\s+([^#\n\r]+)/)
+    if (headingMatch && headingMatch[1].trim()) {
+      return headingMatch[1].trim().replace(/[*_`]/g, "")
+    }
+    const subjectMatch = line.match(/^Subject:\s*(.+)$/i)
+    if (subjectMatch && subjectMatch[1].trim()) {
+      return `Email: ${subjectMatch[1].trim()}`
+    }
+    const titleLineMatch = line.match(/^Title:\s*(.+)$/i)
+    if (titleLineMatch && titleLineMatch[1].trim()) {
+      return titleLineMatch[1].trim().replace(/[*_`]/g, "")
+    }
+  }
+
+  const lower = code.toLowerCase()
+  if (lower.includes("subject:") || lower.includes("dear ") || lower.includes("recipient:") || langInfo.includes("email")) {
+    return `Email Draft (${idx + 1})`
+  }
+  if (lower.includes("slide ") || lower.includes("presentation") || lower.includes("agenda") || langInfo.includes("presentation") || langInfo.includes("deck")) {
+    return `Presentation Outline (${idx + 1})`
+  }
+  if (lower.includes("strategy") || lower.includes("proposal") || lower.includes("action plan") || lower.includes("executive summary")) {
+    return `Strategy Proposal (${idx + 1})`
+  }
+  if (langInfo.includes("sql") || lower.includes("select ") || lower.includes("from ")) {
+    return `SQL Query (${idx + 1})`
+  }
+
+  return `Proposal Artifact ${idx + 1}`
+}
 
 function parseMessage(msgId: string, content: string): { segments: Segment[]; artifacts: Artifact[] } {
   const segments: Segment[] = []
@@ -134,10 +174,12 @@ function parseMessage(msgId: string, content: string): { segments: Segment[]; ar
   FENCE.lastIndex = 0
   while ((m = FENCE.exec(content)) !== null) {
     if (m.index > last) segments.push({ type: "text", value: content.slice(last, m.index) })
-    const lang = (m[1] || "text").toLowerCase()
+    const rawLang = (m[1] || "text").trim()
+    const lang = rawLang.split(/[\s:]/)[0].toLowerCase() || "text"
     const code = m[2] ?? ""
     const id = `${msgId}-art-${idx}`
-    artifacts.push({ id, title: `Artifact ${idx + 1}`, lang, code })
+    const title = extractArtifactTitle(code, rawLang, idx)
+    artifacts.push({ id, title, lang, code })
     segments.push({ type: "artifact", value: id })
     last = m.index + m[0].length
     idx += 1
@@ -161,11 +203,12 @@ interface AGUIChatProps {
   onClose: () => void
   initialAgent?: AgentType
   context?: Record<string, unknown>
+  initialDraft?: string
 }
 
-export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContext }: AGUIChatProps) {
+export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContext, initialDraft }: AGUIChatProps) {
   const [messages, setMessages] = useState<AGUIMessage[]>([])
-  const [inputValue, setInputValue] = useState("")
+  const [inputValue, setInputValue] = useState(initialDraft || "")
   const [isSending, setIsSending] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "customer_facing")
   const [showAgentPicker, setShowAgentPicker] = useState(false)
@@ -189,6 +232,36 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const voiceChunks = useRef<Blob[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (initialDraft !== undefined) {
+      setInputValue(initialDraft)
+      setTimeout(() => inputRef.current?.focus(), 60)
+    }
+  }, [initialDraft])
+
+  useEffect(() => {
+    if (initialAgent && AGENT_LIST.some((a) => a.type === initialAgent)) {
+      setSelectedAgent(initialAgent)
+    }
+  }, [initialAgent])
+
+  useEffect(() => {
+    const handleOpenChat = (event: Event) => {
+      const customEvent = event as CustomEvent<{ prompt?: string; agent?: AgentType; draft?: string }>
+      const prompt = customEvent.detail?.draft || customEvent.detail?.prompt
+      const agent = customEvent.detail?.agent
+      if (agent && AGENT_LIST.some((a) => a.type === agent)) {
+        setSelectedAgent(agent)
+      }
+      if (prompt) {
+        setInputValue(prompt)
+        setTimeout(() => inputRef.current?.focus(), 60)
+      }
+    }
+    window.addEventListener("open-agent-chat", handleOpenChat)
+    return () => window.removeEventListener("open-agent-chat", handleOpenChat)
+  }, [])
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })

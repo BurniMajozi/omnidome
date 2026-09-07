@@ -171,25 +171,48 @@ export function ModuleLayout({
     }
   }
 
-  const handleAssignToAgent = async (rec: AIRecommendation) => {
-    try {
-      setActionFeedback(`Assigning to autonomous agent...`)
-      const agentMsg = `Autonomous Action Request:\nTitle: ${rec.title}\nDescription: ${rec.description}\nCategory: ${rec.category}\nPlease evaluate and execute the necessary tools/data queries to fulfill this recommendation.`
-      const agentType = title.toLowerCase().includes("call") ? "call_center"
-        : title.toLowerCase().includes("product") ? "products"
-        : title.toLowerCase().includes("talent") || title.toLowerCase().includes("hr") ? "talent"
-        : title.toLowerCase().includes("analytic") ? "analytics"
-        : "executive"
-      await invokeAgent({
-        agent_type: agentType,
-        message: agentMsg,
-        prompt: agentMsg,
-      })
-      setActionFeedback(`Agent dispatched to execute recommendation!`)
-      setTimeout(() => setActionFeedback(null), 3000)
-    } catch (e: any) {
-      setActionFeedback(`Agent invocation issue: ${e?.message || "Error communicating with agent service"}`)
-    }
+  const handleAssignToAgent = (rec: AIRecommendation) => {
+    const t = title.toLowerCase()
+    const agentType =
+      t.includes("retention") || t.includes("churn") ? "retention"
+      : t.includes("support") || t.includes("service") || t.includes("ticket") ? "support"
+      : t.includes("provision") || t.includes("network") || t.includes("coverage") ? "provisioning"
+      : t.includes("call") || t.includes("crm") || t.includes("customer") ? "customer_facing"
+      : "executive"
+
+    const agentName =
+      agentType === "executive" ? "InsightDome (Executive Agent)"
+      : agentType === "retention" ? "ChurnGuard (Retention Agent)"
+      : agentType === "support" ? "SupportBot (Diagnostics & Tickets)"
+      : agentType === "provisioning" ? "ProvisionBot (Network & Provisioning)"
+      : agentType === "customer_facing" ? "DomeBot (Customer Operations)"
+      : "OmniAssist"
+
+    const draftedPrompt = `Action Proposal Request:
+Recommendation: ${rec.title}
+Module: ${title}
+Category: ${rec.category} | Impact: ${rec.impact}
+Context: ${rec.description}
+
+Please analyze this recommendation and draft actionable proposals as structured artifacts:
+1. Executive Strategy Proposal (key objectives, target audience, execution timeline, and expected ROI).
+2. Customer Outreach Email Draft (customized communication template ready to send).
+3. Presentation Outline / Action Brief (summary deck outline for leadership review).
+
+Format each proposal as a separate markdown code block with a clear title header (e.g. # Strategy Proposal, # Customer Email Draft, # Executive Presentation Outline) so they are rendered as editable artifacts in the canvas.`
+
+    window.dispatchEvent(
+      new CustomEvent("open-agent-chat", {
+        detail: {
+          agent: agentType,
+          prompt: draftedPrompt,
+          draft: draftedPrompt,
+        },
+      }),
+    )
+
+    setActionFeedback(`Opening Agent Chat with ${agentName}. Review the drafted proposal prompt to submit!`)
+    setTimeout(() => setActionFeedback(null), 5000)
   }
 
   const handleDismissRec = (id: string) => {

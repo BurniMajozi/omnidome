@@ -54,11 +54,26 @@ export default function Dashboard() {
   const router = useRouter()
   const [activeSection, setActiveSection] = useState("overview")
   const [chatOpen, setChatOpen] = useState(false)
+  const [chatAgent, setChatAgent] = useState<any>(undefined)
+  const [chatInitialDraft, setChatInitialDraft] = useState<string | undefined>(undefined)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [retentionTab, setRetentionTab] = useState<string | null>(null)
   const [portalTab, setPortalTab] = useState<string | null>(null)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
   const [authChecked, setAuthChecked] = useState(false)
+
+  useEffect(() => {
+    const handleOpenChat = (event: Event) => {
+      const customEvent = event as CustomEvent<{ prompt?: string; agent?: any; draft?: string }>
+      const prompt = customEvent.detail?.draft || customEvent.detail?.prompt
+      const agent = customEvent.detail?.agent
+      if (agent) setChatAgent(agent)
+      if (prompt) setChatInitialDraft(prompt)
+      setChatOpen(true)
+    }
+    window.addEventListener("open-agent-chat", handleOpenChat)
+    return () => window.removeEventListener("open-agent-chat", handleOpenChat)
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -231,7 +246,15 @@ export default function Dashboard() {
 
       {/* Agent Chat Right Panel */}
       {chatOpen && (
-        <AGUIChat isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+        <AGUIChat
+          isOpen={chatOpen}
+          onClose={() => {
+            setChatOpen(false)
+            setChatInitialDraft(undefined)
+          }}
+          initialAgent={chatAgent}
+          initialDraft={chatInitialDraft}
+        />
       )}
 
       {/* Floating Agent Chat FAB */}
