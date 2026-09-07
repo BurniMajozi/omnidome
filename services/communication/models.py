@@ -298,3 +298,54 @@ class ScheduleEvent(Base):
         Index("ix_schedule_channel", "channel_id", "start_time"),
         Index("ix_schedule_tenant_user", "tenant_id", "user_id", "start_time"),
     )
+
+
+# ── Agent Mail Models ──────────────────────────────────────────────────────
+
+class AgentMailbox(Base):
+    __tablename__ = "agent_mailboxes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    email_address: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    inbound_channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id", ondelete="SET NULL"), nullable=True
+    )
+    auto_reply_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_agent_mailboxes_tenant_email", "tenant_id", "email_address", unique=True),
+        Index("ix_agent_mailboxes_tenant_agent", "tenant_id", "agent_type"),
+    )
+
+
+class AgentEmail(Base):
+    __tablename__ = "agent_emails"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    mailbox_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("agent_mailboxes.id", ondelete="CASCADE"), nullable=False
+    )
+    direction: Mapped[str] = mapped_column(String(20), nullable=False, default="inbound")  # inbound, outbound
+    sender: Mapped[str] = mapped_column(String(255), nullable=False)
+    recipient: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, nullable=False)
+    body_html: Mapped[str] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="received")  # received, dispatched, processed, sent, failed
+    agent_response: Mapped[str] = mapped_column(Text, nullable=True)
+    headers: Mapped[dict] = mapped_column(JSONB, default=dict)
+    message_id: Mapped[str] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_agent_emails_mailbox_status", "mailbox_id", "status"),
+        Index("ix_agent_emails_tenant_created", "tenant_id", "created_at"),
+    )
+

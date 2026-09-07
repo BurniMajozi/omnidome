@@ -92,3 +92,47 @@ class MemoryRecallResponse(BaseModel):
     summaries: list[MemorySummaryRead]
     entries: list[MemoryEntryRead]
 
+
+class AgentSkillCreate(BaseModel):
+    skill_name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(..., min_length=1)
+    category: str = Field(default="operational", max_length=80)
+    source_agent_type: str = Field(..., max_length=80)
+    target_agent_types: list[str] = Field(default_factory=list)
+    protocol_schema: dict[str, Any] = Field(default_factory=dict)
+    tools_required: list[str] = Field(default_factory=list)
+    guidance_prompt: str = Field(..., min_length=1)
+    version: str = Field(default="1.0.0", max_length=20)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentSkillRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    skill_name: str
+    description: str
+    category: str
+    source_agent_type: str
+    target_agent_types: list[str]
+    protocol_schema: dict[str, Any]
+    tools_required: list[str]
+    guidance_prompt: str
+    version: str
+    metadata: dict[str, Any]
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AgentSkillTransferRequest(BaseModel):
+    target_agent_type: str = Field(..., min_length=1, max_length=80)
+    tenant_id: Optional[uuid.UUID] = None
+    override_tools: Optional[list[str]] = None
+
+
+class AgentSkillListResponse(BaseModel):
+    items: list[AgentSkillRead]
+    count: int
+

@@ -49,7 +49,9 @@ class Agent:
                 content = msg.get("content", "")
                 if role in ("user", "assistant"):
                     messages.append({"role": role, "content": content})
-        messages.append({"role": "user", "content": user_message})
+        # Enclose user query in untrusted boundary delimiters
+        bounded_user_message = f"<untrusted_user_input>\n{user_message}\n</untrusted_user_input>"
+        messages.append({"role": "user", "content": bounded_user_message})
         return messages
 
     async def run(

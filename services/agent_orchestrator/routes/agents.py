@@ -266,10 +266,15 @@ async def invoke_agent(
     policy = settings.guardrails_policy
     gate_in = run_gate(body.message, policy)
     if gate_in["action"] == "block":
+        error_msg = gate_in.get("error", "Input blocked by security guardrails")
+        logger.warning("Security gate blocked input for agent %s: %s", body.agent_type, error_msg)
         raise HTTPException(
             status_code=422,
-            detail={"error": gate_in.get("error", "Input blocked by guardrails"),
-                    "hits": gate_in["hits"]},
+            detail={
+                "error": error_msg,
+                "hits": gate_in.get("hits", []),
+                "injection_hits": gate_in.get("injection_hits", []),
+            },
         )
     safe_message = gate_in["text"]
 

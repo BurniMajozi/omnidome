@@ -17,6 +17,10 @@ from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.tenant_memory.database import init_tables
 from services.tenant_memory.schemas import (
+    AgentSkillCreate,
+    AgentSkillListResponse,
+    AgentSkillRead,
+    AgentSkillTransferRequest,
     MemoryEntryCreate,
     MemoryEntryRead,
     MemoryEntryUpdate,
@@ -72,6 +76,15 @@ def _entry_from_row(row: Any) -> MemoryEntryRead:
 
 def _summary_from_row(row: Any) -> MemorySummaryRead:
     return MemorySummaryRead.model_validate(_jsonable_row(row))
+
+
+def _skill_from_row(row: Any) -> AgentSkillRead:
+    item = dict(row)
+    item["target_agent_types"] = item.get("target_agent_types") or []
+    item["tools_required"] = item.get("tools_required") or []
+    item["protocol_schema"] = item.get("protocol_schema") or {}
+    item["metadata"] = item.get("metadata") or {}
+    return AgentSkillRead.model_validate(item)
 
 
 @app.post("/api/v1/memories", response_model=MemoryEntryRead, status_code=status.HTTP_201_CREATED)
@@ -356,6 +369,194 @@ async def recall(
         summaries=[_summary_from_row(row) for row in summaries_result.mappings().all()],
         entries=[_entry_from_row(row) for row in entries_result.mappings().all()],
     )
+
+
+# ── OKF Skill Sharing Endpoints ─────────────────────────────────────────────
+
+@app.post("/api/v1/skills", response_model=AgentSkillRead, status_code=status.HTTP_201_CREATED)
+async def create_agent_skill(
+    payload: AgentSkillCreate,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    skill_id = uuid.uuid4()
+    result = await session.execute(
+        text(
+            """
+            insert into tenant_agent_skills (
+                id, tenant_id, skill_name, description, category, source_agent_type,
+                target_agent_types, protocol_schema, tools_required, guidance_prompt,
+                version, metadata, is_active
+            )
+            values (
+                :id, :tenant_id, :skill_name, :description, :category, :source_agent_type,
+                :target_agent_types, :protocol_schema, :tools_required, :guidance_prompt,
+                :version, :metadata, true
+            )
+            on conflict (tenant_id, skill_name, version)
+            do update set
+                description = excluded.description,
+                category = excluded.category,
+                source_agent_type = excluded.source_agent_type,
+                target_agent_types = excluded.target_agent_types,
+                protocol_schema = excluded.protocol_schema,
+                tools_required = excluded.tools_required,
+                guidance_prompt = excluded.guidance_prompt,
+                metadata = excluded.metadata,
+                is_active = true,
+                updated_at = current_timestamp
+            returning *
+            """
+        ).bindparams(
+            bindparam("target_agent_types", type_=ARRAY(String())),
+            bindparam("tools_required", type_=ARRAY(String())),
+            bindparam("protocol_schema", type_=JSONB),
+            bindparam("metadata", type_=JSONB),
+        ),
+        {
+            "id": skill_id,
+            "tenant_id": ctx.tenant_id,
+            "skill_name": payload.skill_name,
+            "description": payload.description,
+            "category": payload.category,
+            "source_agent_type": payload.source_agent_type,
+            "target_agent_types": payload.target_agent_types,
+            "protocol_schema": payload.protocol_schema,
+            "tools_required": payload.tools_required,
+            "guidance_prompt": payload.guidance_prompt,
+            "version": payload.version,
+            "metadata": payload.metadata,
+        },
+    )
+    row = result.mappings().one()
+    logger.info("OKF skill registered: %s (tenant=%s)", payload.skill_name, ctx.tenant_id)
+    return _skill_from_row(row)
+
+
+@app.get("/api/v1/skills", response_model=AgentSkillListResponse)
+async def list_agent_skills(
+    source_agent_type: Optional[str] = Query(None),
+    target_agent_type: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    clauses = ["tenant_id = :tenant_id", "is_active = true"]
+    params: dict[str, Any] = {"tenant_id": ctx.tenant_id}
+
+    if source_agent_type:
+        clauses.append("source_agent_type = :source_agent_type")
+        params["source_agent_type"] = source_agent_type
+    if target_agent_type:
+        clauses.append("(:target_agent_type = any(target_agent_types) or target_agent_types = '{}'::text[])")
+        params["target_agent_type"] = target_agent_type
+    if category:
+        clauses.append("category = :category")
+        params["category"] = category
+    if q:
+        clauses.append("(skill_name ilike :q or description ilike :q)")
+        params["q"] = f"%{q}%"
+
+    sql = f"""
+        select *
+        from tenant_agent_skills
+        where {' and '.join(clauses)}
+        order by updated_at desc
+    """
+    result = await session.execute(text(sql), params)
+    rows = result.mappings().all()
+    skills = [_skill_from_row(r) for r in rows]
+    return AgentSkillListResponse(items=skills, count=len(skills))
+
+
+@app.post("/api/v1/skills/{skill_id}/transfer", response_model=AgentSkillRead)
+async def transfer_agent_skill(
+    skill_id: uuid.UUID,
+    payload: AgentSkillTransferRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """
+    OKF Skill Transfer: transfer or bind a skill capability to another agent type,
+    recording the transfer in tenant operational memory.
+    """
+    res = await session.execute(
+        text("select * from tenant_agent_skills where id = :id and tenant_id = :tenant_id and is_active = true"),
+        {"id": skill_id, "tenant_id": ctx.tenant_id},
+    )
+    row = res.mappings().first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+
+    existing_targets = list(row["target_agent_types"] or [])
+    if payload.target_agent_type not in existing_targets:
+        existing_targets.append(payload.target_agent_type)
+
+    tools_req = list(payload.override_tools or row["tools_required"] or [])
+
+    update_res = await session.execute(
+        text(
+            """
+            update tenant_agent_skills
+            set target_agent_types = :target_agent_types,
+                tools_required = :tools_required,
+                updated_at = current_timestamp
+            where id = :id and tenant_id = :tenant_id
+            returning *
+            """
+        ).bindparams(
+            bindparam("target_agent_types", type_=ARRAY(String())),
+            bindparam("tools_required", type_=ARRAY(String())),
+        ),
+        {
+            "id": skill_id,
+            "tenant_id": ctx.tenant_id,
+            "target_agent_types": existing_targets,
+            "tools_required": tools_req,
+        },
+    )
+    updated_row = update_res.mappings().one()
+
+    # Log transfer event to tenant memory
+    mem_id = uuid.uuid4()
+    await session.execute(
+        text(
+            """
+            insert into tenant_memory_entries (
+                id, tenant_id, source_type, source_id, module, scope_key, title,
+                content, summary, visibility, importance, tags, metadata
+            )
+            values (
+                :id, :tenant_id, 'skill_transfer', :source_id, 'memory', :scope_key, :title,
+                :content, :summary, 'tenant', 'normal', :tags, :metadata
+            )
+            """
+        ).bindparams(
+            bindparam("tags", type_=ARRAY(String())),
+            bindparam("metadata", type_=JSONB),
+        ),
+        {
+            "id": mem_id,
+            "tenant_id": ctx.tenant_id,
+            "source_id": str(skill_id),
+            "scope_key": f"agent:{payload.target_agent_type}",
+            "title": f"Skill transferred: {row['skill_name']}",
+            "content": f"Skill '{row['skill_name']}' transferred from {row['source_agent_type']} to {payload.target_agent_type}.",
+            "summary": f"Target agent {payload.target_agent_type} acquired skill {row['skill_name']}.",
+            "tags": ["okf", "skill_transfer", payload.target_agent_type],
+            "metadata": {"skill_id": str(skill_id), "source_agent": row["source_agent_type"], "tools": tools_req},
+        },
+    )
+
+    logger.info(
+        "Skill '%s' transferred to %s (tenant=%s)",
+        row["skill_name"],
+        payload.target_agent_type,
+        ctx.tenant_id,
+    )
+    return _skill_from_row(updated_row)
+
 
 
 if __name__ == "__main__":

@@ -111,9 +111,94 @@ export function ModuleLayout({
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
   const [localTableData, setLocalTableData] = useState<TableRow[]>(tableData)
+  const [localRecommendations, setLocalRecommendations] = useState<AIRecommendation[]>(aiRecommendations)
+  const [actionFeedback, setActionFeedback] = useState<string | null>(null)
   const isClient = useIsClient()
   const openIssues = issues.filter((i) => i.status === "open").length
   const openTasks = tasks.filter((t) => t.status !== "done").length
+
+  const handleCreateTaskFromRec = async (rec: AIRecommendation) => {
+    try {
+      setActionFeedback(`Creating task: "${rec.title}"...`)
+      const res = await fetch("/api/chat/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `[AI Action] ${rec.title}`,
+          description: `${rec.description}\nCategory: ${rec.category} | Impact: ${rec.impact}`,
+          priority: rec.impact === "high" ? "high" : "normal",
+          status: "todo",
+        }),
+      })
+      if (res.ok) {
+        setActionFeedback(`Task created successfully!`)
+        setTimeout(() => setActionFeedback(null), 3000)
+      } else {
+        setActionFeedback(`Failed to create task (${res.status})`)
+      }
+    } catch (e) {
+      setActionFeedback("Error communicating with task service")
+    }
+  }
+
+  const handleScheduleActionFromRec = async (rec: AIRecommendation) => {
+    try {
+      setActionFeedback(`Scheduling action: "${rec.title}"...`)
+      const now = new Date()
+      const start = new Date(now.getTime() + 60 * 60 * 1000)
+      const end = new Date(start.getTime() + 30 * 60 * 1000)
+      const res = await fetch("/api/schedule", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `[AI Action] ${rec.title}`,
+          type: "action",
+          start_time: start.toISOString(),
+          end_time: end.toISOString(),
+          notes: rec.description,
+          status: "upcoming",
+        }),
+      })
+      if (res.ok) {
+        setActionFeedback(`Action scheduled for upcoming window!`)
+        setTimeout(() => setActionFeedback(null), 3000)
+      } else {
+        setActionFeedback(`Schedule failed (${res.status})`)
+      }
+    } catch (e) {
+      setActionFeedback("Error communicating with schedule service")
+    }
+  }
+
+  const handleAssignToAgent = async (rec: AIRecommendation) => {
+    try {
+      setActionFeedback(`Assigning to autonomous agent...`)
+      const res = await fetch("/api/orchestrator/agents/invoke", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_type: title.toLowerCase().includes("call") ? "call_center"
+            : title.toLowerCase().includes("product") ? "products"
+            : title.toLowerCase().includes("talent") || title.toLowerCase().includes("hr") ? "talent"
+            : title.toLowerCase().includes("analytic") ? "analytics"
+            : "executive",
+          prompt: `Autonomous Action Request:\nTitle: ${rec.title}\nDescription: ${rec.description}\nCategory: ${rec.category}\nPlease evaluate and execute the necessary tools/data queries to fulfill this recommendation.`,
+        }),
+      })
+      if (res.ok) {
+        setActionFeedback(`Agent dispatched to execute recommendation!`)
+        setTimeout(() => setActionFeedback(null), 3000)
+      } else {
+        setActionFeedback(`Agent invocation returned status ${res.status}`)
+      }
+    } catch (e) {
+      setActionFeedback("Error invoking agent orchestrator")
+    }
+  }
+
+  const handleDismissRec = (id: string) => {
+    setLocalRecommendations((prev) => prev.filter((r) => r.id !== id))
+  }
 
   const handleExport = () => {
     const headers = tableColumns.map((c) => c.label).join(",")
@@ -314,7 +399,12 @@ export function ModuleLayout({
               </h3>
             </CardHeader>
             <CardContent className="space-y-3">
-              {aiRecommendations.map((rec) => (
+              {actionFeedback && (
+                <div className="rounded-md bg-primary/10 border border-primary/20 px-3 py-1.5 text-xs font-medium text-primary animate-in fade-in">
+                  {actionFeedback}
+                </div>
+              )}
+              {localRecommendations.map((rec) => (
                 <div key={rec.id} className="rounded-lg border border-border bg-secondary/20 p-3 group">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-medium text-foreground">{rec.title}</p>
@@ -327,12 +417,18 @@ export function ModuleLayout({
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuItem className="gap-2"><ClipboardList className="h-3.5 w-3.5" />Create Task</DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2"><Calendar className="h-3.5 w-3.5" />Schedule Action</DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2"><UserPlus className="h-3.5 w-3.5" />Assign to Agent</DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2"><Flag className="h-3.5 w-3.5" />Escalate</DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2"><Pin className="h-3.5 w-3.5" />Pin Insight</DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 text-muted-foreground"><CheckCircle className="h-3.5 w-3.5" />Dismiss</DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleCreateTaskFromRec(rec)}>
+                            <ClipboardList className="h-3.5 w-3.5" />Create Task
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleScheduleActionFromRec(rec)}>
+                            <Calendar className="h-3.5 w-3.5" />Schedule Action
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleAssignToAgent(rec)}>
+                            <UserPlus className="h-3.5 w-3.5" />Assign to Agent
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="gap-2 text-muted-foreground cursor-pointer" onClick={() => handleDismissRec(rec.id)}>
+                            <CheckCircle className="h-3.5 w-3.5" />Dismiss
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>

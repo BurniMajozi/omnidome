@@ -73,6 +73,7 @@ from services.communication.routes.messages_state import router as messages_stat
 from services.communication.routes.ws import router as ws_router
 from services.communication.routes.schedule import router as schedule_router
 from services.communication.routes.directory import router as directory_router
+from services.communication.routes.mail import router as mail_router
 
 app.include_router(channels_router, prefix="/api/v1")
 app.include_router(messages_router, prefix="/api/v1")
@@ -87,6 +88,8 @@ app.include_router(messages_state_router, prefix="/api/v1")
 app.include_router(ws_router, prefix="/api/v1")  # WebSocket real-time channel updates
 app.include_router(schedule_router, prefix="/api/v1")  # Schedule events
 app.include_router(directory_router, prefix="/api/v1")  # Team directory (invite pickers)
+app.include_router(mail_router, prefix="/api/v1")  # Agent Mail inbox & automated responder
+
 
 
 if __name__ == "__main__":

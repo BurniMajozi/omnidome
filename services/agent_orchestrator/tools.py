@@ -31,6 +31,8 @@ SERVICE_URLS = {
     "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
     "memory": os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025"),
     "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno-intelligence:8024"),
+    "hr": os.getenv("HR_SERVICE_URL", "http://hr:8014"),
+    "portal": os.getenv("PORTAL_BUILDER_SERVICE_URL", "http://portal_builder:8018"),
 }
 
 
@@ -391,6 +393,78 @@ class ToolRegistry:
             }, "required": ["fno_name"]},
         ))
 
+        # ── Call Center Tools (Read-Only) ───────────────────────────
+        self.register(Tool(
+            name="call_center_get_queues",
+            description="Get real-time call center queue status, active callers waiting, and SLA health.",
+            service="call_center",
+            method="GET",
+            endpoint="/api/queues/dashboard",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="call_center_get_agent_metrics",
+            description="Get call center agent statuses, active calls, and daily resolution stats.",
+            service="call_center",
+            method="GET",
+            endpoint="/api/agents",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
+        # ── Product Catalog Tools (Read-Only) ───────────────────────
+        self.register(Tool(
+            name="products_list_plans",
+            description="List active broadband and VoIP plans with pricing, speeds, and router equipment.",
+            service="billing",
+            method="GET",
+            endpoint="/api/plans",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="products_list_bundles",
+            description="List combined fiber & voice packages, bundle discounts, and add-on services.",
+            service="billing",
+            method="GET",
+            endpoint="/api/bundles",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
+        # ── Talent & HR Tools (Read-Only) ───────────────────────────
+        self.register(Tool(
+            name="talent_list_employees",
+            description="Query employee directory, departments, and active shift rosters.",
+            service="hr",
+            method="GET",
+            endpoint="/api/employees",
+            parameters={"type": "object", "properties": {"department": {"type": "string"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="talent_get_performance_summary",
+            description="Get team performance metrics, completed reviews, and attrition risk indicators.",
+            service="hr",
+            method="GET",
+            endpoint="/api/analytics/attrition-risk",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
+        # ── Analytics & Telemetry Tools (Read-Only) ─────────────────
+        self.register(Tool(
+            name="analytics_get_mrr_trends",
+            description="Get MRR, ARPU, gross additions, and revenue telemetry trends.",
+            service="analytics",
+            method="GET",
+            endpoint="/api/analytics/mrr-breakdown",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="analytics_get_network_health",
+            description="Query live network uptime, active node telemetry, and latency stats.",
+            service="network",
+            method="GET",
+            endpoint="/api/nodes/summary",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
     def register(self, tool: Tool):
         self._tools[tool.name] = tool
 
@@ -420,38 +494,47 @@ class ToolRegistry:
         ]
         AGENT_TOOL_PERMISSIONS = {
             "customer_facing": [
-                "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
+                "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "products_list_plans", "products_list_bundles",
+                "network_check_coverage", "network_get_service_status",
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "retention": [
-                "crm_get_customer", "crm_get_customer_360", "crm_create_customer",
+                "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "retention_get_predictions", "retention_get_cases",
+                "products_list_plans", "products_list_bundles",
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "provisioning": [
                 "crm_get_customer", "crm_get_customer_360",
-                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
+                "network_check_coverage", "network_get_service_status", "network_run_diagnostics",
+                "billing_get_balance", "billing_get_invoice",
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "executive": [
-                "crm_get_customer", "crm_get_customer_360",
-                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
-                "support_create_ticket", "support_get_tickets",
-                "memory.recall", "memory.write_entry",
+                "analytics_get_executive_summary", "analytics_get_mrr_trends", "analytics_get_network_health",
+                "finance_get_financial_summary", "sales_get_pipeline",
+                "retention_get_predictions", "retention_get_cases",
+                "call_center_get_intelligence", "call_center_get_queues",
+                "talent_get_performance_summary",
+                "memory.recall", "memory.write_entry", "memory.upsert_summary",
             ] + FNO_TOOLS,
             "support": [
                 "crm_get_customer", "crm_get_customer_360",
-                "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
                 "support_create_ticket", "support_get_tickets",
+                "network_get_service_status", "network_run_diagnostics",
+                "billing_get_balance", "billing_get_invoice",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "billing": [
                 "billing_get_balance", "billing_get_invoice", "billing_get_payment_history",
                 "crm_get_customer", "crm_get_customer_360",
+                "products_list_plans", "products_list_bundles",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "crm": [
@@ -459,9 +542,39 @@ class ToolRegistry:
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
+            "call_center": [
+                "call_center_get_queues", "call_center_get_agent_metrics", "call_center_get_intelligence",
+                "crm_get_customer", "crm_get_customer_360",
+                "support_create_ticket", "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ],
+            "products": [
+                "products_list_plans", "products_list_bundles",
+                "network_check_coverage",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
+            "talent": [
+                "talent_list_employees", "talent_get_performance_summary",
+                "call_center_get_agent_metrics",
+                "memory.recall", "memory.write_entry",
+            ],
+            "analytics": [
+                "analytics_get_mrr_trends", "analytics_get_network_health", "analytics_get_executive_summary",
+                "sales_get_pipeline", "finance_get_financial_summary",
+                "retention_get_predictions", "call_center_get_intelligence",
+                "memory.recall", "memory.write_entry",
+            ],
+            "assistant": [
+                "crm_get_customer", "crm_get_customer_360",
+                "billing_get_balance", "billing_get_invoice",
+                "products_list_plans", "products_list_bundles",
+                "network_check_coverage", "network_get_service_status",
+                "support_get_tickets",
+                "memory.recall", "memory.write_entry",
+            ] + FNO_TOOLS,
         }
 
-        allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, [])
+        allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, AGENT_TOOL_PERMISSIONS.get("customer_facing", []))
         return [t for t in self._tools.values() if t.name in allowed]
 
     def to_openai_format(self, tools: List[Tool]) -> List[Dict]:

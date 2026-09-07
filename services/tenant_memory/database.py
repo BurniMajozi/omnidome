@@ -60,6 +60,30 @@ CREATE INDEX IF NOT EXISTS idx_memory_summaries_tenant
     ON tenant_memory_summaries(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_summaries_module
     ON tenant_memory_summaries(tenant_id, module, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS tenant_agent_skills (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    skill_name VARCHAR(120) NOT NULL,
+    description TEXT NOT NULL,
+    category VARCHAR(80) NOT NULL DEFAULT 'operational',
+    source_agent_type VARCHAR(80) NOT NULL,
+    target_agent_types TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    protocol_schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tools_required TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    guidance_prompt TEXT NOT NULL,
+    version VARCHAR(20) NOT NULL DEFAULT '1.0.0',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, skill_name, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_skills_tenant
+    ON tenant_agent_skills(tenant_id, is_active, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tenant_agent_skills_source
+    ON tenant_agent_skills(tenant_id, source_agent_type);
 """
 
 
