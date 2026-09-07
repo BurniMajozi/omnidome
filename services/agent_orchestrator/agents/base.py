@@ -20,6 +20,20 @@ from tools.registry import Tool, execute_tool, get_tools_for_agent
 logger = logging.getLogger("agents.base")
 
 
+def clean_response(text: str) -> str:
+    """Clean repeated assistant responses if the LLM emitted premature drafts."""
+    if not text or not isinstance(text, str):
+        return text or ""
+    parts = text.split("\n---\n")
+    if len(parts) > 1:
+        stripped = [p.strip() for p in parts if p.strip()]
+        if len(stripped) >= 2:
+            first_lines = [p.splitlines()[0] for p in stripped if p.splitlines()]
+            if len(first_lines) >= 2 and first_lines[0] == first_lines[1]:
+                return stripped[-1]
+    return text.strip()
+
+
 # ---------------------------------------------------------------------------
 # Conversation helpers
 # ---------------------------------------------------------------------------
@@ -203,7 +217,7 @@ class BaseAgent:
                     self.agent_type, duration, iteration,
                 )
                 return AgentResult(
-                    content=content,
+                    content=clean_response(content),
                     tool_calls=all_tool_calls,
                     tool_results=all_tool_results,
                     conversation_id=self.conversation_id,
@@ -218,7 +232,7 @@ class BaseAgent:
             # Record assistant message with tool_calls in history
             assistant_msg: Dict[str, Any] = {
                 "role": "assistant",
-                "content": content,
+                "content": None if calls else content,
             }
             if calls:
                 assistant_msg["tool_calls"] = calls
@@ -311,7 +325,7 @@ class BaseAgent:
         )
 
         return AgentResult(
-            content=content,
+            content=clean_response(content),
             tool_calls=all_tool_calls,
             tool_results=all_tool_results,
             conversation_id=self.conversation_id,

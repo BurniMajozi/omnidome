@@ -37,10 +37,11 @@ from services.agent_orchestrator.protocol_models import (
     UCPCheckoutSessionRecord,
 )
 from services.common.auth import AuthContext, get_auth_context
-from services.common.db import get_async_session
+from services.common.db import get_async_session, session_scope as get_session
+from services.agent_orchestrator.conversation.models import AgentConversation
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.hermes_client import hermes_client
-from services.agent_orchestrator.routes.agents import _hermes_system_note
+from services.agent_orchestrator.routes.agents import _hermes_system_note, _persist_messages
 
 router = APIRouter(tags=["Agent Protocols"])
 
@@ -248,6 +249,47 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 conversation_id=body.conversation_id,
                 data={"correlation_id": correlation, "status": "written"},
             ))
+            # Persist messages & actions to AgentConversation / AgentMessage / AgentAction
+            try:
+                conv_uuid = None
+                if body.conversation_id:
+                    try:
+                        conv_uuid = uuid.UUID(str(body.conversation_id))
+                    except (ValueError, TypeError):
+                        pass
+                if not conv_uuid:
+                    conv_uuid = run_id
+
+                async with get_session() as session:
+                    # Ensure conversation exists
+                    conv_res = await session.execute(
+                        select(AgentConversation).where(AgentConversation.id == conv_uuid)
+                    )
+                    conv = conv_res.scalar_one_or_none()
+                    if not conv:
+                        conv = AgentConversation(
+                            id=conv_uuid,
+                            tenant_id=ctx.tenant_id,
+                            agent_type=body.agent_type,
+                            channel="ag-ui",
+                            context=body.context,
+                        )
+                        session.add(conv)
+                        await session.flush()
+
+                    await _persist_messages(
+                        session=session,
+                        conversation_id=conv_uuid,
+                        agent_type=body.agent_type,
+                        user_message=body.message,
+                        assistant_content=full_content,
+                        tool_calls=run_result.get("tool_calls", []) if "run_result" in locals() else [],
+                    )
+                    await session.flush()
+            except Exception as persist_err:
+                # DB persistence failure shouldn't crash the AG-UI stream
+                pass
+
             yield await emit(AGUIEvent(
                 type="RUN_FINISHED",
                 run_id=run_id,

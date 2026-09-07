@@ -521,3 +521,26 @@ export async function listConversations(agentType?: string): Promise<Conversatio
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.status}`)
   return res.json()
 }
+
+// ── Agent Satisfaction Feedback ─────────────────────────────────────────
+
+export interface AgentFeedbackPayload {
+  conversation_id?: string
+  agent_type: string
+  satisfaction: "thumbs_up" | "thumbs_down"
+  prompt?: string
+  response?: string
+}
+
+export async function recordAgentFeedback(payload: AgentFeedbackPayload): Promise<{ status: string }> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Failed to record feedback: ${res.status} — ${err}`)
+  }
+  return res.json()
+}

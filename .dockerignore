@@ -1,22 +1,16 @@
 node_modules
+*/node_modules
+*/*/node_modules
 .next
+*/.next
+*/*/.next
 .git
-*.pyc
+.venv
+*/.venv
+*/*/.venv
 __pycache__
-.env.local
-.env.*.local
-# Host-dev env overrides point *_SERVICE_URL at localhost:* — they must NOT
-# leak into the image build, or Next.js bakes localhost into the /svc/* rewrite
-# destinations and every rewrite-proxied service 500s (ECONNREFUSED) in-container.
-# Root-level patterns above don't match nested paths; these do.
-**/.env.local
-**/.env.*.local
-apps/web/node_modules
-apps/web/.next
-apps/web/.turbo
-apps/portal/node_modules
-brand_guidelines/
-docs/
-licenses/
-*.md
-!README.md
+*/__pycache__
+*/*/__pycache__
+*.pyc
+.hermes
+hermes_data

@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
@@ -192,6 +193,58 @@ def _parse_since(since: Optional[str]):
         raise ValueError(f"Invalid ISO datetime for 'since': {since!r}") from exc
 
 
+class FeedbackRequest(BaseModel):
+    conversation_id: Optional[uuid.UUID] = None
+    agent_type: str = "assistant"
+    satisfaction: str = Field(..., description="'thumbs_up' or 'thumbs_down'")
+    prompt: Optional[str] = None
+    response: Optional[str] = None
+
+
+@router.post("/feedback")
+async def record_feedback(
+    body: FeedbackRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Record user satisfaction rating (thumbs up / thumbs down) for an agent response."""
+    if body.satisfaction not in ("thumbs_up", "thumbs_down"):
+        raise HTTPException(status_code=400, detail="Satisfaction must be 'thumbs_up' or 'thumbs_down'")
+
+    async with get_session() as session:
+        conv_id = body.conversation_id
+        if not conv_id:
+            # Create a lightweight conversation to anchor the action
+            conv = AgentConversation(
+                tenant_id=ctx.tenant_id,
+                agent_type=body.agent_type,
+                channel="feedback",
+                context={"feedback": True},
+            )
+            session.add(conv)
+            await session.flush()
+            conv_id = conv.id
+
+        action = AgentAction(
+            conversation_id=conv_id,
+            agent_type=body.agent_type,
+            tool_name="user_feedback",
+            tool_input={
+                "satisfaction": body.satisfaction,
+                "prompt": body.prompt or "",
+                "user_id": str(ctx.user_id) if ctx.user_id else None,
+            },
+            tool_output={
+                "response": body.response or "",
+                "recorded": True,
+            },
+            success=True,
+        )
+        session.add(action)
+        await session.flush()
+
+    return {"status": "recorded", "action_id": str(action.id), "satisfaction": body.satisfaction}
+
+
 @router.get("/actions")
 async def list_actions(
     agent_type: Optional[str] = None,
@@ -203,6 +256,7 @@ async def list_actions(
 
     AgentAction has no tenant_id column, so tenant scoping goes through the
     conversation join (same ctx.tenant_id pattern as invoke_agent).
+    Enriched with the user prompt, assistant response, and user satisfaction rating.
     """
     try:
         since_dt = _parse_since(since)
@@ -227,21 +281,70 @@ async def list_actions(
         result = await session.execute(stmt)
         actions = result.scalars().all()
 
-    return {
-        "items": [
-            {
-                "id": str(a.id),
-                "conversation_id": str(a.conversation_id),
-                "agent_type": a.agent_type,
-                "tool_name": a.tool_name,
-                "tool_input": a.tool_input,
-                "tool_output": a.tool_output,
-                "success": a.success,
-                "created_at": a.created_at.isoformat() if a.created_at else None,
-            }
-            for a in actions
-        ]
-    }
+        # Batch fetch conversation messages and feedback to attach prompt, response, satisfaction
+        conv_ids = list({a.conversation_id for a in actions if a.conversation_id})
+        msg_map: dict[uuid.UUID, dict[str, str]] = {}
+        satisfaction_map: dict[uuid.UUID, str] = {}
+
+        if conv_ids:
+            # Query messages for prompt and response
+            msg_stmt = (
+                select(AgentMessage)
+                .where(AgentMessage.conversation_id.in_(conv_ids))
+                .order_by(AgentMessage.created_at.asc())
+            )
+            msg_res = await session.execute(msg_stmt)
+            for m in msg_res.scalars().all():
+                if m.conversation_id not in msg_map:
+                    msg_map[m.conversation_id] = {"prompt": "", "response": ""}
+                if m.role == "user" and not msg_map[m.conversation_id]["prompt"]:
+                    msg_map[m.conversation_id]["prompt"] = m.content or ""
+                elif m.role == "assistant":
+                    msg_map[m.conversation_id]["response"] = m.content or ""
+
+            # Check if any user_feedback action exists for these conversations
+            fb_stmt = (
+                select(AgentAction)
+                .where(
+                    AgentAction.conversation_id.in_(conv_ids),
+                    AgentAction.tool_name == "user_feedback",
+                )
+            )
+            fb_res = await session.execute(fb_stmt)
+            for fb in fb_res.scalars().all():
+                if isinstance(fb.tool_input, dict) and "satisfaction" in fb.tool_input:
+                    satisfaction_map[fb.conversation_id] = fb.tool_input["satisfaction"]
+
+    items = []
+    for a in actions:
+        conv_info = msg_map.get(a.conversation_id, {})
+        prompt = conv_info.get("prompt", "")
+        response = conv_info.get("response", "")
+        satisfaction = satisfaction_map.get(a.conversation_id)
+
+        # If this action is itself a user_feedback action, extract its values directly
+        if a.tool_name == "user_feedback" and isinstance(a.tool_input, dict):
+            satisfaction = a.tool_input.get("satisfaction", satisfaction)
+            if not prompt and a.tool_input.get("prompt"):
+                prompt = a.tool_input.get("prompt", "")
+            if not response and isinstance(a.tool_output, dict) and a.tool_output.get("response"):
+                response = a.tool_output.get("response", "")
+
+        items.append({
+            "id": str(a.id),
+            "conversation_id": str(a.conversation_id),
+            "agent_type": a.agent_type,
+            "tool_name": a.tool_name,
+            "tool_input": a.tool_input,
+            "tool_output": a.tool_output,
+            "success": a.success,
+            "prompt": prompt,
+            "response": response,
+            "satisfaction": satisfaction,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        })
+
+    return {"items": items}
 
 
 # ---------------------------------------------------------------------------

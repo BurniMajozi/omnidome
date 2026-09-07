@@ -23,6 +23,8 @@ import {
   Check,
   PanelRightClose,
   Hash,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -38,6 +40,7 @@ import { cn } from "@/lib/utils"
 import {
   invokeAgentAGUI,
   listAgents,
+  recordAgentFeedback,
   AGENT_CATALOG,
   type AGUIEvent,
   type AGUIStreamState,
@@ -452,6 +455,44 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const [artifactEdits, setArtifactEdits] = useState<Record<string, string>>({})
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [feedbackMap, setFeedbackMap] = useState<Record<string, "thumbs_up" | "thumbs_down">>({})
+
+  const handleCopyMessage = async (message: AGUIMessage) => {
+    if (!message.content) return
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopiedMessageId(message.id)
+      setTimeout(() => setCopiedMessageId(null), 2000)
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  const handleFeedback = async (message: AGUIMessage, rating: "thumbs_up" | "thumbs_down") => {
+    // Find preceding user prompt if available
+    const msgIdx = messages.findIndex((m) => m.id === message.id)
+    let prompt = ""
+    for (let i = msgIdx - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        prompt = messages[i].content
+        break
+      }
+    }
+
+    setFeedbackMap((prev) => ({ ...prev, [message.id]: rating }))
+    try {
+      await recordAgentFeedback({
+        conversation_id: conversationId || undefined,
+        agent_type: selectedAgent,
+        satisfaction: rating,
+        prompt,
+        response: message.content,
+      })
+    } catch (err) {
+      console.error("Failed to record feedback", err)
+    }
+  }
 
   // Autocomplete token detection
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -894,20 +935,66 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                   </div>
 
                   {message.role === "assistant" && !message.isStreaming && message.content && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 shrink-0 self-end text-muted-foreground hover:text-foreground"
-                      onClick={() => handleSpeakMessage(message)}
-                      disabled={speakingMessageId === message.id}
-                      title="Speak message"
-                    >
-                      {speakingMessageId === message.id ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Volume2 className="h-3.5 w-3.5" />
-                      )}
-                    </Button>
+                    <div className="flex items-center gap-0.5 shrink-0 self-end">
+                      {/* Copy message button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                        onClick={() => handleCopyMessage(message)}
+                        title="Copy message"
+                      >
+                        {copiedMessageId === message.id ? (
+                          <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+
+                      {/* Thumbs Up button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-6 w-6 text-muted-foreground hover:text-foreground",
+                          feedbackMap[message.id] === "thumbs_up" && "text-emerald-400 hover:text-emerald-300"
+                        )}
+                        onClick={() => handleFeedback(message, "thumbs_up")}
+                        title="Helpful response"
+                      >
+                        <ThumbsUp className={cn("h-3.5 w-3.5", feedbackMap[message.id] === "thumbs_up" && "fill-current")} />
+                      </Button>
+
+                      {/* Thumbs Down button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-6 w-6 text-muted-foreground hover:text-foreground",
+                          feedbackMap[message.id] === "thumbs_down" && "text-rose-400 hover:text-rose-300"
+                        )}
+                        onClick={() => handleFeedback(message, "thumbs_down")}
+                        title="Not helpful"
+                      >
+                        <ThumbsDown className={cn("h-3.5 w-3.5", feedbackMap[message.id] === "thumbs_down" && "fill-current")} />
+                      </Button>
+
+                      {/* Speak button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                        onClick={() => handleSpeakMessage(message)}
+                        disabled={speakingMessageId === message.id}
+                        title="Speak message"
+                      >
+                        {speakingMessageId === message.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Volume2 className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    </div>
                   )}
                 </div>
 

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -37,6 +37,9 @@ interface ActionItem {
   tool_input: unknown
   tool_output: unknown
   success: boolean
+  prompt?: string
+  response?: string
+  satisfaction?: "thumbs_up" | "thumbs_down" | null
   created_at: string
 }
 
@@ -158,6 +161,8 @@ function ActionTrailTab({ agentType }: { agentType: string }) {
               <TableRow>
                 <TableHead>Time</TableHead>
                 <TableHead>Tool / Action</TableHead>
+                <TableHead>Satisfaction</TableHead>
+                <TableHead>User Prompt & Response</TableHead>
                 <TableHead>Success</TableHead>
                 <TableHead>Conversation</TableHead>
                 <TableHead>Payload</TableHead>
@@ -175,12 +180,47 @@ function ActionTrailTab({ agentType }: { agentType: string }) {
                     </Badge>
                   </TableCell>
                   <TableCell>
+                    {item.satisfaction === "thumbs_up" ? (
+                      <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 gap-1 text-[11px]">
+                        <ThumbsUp className="h-3 w-3 fill-current" />
+                        Helpful
+                      </Badge>
+                    ) : item.satisfaction === "thumbs_down" ? (
+                      <Badge variant="outline" className="bg-rose-500/10 text-rose-400 border-rose-500/30 gap-1 text-[11px]">
+                        <ThumbsDown className="h-3 w-3 fill-current" />
+                        Unhelpful
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="max-w-xs">
+                    {item.prompt || item.response ? (
+                      <div className="space-y-1 text-xs">
+                        {item.prompt && (
+                          <p className="line-clamp-2 text-foreground font-medium" title={item.prompt}>
+                            <span className="text-muted-foreground font-normal">Prompt: </span>
+                            {item.prompt}
+                          </p>
+                        )}
+                        {item.response && (
+                          <p className="line-clamp-2 text-muted-foreground" title={item.response}>
+                            <span className="font-normal text-muted-foreground/70">Reply: </span>
+                            {item.response}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={item.success ? "default" : "destructive"}>
                       {item.success ? "ok" : "failed"}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <span className="block max-w-[140px] truncate font-mono text-xs text-muted-foreground">
+                    <span className="block max-w-[120px] truncate font-mono text-xs text-muted-foreground" title={item.conversation_id}>
                       {item.conversation_id}
                     </span>
                   </TableCell>

@@ -28,8 +28,10 @@ import {
   MicOff,
   ChevronDown,
   ShieldCheck,
+  ThumbsUp,
+  ThumbsDown,
 } from "lucide-react"
-import { invokeAgentAGUI, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
+import { invokeAgentAGUI, recordAgentFeedback, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -161,12 +163,46 @@ export function AgentArtifactChat({
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [history, setHistory] = useState<{ role: string; content: string }[]>([])
-  // Editable artifact store, keyed by artifact id (canvas edits live here).
   const [artifactEdits, setArtifactEdits] = useState<Record<string, string>>({})
   const [activeArtifact, setActiveArtifact] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [feedbackMap, setFeedbackMap] = useState<Record<string, "thumbs_up" | "thumbs_down">>({})
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  const handleCopyMessage = async (content: string, id: string) => {
+    if (!content) return
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopiedMessageId(id)
+      setTimeout(() => setCopiedMessageId(null), 2000)
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  const handleFeedback = async (message: Msg, rating: "thumbs_up" | "thumbs_down") => {
+    const msgIdx = messages.findIndex((m) => m.id === message.id)
+    let prompt = ""
+    for (let i = msgIdx - 1; i >= 0; i--) {
+      if (messages[i].role === "user") {
+        prompt = messages[i].content
+        break
+      }
+    }
+    setFeedbackMap((prev) => ({ ...prev, [message.id]: rating }))
+    try {
+      await recordAgentFeedback({
+        agent_type: selectedAgent,
+        satisfaction: rating,
+        prompt,
+        response: message.content,
+      })
+    } catch (err) {
+      console.error("Failed to record feedback", err)
+    }
+  }
 
   const currentAgent = AVAILABLE_AGENTS.find((a) => a.id === selectedAgent) ?? AVAILABLE_AGENTS[0]
 
@@ -408,6 +444,49 @@ export function AgentArtifactChat({
                       </button>
                     )
                   })}
+
+                  {/* Message Action Bar (Copy & Thumbs Up / Down) */}
+                  {!m.streaming && m.content && (
+                    <div className="flex items-center justify-end gap-1 pt-1 border-t border-border/40">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-5 w-5 text-muted-foreground hover:text-foreground"
+                        onClick={() => handleCopyMessage(m.content, m.id)}
+                        title="Copy message"
+                      >
+                        {copiedMessageId === m.id ? (
+                          <Check className="h-3 w-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-5 w-5 text-muted-foreground hover:text-foreground",
+                          feedbackMap[m.id] === "thumbs_up" && "text-emerald-400 hover:text-emerald-300"
+                        )}
+                        onClick={() => handleFeedback(m, "thumbs_up")}
+                        title="Helpful response"
+                      >
+                        <ThumbsUp className={cn("h-3 w-3", feedbackMap[m.id] === "thumbs_up" && "fill-current")} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-5 w-5 text-muted-foreground hover:text-foreground",
+                          feedbackMap[m.id] === "thumbs_down" && "text-rose-400 hover:text-rose-300"
+                        )}
+                        onClick={() => handleFeedback(m, "thumbs_down")}
+                        title="Not helpful"
+                      >
+                        <ThumbsDown className={cn("h-3 w-3", feedbackMap[m.id] === "thumbs_down" && "fill-current")} />
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             )

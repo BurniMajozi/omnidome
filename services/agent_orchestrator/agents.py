@@ -13,6 +13,22 @@ logger = logging.getLogger(__name__)
 MAX_TOOL_CALLS = 10
 
 
+def clean_response(text: str) -> str:
+    """Clean repeated assistant responses if the LLM emitted premature drafts."""
+    if not text or not isinstance(text, str):
+        return text or ""
+    parts = text.split("\n---\n")
+    if len(parts) > 1:
+        # Check if consecutive parts are near-duplicates (e.g. repeated briefings)
+        stripped = [p.strip() for p in parts if p.strip()]
+        if len(stripped) >= 2:
+            # If the first line of the parts match, or one starts similarly
+            first_lines = [p.splitlines()[0] for p in stripped if p.splitlines()]
+            if len(first_lines) >= 2 and first_lines[0] == first_lines[1]:
+                return stripped[-1]
+    return text.strip()
+
+
 class Agent:
     """Stateless agent reasoning loop.
     
@@ -87,8 +103,9 @@ class Agent:
 
             # No tool calls → final response
             if not raw_tool_calls:
+                cleaned = clean_response(content) or "I wasn't able to generate a response. Please try again."
                 return {
-                    "content": content or "I wasn't able to generate a response. Please try again.",
+                    "content": cleaned,
                     "tool_calls": tool_call_log,
                     "conversation_id": conversation_id,
                 }
@@ -176,12 +193,13 @@ class Agent:
 
             # Feed results back in OpenAI/Anthropic tool-calling format: an
             # assistant message carrying the tool_calls (with ids), then one
-            # tool message per result keyed by tool_call_id. Providers 400 if
-            # a tool message lacks tool_call_id.
+            # tool message per result keyed by tool_call_id.
+            # IMPORTANT: Set content to None/empty if tool calls were made so the LLM
+            # does not echo or concatenate its premature draft into the final response.
             import json as _json
             messages.append({
                 "role": "assistant",
-                "content": content or "",
+                "content": None if executed_calls else (content or ""),
                 "tool_calls": [
                     {
                         "id": c["id"],
@@ -203,8 +221,9 @@ class Agent:
 
         # Max tool calls reached — return last assistant content
         logger.warning("Agent %s reached max tool calls (%d)", self.agent_type, MAX_TOOL_CALLS)
+        last_content = messages[-1].get("content", "") if messages else "I've gathered all the information I can. Is there something specific you'd like me to focus on?"
         return {
-            "content": messages[-1].get("content", "") if messages else "I've gathered all the information I can. Is there something specific you'd like me to focus on?",
+            "content": clean_response(last_content),
             "tool_calls": tool_call_log,
             "conversation_id": conversation_id,
         }
