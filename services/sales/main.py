@@ -181,6 +181,57 @@ class QuoteAccept(BaseModel):
     stage_name: Optional[str] = None
 
 
+# ---- Lead Models ----
+class LeadCreate(BaseModel):
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source: str = "FIELD_VISIT"
+    interest_level: int = Field(default=3, ge=1, le=5)
+    notes: Optional[str] = None
+    agent_id: Optional[uuid.UUID] = None
+
+
+class LeadUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source: Optional[str] = None
+    interest_level: Optional[int] = Field(None, ge=1, le=5)
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    agent_id: Optional[uuid.UUID] = None
+
+
+class LeadResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    contact_id: Optional[uuid.UUID] = None
+    agent_id: Optional[uuid.UUID] = None
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    source: str
+    interest_level: int
+    status: str
+    notes: Optional[str] = None
+    converted_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class LeadConvert(BaseModel):
+    name: Optional[str] = Field(None, description="Deal name (defaults to lead name)")
+    value_zar: Decimal = Field(default=Decimal("0"), ge=0)
+    agent_id: Optional[uuid.UUID] = None
+
+
 class CommissionResponse(BaseModel):
     id: uuid.UUID
     deal_id: uuid.UUID
@@ -1633,6 +1684,266 @@ async def target_performance(
             )
 
     return results
+
+
+# ── Leads Management ──────────────────────────────────────────────────
+
+@app.get("/leads", response_model=List[LeadResponse])
+async def list_leads(
+    status: Optional[str] = None,
+    agent_id: Optional[uuid.UUID] = None,
+    source: Optional[str] = None,
+    min_interest: Optional[int] = Query(None, ge=1, le=5),
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    conditions = ["tenant_id = :tenant_id"]
+    params: Dict[str, Any] = {"tenant_id": str(tenant_id), "limit": limit}
+    if status:
+        conditions.append("status = :status")
+        params["status"] = status.upper()
+    if agent_id:
+        conditions.append("agent_id = :agent_id")
+        params["agent_id"] = str(agent_id)
+    if source:
+        conditions.append("source = :source")
+        params["source"] = source
+    if min_interest:
+        conditions.append("interest_level >= :min_interest")
+        params["min_interest"] = min_interest
+
+    where_clause = " and ".join(conditions)
+    engine = _get_engine()
+    async with engine.connect() as conn:
+        rows = await conn.execute(
+            text(
+                f"""
+                select id, tenant_id, contact_id, agent_id, first_name, last_name,
+                       email, phone, address, source, interest_level, status,
+                       notes, converted_at, created_at, updated_at
+                from leads
+                where {where_clause}
+                order by created_at desc
+                limit :limit
+                """
+            ),
+            params,
+        )
+        leads = list(rows.mappings().all())
+    return [LeadResponse(**lead) for lead in leads]
+
+
+@app.post("/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
+async def create_lead(
+    payload: LeadCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = _get_engine()
+    lead_id = uuid.uuid4()
+    now = datetime.utcnow()
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                """
+                insert into leads (
+                    id, tenant_id, first_name, last_name, email, phone, address,
+                    source, interest_level, notes, agent_id, status, created_at, updated_at
+                )
+                values (
+                    :id, :tenant_id, :first_name, :last_name, :email, :phone, :address,
+                    :source, :interest_level, :notes, :agent_id, 'NEW', :created_at, :updated_at
+                )
+                """
+            ),
+            {
+                "id": str(lead_id),
+                "tenant_id": str(tenant_id),
+                "first_name": payload.first_name,
+                "last_name": payload.last_name,
+                "email": payload.email,
+                "phone": payload.phone,
+                "address": payload.address,
+                "source": payload.source,
+                "interest_level": payload.interest_level,
+                "notes": payload.notes,
+                "agent_id": str(payload.agent_id) if payload.agent_id else None,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+    return LeadResponse(
+        id=lead_id,
+        tenant_id=tenant_id,
+        first_name=payload.first_name,
+        last_name=payload.last_name,
+        email=payload.email,
+        phone=payload.phone,
+        address=payload.address,
+        source=payload.source,
+        interest_level=payload.interest_level,
+        status="NEW",
+        notes=payload.notes,
+        agent_id=payload.agent_id,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@app.put("/leads/{lead_id}", response_model=LeadResponse)
+async def update_lead(
+    lead_id: uuid.UUID,
+    payload: LeadUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = _get_engine()
+    now = datetime.utcnow()
+    update_fields = []
+    params: Dict[str, Any] = {"lead_id": str(lead_id), "tenant_id": str(tenant_id), "updated_at": now}
+
+    if payload.first_name is not None:
+        update_fields.append("first_name = :first_name")
+        params["first_name"] = payload.first_name
+    if payload.last_name is not None:
+        update_fields.append("last_name = :last_name")
+        params["last_name"] = payload.last_name
+    if payload.email is not None:
+        update_fields.append("email = :email")
+        params["email"] = payload.email
+    if payload.phone is not None:
+        update_fields.append("phone = :phone")
+        params["phone"] = payload.phone
+    if payload.address is not None:
+        update_fields.append("address = :address")
+        params["address"] = payload.address
+    if payload.source is not None:
+        update_fields.append("source = :source")
+        params["source"] = payload.source
+    if payload.interest_level is not None:
+        update_fields.append("interest_level = :interest_level")
+        params["interest_level"] = payload.interest_level
+    if payload.status is not None:
+        update_fields.append("status = :status")
+        params["status"] = payload.status.upper()
+    if payload.notes is not None:
+        update_fields.append("notes = :notes")
+        params["notes"] = payload.notes
+    if payload.agent_id is not None:
+        update_fields.append("agent_id = :agent_id")
+        params["agent_id"] = str(payload.agent_id)
+
+    if not update_fields:
+        update_fields.append("updated_at = :updated_at")
+    else:
+        update_fields.append("updated_at = :updated_at")
+
+    async with engine.begin() as conn:
+        result = await conn.execute(
+            text(
+                f"""
+                update leads
+                set {', '.join(update_fields)}
+                where id = :lead_id and tenant_id = :tenant_id
+                returning id, tenant_id, contact_id, agent_id, first_name, last_name,
+                          email, phone, address, source, interest_level, status,
+                          notes, converted_at, created_at, updated_at
+                """
+            ),
+            params,
+        )
+        row = result.mappings().fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Lead not found")
+    return LeadResponse(**row)
+
+
+@app.post("/leads/{lead_id}/convert", response_model=dict)
+async def convert_lead(
+    lead_id: uuid.UUID,
+    payload: LeadConvert,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = _get_engine()
+    now = datetime.utcnow()
+    deal_id = uuid.uuid4()
+    async with engine.begin() as conn:
+        lead_row = await conn.execute(
+            text("select * from leads where id = :id and tenant_id = :tenant_id"),
+            {"id": str(lead_id), "tenant_id": str(tenant_id)},
+        )
+        lead = lead_row.mappings().fetchone()
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+
+        contact_id = lead.get("contact_id")
+        if not contact_id:
+            contact_id = uuid.uuid4()
+            await conn.execute(
+                text(
+                    """
+                    insert into contacts (
+                        id, tenant_id, first_name, last_name, email, phone, physical_address,
+                        status, lifecycle_stage, created_at, updated_at
+                    )
+                    values (
+                        :id, :tenant_id, :first_name, :last_name, :email, :phone, :address,
+                        'ACTIVE', 'QUALIFIED', :created_at, :updated_at
+                    )
+                    """
+                ),
+                {
+                    "id": str(contact_id),
+                    "tenant_id": str(tenant_id),
+                    "first_name": lead["first_name"],
+                    "last_name": lead["last_name"],
+                    "email": lead.get("email"),
+                    "phone": lead.get("phone"),
+                    "address": lead.get("address"),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
+        deal_name = payload.name or f"{lead['first_name']} {lead['last_name']} - New Deal"
+        stage_id = await _resolve_stage_id(conn, tenant_id, None, "Prospecting")
+        await conn.execute(
+            text(
+                """
+                insert into deals (
+                    id, tenant_id, contact_id, lead_id, agent_id, stage_id,
+                    name, amount, value_zar, status, created_at, updated_at
+                )
+                values (
+                    :id, :tenant_id, :contact_id, :lead_id, :agent_id, :stage_id,
+                    :name, :value_zar, :value_zar, 'OPEN', :created_at, :updated_at
+                )
+                """
+            ),
+            {
+                "id": str(deal_id),
+                "tenant_id": str(tenant_id),
+                "contact_id": str(contact_id),
+                "lead_id": str(lead_id),
+                "agent_id": str(payload.agent_id or lead.get("agent_id")) if (payload.agent_id or lead.get("agent_id")) else None,
+                "stage_id": str(stage_id),
+                "name": deal_name,
+                "value_zar": payload.value_zar,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+        await conn.execute(
+            text(
+                """
+                update leads
+                set status = 'CONVERTED', contact_id = :contact_id, converted_at = :now, updated_at = :now
+                where id = :lead_id and tenant_id = :tenant_id
+                """
+            ),
+            {"contact_id": str(contact_id), "now": now, "lead_id": str(lead_id), "tenant_id": str(tenant_id)},
+        )
+
+    return {"deal_id": str(deal_id), "contact_id": str(contact_id), "message": "Lead converted"}
 
 
 if __name__ == "__main__":
