@@ -536,9 +536,13 @@ export function SalesPipelineBoard({
       }${dealContactPhone.trim() ? ` | Phone: ${dealContactPhone.trim()}` : ""} | Product: ${dealProduct} | Channel: ${dealChannel}`
       const combinedNotes = dealNotes.trim() ? `${metaPrefix}\n${dealNotes.trim()}` : metaPrefix
 
+      const contactUuid = typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "00000000-0000-0000-0000-000000000001"
+
       await salesApi.createDeal({
         name: dealName.trim(),
-        customer_id: "00000000-0000-0000-0000-000000000001",
+        customer_id: contactUuid,
         stage_id: stage?.id,
         stage_name: stage?.name,
         value_zar: Number(dealValue) || 0,

@@ -623,10 +623,14 @@ export function SalesModule() {
 
       // 1. Create Deal in pipeline board
       let createdDeal: any = null
+      const contactUuid = typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "00000000-0000-0000-0000-000000000001"
+
       try {
         createdDeal = await salesApi.createDeal({
           name: dealTitle,
-          customer_id: "00000000-0000-0000-0000-000000000001",
+          customer_id: contactUuid,
           stage_name: dealStage,
           value_zar: Number(dealValue) || 0,
           notes: metaNotes,

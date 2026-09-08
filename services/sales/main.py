@@ -567,6 +567,65 @@ async def create_deal(
     now = datetime.utcnow()
     async with engine.begin() as conn:
         stage_id = await _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
+        
+        # Verify or resolve contact_id to satisfy foreign key constraint deals_contact_id_fkey
+        contact_id = payload.customer_id
+        contact_exists_row = await conn.execute(
+            text("select id from contacts where id = :contact_id and tenant_id = :tenant_id"),
+            {"contact_id": str(contact_id), "tenant_id": str(tenant_id)},
+        )
+        if not contact_exists_row.fetchone():
+            # Parse contact name and details if provided in notes or fallback to deal name
+            first_name = "Walk-in"
+            last_name = "Customer"
+            email = None
+            phone = None
+            if payload.notes and "Contact: " in payload.notes:
+                try:
+                    c_part = payload.notes.split("Contact: ")[1].split("|")[0].strip()
+                    tokens = c_part.split(" ")
+                    first_name = tokens[0]
+                    if len(tokens) > 1:
+                        last_name = " ".join(tokens[1:])
+                except Exception:
+                    pass
+            if payload.notes and "Email: " in payload.notes:
+                try:
+                    email = payload.notes.split("Email: ")[1].split("|")[0].strip()
+                except Exception:
+                    pass
+            if payload.notes and "Phone: " in payload.notes:
+                try:
+                    phone = payload.notes.split("Phone: ")[1].split("|")[0].strip()
+                except Exception:
+                    pass
+
+            await conn.execute(
+                text(
+                    """
+                    insert into contacts (
+                        id, tenant_id, first_name, last_name, email, phone,
+                        status, lifecycle_stage, created_at, updated_at
+                    )
+                    values (
+                        :id, :tenant_id, :first_name, :last_name, :email, :phone,
+                        'ACTIVE', 'PROSPECT', :created_at, :updated_at
+                    )
+                    on conflict (id) do nothing
+                    """
+                ),
+                {
+                    "id": str(contact_id),
+                    "tenant_id": str(tenant_id),
+                    "first_name": first_name,
+                    "last_name": last_name,
+                    "email": email,
+                    "phone": phone,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+
         await conn.execute(
             text(
                 """
@@ -583,7 +642,7 @@ async def create_deal(
             {
                 "id": str(deal_id),
                 "tenant_id": str(tenant_id),
-                "contact_id": str(payload.customer_id),
+                "contact_id": str(contact_id),
                 "lead_id": str(payload.lead_id) if payload.lead_id else None,
                 "agent_id": str(payload.agent_id) if payload.agent_id else None,
                 "stage_id": str(stage_id),
