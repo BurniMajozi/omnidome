@@ -22,7 +22,14 @@ logger = logging.getLogger("communication.mail")
 
 router = APIRouter(prefix="/mail", tags=["agent-mail"])
 
-ORCHESTRATOR_URL = os.getenv("AGENT_ORCHESTRATOR_URL", "http://agent_orchestrator:8006")
+# Canonical orchestrator URL. Prefer ORCHESTRATOR_URL (used across the stack),
+# fall back to AGENT_ORCHESTRATOR_URL (billing uses this name), then the Docker
+# DNS default. On Railway set ORCHESTRATOR_URL to the .railway.internal host.
+ORCHESTRATOR_URL = (
+    os.getenv("ORCHESTRATOR_URL")
+    or os.getenv("AGENT_ORCHESTRATOR_URL")
+    or "http://agent-orchestrator:8021"
+)
 
 
 # ── Pydantic Schemas ────────────────────────────────────────────────────────

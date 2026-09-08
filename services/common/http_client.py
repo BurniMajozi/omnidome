@@ -51,7 +51,7 @@ _SERVICE_URLS: dict[str, str] = {
     "memory":             os.getenv("MEMORY_SERVICE_URL",             "http://memory:8025"),
     "journey_engine":     os.getenv("JOURNEY_ENGINE_SERVICE_URL",     "http://journey_engine:8017"),
     "lifecycle":          os.getenv("LIFECYCLE_SERVICE_URL",          "http://lifecycle:8018"),
-    "orchestrator":       os.getenv("ORCHESTRATOR_SERVICE_URL",       "http://agent-orchestrator:8019"),
+    "orchestrator":       os.getenv("ORCHESTRATOR_SERVICE_URL",       "http://agent-orchestrator:8021"),
     "portal":             os.getenv("PORTAL_SERVICE_URL",             "http://portal:8026"),
 }
 
