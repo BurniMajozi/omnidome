@@ -62,6 +62,26 @@ export const SALES_CHANNELS: { id: SalesChannel; label: string; description: str
   { id: "REFERRAL", label: "Partner Referral", description: "Affiliate & partner networks", icon: "Users", color: "#ec4899" },
 ]
 
+export interface ProductPackage {
+  id: string
+  name: string
+  category: "Fiber" | "Broadband" | "Voice" | "Cloud" | "Enterprise"
+  speed?: string
+  price_monthly: number
+  description: string
+}
+
+export const PRODUCT_CATALOG: ProductPackage[] = [
+  { id: "BF-200", name: "Business Fiber 200Mbps", category: "Fiber", speed: "200/200 Mbps", price_monthly: 1899, description: "Symmetric business uncapped fiber with 99.5% uptime SLA" },
+  { id: "BF-500", name: "Business Fiber 500Mbps", category: "Fiber", speed: "500/500 Mbps", price_monthly: 2999, description: "High-capacity symmetric fiber with static IP & prioritized routing" },
+  { id: "ENT-1G", name: "Enterprise Dedicated 1Gbps", category: "Enterprise", speed: "1 Gbps Dedicated", price_monthly: 7500, description: "1:1 Dedicated leased line, 99.9% SLA, BGP peering, 4-hour MTTR" },
+  { id: "HB-100", name: "Home Broadband 100Mbps", category: "Broadband", speed: "100/100 Mbps", price_monthly: 899, description: "Uncapped, unshaped residential fiber with premium Wi-Fi 6 router" },
+  { id: "HB-200", name: "Home Broadband 200Mbps", category: "Broadband", speed: "200/200 Mbps", price_monthly: 1199, description: "High-speed family streaming & gaming fiber with zero throttling" },
+  { id: "PBX-10", name: "Hosted PBX & VoIP Trunk (10-Seat)", category: "Voice", speed: "Voice", price_monthly: 1450, description: "Cloud telephone switchboard, 10 geographic SIP trunks, call recording" },
+  { id: "VDC-STD", name: "Cloud Virtual Data Center & Backup", category: "Cloud", speed: "Cloud", price_monthly: 3200, description: "Automated off-site backup, disaster recovery, Veeam integration" },
+  { id: "SDWAN-5", name: "SD-WAN Multi-Branch Secure Network", category: "Enterprise", speed: "SD-WAN", price_monthly: 5800, description: "Automated multi-branch WAN path selection with Fortinet firewall" },
+]
+
 export interface PipelineStage {
   id: string
   name: string

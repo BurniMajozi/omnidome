@@ -62,6 +62,10 @@ interface ModuleLayoutProps {
   subtitle?: string
   /** Optional extra actions in the PageHeader (right of Export CSV) */
   headerActions?: ReactNode
+  /** Whether to show the bottom generic TableShell (defaults to true) */
+  showTable?: boolean
+  /** Whether to hide the header Export CSV button (defaults to false) */
+  hideHeaderExport?: boolean
 }
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -109,6 +113,8 @@ export function ModuleLayout({
   icon,
   subtitle,
   headerActions,
+  showTable = true,
+  hideHeaderExport = false,
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
   const [localTableData, setLocalTableData] = useState<TableRow[]>(tableData)
@@ -242,9 +248,11 @@ Format each proposal as a separate markdown code block with a clear title header
         actions={
           <>
             {headerActions}
-            <Button variant="outline" size="sm" onClick={handleExport}>
-              <Download className="h-3.5 w-3.5" />Export CSV
-            </Button>
+            {!hideHeaderExport && (
+              <Button variant="outline" size="sm" onClick={handleExport}>
+                <Download className="h-3.5 w-3.5" />Export CSV
+              </Button>
+            )}
           </>
         }
       />
@@ -462,19 +470,21 @@ Format each proposal as a separate markdown code block with a clear title header
       </section>
 
       {/* Data Table */}
-      <section aria-label="Data export">
-        <TableShell
-          title={`${title} Records`}
-          columns={tableColumns.map((c) => ({ ...c, inputType: "text" as const }))}
-          data={localTableData}
-          addLabel="Add Record"
-          onAdd={(rec) => setLocalTableData((prev) => [rec as TableRow, ...prev])}
-          onDelete={(id) => setLocalTableData((prev) => prev.filter((r) => r.id !== id))}
-          onEdit={(rec) => setLocalTableData((prev) => prev.map((r) => r.id === rec.id ? rec as TableRow : r))}
-          onRefresh={() => setLocalTableData(tableData)}
-          searchPlaceholder={`Search ${title.toLowerCase()}...`}
-        />
-      </section>
+      {showTable && (
+        <section aria-label="Data export">
+          <TableShell
+            title={`${title} Records`}
+            columns={tableColumns.map((c) => ({ ...c, inputType: "text" as const }))}
+            data={localTableData}
+            addLabel="Add Record"
+            onAdd={(rec) => setLocalTableData((prev) => [rec as TableRow, ...prev])}
+            onDelete={(id) => setLocalTableData((prev) => prev.filter((r) => r.id !== id))}
+            onEdit={(rec) => setLocalTableData((prev) => prev.map((r) => r.id === rec.id ? rec as TableRow : r))}
+            onRefresh={() => setLocalTableData(tableData)}
+            searchPlaceholder={`Search ${title.toLowerCase()}...`}
+          />
+        </section>
+      )}
     </div>
   )
 }

@@ -10,16 +10,63 @@ import {
   XCircle,
   Clock,
   User,
+  Mail,
+  Phone,
+  Package,
+  Store,
+  Globe,
+  Building2,
+  Sparkles,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   salesApi,
+  PRODUCT_CATALOG,
+  SALES_CHANNELS,
   type Deal,
   type PipelineOverviewStage,
   type PipelineStage,
+  type SalesChannel,
+  type ProductPackage,
 } from "@/lib/sales-api"
+
+function parseDealMetadata(notes?: string, dealName?: string) {
+  let email = ""
+  let phone = ""
+  let contact = ""
+  let product = ""
+  let channel = ""
+
+  if (notes) {
+    const emailMatch = notes.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/)
+    if (emailMatch) email = emailMatch[0]
+
+    const phoneMatch = notes.match(/(?:\+27|0)[0-9\s-]{9,13}/)
+    if (phoneMatch) phone = phoneMatch[0].trim()
+
+    const productMatch = notes.match(/Product:\s*([^|\n]+)/i)
+    if (productMatch) product = productMatch[1].trim()
+
+    const channelMatch = notes.match(/Channel:\s*([^|\n]+)/i)
+    if (channelMatch) channel = channelMatch[1].trim()
+
+    const contactMatch = notes.match(/Contact:\s*([^|\n]+)/i)
+    if (contactMatch) contact = contactMatch[1].trim()
+  }
+
+  if (!product && dealName) {
+    const foundProduct = PRODUCT_CATALOG.find(
+      (p) =>
+        dealName.toLowerCase().includes(p.name.toLowerCase()) ||
+        dealName.toLowerCase().includes(p.id.toLowerCase())
+    )
+    if (foundProduct) product = foundProduct.name
+  }
+
+  return { email, phone, contact, product, channel }
+}
 
 // ── Stage color mapping ──────────────────────────────────────────────
 
@@ -70,6 +117,7 @@ function DealCard({
   isLast: boolean
 }) {
   const colors = getStageColors(stageName)
+  const meta = parseDealMetadata(deal.notes, deal.name)
 
   return (
     <div
@@ -89,6 +137,46 @@ function DealCard({
       <h4 className="text-sm font-medium text-foreground pr-6 truncate" title={deal.name}>
         {deal.name}
       </h4>
+
+      {/* Product Tag */}
+      {meta.product && (
+        <div className="mt-1 flex items-center gap-1 text-[11px] font-medium text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 px-1.5 py-0.5 rounded max-w-full truncate">
+          <Package className="h-3 w-3 shrink-0 text-cyan-400" />
+          <span className="truncate">{meta.product}</span>
+        </div>
+      )}
+
+      {/* Contact Details */}
+      {(meta.contact || meta.email || meta.phone) && (
+        <div className="mt-1.5 space-y-0.5 rounded bg-background/50 border border-border/50 p-1.5 text-[10px] text-muted-foreground">
+          {meta.contact && (
+            <div className="flex items-center gap-1 font-semibold text-foreground truncate">
+              <User className="h-2.5 w-2.5 text-primary shrink-0" />
+              <span className="truncate">{meta.contact}</span>
+            </div>
+          )}
+          {meta.email && (
+            <div className="flex items-center gap-1 truncate text-muted-foreground">
+              <Mail className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+              <span className="truncate">{meta.email}</span>
+            </div>
+          )}
+          {meta.phone && (
+            <div className="flex items-center gap-1 text-muted-foreground">
+              <Phone className="h-2.5 w-2.5 text-muted-foreground shrink-0" />
+              <span>{meta.phone}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {meta.channel && (
+        <div className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground/80">
+          <span className="rounded-full px-1.5 py-0.5 bg-muted border border-border text-[9px] font-medium">
+            {meta.channel}
+          </span>
+        </div>
+      )}
 
       {/* Value */}
       <div className="mt-1.5 flex items-center justify-between">
@@ -287,22 +375,31 @@ function PipelineColumn({
   )
 }
 
-// ── Main Pipeline Board ───────────────────────────────────────────────
+export interface SalesPipelineBoardProps {
+  onDataLoaded?: (deals: Deal[], stages: PipelineOverviewStage[]) => void
+  onOpenCreateModal?: () => void
+  refreshTrigger?: number
+}
 
 export function SalesPipelineBoard({
   onDataLoaded,
-}: {
-  onDataLoaded?: (deals: Deal[], stages: PipelineOverviewStage[]) => void
-}) {
+  onOpenCreateModal,
+  refreshTrigger,
+}: SalesPipelineBoardProps) {
   const [stages, setStages] = useState<PipelineOverviewStage[]>([])
   const [deals, setDeals] = useState<Deal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Manual Deal Creation Modal state
+  // Manual Deal Creation Modal state with full contact & product fields
   const [newDealOpen, setNewDealOpen] = useState(false)
   const [dealName, setDealName] = useState("")
-  const [dealValue, setDealValue] = useState<string>("50000")
+  const [dealContactName, setDealContactName] = useState("")
+  const [dealContactEmail, setDealContactEmail] = useState("")
+  const [dealContactPhone, setDealContactPhone] = useState("")
+  const [dealProduct, setDealProduct] = useState(PRODUCT_CATALOG[0].name)
+  const [dealChannel, setDealChannel] = useState<SalesChannel>("WALK_IN")
+  const [dealValue, setDealValue] = useState<string>(String(PRODUCT_CATALOG[0].price_monthly * 12))
   const [dealStageId, setDealStageId] = useState("")
   const [dealNotes, setDealNotes] = useState("")
   const [savingDeal, setSavingDeal] = useState(false)
@@ -355,7 +452,7 @@ export function SalesPipelineBoard({
 
   useEffect(() => {
     loadData()
-  }, [loadData])
+  }, [loadData, refreshTrigger])
 
   // Group deals by stage
   const dealsByStage = stages.reduce<Record<string, Deal[]>>((acc, stage) => {
@@ -434,17 +531,41 @@ export function SalesPipelineBoard({
     setSavingDeal(true)
     try {
       const stage = stages.find((s) => s.id === dealStageId) || stages[0]
+      const metaPrefix = `Contact: ${dealContactName.trim() || "Walk-in Lead"}${
+        dealContactEmail.trim() ? ` | Email: ${dealContactEmail.trim()}` : ""
+      }${dealContactPhone.trim() ? ` | Phone: ${dealContactPhone.trim()}` : ""} | Product: ${dealProduct} | Channel: ${dealChannel}`
+      const combinedNotes = dealNotes.trim() ? `${metaPrefix}\n${dealNotes.trim()}` : metaPrefix
+
       await salesApi.createDeal({
         name: dealName.trim(),
         customer_id: "00000000-0000-0000-0000-000000000001",
         stage_id: stage?.id,
         stage_name: stage?.name,
         value_zar: Number(dealValue) || 0,
-        notes: dealNotes.trim() || undefined,
+        notes: combinedNotes,
       })
+
+      // Also create a lead entry so leads and pipeline stay perfectly synced
+      if (dealContactName.trim()) {
+        const [firstName, ...lastRest] = dealContactName.trim().split(" ")
+        await salesApi
+          .createLead({
+            first_name: firstName || "Walk-in",
+            last_name: lastRest.join(" ") || "Lead",
+            email: dealContactEmail.trim() || undefined,
+            phone: dealContactPhone.trim() || undefined,
+            source: dealChannel,
+            interest_level: 5,
+            notes: `Deal created: ${dealName.trim()} · Product: ${dealProduct}`,
+          })
+          .catch(() => null)
+      }
+
       setNewDealOpen(false)
       setDealName("")
-      setDealValue("50000")
+      setDealContactName("")
+      setDealContactEmail("")
+      setDealContactPhone("")
       setDealNotes("")
       loadData()
     } catch (err) {
@@ -505,20 +626,23 @@ export function SalesPipelineBoard({
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            onClick={() => setNewDealOpen(true)}
+            onClick={() => (onOpenCreateModal ? onOpenCreateModal() : setNewDealOpen(true))}
             className="h-8 gap-1.5 bg-primary text-primary-foreground text-xs shadow-sm"
           >
-            + Create Deal Manually
+            + Create Deal / Lead
           </Button>
         </div>
       </div>
 
-      {/* Manual Create Deal Dialog */}
+      {/* Comprehensive Create Deal Dialog with Contact Details & Product Selection */}
       {newDealOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <h3 className="text-base font-bold text-foreground">Add Deal to Pipeline</h3>
+              <div>
+                <h3 className="text-base font-bold text-foreground">Add Deal to Pipeline</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">Captures Contact Details, Product Selection, Channel & Stage</p>
+              </div>
               <button
                 type="button"
                 onClick={() => setNewDealOpen(false)}
@@ -529,20 +653,105 @@ export function SalesPipelineBoard({
             </div>
             <form onSubmit={handleCreateManualDeal} className="space-y-3.5">
               <div>
-                <label className="text-xs font-semibold text-foreground">Deal Name *</label>
+                <label className="text-xs font-semibold text-foreground">Deal / Company Name *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Acme Corp - Fiber Upgrade"
+                  placeholder="e.g. Acme Corp - Fiber Expansion"
                   value={dealName}
                   onChange={(e) => setDealName(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
+              {/* Contact Details Fields */}
+              <div className="rounded-lg border border-border/70 bg-muted/20 p-3 space-y-2.5">
+                <div className="text-[11px] font-semibold text-foreground flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-primary" /> Contact Details (Customer Person)
+                </div>
+                <div>
+                  <label className="text-[11px] font-medium text-muted-foreground">Contact Person Name</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Sipho Khumalo"
+                    value={dealContactName}
+                    onChange={(e) => setDealContactName(e.target.value)}
+                    className="mt-0.5 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+                      <Mail className="h-3 w-3" /> Email Address
+                    </label>
+                    <input
+                      type="email"
+                      placeholder="client@domain.co.za"
+                      value={dealContactEmail}
+                      onChange={(e) => setDealContactEmail(e.target.value)}
+                      className="mt-0.5 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground flex items-center gap-1">
+                      <Phone className="h-3 w-3" /> Phone Number
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="+27 82 123 4567"
+                      value={dealContactPhone}
+                      onChange={(e) => setDealContactPhone(e.target.value)}
+                      className="mt-0.5 w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Product Package & Channel Selection */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-semibold text-foreground">Value (ZAR) *</label>
+                  <label className="text-xs font-semibold text-foreground flex items-center gap-1">
+                    <Package className="h-3 w-3 text-cyan-400" /> Selected Product / Package *
+                  </label>
+                  <select
+                    value={dealProduct}
+                    onChange={(e) => {
+                      const prod = PRODUCT_CATALOG.find((p) => p.name === e.target.value)
+                      setDealProduct(e.target.value)
+                      if (prod) {
+                        setDealValue(String(prod.price_monthly * 12))
+                      }
+                    }}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {PRODUCT_CATALOG.map((p) => (
+                      <option key={p.id} value={p.name}>
+                        {p.name} (R{p.price_monthly.toLocaleString()}/mo)
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-foreground flex items-center gap-1">
+                    <Store className="h-3 w-3 text-amber-400" /> Acquisition Channel *
+                  </label>
+                  <select
+                    value={dealChannel}
+                    onChange={(e) => setDealChannel(e.target.value as SalesChannel)}
+                    className="mt-1 w-full rounded-lg border border-border bg-background px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {SALES_CHANNELS.map((ch) => (
+                      <option key={ch.id} value={ch.id}>
+                        {ch.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-foreground">Value (ZAR / Annual) *</label>
                   <input
                     type="number"
                     required
@@ -572,8 +781,8 @@ export function SalesPipelineBoard({
               <div>
                 <label className="text-xs font-semibold text-foreground">Notes / Customer Context</label>
                 <textarea
-                  rows={3}
-                  placeholder="Customer walk-in, agreed pricing, expected signing..."
+                  rows={2}
+                  placeholder="Customer walk-in, agreed pricing terms, installation site..."
                   value={dealNotes}
                   onChange={(e) => setDealNotes(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
