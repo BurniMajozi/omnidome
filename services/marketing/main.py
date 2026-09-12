@@ -2715,6 +2715,7 @@ async def zernio_conversations(
     platform: Optional[str] = None,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(20, ge=1, le=100),
+    account_id: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """Live inbox conversations from Zernio (proxied, not stored)."""
@@ -2722,7 +2723,10 @@ async def zernio_conversations(
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
     try:
-        return await client.list_conversations(platform=platform, status=status_filter, limit=limit)
+        return await client.list_conversations(
+            platform=platform, status=status_filter, limit=limit,
+            account_id=account_id,
+        )
     except Exception as e:
         logger.error(f"Zernio list_conversations failed: {e}")
         raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")

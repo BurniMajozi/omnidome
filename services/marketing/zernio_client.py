@@ -105,11 +105,16 @@ class ZernioClient:
         return result if isinstance(result, list) else []
 
     async def get_account(self, account_id: str) -> Dict:
-        """Get a specific account by ID."""
-        result = await self._request("GET", f"/accounts/{account_id}")
-        if isinstance(result, dict):
-            return result.get("data", result)
-        return result
+        """Get a specific account by ID.
+
+        Spec note: /v1/accounts/{accountId} has no GET — filter the
+        list endpoint instead (verified against zernio.com/openapi.json).
+        """
+        accounts = await self.list_accounts()
+        for acct in accounts:
+            if acct.get("_id") == account_id or acct.get("id") == account_id:
+                return acct
+        return {}
 
     # ── Conversations / Inbox ──────────────────────────────────────────
 
@@ -119,8 +124,13 @@ class ZernioClient:
         status: Optional[str] = None,
         limit: int = 20,
         cursor: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """List inbox conversations across platforms."""
+        """List inbox conversations across platforms.
+
+        Path verified: GET /v1/inbox/conversations (spec: platform, status,
+        limit, cursor, accountId query params).
+        """
         params: Dict[str, Any] = {"limit": limit}
         if platform:
             params["platform"] = platform
@@ -128,26 +138,38 @@ class ZernioClient:
             params["status"] = status
         if cursor:
             params["cursor"] = cursor
-        return await self._request("GET", "/messages/list-inbox-conversations", params=params)
+        if account_id:
+            params["accountId"] = account_id
+        return await self._request("GET", "/inbox/conversations", params=params)
 
-    async def get_conversation(self, conversation_id: str) -> Dict:
-        """Get a specific conversation."""
-        result = await self._request("GET", f"/messages/conversations/{conversation_id}")
+    async def get_conversation(
+        self, conversation_id: str, account_id: Optional[str] = None
+    ) -> Dict:
+        """Get a specific conversation (spec requires accountId query)."""
+        params: Dict[str, Any] = {}
+        if account_id:
+            params["accountId"] = account_id
+        result = await self._request(
+            "GET", f"/inbox/conversations/{conversation_id}", params=params
+        )
         return result.get("data", result) if isinstance(result, dict) else result
 
     async def fetch_messages(
         self,
         conversation_id: str,
+        account_id: Optional[str] = None,
         limit: int = 50,
         cursor: Optional[str] = None,
-        direction: str = "before",
+        sort_order: str = "asc",
     ) -> Dict[str, Any]:
-        """Fetch messages from a conversation."""
-        params: Dict[str, Any] = {"limit": limit, "direction": direction}
+        """Fetch messages from a conversation (spec requires accountId query)."""
+        params: Dict[str, Any] = {"limit": limit, "sortOrder": sort_order}
+        if account_id:
+            params["accountId"] = account_id
         if cursor:
             params["cursor"] = cursor
         return await self._request(
-            "GET", f"/messages/conversations/{conversation_id}/messages", params=params
+            "GET", f"/inbox/conversations/{conversation_id}/messages", params=params
         )
 
     # ── Messages (Send) ───────────────────────────────────────────────
@@ -158,17 +180,19 @@ class ZernioClient:
         message: str,
         account_id: Optional[str] = None,
         attachment_url: Optional[str] = None,
-        attachment_type: Optional[str] = None,
     ) -> Dict:
-        """Send a message in a conversation."""
+        """Send a message in a conversation.
+
+        Path verified: POST /v1/inbox/conversations/{id}/messages with
+        { accountId?, message, attachmentUrl? } (spec body schema).
+        """
         payload: Dict[str, Any] = {"message": message}
         if account_id:
             payload["accountId"] = account_id
         if attachment_url:
             payload["attachmentUrl"] = attachment_url
-            payload["attachmentType"] = attachment_type or "image"
         result = await self._request(
-            "POST", f"/messages/conversations/{conversation_id}/send", json_data=payload
+            "POST", f"/inbox/conversations/{conversation_id}/messages", json_data=payload
         )
         return result.get("data", result) if isinstance(result, dict) else result
 
@@ -243,8 +267,18 @@ class ZernioClient:
     # ── Social Account Connection ──────────────────────────────────────
 
     async def get_connect_url(self, platform: str) -> str:
-        """Get OAuth connect URL for a platform."""
-        result = await self._request("GET", f"/accounts/connect/{platform}")
+        """Get OAuth connect URL for a platform.
+
+        Spec note: GET /v1/connect/{platform} requires profileId query.
+        Without a profile id we return "" so callers degrade gracefully.
+        """
+        profile_id = os.getenv("ZERNIO_PROFILE_ID", "")
+        if not profile_id:
+            logger.warning("ZERNIO_PROFILE_ID not set — connect URL unavailable")
+            return ""
+        result = await self._request(
+            "GET", f"/connect/{platform}", params={"profileId": profile_id}
+        )
         if isinstance(result, dict):
             return result.get("connect_url", result.get("url", ""))
         return str(result)
