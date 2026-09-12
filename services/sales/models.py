@@ -1,6 +1,14 @@
 """SQLAlchemy async models for the Sales service.
 
-Tables: pipelines, deal_stages, deals, quotes, commissions, targets
+Tables (authoritative DDL: config/master_schema.sql): pipelines, deal_stages,
+deals, quotes, commissions, commission_tiers, sales_targets, leads.
+
+NOTE: contacts live in master_schema too, but the sales service reads/writes
+them via its own Contact model (CRM also owns the same table). No cross-service
+SQLAlchemy FKs — FKs only reference integrity the DB enforces at runtime.
+Cross-service references are plain UUID columns (package_id in particular:
+main.py previously declared FKs to inventory_products which inventory does NOT
+own — inventory only owns the `products` table).
 """
 
 import uuid
@@ -9,7 +17,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric,
-    String, Text, text as sa_text, UniqueConstraint,
+    String, Text,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship, declarative_base
@@ -24,8 +32,6 @@ class Pipeline(Base):
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
     name = Column(String(255), nullable=False, default="Default Pipeline")
     is_default = Column(Boolean, nullable=False, default=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime)
 
     stages = relationship("DealStage", back_populates="pipeline", cascade="all, delete-orphan")
 
@@ -52,7 +58,7 @@ class Deal(Base):
     lead_id = Column(UUID(as_uuid=True))
     agent_id = Column(UUID(as_uuid=True), index=True)
     stage_id = Column(UUID(as_uuid=True), ForeignKey("deal_stages.id"))
-    package_id = Column(UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"))
+    package_id = Column(UUID(as_uuid=True))
     name = Column(String(500), nullable=False)
     amount = Column(Numeric(14, 2))
     value_zar = Column(Numeric(14, 2), nullable=False, default=0)
@@ -78,7 +84,7 @@ class Quote(Base):
     customer_id = Column(UUID(as_uuid=True), nullable=False)
     lead_id = Column(UUID(as_uuid=True))
     agent_id = Column(UUID(as_uuid=True))
-    package_id = Column(UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"))
+    package_id = Column(UUID(as_uuid=True))
     items = Column(JSONB)
     total_monthly = Column(Numeric(14, 2), nullable=False, default=0)
     total_once_off = Column(Numeric(14, 2), nullable=False, default=0)
@@ -109,8 +115,26 @@ class Commission(Base):
     deal = relationship("Deal", back_populates="commissions")
 
 
+class CommissionTier(Base):
+    """Tenant-configurable commission tiers (master_schema.commission_tiers)."""
+
+    __tablename__ = "commission_tiers"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    tier_name = Column(String(255), nullable=False, default="Standard")
+    min_deals = Column(Integer, nullable=False, default=0)
+    max_deals = Column(Integer)
+    rate_percent = Column(Numeric(5, 2), nullable=False, default=5.00)
+    is_active = Column(Boolean, nullable=False, default=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime)
+
+
 class Target(Base):
-    __tablename__ = "targets"
+    # master_schema table is `sales_targets` (NOT `targets`).
+    __tablename__ = "sales_targets"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
@@ -121,7 +145,6 @@ class Target(Base):
     period_end = Column(Date, nullable=False)
     target_value_zar = Column(Numeric(14, 2), nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime)
 
 
 class Contact(Base):

@@ -1,25 +1,85 @@
+"""OmniDome Sales Service — async SQLAlchemy ORM.
 
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+Manages pipelines, deals, quotes, commissions, targets, leads, contacts.
+
+Port: 8002. Entrypoint: services.sales.main:app (Dockerfile CMD).
+
+Merged 2026-09-12 from main.py (raw-SQL, production) + main_async.py (ORM):
+- ORM throughout (AsyncSession via services.sales.database.get_db)
+- contact auto-create on create_deal (FK deals_contact_id_fkey — commit 5d215915)
+- finance GL bridge on close-won (POST {FINANCE_URL}/journal-entries, verified live)
+- lifecycle close-won bridge (POST {LIFECYCLE_URL}/lifecycle/from-sale, verified live)
+- lifecycle close-lost bridge (POST {LIFECYCLE_URL}/lifecycle/transition?tenant_id=, verified live)
+- quote -> deal uses FULL contract value (monthly*term + once-off), links quote.deal_id
+- tenant-configurable commission tiers (commission_tiers, fallback 5/7/10%)
+- GET /quotes list (field-sales mobile listQuotes calls it; neither impl had it)
+- Lead list supports agent_id + min_interest filters (main.py had them)
+- commissions list defaults agent to caller (main.py behaviour, web quick-stats relies on it)
+- DealResponse/DealUpdate carry `name` (frontend Deal type requires it)
+- QuoteItem accepts monthly_price/name/qty aliases (field-sales quote builder sends them)
+- lifespan startup (guard + init_tables with run_with_db_retry) — NOT @app.on_event
+- EntitlementGuard middleware; /health + /docs + /openapi.json public
+"""
+
+import logging
 import os
-from typing import Any, Dict, List, Optional
 import uuid
+from contextlib import asynccontextmanager
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy import Integer, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
-from services.common.db import get_async_engine
+from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+from services.sales.database import get_db, init_tables
+from services.sales.models import (
+    Commission,
+    CommissionTier,
+    Contact,
+    Deal,
+    DealStage,
+    Lead,
+    Pipeline,
+    Quote,
+    Target,
+)
 
-app = FastAPI(title="CoreConnect Sales Service", version="1.0.0")
+logger = logging.getLogger("sales")
+
+# ---------------------------------------------------------------------------
+# App + guard
+# ---------------------------------------------------------------------------
+
+app = FastAPI(title="OmniDome Sales Service", version="2.0.0")
+
 guard = EntitlementGuard(module_id="sales")
 
 configure_production(app)
+
+
+@app.middleware("http")
+async def entitlement_middleware(request, call_next):
+    return await guard.middleware(request, call_next)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    guard.ensure_startup()
+    await run_with_db_retry(init_tables, logger=logger)
+    logger.info("Sales service started — tables initialized")
+    yield
+    logger.info("Sales service shutting down")
+
+
+app.router.lifespan_context = lifespan
 
 
 @app.get("/health", tags=["Health"])
@@ -27,17 +87,19 @@ async def health():
     return {"status": "ok", "service": "sales"}
 
 
+# ---------------------------------------------------------------------------
+# External bridges (env-driven; silent skip when unset so local dev works)
+# ---------------------------------------------------------------------------
+
 LIFECYCLE_URL = os.getenv("LIFECYCLE_SERVICE_URL", "http://lifecycle:8018")
-
-@app.on_event("startup")
-async def startup() -> None:
-    guard.ensure_startup()
-
-
-@app.middleware("http")
-async def entitlement_middleware(request, call_next):
-    return await guard.middleware(request, call_next)
-
+FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
+BILLING_WEBHOOK_URL = os.getenv("BILLING_WEBHOOK_URL")
+NETWORK_WEBHOOK_URL = os.getenv("NETWORK_WEBHOOK_URL")
+PROVISIONING_WEBHOOKS = [
+    url.strip()
+    for url in os.getenv("SALES_PROVISIONING_WEBHOOKS", "").split(",")
+    if url.strip()
+]
 
 DEFAULT_STAGES = [
     {"name": "Prospecting", "probability": 10, "sort_order": 1},
@@ -48,16 +110,11 @@ DEFAULT_STAGES = [
     {"name": "Closed Lost", "probability": 0, "sort_order": 6},
 ]
 
-BILLING_WEBHOOK_URL = os.getenv("BILLING_WEBHOOK_URL")
-NETWORK_WEBHOOK_URL = os.getenv("NETWORK_WEBHOOK_URL")
-PROVISIONING_WEBHOOKS = [
-    url.strip()
-    for url in os.getenv("SALES_PROVISIONING_WEBHOOKS", "").split(",")
-    if url.strip()
-]
 
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 
-# ---- Pydantic Models ----
 class PipelineStage(BaseModel):
     id: uuid.UUID
     name: str
@@ -113,6 +170,7 @@ class DealStageUpdate(BaseModel):
 class DealResponse(BaseModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
+    name: str
     customer_id: uuid.UUID
     lead_id: Optional[uuid.UUID]
     agent_id: Optional[uuid.UUID]
@@ -130,10 +188,30 @@ class DealResponse(BaseModel):
 
 
 class QuoteItem(BaseModel):
-    description: str
-    quantity: int = 1
-    unit_price_zar: Decimal
-    charge_type: str = Field(default="monthly", description="monthly or once_off")
+    # Canonical fields…
+    description: Optional[str] = None
+    quantity: Optional[int] = None
+    unit_price_zar: Optional[Decimal] = None
+    charge_type: str = Field(default="monthly")
+    # …plus field-sales mobile aliases (mobile-field-sales-api createQuote
+    # sends { product_id, name, monthly_price, qty }).
+    name: Optional[str] = None
+    product_id: Optional[str] = None
+    qty: Optional[int] = None
+    monthly_price: Optional[Decimal] = None
+
+    def resolved_description(self) -> str:
+        return self.description or self.name or self.product_id or "Item"
+
+    def resolved_quantity(self) -> int:
+        return self.quantity if self.quantity is not None else (self.qty or 1)
+
+    def resolved_unit_price(self) -> Decimal:
+        if self.unit_price_zar is not None:
+            return self.unit_price_zar
+        if self.monthly_price is not None:
+            return self.monthly_price
+        return Decimal("0")
 
 
 class QuoteCreate(BaseModel):
@@ -181,7 +259,47 @@ class QuoteAccept(BaseModel):
     stage_name: Optional[str] = None
 
 
-# ---- Lead Models ----
+class CommissionResponse(BaseModel):
+    id: uuid.UUID
+    deal_id: uuid.UUID
+    agent_id: uuid.UUID
+    amount_zar: Decimal
+    rate_percent: Optional[Decimal]
+    status: str
+    created_at: datetime
+    updated_at: Optional[datetime]
+
+
+class CommissionReportEntry(BaseModel):
+    agent_id: uuid.UUID
+    total_amount_zar: Decimal
+    deals_count: int
+    pending: int
+    approved: int
+    paid: int
+    clawback: int
+
+
+class TargetCreate(BaseModel):
+    agent_id: Optional[uuid.UUID] = None
+    team_id: Optional[uuid.UUID] = None
+    period_type: str = Field(default="MONTHLY", description="MONTHLY or QUARTERLY")
+    period_start: date
+    period_end: date
+    target_value_zar: Decimal
+
+
+class TargetPerformanceEntry(BaseModel):
+    target_id: uuid.UUID
+    agent_id: Optional[uuid.UUID]
+    team_id: Optional[uuid.UUID]
+    period_start: date
+    period_end: date
+    target_value_zar: Decimal
+    actual_value_zar: Decimal
+    variance_zar: Decimal
+
+
 class LeadCreate(BaseModel):
     first_name: str
     last_name: str
@@ -232,174 +350,72 @@ class LeadConvert(BaseModel):
     agent_id: Optional[uuid.UUID] = None
 
 
-class CommissionResponse(BaseModel):
+class ContactCreate(BaseModel):
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    physical_address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    rica_id_number: Optional[str] = None
+
+
+class ContactUpdate(BaseModel):
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    physical_address: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    province: Optional[str] = None
+    rica_id_number: Optional[str] = None
+    status: Optional[str] = None
+    lifecycle_stage: Optional[str] = None
+    nps_score: Optional[int] = None
+
+
+class ContactResponse(BaseModel):
     id: uuid.UUID
-    deal_id: uuid.UUID
-    agent_id: uuid.UUID
-    amount_zar: Decimal
-    rate_percent: Optional[Decimal]
+    tenant_id: uuid.UUID
+    first_name: str
+    last_name: str
+    email: Optional[str]
+    phone: Optional[str]
+    physical_address: Optional[str]
+    city: Optional[str]
+    province: Optional[str]
+    rica_verified: bool
     status: str
+    lifecycle_stage: str
+    nps_score: Optional[int]
     created_at: datetime
     updated_at: Optional[datetime]
 
 
-class CommissionReportEntry(BaseModel):
-    agent_id: uuid.UUID
-    total_amount_zar: Decimal
-    deals_count: int
-    pending: int
-    approved: int
-    paid: int
-    clawback: int
+class Customer360Response(BaseModel):
+    contact: ContactResponse
+    deals: List[DealResponse]
+    quotes: List[QuoteResponse]
+    invoices: List[dict]
+    total_revenue: float
+    open_deals_value: float
 
 
-class TargetCreate(BaseModel):
-    agent_id: Optional[uuid.UUID] = None
-    team_id: Optional[uuid.UUID] = None
-    period_type: str = Field(default="MONTHLY", description="MONTHLY or QUARTERLY")
-    period_start: date
-    period_end: date
-    target_value_zar: Decimal
+# ---------------------------------------------------------------------------
+# Pure helpers (unit-testable without a DB)
+# ---------------------------------------------------------------------------
 
-
-class TargetPerformanceEntry(BaseModel):
-    target_id: uuid.UUID
-    agent_id: Optional[uuid.UUID]
-    team_id: Optional[uuid.UUID]
-    period_start: date
-    period_end: date
-    target_value_zar: Decimal
-    actual_value_zar: Decimal
-    variance_zar: Decimal
-
-
-# ---- Helpers ----
-def _get_engine() -> AsyncEngine:
-    return get_async_engine()
-
-
-async def _ensure_default_pipeline(conn: AsyncConnection, tenant_id: uuid.UUID) -> uuid.UUID:
-    row = await conn.execute(
-        text(
-            """
-            select id from pipelines
-            where tenant_id = :tenant_id and is_default = true
-            limit 1
-            """
-        ),
-        {"tenant_id": str(tenant_id)},
-    )
-    result = row.fetchone()
-
-    if not result:
-        pipeline_id = uuid.uuid4()
-        await conn.execute(
-            text(
-                """
-                insert into pipelines (id, tenant_id, name, is_default)
-                values (:id, :tenant_id, :name, true)
-                """
-            ),
-            {"id": str(pipeline_id), "tenant_id": str(tenant_id), "name": "Default Pipeline"},
-        )
-    else:
-        pipeline_id = result[0]
-
-    stage_count_row = await conn.execute(
-        text("select count(*) from deal_stages where pipeline_id = :pipeline_id"),
-        {"pipeline_id": str(pipeline_id)},
-    )
-    stage_count = stage_count_row.scalar()
-
-    if stage_count == 0:
-        await conn.execute(
-            text(
-                """
-                insert into deal_stages (id, pipeline_id, name, probability, sort_order)
-                values (:id, :pipeline_id, :name, :probability, :sort_order)
-                """
-            ),
-            [
-                {
-                    "id": str(uuid.uuid4()),
-                    "pipeline_id": str(pipeline_id),
-                    "name": stage["name"],
-                    "probability": stage["probability"],
-                    "sort_order": stage["sort_order"],
-                }
-                for stage in DEFAULT_STAGES
-            ],
-        )
-
-    return pipeline_id
-
-
-async def _get_stages(conn: AsyncConnection, pipeline_id: uuid.UUID) -> List[Dict[str, Any]]:
-    rows = await conn.execute(
-        text(
-            """
-            select id, name, probability, sort_order
-            from deal_stages
-            where pipeline_id = :pipeline_id
-            order by sort_order
-            """
-        ),
-        {"pipeline_id": str(pipeline_id)},
-    )
-    return list(rows.mappings().all())
-
-
-async def _resolve_stage_id(
-    conn: AsyncConnection,
-    tenant_id: uuid.UUID,
-    stage_id: Optional[uuid.UUID],
-    stage_name: Optional[str],
-) -> uuid.UUID:
-    pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
-    if stage_id:
-        return stage_id
-    if stage_name:
-        row = await conn.execute(
-            text(
-                """
-                select id from deal_stages
-                where pipeline_id = :pipeline_id and lower(name) = lower(:name)
-                """
-            ),
-            {"pipeline_id": str(pipeline_id), "name": stage_name},
-        )
-        result = row.fetchone()
-        if result:
-            return result[0]
-    stages = await _get_stages(conn, pipeline_id)
-    if not stages:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Pipeline stages missing")
-    return stages[0]["id"]
-
-
-async def _get_closed_stage_id(conn: AsyncConnection, tenant_id: uuid.UUID, name: str) -> Optional[uuid.UUID]:
-    pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
-    row = await conn.execute(
-        text(
-            """
-            select id from deal_stages
-            where pipeline_id = :pipeline_id and lower(name) = lower(:name)
-            limit 1
-            """
-        ),
-        {"pipeline_id": str(pipeline_id), "name": name},
-    )
-    result = row.fetchone()
-    return result[0] if result else None
-
-
-def _calculate_quote_totals(items: Optional[List[QuoteItem]]) -> Dict[str, Decimal]:
+def calculate_quote_totals(items: Optional[List[QuoteItem]]) -> Dict[str, Decimal]:
+    """Sum quote line items into monthly / once-off totals."""
     total_monthly = Decimal("0")
     total_once_off = Decimal("0")
     if not items:
         return {"total_monthly": total_monthly, "total_once_off": total_once_off}
     for item in items:
-        line_total = item.unit_price_zar * item.quantity
+        line_total = item.resolved_unit_price() * item.resolved_quantity()
         if item.charge_type.lower() == "once_off":
             total_once_off += line_total
         else:
@@ -407,44 +423,237 @@ def _calculate_quote_totals(items: Optional[List[QuoteItem]]) -> Dict[str, Decim
     return {"total_monthly": total_monthly, "total_once_off": total_once_off}
 
 
-def _apply_discount(value: Decimal, discount_percent: Optional[Decimal]) -> Decimal:
+def apply_discount(value: Decimal, discount_percent: Optional[Decimal]) -> Decimal:
+    """Apply a percentage discount; None/0 returns the value unchanged."""
     if not discount_percent:
         return value
-    discount = value * (discount_percent / Decimal("100"))
-    return (value - discount).quantize(Decimal("0.01"))
+    try:
+        pct = Decimal(str(discount_percent))
+    except (InvalidOperation, ValueError, TypeError):
+        return value
+    if pct <= 0:
+        return value
+    return (value - value * pct / Decimal("100")).quantize(Decimal("0.01"))
 
 
-async def _commission_rate_for_agent(conn: AsyncConnection, tenant_id: uuid.UUID, agent_id: uuid.UUID, now: datetime) -> Decimal:
-    period_start = date(now.year, now.month, 1)
-    next_month = period_start + timedelta(days=32)
-    period_end = date(next_month.year, next_month.month, 1)
+def deal_value_from_quote(total_monthly: Decimal, total_once_off: Decimal, term_months: int) -> Decimal:
+    """Full contract value: monthly * term + once-off (production main.py rule)."""
+    return (total_monthly * Decimal(term_months or 12) + total_once_off).quantize(Decimal("0.01"))
 
-    row = await conn.execute(
-        text(
-            """
-            select count(*)
-            from deals
-            where tenant_id = :tenant_id
-              and agent_id = :agent_id
-              and status = 'WON'
-              and closed_at >= :start_date
-              and closed_at < :end_date
-            """
-        ),
-        {
-            "tenant_id": str(tenant_id),
-            "agent_id": str(agent_id),
-            "start_date": period_start,
-            "end_date": period_end,
-        },
-    )
-    count = row.scalar() or 0
 
-    if count >= 20:
+def fallback_commission_rate(won_deals_this_month: int) -> Decimal:
+    """Default 5/7/10% tiers when no tenant commission_tiers row matches."""
+    if won_deals_this_month >= 20:
         return Decimal("10.0")
-    if count >= 10:
+    if won_deals_this_month >= 10:
         return Decimal("7.0")
     return Decimal("5.0")
+
+
+def serialize_items(items: Optional[List[QuoteItem]]) -> Optional[List[Dict[str, Any]]]:
+    if not items:
+        return None
+    return [
+        {
+            "description": item.resolved_description(),
+            "quantity": item.resolved_quantity(),
+            "unit_price_zar": float(item.resolved_unit_price()),
+            "charge_type": item.charge_type,
+        }
+        for item in items
+    ]
+
+
+def deserialize_items(items: Optional[List[Dict[str, Any]]]) -> Optional[List[QuoteItem]]:
+    """Rebuild QuoteItems from stored JSON; tolerant of the mobile alias shape."""
+    if not items:
+        return None
+    rebuilt: List[QuoteItem] = []
+    for raw in items:
+        data = dict(raw)
+        if "description" not in data and "name" in data:
+            data["description"] = data["name"]
+        if "quantity" not in data and "qty" in data:
+            data["quantity"] = data["qty"]
+        if "unit_price_zar" not in data and "monthly_price" in data:
+            data["unit_price_zar"] = data["monthly_price"]
+        rebuilt.append(QuoteItem(**data))
+    return rebuilt
+
+
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+
+async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
+    result = await db.execute(
+        select(Pipeline).where(
+            Pipeline.tenant_id == tenant_id,
+            Pipeline.is_default == True,  # noqa: E712
+        )
+    )
+    pipeline = result.scalar_one_or_none()
+    if pipeline:
+        return pipeline.id
+
+    pipeline_id = uuid.uuid4()
+    pipeline = Pipeline(
+        id=pipeline_id, tenant_id=tenant_id, name="Default Pipeline", is_default=True,
+    )
+    db.add(pipeline)
+    await db.flush()
+
+    for stage_def in DEFAULT_STAGES:
+        db.add(DealStage(
+            id=uuid.uuid4(),
+            pipeline_id=pipeline_id,
+            name=stage_def["name"],
+            probability=stage_def["probability"],
+            sort_order=stage_def["sort_order"],
+        ))
+    await db.flush()
+    return pipeline_id
+
+
+async def _get_stages(db: AsyncSession, pipeline_id: uuid.UUID) -> List[DealStage]:
+    result = await db.execute(
+        select(DealStage)
+        .where(DealStage.pipeline_id == pipeline_id)
+        .order_by(DealStage.sort_order)
+    )
+    return list(result.scalars().all())
+
+
+async def _resolve_stage_id(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    stage_id: Optional[uuid.UUID],
+    stage_name: Optional[str],
+) -> uuid.UUID:
+    pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    if stage_id:
+        return stage_id
+    if stage_name:
+        result = await db.execute(
+            select(DealStage.id).where(
+                DealStage.pipeline_id == pipeline_id,
+                func.lower(DealStage.name) == stage_name.lower(),
+            )
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            return row
+    stages = await _get_stages(db, pipeline_id)
+    if not stages:
+        raise HTTPException(status_code=500, detail="Pipeline stages missing")
+    return stages[0].id
+
+
+async def _get_closed_stage_id(
+    db: AsyncSession, tenant_id: uuid.UUID, name: str,
+) -> Optional[uuid.UUID]:
+    pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    result = await db.execute(
+        select(DealStage.id).where(
+            DealStage.pipeline_id == pipeline_id,
+            func.lower(DealStage.name) == name.lower(),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Decimal:
+    """Tenant-configured tier wins; default 5/7/10% thresholds otherwise."""
+    now = datetime.now(timezone.utc)
+    period_start = date(now.year, now.month, 1)
+    next_m = period_start + timedelta(days=32)
+    period_end = date(next_m.year, next_m.month, 1)
+
+    result = await db.execute(
+        select(func.count(Deal.id)).where(
+            Deal.tenant_id == tenant_id,
+            Deal.agent_id == agent_id,
+            Deal.status == "WON",
+            Deal.closed_at >= period_start,
+            Deal.closed_at < period_end,
+        )
+    )
+    count = result.scalar() or 0
+
+    tier_result = await db.execute(
+        select(CommissionTier.rate_percent).where(
+            CommissionTier.tenant_id == tenant_id,
+            CommissionTier.is_active == True,  # noqa: E712
+            CommissionTier.min_deals <= count,
+            (CommissionTier.max_deals.is_(None) | (CommissionTier.max_deals >= count)),
+        )
+        .order_by(CommissionTier.rate_percent.desc())
+        .limit(1)
+    )
+    tier_rate = tier_result.scalar_one_or_none()
+    if tier_rate is not None:
+        return Decimal(str(tier_rate))
+    return fallback_commission_rate(count)
+
+
+def _parse_notes_contact(notes: Optional[str]) -> Dict[str, Optional[str]]:
+    """Extract contact hints the frontend embeds in deal notes.
+
+    create_deal historically received a random customer_id UUID plus
+    'Contact: <name> | Email: <e> | Phone: <p>' inside notes (commit
+    5d215915). Preserved so auto-created contacts carry real details.
+    """
+    out: Dict[str, Optional[str]] = {"first_name": "Walk-in", "last_name": "Customer",
+                                     "email": None, "phone": None}
+    if not notes:
+        return out
+    try:
+        if "Contact: " in notes:
+            c_part = notes.split("Contact: ")[1].split("|")[0].strip()
+            tokens = c_part.split(" ")
+            if tokens and tokens[0]:
+                out["first_name"] = tokens[0]
+                out["last_name"] = " ".join(tokens[1:]) if len(tokens) > 1 else "Customer"
+        if "Email: " in notes:
+            out["email"] = notes.split("Email: ")[1].split("|")[0].strip() or None
+        if "Phone: " in notes:
+            out["phone"] = notes.split("Phone: ")[1].split("|")[0].strip() or None
+    except Exception:
+        pass
+    return out
+
+
+async def _ensure_contact(
+    db: AsyncSession, tenant_id: uuid.UUID, contact_id: uuid.UUID,
+    notes: Optional[str], now: datetime,
+) -> uuid.UUID:
+    """Return an existing contact id, else insert one (satisfies FK)."""
+    existing = await db.get(Contact, contact_id)
+    if existing and existing.tenant_id == tenant_id:
+        return contact_id
+    hints = _parse_notes_contact(notes)
+    db.add(Contact(
+        id=contact_id, tenant_id=tenant_id,
+        first_name=hints["first_name"] or "Walk-in",
+        last_name=hints["last_name"] or "Customer",
+        email=hints["email"], phone=hints["phone"],
+        status="ACTIVE", lifecycle_stage="PROSPECT",
+        created_at=now, updated_at=now,
+    ))
+    await db.flush()
+    return contact_id
+
+
+def _deal_to_response(deal: Deal, stage_name: Optional[str]) -> DealResponse:
+    return DealResponse(
+        id=deal.id, tenant_id=deal.tenant_id, name=deal.name,
+        customer_id=deal.contact_id,
+        lead_id=deal.lead_id, agent_id=deal.agent_id, stage_id=deal.stage_id,
+        stage_name=stage_name, package_id=deal.package_id,
+        value_zar=deal.value_zar, status=deal.status, close_date=deal.close_date,
+        closed_at=deal.closed_at, close_reason=deal.close_reason, notes=deal.notes,
+        created_at=deal.created_at, updated_at=deal.updated_at,
+    )
 
 
 def _emit_webhook(url: str, payload: Dict[str, Any]) -> None:
@@ -455,7 +664,7 @@ def _emit_webhook(url: str, payload: Dict[str, Any]) -> None:
         return
 
 
-def _dispatch_provisioning(background_tasks: BackgroundTasks, payload: Dict[str, Any]) -> None:
+async def _dispatch_provisioning_bg(payload: Dict[str, Any]) -> None:
     urls = []
     if BILLING_WEBHOOK_URL:
         urls.append(BILLING_WEBHOOK_URL)
@@ -463,223 +672,196 @@ def _dispatch_provisioning(background_tasks: BackgroundTasks, payload: Dict[str,
         urls.append(NETWORK_WEBHOOK_URL)
     urls.extend(PROVISIONING_WEBHOOKS)
     for url in urls:
-        background_tasks.add_task(_emit_webhook, url, payload)
+        _emit_webhook(url, payload)
 
 
-# ---- Routes ----
+async def _notify_lifecycle_won(deal: Deal, tenant_id: uuid.UUID) -> None:
+    """POST /lifecycle/from-sale — verified live contract (SaleBridgeCreate)."""
+    if not LIFECYCLE_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{LIFECYCLE_URL}/lifecycle/from-sale",
+                json={
+                    "tenant_id": str(tenant_id),
+                    "customer_id": str(deal.contact_id),
+                    "deal_id": str(deal.id),
+                    "agent_id": str(deal.agent_id) if deal.agent_id else None,
+                    "plan": str(deal.package_id) if deal.package_id else None,
+                    "monthly_recurring_revenue": float(deal.value_zar or 0) / 12,
+                    "lead_id": str(deal.lead_id) if deal.lead_id else None,
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass  # Don't fail the sale if lifecycle is down
+
+
+async def _notify_lifecycle_lost(deal: Deal, tenant_id: uuid.UUID, reason: str) -> None:
+    """POST /lifecycle/transition?tenant_id= — verified live contract."""
+    if not LIFECYCLE_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{LIFECYCLE_URL}/lifecycle/transition",
+                params={"tenant_id": str(tenant_id)},
+                json={
+                    "customer_id": str(deal.contact_id),
+                    "to_stage": "Closed Lost",
+                    "reason": reason,
+                    "trigger_source": "sale",
+                    "trigger_id": str(deal.id),
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass
+
+
+async def _notify_finance_won(deal: Deal, tenant_id: uuid.UUID, now: datetime) -> None:
+    """POST /journal-entries — verified live contract (double-entry, balanced)."""
+    if not FINANCE_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{FINANCE_URL}/journal-entries",
+                json={
+                    "entry_date": now.strftime("%Y-%m-%d"),
+                    "reference": f"DEAL-{str(deal.id)[:8]}",
+                    "description": f"Won deal - {deal.contact_id}",
+                    "source": "SALES",
+                    "source_id": str(deal.id),
+                    "lines": [
+                        {
+                            "account_code": "1100",
+                            "account_name": "Accounts Receivable",
+                            "description": f"AR - Customer {str(deal.contact_id)[:8]}",
+                            "debit": float(deal.value_zar or 0),
+                            "credit": 0,
+                        },
+                        {
+                            "account_code": "4000",
+                            "account_name": "Revenue - FTTH Subscriptions",
+                            "description": f"Revenue - Deal {str(deal.id)[:8]}",
+                            "debit": 0,
+                            "credit": float(deal.value_zar or 0),
+                        },
+                    ],
+                },
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+    except Exception:
+        pass  # Don't fail the sale if finance is down
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @app.get("/")
 async def root():
-    return {"message": "CoreConnect Sales Service is active"}
+    return {"message": "OmniDome Sales Service v2.0 (async) is active"}
 
 
-# Pipeline Management
+# ── Pipeline ─────────────────────────────────────────────────────────────
+
 @app.get("/pipeline", response_model=List[PipelineOverviewStage])
-async def get_pipeline_overview(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    engine = _get_engine()
-    async with engine.begin() as conn:
-        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
-        stages = await _get_stages(conn, pipeline_id)
-        stage_rows = await conn.execute(
-            text(
-                """
-                select d.stage_id, count(*) as deal_count, coalesce(sum(d.value_zar), 0) as total_value
-                from deals d
-                where d.tenant_id = :tenant_id
-                group by d.stage_id
-                """
-            ),
-            {"tenant_id": str(tenant_id)},
-        )
-        totals = {row[0]: {"deal_count": row[1], "total_value": row[2]} for row in stage_rows.fetchall()}
+async def get_pipeline_overview(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    stages = await _get_stages(db, pipeline_id)
 
-    overview: List[PipelineOverviewStage] = []
-    for stage in stages:
-        total = totals.get(stage["id"], {"deal_count": 0, "total_value": 0})
-        overview.append(
-            PipelineOverviewStage(
-                id=stage["id"],
-                name=stage["name"],
-                probability=stage["probability"],
-                sort_order=stage["sort_order"],
-                deal_count=total["deal_count"],
-                total_value_zar=Decimal(str(total["total_value"])),
-            )
+    result = await db.execute(
+        select(
+            Deal.stage_id,
+            func.count(Deal.id).label("deal_count"),
+            func.coalesce(func.sum(Deal.value_zar), 0).label("total_value"),
         )
+        .where(Deal.tenant_id == tenant_id)
+        .group_by(Deal.stage_id)
+    )
+    totals = {row.stage_id: {"deal_count": row.deal_count, "total_value": row.total_value}
+              for row in result.all()}
+
+    overview = []
+    for stage in stages:
+        t = totals.get(stage.id, {"deal_count": 0, "total_value": 0})
+        overview.append(PipelineOverviewStage(
+            id=stage.id, name=stage.name, probability=stage.probability,
+            sort_order=stage.sort_order, deal_count=t["deal_count"],
+            total_value_zar=Decimal(str(t["total_value"])),
+        ))
     return overview
 
 
 @app.get("/pipeline/stages", response_model=List[PipelineStage])
-async def list_pipeline_stages(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    engine = _get_engine()
-    async with engine.begin() as conn:
-        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
-        stages = await _get_stages(conn, pipeline_id)
-    return [PipelineStage(**stage) for stage in stages]
+async def list_pipeline_stages(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    stages = await _get_stages(db, pipeline_id)
+    return [PipelineStage(id=s.id, name=s.name, probability=s.probability, sort_order=s.sort_order)
+            for s in stages]
 
 
-@app.post("/pipeline/stages", response_model=PipelineStage, status_code=status.HTTP_201_CREATED)
+@app.post("/pipeline/stages", response_model=PipelineStage, status_code=201)
 async def create_pipeline_stage(
-    payload: PipelineStageCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
+    payload: PipelineStageCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    stage_id = uuid.uuid4()
-    async with engine.begin() as conn:
-        pipeline_id = await _ensure_default_pipeline(conn, tenant_id)
-        if payload.sort_order is None:
-            max_sort_row = await conn.execute(
-                text("select coalesce(max(sort_order), 0) from deal_stages where pipeline_id = :pipeline_id"),
-                {"pipeline_id": str(pipeline_id)},
-            )
-            max_sort = max_sort_row.scalar()
-            sort_order = int(max_sort or 0) + 1
-        else:
-            sort_order = payload.sort_order
-        await conn.execute(
-            text(
-                """
-                insert into deal_stages (id, pipeline_id, name, probability, sort_order)
-                values (:id, :pipeline_id, :name, :probability, :sort_order)
-                """
-            ),
-            {
-                "id": str(stage_id),
-                "pipeline_id": str(pipeline_id),
-                "name": payload.name,
-                "probability": payload.probability,
-                "sort_order": sort_order,
-            },
+    pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    sort_order = payload.sort_order
+    if sort_order is None:
+        result = await db.execute(
+            select(func.coalesce(func.max(DealStage.sort_order), 0))
+            .where(DealStage.pipeline_id == pipeline_id)
         )
-    return PipelineStage(
-        id=stage_id,
-        name=payload.name,
-        probability=payload.probability,
-        sort_order=sort_order,
+        sort_order = (result.scalar() or 0) + 1
+
+    stage = DealStage(
+        id=uuid.uuid4(), pipeline_id=pipeline_id, name=payload.name,
+        probability=payload.probability, sort_order=sort_order,
     )
+    db.add(stage)
+    await db.flush()
+    return PipelineStage(id=stage.id, name=stage.name, probability=stage.probability,
+                         sort_order=stage.sort_order)
 
 
-# Deal Management
-@app.post("/deals", response_model=DealResponse, status_code=status.HTTP_201_CREATED)
+# ── Deals ────────────────────────────────────────────────────────────────
+
+@app.post("/deals", response_model=DealResponse, status_code=201)
 async def create_deal(
-    payload: DealCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
+    payload: DealCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
+    stage_id = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
     deal_id = uuid.uuid4()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        stage_id = await _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
-        
-        # Verify or resolve contact_id to satisfy foreign key constraint deals_contact_id_fkey
-        contact_id = payload.customer_id
-        contact_exists_row = await conn.execute(
-            text("select id from contacts where id = :contact_id and tenant_id = :tenant_id"),
-            {"contact_id": str(contact_id), "tenant_id": str(tenant_id)},
-        )
-        if not contact_exists_row.fetchone():
-            # Parse contact name and details if provided in notes or fallback to deal name
-            first_name = "Walk-in"
-            last_name = "Customer"
-            email = None
-            phone = None
-            if payload.notes and "Contact: " in payload.notes:
-                try:
-                    c_part = payload.notes.split("Contact: ")[1].split("|")[0].strip()
-                    tokens = c_part.split(" ")
-                    first_name = tokens[0]
-                    if len(tokens) > 1:
-                        last_name = " ".join(tokens[1:])
-                except Exception:
-                    pass
-            if payload.notes and "Email: " in payload.notes:
-                try:
-                    email = payload.notes.split("Email: ")[1].split("|")[0].strip()
-                except Exception:
-                    pass
-            if payload.notes and "Phone: " in payload.notes:
-                try:
-                    phone = payload.notes.split("Phone: ")[1].split("|")[0].strip()
-                except Exception:
-                    pass
+    now = datetime.now(timezone.utc)
 
-            await conn.execute(
-                text(
-                    """
-                    insert into contacts (
-                        id, tenant_id, first_name, last_name, email, phone,
-                        status, lifecycle_stage, created_at, updated_at
-                    )
-                    values (
-                        :id, :tenant_id, :first_name, :last_name, :email, :phone,
-                        'ACTIVE', 'PROSPECT', :created_at, :updated_at
-                    )
-                    on conflict (id) do nothing
-                    """
-                ),
-                {
-                    "id": str(contact_id),
-                    "tenant_id": str(tenant_id),
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "email": email,
-                    "phone": phone,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-            )
+    # Auto-create/resolve contact so deals_contact_id_fkey never fails.
+    contact_id = await _ensure_contact(db, tenant_id, payload.customer_id, payload.notes, now)
 
-        await conn.execute(
-            text(
-                """
-                insert into deals (
-                    id, tenant_id, contact_id, lead_id, agent_id, stage_id, package_id,
-                    name, amount, value_zar, status, close_date, notes, created_at, updated_at
-                )
-                values (
-                    :id, :tenant_id, :contact_id, :lead_id, :agent_id, :stage_id, :package_id,
-                    :name, :amount, :value_zar, :status, :close_date, :notes, :created_at, :updated_at
-                )
-                """
-            ),
-            {
-                "id": str(deal_id),
-                "tenant_id": str(tenant_id),
-                "contact_id": str(contact_id),
-                "lead_id": str(payload.lead_id) if payload.lead_id else None,
-                "agent_id": str(payload.agent_id) if payload.agent_id else None,
-                "stage_id": str(stage_id),
-                "package_id": str(payload.package_id) if payload.package_id else None,
-                "name": payload.name,
-                "amount": payload.value_zar,
-                "value_zar": payload.value_zar,
-                "status": "OPEN",
-                "close_date": payload.close_date,
-                "notes": payload.notes,
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
-        stage_name_row = await conn.execute(
-            text("select name from deal_stages where id = :stage_id"),
-            {"stage_id": str(stage_id)},
-        )
-        stage_name = stage_name_row.scalar()
-    return DealResponse(
-        id=deal_id,
-        tenant_id=tenant_id,
-        customer_id=payload.customer_id,
-        lead_id=payload.lead_id,
-        agent_id=payload.agent_id,
-        stage_id=stage_id,
-        stage_name=stage_name,
-        package_id=payload.package_id,
-        value_zar=payload.value_zar,
-        status="OPEN",
-        close_date=payload.close_date,
-        closed_at=None,
-        close_reason=None,
-        notes=payload.notes,
-        created_at=now,
-        updated_at=now,
+    deal = Deal(
+        id=deal_id, tenant_id=tenant_id, contact_id=contact_id,
+        lead_id=payload.lead_id, agent_id=payload.agent_id, stage_id=stage_id,
+        package_id=payload.package_id, name=payload.name, amount=payload.value_zar,
+        value_zar=payload.value_zar, status="OPEN", close_date=payload.close_date,
+        notes=payload.notes, created_at=now, updated_at=now,
     )
+    db.add(deal)
+    await db.flush()
+
+    stage = await db.get(DealStage, stage_id)
+    return _deal_to_response(deal, stage.name if stage else None)
 
 
 @app.get("/deals", response_model=List[DealResponse])
@@ -693,96 +875,65 @@ async def list_deals(
     min_value: Optional[Decimal] = None,
     max_value: Optional[Decimal] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    conditions = ["d.tenant_id = :tenant_id"]
-    params: Dict[str, Any] = {"tenant_id": str(tenant_id)}
+    q = (
+        select(Deal, DealStage.name.label("stage_name"))
+        .outerjoin(DealStage, DealStage.id == Deal.stage_id)
+        .where(Deal.tenant_id == tenant_id)
+    )
     if stage_id:
-        conditions.append("d.stage_id = :stage_id")
-        params["stage_id"] = str(stage_id)
+        q = q.where(Deal.stage_id == stage_id)
     if stage:
-        conditions.append("lower(s.name) = lower(:stage_name)")
-        params["stage_name"] = stage
+        q = q.where(func.lower(DealStage.name) == stage.lower())
     if agent_id:
-        conditions.append("d.agent_id = :agent_id")
-        params["agent_id"] = str(agent_id)
+        q = q.where(Deal.agent_id == agent_id)
     if status_filter:
-        conditions.append("d.status = :status")
-        params["status"] = status_filter.upper()
+        q = q.where(Deal.status == status_filter.upper())
     if start_date:
-        conditions.append("d.created_at >= :start_date")
-        params["start_date"] = start_date
+        q = q.where(Deal.created_at >= start_date)
     if end_date:
-        conditions.append("d.created_at <= :end_date")
-        params["end_date"] = end_date
+        q = q.where(Deal.created_at <= end_date)
     if min_value is not None:
-        conditions.append("d.value_zar >= :min_value")
-        params["min_value"] = min_value
+        q = q.where(Deal.value_zar >= min_value)
     if max_value is not None:
-        conditions.append("d.value_zar <= :max_value")
-        params["max_value"] = max_value
+        q = q.where(Deal.value_zar <= max_value)
+    q = q.order_by(Deal.created_at.desc())
 
-    where_clause = " and ".join(conditions)
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                f"""
-                select d.id, d.tenant_id, d.contact_id as customer_id, d.lead_id, d.agent_id,
-                       d.stage_id, s.name as stage_name, d.package_id, d.value_zar, d.status,
-                       d.close_date, d.closed_at, d.close_reason, d.notes, d.created_at, d.updated_at
-                from deals d
-                left join deal_stages s on s.id = d.stage_id
-                where {where_clause}
-                order by d.created_at desc
-                """
-            ),
-            params,
-        )
-        result_rows = list(rows.mappings().all())
-    return [DealResponse(**row) for row in result_rows]
+    result = await db.execute(q)
+    return [
+        _deal_to_response(row.Deal, row.stage_name)
+        for row in result.all()
+    ]
 
 
 @app.get("/deals/{deal_id}", response_model=DealResponse)
 async def get_deal(
     deal_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get a single deal by ID"""
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        row = await conn.execute(
-            text(
-                """
-                select d.id, d.tenant_id, d.contact_id as customer_id, d.lead_id, d.agent_id,
-                       d.stage_id, s.name as stage_name, d.package_id, d.value_zar, d.status,
-                       d.close_date, d.closed_at, d.close_reason, d.notes, d.created_at, d.updated_at
-                from deals d
-                left join deal_stages s on s.id = d.stage_id
-                where d.id = :deal_id and d.tenant_id = :tenant_id
-                """
-            ),
-            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        )
-        result = row.mappings().one_or_none()
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-    return DealResponse(**result, stage_name=result["stage_name"])
+    result = await db.execute(
+        select(Deal, DealStage.name.label("stage_name"))
+        .outerjoin(DealStage, Deal.stage_id == DealStage.id)
+        .where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return _deal_to_response(row.Deal, row.stage_name)
 
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_deal(
     deal_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Delete a deal"""
-    engine = _get_engine()
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text("delete from deals where id = :deal_id and tenant_id = :tenant_id"),
-            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        )
-        if result.rowcount == 0:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    await db.delete(deal)
 
 
 @app.put("/deals/{deal_id}", response_model=DealResponse)
@@ -790,57 +941,34 @@ async def update_deal(
     deal_id: uuid.UUID,
     payload: DealUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    updates: Dict[str, Any] = {}
-    if payload.name is not None:
-        updates["name"] = payload.name
-    if payload.value_zar is not None:
-        updates["value_zar"] = payload.value_zar
-        updates["amount"] = payload.value_zar
-    if payload.agent_id is not None:
-        updates["agent_id"] = str(payload.agent_id)
-    if payload.package_id is not None:
-        updates["package_id"] = str(payload.package_id)
-    if payload.close_date is not None:
-        updates["close_date"] = payload.close_date
-    if payload.notes is not None:
-        updates["notes"] = payload.notes
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
 
-    async with engine.begin() as conn:
-        if payload.stage_id or payload.stage_name:
-            updates["stage_id"] = str(
-                await _resolve_stage_id(conn, tenant_id, payload.stage_id, payload.stage_name)
-            )
-        if not updates:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
-        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
-        updates["deal_id"] = str(deal_id)
-        updates["tenant_id"] = str(tenant_id)
-        updates["updated_at"] = now
-        row = await conn.execute(
-            text(
-                f"""
-                update deals
-                set {set_clause}, updated_at = :updated_at
-                where id = :deal_id and tenant_id = :tenant_id
-                returning id, tenant_id, contact_id as customer_id, lead_id, agent_id,
-                          stage_id, package_id, value_zar, status, close_date, closed_at,
-                          close_reason, notes, created_at, updated_at
-                """
-            ),
-            updates,
-        )
-        result = row.mappings().one_or_none()
-        if not result:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-        stage_name_row = await conn.execute(
-            text("select name from deal_stages where id = :stage_id"),
-            {"stage_id": str(result["stage_id"])},
-        )
-        stage_name = stage_name_row.scalar()
-    return DealResponse(**result, stage_name=stage_name)
+    now = datetime.now(timezone.utc)
+    if payload.name is not None:
+        deal.name = payload.name
+    if payload.value_zar is not None:
+        deal.value_zar = payload.value_zar
+        deal.amount = payload.value_zar
+    if payload.agent_id is not None:
+        deal.agent_id = payload.agent_id
+    if payload.package_id is not None:
+        deal.package_id = payload.package_id
+    if payload.close_date is not None:
+        deal.close_date = payload.close_date
+    if payload.notes is not None:
+        deal.notes = payload.notes
+    if payload.stage_id or payload.stage_name:
+        deal.stage_id = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
+
+    deal.updated_at = now
+    await db.flush()
+
+    stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
+    return _deal_to_response(deal, stage.name if stage else None)
 
 
 @app.put("/deals/{deal_id}/stage", response_model=DealResponse)
@@ -848,70 +976,38 @@ async def move_deal_stage(
     deal_id: uuid.UUID,
     payload: DealStageUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        deal_row = await conn.execute(
-            text(
-                """
-                select d.id, d.stage_id, s.pipeline_id
-                from deals d
-                join deal_stages s on s.id = d.stage_id
-                where d.id = :deal_id and d.tenant_id = :tenant_id
-                """
-            ),
-            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        )
-        deal = deal_row.mappings().one_or_none()
-        if not deal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
 
-        stage_id = payload.stage_id
-        if not stage_id and payload.stage_name:
-            stage_id = await _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
-        if not stage_id and payload.direction:
-            stages = await _get_stages(conn, deal["pipeline_id"])
-            stage_ids = [stage["id"] for stage in stages]
-            try:
-                idx = stage_ids.index(deal["stage_id"])
-            except ValueError:
-                idx = 0
-            if payload.direction.lower() == "next" and idx + 1 < len(stage_ids):
-                stage_id = stage_ids[idx + 1]
-            elif payload.direction.lower() == "previous" and idx - 1 >= 0:
-                stage_id = stage_ids[idx - 1]
+    now = datetime.now(timezone.utc)
+    stage_id = payload.stage_id
+    if not stage_id and payload.stage_name:
+        stage_id = await _resolve_stage_id(db, tenant_id, None, payload.stage_name)
+    if not stage_id and payload.direction:
+        pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+        stages = await _get_stages(db, pipeline_id)
+        stage_ids = [s.id for s in stages]
+        try:
+            idx = stage_ids.index(deal.stage_id)
+        except (ValueError, TypeError):
+            idx = 0
+        if payload.direction.lower() == "next" and idx + 1 < len(stage_ids):
+            stage_id = stage_ids[idx + 1]
+        elif payload.direction.lower() == "previous" and idx - 1 >= 0:
+            stage_id = stage_ids[idx - 1]
 
-        if not stage_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No stage specified")
+    if not stage_id:
+        raise HTTPException(status_code=400, detail="No stage specified")
 
-        row = await conn.execute(
-            text(
-                """
-                update deals
-                set stage_id = :stage_id, updated_at = :updated_at
-                where id = :deal_id and tenant_id = :tenant_id
-                returning id, tenant_id, contact_id as customer_id, lead_id, agent_id,
-                          stage_id, package_id, value_zar, status, close_date, closed_at,
-                          close_reason, notes, created_at, updated_at
-                """
-            ),
-            {
-                "stage_id": str(stage_id),
-                "updated_at": now,
-                "deal_id": str(deal_id),
-                "tenant_id": str(tenant_id),
-            },
-        )
-        result = row.mappings().one_or_none()
-        if not result:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
-        stage_name_row = await conn.execute(
-            text("select name from deal_stages where id = :stage_id"),
-            {"stage_id": str(result["stage_id"])},
-        )
-        stage_name = stage_name_row.scalar()
-    return DealResponse(**result, stage_name=stage_name)
+    deal.stage_id = stage_id
+    deal.updated_at = now
+    await db.flush()
+
+    stage = await db.get(DealStage, stage_id)
+    return _deal_to_response(deal, stage.name if stage else None)
 
 
 @app.post("/deals/{deal_id}/close-won", response_model=DealResponse)
@@ -919,156 +1015,45 @@ async def close_deal_won(
     deal_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        deal_row = await conn.execute(
-            text(
-                """
-                select d.*, s.name as stage_name
-                from deals d
-                left join deal_stages s on s.id = d.stage_id
-                where d.id = :deal_id and d.tenant_id = :tenant_id
-                """
-            ),
-            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        )
-        deal = deal_row.mappings().one_or_none()
-        if not deal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
 
-        closed_stage_id = await _get_closed_stage_id(conn, tenant_id, "Closed Won")
-        await conn.execute(
-            text(
-                """
-                update deals
-                set status = 'WON',
-                    closed_at = :closed_at,
-                    stage_id = coalesce(:stage_id, stage_id),
-                    updated_at = :updated_at
-                where id = :deal_id and tenant_id = :tenant_id
-                """
-            ),
-            {
-                "closed_at": now,
-                "stage_id": str(closed_stage_id) if closed_stage_id else None,
-                "updated_at": now,
-                "deal_id": str(deal_id),
-                "tenant_id": str(tenant_id),
-            },
-        )
+    now = datetime.now(timezone.utc)
+    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Won")
+    deal.status = "WON"
+    deal.closed_at = now
+    deal.updated_at = now
+    if closed_stage_id:
+        deal.stage_id = closed_stage_id
 
-        if deal["agent_id"]:
-            rate = await _commission_rate_for_agent(conn, tenant_id, deal["agent_id"], now)
-            amount_zar = (Decimal(str(deal["value_zar"] or 0)) * rate / Decimal("100")).quantize(
-                Decimal("0.01")
-            )
-            await conn.execute(
-                text(
-                    """
-                    insert into commissions (id, tenant_id, deal_id, agent_id, amount_zar, rate_percent, status, created_at, updated_at)
-                    values (:id, :tenant_id, :deal_id, :agent_id, :amount_zar, :rate_percent, 'PENDING', :created_at, :updated_at)
-                    """
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "tenant_id": str(tenant_id),
-                    "deal_id": str(deal_id),
-                    "agent_id": str(deal["agent_id"]),
-                    "amount_zar": amount_zar,
-                    "rate_percent": rate,
-                    "created_at": now,
-                    "updated_at": now,
-                },
-            )
+    # Commission per agent tier.
+    if deal.agent_id:
+        rate = await _commission_rate(db, tenant_id, deal.agent_id)
+        amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
+        db.add(Commission(
+            id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal_id,
+            agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
+            status="PENDING", created_at=now, updated_at=now,
+        ))
 
-        stage_name = "Closed Won" if closed_stage_id else deal["stage_name"]
+    await db.flush()
 
-    # Lifecycle bridge: notify lifecycle service on close-won
-    lifecycle_payload = {
-        "tenant_id": str(tenant_id),
-        "customer_id": str(deal["contact_id"]),
-        "deal_id": str(deal_id),
-        "agent_id": str(deal["agent_id"]) if deal["agent_id"] else None,
-        "plan": str(deal["package_id"]) if deal["package_id"] else None,
-        "monthly_recurring_revenue": float(deal["value_zar"] or 0) / 12,
-        "lead_id": str(deal["lead_id"]) if deal["lead_id"] else None,
-    }
-    try:
-        with httpx.Client(timeout=5) as client:
-            client.post(
-                f"{LIFECYCLE_URL}/lifecycle/from-sale",
-                json=lifecycle_payload,
-                headers={"X-Tenant-Id": str(tenant_id)},
-            )
-    except Exception:
-        pass  # Don't fail the sale if lifecycle is down
+    # Bridges — non-blocking, never fail the sale.
+    await _notify_lifecycle_won(deal, tenant_id)
+    await _notify_finance_won(deal, tenant_id, now)
+    background_tasks.add_task(_dispatch_provisioning_bg, {
+        "event": "deal.closed_won", "deal_id": str(deal_id),
+        "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
+        "agent_id": str(deal.agent_id) if deal.agent_id else None,
+        "package_id": str(deal.package_id) if deal.package_id else None,
+        "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
+    })
 
-    # Finance bridge: create GL revenue entry on close-won
-    FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
-    try:
-        with httpx.Client(timeout=5) as client:
-            client.post(
-                f"{FINANCE_URL}/journal-entries",
-                json={
-                    "entry_date": now.strftime("%Y-%m-%d"),
-                    "reference": f"DEAL-{str(deal_id)[:8]}",
-                    "description": f"Won deal - {deal['contact_id']}",
-                    "source": "SALES",
-                    "source_id": str(deal_id),
-                    "lines": [
-                        {
-                            "account_code": "1100",
-                            "account_name": "Accounts Receivable",
-                            "description": f"AR - Customer {str(deal['contact_id'])[:8]}",
-                            "debit": float(deal["value_zar"] or 0),
-                            "credit": 0,
-                        },
-                        {
-                            "account_code": "4000",
-                            "account_name": "Revenue - FTTH Subscriptions",
-                            "description": f"Revenue - Deal {str(deal_id)[:8]}",
-                            "debit": 0,
-                            "credit": float(deal["value_zar"] or 0),
-                        },
-                    ],
-                },
-                headers={"X-Tenant-Id": str(tenant_id)},
-            )
-    except Exception:
-        pass  # Don't fail the sale if finance is down
-
-    payload = {
-        "event": "deal.closed_won",
-        "deal_id": str(deal_id),
-        "tenant_id": str(tenant_id),
-        "customer_id": str(deal["contact_id"]),
-        "agent_id": str(deal["agent_id"]) if deal["agent_id"] else None,
-        "package_id": str(deal["package_id"]) if deal["package_id"] else None,
-        "value_zar": float(deal["value_zar"] or 0),
-        "closed_at": now.isoformat(),
-    }
-    _dispatch_provisioning(background_tasks, payload)
-
-    return DealResponse(
-        id=deal_id,
-        tenant_id=tenant_id,
-        customer_id=deal["contact_id"],
-        lead_id=deal["lead_id"],
-        agent_id=deal["agent_id"],
-        stage_id=closed_stage_id or deal["stage_id"],
-        stage_name=stage_name,
-        package_id=deal["package_id"],
-        value_zar=Decimal(str(deal["value_zar"] or 0)),
-        status="WON",
-        close_date=deal["close_date"],
-        closed_at=now,
-        close_reason=deal["close_reason"],
-        notes=deal["notes"],
-        created_at=deal["created_at"],
-        updated_at=now,
-    )
+    stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
+    return _deal_to_response(deal, stage.name if stage else "Closed Won")
 
 
 @app.post("/deals/{deal_id}/close-lost", response_model=DealResponse)
@@ -1076,229 +1061,125 @@ async def close_deal_lost(
     deal_id: uuid.UUID,
     reason: str = Query(..., min_length=3),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        deal_row = await conn.execute(
-            text(
-                """
-                select d.*, s.name as stage_name
-                from deals d
-                left join deal_stages s on s.id = d.stage_id
-                where d.id = :deal_id and d.tenant_id = :tenant_id
-                """
-            ),
-            {"deal_id": str(deal_id), "tenant_id": str(tenant_id)},
-        )
-        deal = deal_row.mappings().one_or_none()
-        if not deal:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deal not found")
+    deal = await db.get(Deal, deal_id)
+    if not deal or deal.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Deal not found")
 
-        closed_stage_id = await _get_closed_stage_id(conn, tenant_id, "Closed Lost")
-        await conn.execute(
-            text(
-                """
-                update deals
-                set status = 'LOST',
-                    closed_at = :closed_at,
-                    close_reason = :close_reason,
-                    stage_id = coalesce(:stage_id, stage_id),
-                    updated_at = :updated_at
-                where id = :deal_id and tenant_id = :tenant_id
-                """
-            ),
-            {
-                "closed_at": now,
-                "close_reason": reason,
-                "stage_id": str(closed_stage_id) if closed_stage_id else None,
-                "updated_at": now,
-                "deal_id": str(deal_id),
-                "tenant_id": str(tenant_id),
-            },
-        )
+    now = datetime.now(timezone.utc)
+    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Lost")
+    deal.status = "LOST"
+    deal.closed_at = now
+    deal.close_reason = reason
+    deal.updated_at = now
+    if closed_stage_id:
+        deal.stage_id = closed_stage_id
+    await db.flush()
 
-        stage_name = "Closed Lost" if closed_stage_id else deal["stage_name"]
+    # Lifecycle bridge — non-blocking.
+    await _notify_lifecycle_lost(deal, tenant_id, reason)
 
-    # Lifecycle bridge: notify lifecycle service on close-lost
-    try:
-        with httpx.Client(timeout=5) as client:
-            client.post(
-                f"{LIFECYCLE_URL}/lifecycle/customers/{deal['contact_id']}/transition",
-                json={
-                    "tenant_id": str(tenant_id),
-                    "to_stage": "Closed Lost",
-                    "reason": reason,
-                    "trigger_source": "sale",
-                },
-                headers={"X-Tenant-Id": str(tenant_id)},
-            )
-    except Exception:
-        pass  # Don't fail the sale if lifecycle is down
-
-    return DealResponse(
-        id=deal_id,
-        tenant_id=tenant_id,
-        customer_id=deal["contact_id"],
-        lead_id=deal["lead_id"],
-        agent_id=deal["agent_id"],
-        stage_id=closed_stage_id or deal["stage_id"],
-        stage_name=stage_name,
-        package_id=deal["package_id"],
-        value_zar=Decimal(str(deal["value_zar"] or 0)),
-        status="LOST",
-        close_date=deal["close_date"],
-        closed_at=now,
-        close_reason=reason,
-        notes=deal["notes"],
-        created_at=deal["created_at"],
-        updated_at=now,
-    )
+    stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
+    return _deal_to_response(deal, stage.name if stage else "Closed Lost")
 
 
-# Quotes
-def _serialize_items(items: Optional[List[QuoteItem]]) -> Optional[List[Dict[str, Any]]]:
-    if not items:
-        return None
-    return [
-        {
-            "description": item.description,
-            "quantity": item.quantity,
-            "unit_price_zar": float(item.unit_price_zar),
-            "charge_type": item.charge_type,
-        }
-        for item in items
-    ]
+# ── Quotes ───────────────────────────────────────────────────────────────
 
-
-def _deserialize_items(items: Optional[List[Dict[str, Any]]]) -> Optional[List[QuoteItem]]:
-    if not items:
-        return None
-    return [QuoteItem(**item) for item in items]
-
-
-def _deal_value_from_quote(total_monthly: Decimal, total_once_off: Decimal, term_months: int) -> Decimal:
-    return (total_monthly * Decimal(term_months) + total_once_off).quantize(Decimal("0.01"))
-
-
-@app.post("/quotes", response_model=QuoteResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/quotes", response_model=QuoteResponse, status_code=201)
 async def create_quote(
-    payload: QuoteCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
+    payload: QuoteCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
     quote_id = uuid.uuid4()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if payload.items:
-        totals = _calculate_quote_totals(payload.items)
+        totals = calculate_quote_totals(payload.items)
         total_monthly = totals["total_monthly"]
         total_once_off = totals["total_once_off"]
     else:
         total_monthly = payload.total_monthly or Decimal("0")
         total_once_off = payload.total_once_off or Decimal("0")
 
-    total_monthly = _apply_discount(total_monthly, payload.discount_percent).quantize(Decimal("0.01"))
-    total_once_off = _apply_discount(total_once_off, payload.discount_percent).quantize(Decimal("0.01"))
-
+    total_monthly = apply_discount(total_monthly, payload.discount_percent).quantize(Decimal("0.01"))
+    total_once_off = apply_discount(total_once_off, payload.discount_percent).quantize(Decimal("0.01"))
     valid_until = date.today() + timedelta(days=payload.valid_days)
-    items_json = _serialize_items(payload.items)
 
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                insert into quotes (
-                    id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
-                    items, total_monthly, total_once_off, term_months, valid_until, status,
-                    terms, created_at
-                )
-                values (
-                    :id, :tenant_id, :deal_id, :customer_id, :lead_id, :agent_id, :package_id,
-                    :items, :total_monthly, :total_once_off, :term_months, :valid_until, :status,
-                    :terms, :created_at
-                )
-                """
-            ),
-            {
-                "id": str(quote_id),
-                "tenant_id": str(tenant_id),
-                "deal_id": str(payload.deal_id) if payload.deal_id else None,
-                "customer_id": str(payload.customer_id),
-                "lead_id": str(payload.lead_id) if payload.lead_id else None,
-                "agent_id": str(payload.agent_id) if payload.agent_id else None,
-                "package_id": str(payload.package_id) if payload.package_id else None,
-                "items": items_json,
-                "total_monthly": total_monthly,
-                "total_once_off": total_once_off,
-                "term_months": payload.term_months,
-                "valid_until": valid_until,
-                "status": "DRAFT",
-                "terms": payload.terms,
-                "created_at": now,
-            },
-        )
+    quote = Quote(
+        id=quote_id, tenant_id=tenant_id, deal_id=payload.deal_id,
+        customer_id=payload.customer_id, lead_id=payload.lead_id,
+        agent_id=payload.agent_id, package_id=payload.package_id,
+        items=serialize_items(payload.items), total_monthly=total_monthly,
+        total_once_off=total_once_off, term_months=payload.term_months,
+        valid_until=valid_until, status="DRAFT", terms=payload.terms,
+        created_at=now,
+    )
+    db.add(quote)
+    await db.flush()
 
     return QuoteResponse(
-        id=quote_id,
-        tenant_id=tenant_id,
-        deal_id=payload.deal_id,
-        customer_id=payload.customer_id,
-        lead_id=payload.lead_id,
-        agent_id=payload.agent_id,
-        package_id=payload.package_id,
-        items=payload.items,
-        total_monthly=total_monthly,
-        total_once_off=total_once_off,
-        term_months=payload.term_months,
-        valid_until=valid_until,
-        status="DRAFT",
-        terms=payload.terms,
-        created_at=now,
-        sent_at=None,
-        accepted_at=None,
+        id=quote_id, tenant_id=tenant_id, deal_id=payload.deal_id,
+        customer_id=payload.customer_id, lead_id=payload.lead_id,
+        agent_id=payload.agent_id, package_id=payload.package_id,
+        items=payload.items, total_monthly=total_monthly,
+        total_once_off=total_once_off, term_months=payload.term_months,
+        valid_until=valid_until, status="DRAFT", terms=payload.terms,
+        created_at=now, sent_at=None, accepted_at=None,
     )
+
+
+@app.get("/quotes", response_model=List[QuoteResponse])
+async def list_quotes(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    customer_id: Optional[uuid.UUID] = None,
+    deal_id: Optional[uuid.UUID] = None,
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Quote list — called by field-sales mobile listQuotes; no impl had it."""
+    q = select(Quote).where(Quote.tenant_id == tenant_id)
+    if status_filter:
+        q = q.where(Quote.status == status_filter.upper())
+    if customer_id:
+        q = q.where(Quote.customer_id == customer_id)
+    if deal_id:
+        q = q.where(Quote.deal_id == deal_id)
+    q = q.order_by(Quote.created_at.desc()).limit(limit)
+    result = await db.execute(q)
+    return [
+        QuoteResponse(
+            id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
+            customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
+            package_id=quote.package_id, items=deserialize_items(quote.items),
+            total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
+            term_months=quote.term_months, valid_until=quote.valid_until,
+            status=quote.status, terms=quote.terms, created_at=quote.created_at,
+            sent_at=quote.sent_at, accepted_at=quote.accepted_at,
+        )
+        for quote in result.scalars().all()
+    ]
 
 
 @app.get("/quotes/{quote_id}", response_model=QuoteResponse)
 async def get_quote(
-    quote_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
+    quote_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        row = await conn.execute(
-            text(
-                """
-                select id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
-                       items, total_monthly, total_once_off, term_months, valid_until,
-                       status, terms, created_at, sent_at, accepted_at
-                from quotes
-                where id = :quote_id and tenant_id = :tenant_id
-                """
-            ),
-            {"quote_id": str(quote_id), "tenant_id": str(tenant_id)},
-        )
-        result = row.mappings().one_or_none()
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
-
+    quote = await db.get(Quote, quote_id)
+    if not quote or quote.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Quote not found")
     return QuoteResponse(
-        id=result["id"],
-        tenant_id=result["tenant_id"],
-        deal_id=result["deal_id"],
-        customer_id=result["customer_id"],
-        lead_id=result["lead_id"],
-        agent_id=result["agent_id"],
-        package_id=result["package_id"],
-        items=_deserialize_items(result["items"]),
-        total_monthly=Decimal(str(result["total_monthly"] or 0)),
-        total_once_off=Decimal(str(result["total_once_off"] or 0)),
-        term_months=result["term_months"],
-        valid_until=result["valid_until"],
-        status=result["status"],
-        terms=result["terms"],
-        created_at=result["created_at"],
-        sent_at=result["sent_at"],
-        accepted_at=result["accepted_at"],
+        id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
+        customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
+        package_id=quote.package_id, items=deserialize_items(quote.items),
+        total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
+        term_months=quote.term_months, valid_until=quote.valid_until,
+        status=quote.status, terms=quote.terms, created_at=quote.created_at,
+        sent_at=quote.sent_at, accepted_at=quote.accepted_at,
     )
 
 
@@ -1307,46 +1188,22 @@ async def send_quote(
     quote_id: uuid.UUID,
     payload: QuoteSend,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        row = await conn.execute(
-            text(
-                """
-                update quotes
-                set status = 'SENT',
-                    sent_at = :sent_at
-                where id = :quote_id and tenant_id = :tenant_id
-                returning id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
-                          items, total_monthly, total_once_off, term_months, valid_until,
-                          status, terms, created_at, sent_at, accepted_at
-                """
-            ),
-            {"quote_id": str(quote_id), "tenant_id": str(tenant_id), "sent_at": now},
-        )
-        result = row.mappings().one_or_none()
-    if not result:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
-
+    quote = await db.get(Quote, quote_id)
+    if not quote or quote.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    quote.status = "SENT"
+    quote.sent_at = datetime.now(timezone.utc)
+    await db.flush()
     return QuoteResponse(
-        id=result["id"],
-        tenant_id=result["tenant_id"],
-        deal_id=result["deal_id"],
-        customer_id=result["customer_id"],
-        lead_id=result["lead_id"],
-        agent_id=result["agent_id"],
-        package_id=result["package_id"],
-        items=_deserialize_items(result["items"]),
-        total_monthly=Decimal(str(result["total_monthly"] or 0)),
-        total_once_off=Decimal(str(result["total_once_off"] or 0)),
-        term_months=result["term_months"],
-        valid_until=result["valid_until"],
-        status=result["status"],
-        terms=result["terms"],
-        created_at=result["created_at"],
-        sent_at=result["sent_at"],
-        accepted_at=result["accepted_at"],
+        id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
+        customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
+        package_id=quote.package_id, items=deserialize_items(quote.items),
+        total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
+        term_months=quote.term_months, valid_until=quote.valid_until,
+        status=quote.status, terms=quote.terms, created_at=quote.created_at,
+        sent_at=quote.sent_at, accepted_at=quote.accepted_at,
     )
 
 
@@ -1355,192 +1212,96 @@ async def accept_quote(
     quote_id: uuid.UUID,
     payload: QuoteAccept,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        quote_row = await conn.execute(
-            text(
-                """
-                select id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
-                       items, total_monthly, total_once_off, term_months, valid_until,
-                       status, terms, created_at, sent_at, accepted_at
-                from quotes
-                where id = :quote_id and tenant_id = :tenant_id
-                """
-            ),
-            {"quote_id": str(quote_id), "tenant_id": str(tenant_id)},
+    quote = await db.get(Quote, quote_id)
+    if not quote or quote.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Quote not found")
+
+    now = datetime.now(timezone.utc)
+    quote.status = "ACCEPTED"
+    quote.accepted_at = now
+
+    if payload.create_deal:
+        contract_value = deal_value_from_quote(
+            quote.total_monthly or Decimal("0"),
+            quote.total_once_off or Decimal("0"),
+            quote.term_months or 12,
         )
-        quote = quote_row.mappings().one_or_none()
+        stage_id = await _resolve_stage_id(db, tenant_id, None, payload.stage_name or "Proposal")
+        if quote.deal_id:
+            deal = await db.get(Deal, quote.deal_id)
+            if deal and deal.tenant_id == tenant_id:
+                deal.value_zar = contract_value
+                deal.amount = contract_value
+                deal.status = "OPEN"
+                deal.closed_at = None
+                deal.close_reason = None
+                deal.stage_id = stage_id
+                deal.updated_at = now
+        else:
+            # Quote customer is an existing contact (quotes.customer_id FKs contacts).
+            deal = Deal(
+                id=uuid.uuid4(), tenant_id=tenant_id, contact_id=quote.customer_id,
+                lead_id=quote.lead_id, agent_id=quote.agent_id, stage_id=stage_id,
+                package_id=quote.package_id, name=f"Quote {quote.id} deal",
+                amount=contract_value, value_zar=contract_value,
+                status="OPEN", created_at=now, updated_at=now,
+            )
+            db.add(deal)
+            await db.flush()
+            quote.deal_id = deal.id
 
-        if not quote:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quote not found")
-
-        deal_id = quote["deal_id"]
-        if payload.create_deal:
-            total_monthly = Decimal(str(quote["total_monthly"] or 0))
-            total_once_off = Decimal(str(quote["total_once_off"] or 0))
-            contract_value = _deal_value_from_quote(total_monthly, total_once_off, quote["term_months"] or 12)
-            stage_id = None
-            if payload.stage_name:
-                stage_id = await _resolve_stage_id(conn, tenant_id, None, payload.stage_name)
-
-            if deal_id:
-                await conn.execute(
-                    text(
-                        """
-                        update deals
-                        set value_zar = :value_zar,
-                            amount = :amount,
-                            status = 'OPEN',
-                            closed_at = null,
-                            close_reason = null,
-                            stage_id = coalesce(:stage_id, stage_id),
-                            updated_at = :updated_at
-                        where id = :deal_id and tenant_id = :tenant_id
-                        """
-                    ),
-                    {
-                        "value_zar": contract_value,
-                        "amount": contract_value,
-                        "stage_id": str(stage_id) if stage_id else None,
-                        "updated_at": now,
-                        "deal_id": str(deal_id),
-                        "tenant_id": str(tenant_id),
-                    },
-                )
-            else:
-                stage_id = stage_id or await _resolve_stage_id(conn, tenant_id, None, None)
-                deal_id = uuid.uuid4()
-                await conn.execute(
-                    text(
-                        """
-                        insert into deals (
-                            id, tenant_id, contact_id, lead_id, agent_id, stage_id, package_id,
-                            name, amount, value_zar, status, created_at, updated_at
-                        )
-                        values (
-                            :id, :tenant_id, :contact_id, :lead_id, :agent_id, :stage_id, :package_id,
-                            :name, :amount, :value_zar, :status, :created_at, :updated_at
-                        )
-                        """
-                    ),
-                    {
-                        "id": str(deal_id),
-                        "tenant_id": str(tenant_id),
-                        "contact_id": str(quote["customer_id"]),
-                        "lead_id": str(quote["lead_id"]) if quote["lead_id"] else None,
-                        "agent_id": str(quote["agent_id"]) if quote["agent_id"] else None,
-                        "stage_id": str(stage_id),
-                        "package_id": str(quote["package_id"]) if quote["package_id"] else None,
-                        "name": f"Quote {quote_id}",
-                        "amount": contract_value,
-                        "value_zar": contract_value,
-                        "status": "OPEN",
-                        "created_at": now,
-                        "updated_at": now,
-                    },
-                )
-
-        row = await conn.execute(
-            text(
-                """
-                update quotes
-                set status = 'ACCEPTED',
-                    accepted_at = :accepted_at,
-                    deal_id = :deal_id
-                where id = :quote_id and tenant_id = :tenant_id
-                returning id, tenant_id, deal_id, customer_id, lead_id, agent_id, package_id,
-                          items, total_monthly, total_once_off, term_months, valid_until,
-                          status, terms, created_at, sent_at, accepted_at
-                """
-            ),
-            {
-                "quote_id": str(quote_id),
-                "tenant_id": str(tenant_id),
-                "accepted_at": now,
-                "deal_id": str(deal_id) if deal_id else None,
-            },
-        )
-        result = row.mappings().one_or_none()
-
+    await db.flush()
     return QuoteResponse(
-        id=result["id"],
-        tenant_id=result["tenant_id"],
-        deal_id=result["deal_id"],
-        customer_id=result["customer_id"],
-        lead_id=result["lead_id"],
-        agent_id=result["agent_id"],
-        package_id=result["package_id"],
-        items=_deserialize_items(result["items"]),
-        total_monthly=Decimal(str(result["total_monthly"] or 0)),
-        total_once_off=Decimal(str(result["total_once_off"] or 0)),
-        term_months=result["term_months"],
-        valid_until=result["valid_until"],
-        status=result["status"],
-        terms=result["terms"],
-        created_at=result["created_at"],
-        sent_at=result["sent_at"],
-        accepted_at=result["accepted_at"],
+        id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
+        customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
+        package_id=quote.package_id, items=deserialize_items(quote.items),
+        total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
+        term_months=quote.term_months, valid_until=quote.valid_until,
+        status=quote.status, terms=quote.terms, created_at=quote.created_at,
+        sent_at=quote.sent_at, accepted_at=quote.accepted_at,
     )
 
 
-# Commissions
+# ── Commissions ──────────────────────────────────────────────────────────
+
 @app.get("/commissions", response_model=List[CommissionResponse])
 async def list_commissions(
     agent_id: Optional[uuid.UUID] = None,
+    deal_id: Optional[uuid.UUID] = None,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     ctx: AuthContext = Depends(get_auth_context),
+    db: AsyncSession = Depends(get_db),
 ):
-    tenant_id = ctx.tenant_id
+    # Production behaviour: default the agent filter to the caller so agents
+    # see their own commissions (web quick-stats relies on this).
     if agent_id is None:
         agent_id = ctx.user_id
 
-    conditions = ["tenant_id = :tenant_id", "agent_id = :agent_id"]
-    params: Dict[str, Any] = {
-        "tenant_id": str(tenant_id),
-        "agent_id": str(agent_id),
-    }
+    q = select(Commission).where(
+        Commission.tenant_id == ctx.tenant_id,
+        Commission.agent_id == agent_id,
+    )
+    if deal_id:
+        q = q.where(Commission.deal_id == deal_id)
     if status_filter:
-        conditions.append("status = :status")
-        params["status"] = status_filter.upper()
+        q = q.where(Commission.status == status_filter.upper())
     if start_date:
-        conditions.append("created_at >= :start_date")
-        params["start_date"] = start_date
+        q = q.where(Commission.created_at >= start_date)
     if end_date:
-        conditions.append("created_at <= :end_date")
-        params["end_date"] = end_date
-
-    where_clause = " and ".join(conditions)
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                f"""
-                select id, deal_id, agent_id, amount_zar, rate_percent, status,
-                       created_at, updated_at
-                from commissions
-                where {where_clause}
-                order by created_at desc
-                """
-            ),
-            params,
-        )
-        result_rows = list(rows.mappings().all())
+        q = q.where(Commission.created_at <= end_date)
+    q = q.order_by(Commission.created_at.desc())
+    result = await db.execute(q)
     return [
         CommissionResponse(
-            id=row["id"],
-            deal_id=row["deal_id"],
-            agent_id=row["agent_id"],
-            amount_zar=Decimal(str(row["amount_zar"] or 0)),
-            rate_percent=row["rate_percent"],
-            status=row["status"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
+            id=c.id, deal_id=c.deal_id, agent_id=c.agent_id,
+            amount_zar=c.amount_zar, rate_percent=c.rate_percent,
+            status=c.status, created_at=c.created_at, updated_at=c.updated_at,
         )
-        for row in result_rows
+        for c in result.scalars().all()
     ]
 
 
@@ -1549,6 +1310,7 @@ async def commission_report(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
     today = date.today()
     if not start_date:
@@ -1558,88 +1320,57 @@ async def commission_report(
         end_date = date(next_month.year, next_month.month, 1) - timedelta(days=1)
     end_exclusive = end_date + timedelta(days=1)
 
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                """
-                select agent_id,
-                       coalesce(sum(amount_zar), 0) as total_amount,
-                       count(*) as deals_count,
-                       sum(case when status = 'PENDING' then 1 else 0 end) as pending,
-                       sum(case when status = 'APPROVED' then 1 else 0 end) as approved,
-                       sum(case when status = 'PAID' then 1 else 0 end) as paid,
-                       sum(case when status = 'CLAWBACK' then 1 else 0 end) as clawback
-                from commissions
-                where tenant_id = :tenant_id
-                  and created_at >= :start_date
-                  and created_at < :end_exclusive
-                group by agent_id
-                order by total_amount desc
-                """
-            ),
-            {
-                "tenant_id": str(tenant_id),
-                "start_date": start_date,
-                "end_exclusive": end_exclusive,
-            },
+    result = await db.execute(
+        select(
+            Commission.agent_id,
+            func.sum(Commission.amount_zar).label("total_amount"),
+            func.count(Commission.id).label("deals_count"),
+            func.sum(func.cast((Commission.status == "PENDING").int, Integer)).label("pending"),
+            func.sum(func.cast((Commission.status == "APPROVED").int, Integer)).label("approved"),
+            func.sum(func.cast((Commission.status == "PAID").int, Integer)).label("paid"),
+            func.sum(func.cast((Commission.status == "CLAWBACK").int, Integer)).label("clawback"),
         )
-        result_rows = list(rows.mappings().all())
-
+        .where(
+            Commission.tenant_id == tenant_id,
+            Commission.created_at >= start_date,
+            Commission.created_at < end_exclusive,
+        )
+        .group_by(Commission.agent_id)
+    )
     return [
         CommissionReportEntry(
-            agent_id=row["agent_id"],
-            total_amount_zar=Decimal(str(row["total_amount"] or 0)),
-            deals_count=row["deals_count"],
-            pending=row["pending"],
-            approved=row["approved"],
-            paid=row["paid"],
-            clawback=row["clawback"],
+            agent_id=row.agent_id, total_amount_zar=Decimal(str(row.total_amount or 0)),
+            deals_count=row.deals_count, pending=row.pending or 0,
+            approved=row.approved or 0, paid=row.paid or 0, clawback=row.clawback or 0,
         )
-        for row in result_rows
+        for row in result.all()
     ]
 
 
-# Targets
+# ── Targets ──────────────────────────────────────────────────────────────
+
 @app.post("/targets", response_model=TargetPerformanceEntry, status_code=status.HTTP_201_CREATED)
 async def create_target(
-    payload: TargetCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)
+    payload: TargetCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
     if payload.period_end < payload.period_start:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="period_end must be after period_start")
+        raise HTTPException(status_code=400, detail="period_end must be after period_start")
 
-    target_id = uuid.uuid4()
-    engine = _get_engine()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                insert into sales_targets (
-                    id, tenant_id, agent_id, team_id, period_type, period_start, period_end, target_value_zar
-                )
-                values (
-                    :id, :tenant_id, :agent_id, :team_id, :period_type, :period_start, :period_end, :target_value_zar
-                )
-                """
-            ),
-            {
-                "id": str(target_id),
-                "tenant_id": str(tenant_id),
-                "agent_id": str(payload.agent_id) if payload.agent_id else None,
-                "team_id": str(payload.team_id) if payload.team_id else None,
-                "period_type": payload.period_type,
-                "period_start": payload.period_start,
-                "period_end": payload.period_end,
-                "target_value_zar": payload.target_value_zar,
-            },
-        )
+    target = Target(
+        id=uuid.uuid4(), tenant_id=tenant_id, agent_id=payload.agent_id,
+        team_id=payload.team_id, period_type=payload.period_type,
+        period_start=payload.period_start, period_end=payload.period_end,
+        target_value_zar=payload.target_value_zar,
+    )
+    db.add(target)
+    await db.flush()
 
+    # Production response shape: performance entry with zero actuals.
     return TargetPerformanceEntry(
-        target_id=target_id,
-        agent_id=payload.agent_id,
-        team_id=payload.team_id,
-        period_start=payload.period_start,
-        period_end=payload.period_end,
+        target_id=target.id, agent_id=payload.agent_id, team_id=payload.team_id,
+        period_start=payload.period_start, period_end=payload.period_end,
         target_value_zar=payload.target_value_zar,
         actual_value_zar=Decimal("0.00"),
         variance_zar=(Decimal("0.00") - payload.target_value_zar).quantize(Decimal("0.01")),
@@ -1653,99 +1384,44 @@ async def target_performance(
     agent_id: Optional[uuid.UUID] = None,
     team_id: Optional[uuid.UUID] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    conditions = ["tenant_id = :tenant_id"]
-    params: Dict[str, Any] = {"tenant_id": str(tenant_id)}
+    q = select(Target).where(Target.tenant_id == tenant_id)
     if agent_id:
-        conditions.append("agent_id = :agent_id")
-        params["agent_id"] = str(agent_id)
+        q = q.where(Target.agent_id == agent_id)
     if team_id:
-        conditions.append("team_id = :team_id")
-        params["team_id"] = str(team_id)
+        q = q.where(Target.team_id == team_id)
     if period_start:
-        conditions.append("period_start >= :period_start")
-        params["period_start"] = period_start
+        q = q.where(Target.period_start >= period_start)
     if period_end:
-        conditions.append("period_end <= :period_end")
-        params["period_end"] = period_end
+        q = q.where(Target.period_end <= period_end)
+    q = q.order_by(Target.period_start.desc())
 
-    where_clause = " and ".join(conditions)
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        targets = await conn.execute(
-            text(
-                f"""
-                select id, agent_id, team_id, period_start, period_end, target_value_zar
-                from sales_targets
-                where {where_clause}
-                order by period_start desc
-                """
-            ),
-            params,
-        )
-        target_rows = list(targets.mappings().all())
+    targets = (await db.execute(q)).scalars().all()
 
-        results: List[TargetPerformanceEntry] = []
-        for target in target_rows:
-            end_exclusive = target["period_end"] + timedelta(days=1)
-            if target["agent_id"]:
-                total_row = await conn.execute(
-                    text(
-                        """
-                        select coalesce(sum(value_zar), 0) as total_value
-                        from deals
-                        where tenant_id = :tenant_id
-                          and agent_id = :agent_id
-                          and status = 'WON'
-                          and closed_at >= :start_date
-                          and closed_at < :end_exclusive
-                        """
-                    ),
-                    {
-                        "tenant_id": str(tenant_id),
-                        "agent_id": str(target["agent_id"]),
-                        "start_date": target["period_start"],
-                        "end_exclusive": end_exclusive,
-                    },
-                )
-            else:
-                total_row = await conn.execute(
-                    text(
-                        """
-                        select coalesce(sum(value_zar), 0) as total_value
-                        from deals
-                        where tenant_id = :tenant_id
-                          and status = 'WON'
-                          and closed_at >= :start_date
-                          and closed_at < :end_exclusive
-                        """
-                    ),
-                    {
-                        "tenant_id": str(tenant_id),
-                        "start_date": target["period_start"],
-                        "end_exclusive": end_exclusive,
-                    },
-                )
-
-            actual_value = Decimal(str(total_row.scalar() or 0))
-            target_value = Decimal(str(target["target_value_zar"] or 0))
-            results.append(
-                TargetPerformanceEntry(
-                    target_id=target["id"],
-                    agent_id=target["agent_id"],
-                    team_id=target["team_id"],
-                    period_start=target["period_start"],
-                    period_end=target["period_end"],
-                    target_value_zar=target_value,
-                    actual_value_zar=actual_value,
-                    variance_zar=(actual_value - target_value).quantize(Decimal("0.01")),
-                )
+    results: List[TargetPerformanceEntry] = []
+    for target in targets:
+        total_result = await db.execute(
+            select(func.coalesce(func.sum(Deal.value_zar), 0)).where(
+                Deal.tenant_id == tenant_id,
+                Deal.status == "WON",
+                Deal.closed_at >= target.period_start,
+                Deal.closed_at < target.period_end + timedelta(days=1),
+                *([Deal.agent_id == target.agent_id] if target.agent_id else []),
             )
-
+        )
+        actual_value = Decimal(str(total_result.scalar() or 0))
+        target_value = Decimal(str(target.target_value_zar or 0))
+        results.append(TargetPerformanceEntry(
+            target_id=target.id, agent_id=target.agent_id, team_id=target.team_id,
+            period_start=target.period_start, period_end=target.period_end,
+            target_value_zar=target_value, actual_value_zar=actual_value,
+            variance_zar=(actual_value - target_value).quantize(Decimal("0.01")),
+        ))
     return results
 
 
-# ── Leads Management ──────────────────────────────────────────────────
+# ── Leads ────────────────────────────────────────────────────────────────
 
 @app.get("/leads", response_model=List[LeadResponse])
 async def list_leads(
@@ -1755,96 +1431,53 @@ async def list_leads(
     min_interest: Optional[int] = Query(None, ge=1, le=5),
     limit: int = Query(50, ge=1, le=200),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    conditions = ["tenant_id = :tenant_id"]
-    params: Dict[str, Any] = {"tenant_id": str(tenant_id), "limit": limit}
+    q = select(Lead).where(Lead.tenant_id == tenant_id)
     if status:
-        conditions.append("status = :status")
-        params["status"] = status.upper()
+        q = q.where(Lead.status == status.upper())
     if agent_id:
-        conditions.append("agent_id = :agent_id")
-        params["agent_id"] = str(agent_id)
+        q = q.where(Lead.agent_id == agent_id)
     if source:
-        conditions.append("source = :source")
-        params["source"] = source
+        q = q.where(Lead.source == source)
     if min_interest:
-        conditions.append("interest_level >= :min_interest")
-        params["min_interest"] = min_interest
-
-    where_clause = " and ".join(conditions)
-    engine = _get_engine()
-    async with engine.connect() as conn:
-        rows = await conn.execute(
-            text(
-                f"""
-                select id, tenant_id, contact_id, agent_id, first_name, last_name,
-                       email, phone, address, source, interest_level, status,
-                       notes, converted_at, created_at, updated_at
-                from leads
-                where {where_clause}
-                order by created_at desc
-                limit :limit
-                """
-            ),
-            params,
-        )
-        leads = list(rows.mappings().all())
-    return [LeadResponse(**lead) for lead in leads]
+        q = q.where(Lead.interest_level >= min_interest)
+    q = q.order_by(Lead.created_at.desc()).limit(limit)
+    result = await db.execute(q)
+    return [
+        LeadResponse(
+            id=l.id, tenant_id=l.tenant_id, contact_id=l.contact_id,
+            agent_id=l.agent_id, first_name=l.first_name, last_name=l.last_name,
+            email=l.email, phone=l.phone, address=l.address, source=l.source,
+            interest_level=l.interest_level, status=l.status, notes=l.notes,
+            converted_at=l.converted_at, created_at=l.created_at, updated_at=l.updated_at,
+        ) for l in result.scalars().all()
+    ]
 
 
-@app.post("/leads", response_model=LeadResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/leads", response_model=LeadResponse, status_code=201)
 async def create_lead(
     payload: LeadCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    lead_id = uuid.uuid4()
-    now = datetime.utcnow()
-    async with engine.begin() as conn:
-        await conn.execute(
-            text(
-                """
-                insert into leads (
-                    id, tenant_id, first_name, last_name, email, phone, address,
-                    source, interest_level, notes, agent_id, status, created_at, updated_at
-                )
-                values (
-                    :id, :tenant_id, :first_name, :last_name, :email, :phone, :address,
-                    :source, :interest_level, :notes, :agent_id, 'NEW', :created_at, :updated_at
-                )
-                """
-            ),
-            {
-                "id": str(lead_id),
-                "tenant_id": str(tenant_id),
-                "first_name": payload.first_name,
-                "last_name": payload.last_name,
-                "email": payload.email,
-                "phone": payload.phone,
-                "address": payload.address,
-                "source": payload.source,
-                "interest_level": payload.interest_level,
-                "notes": payload.notes,
-                "agent_id": str(payload.agent_id) if payload.agent_id else None,
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
+    now = datetime.now(timezone.utc)
+    lead = Lead(
+        id=uuid.uuid4(), tenant_id=tenant_id,
+        first_name=payload.first_name, last_name=payload.last_name,
+        email=payload.email, phone=payload.phone, address=payload.address,
+        source=payload.source, interest_level=payload.interest_level,
+        notes=payload.notes, agent_id=payload.agent_id,
+        status="NEW", created_at=now, updated_at=now,
+    )
+    db.add(lead)
+    await db.flush()
     return LeadResponse(
-        id=lead_id,
-        tenant_id=tenant_id,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
-        email=payload.email,
-        phone=payload.phone,
-        address=payload.address,
-        source=payload.source,
-        interest_level=payload.interest_level,
-        status="NEW",
-        notes=payload.notes,
-        agent_id=payload.agent_id,
-        created_at=now,
-        updated_at=now,
+        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
+        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
+        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
+        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
+        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
     )
 
 
@@ -1853,66 +1486,25 @@ async def update_lead(
     lead_id: uuid.UUID,
     payload: LeadUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    update_fields = []
-    params: Dict[str, Any] = {"lead_id": str(lead_id), "tenant_id": str(tenant_id), "updated_at": now}
-
-    if payload.first_name is not None:
-        update_fields.append("first_name = :first_name")
-        params["first_name"] = payload.first_name
-    if payload.last_name is not None:
-        update_fields.append("last_name = :last_name")
-        params["last_name"] = payload.last_name
-    if payload.email is not None:
-        update_fields.append("email = :email")
-        params["email"] = payload.email
-    if payload.phone is not None:
-        update_fields.append("phone = :phone")
-        params["phone"] = payload.phone
-    if payload.address is not None:
-        update_fields.append("address = :address")
-        params["address"] = payload.address
-    if payload.source is not None:
-        update_fields.append("source = :source")
-        params["source"] = payload.source
-    if payload.interest_level is not None:
-        update_fields.append("interest_level = :interest_level")
-        params["interest_level"] = payload.interest_level
-    if payload.status is not None:
-        update_fields.append("status = :status")
-        params["status"] = payload.status.upper()
-    if payload.notes is not None:
-        update_fields.append("notes = :notes")
-        params["notes"] = payload.notes
-    if payload.agent_id is not None:
-        update_fields.append("agent_id = :agent_id")
-        params["agent_id"] = str(payload.agent_id)
-
-    if not update_fields:
-        update_fields.append("updated_at = :updated_at")
-    else:
-        update_fields.append("updated_at = :updated_at")
-
-    async with engine.begin() as conn:
-        result = await conn.execute(
-            text(
-                f"""
-                update leads
-                set {', '.join(update_fields)}
-                where id = :lead_id and tenant_id = :tenant_id
-                returning id, tenant_id, contact_id, agent_id, first_name, last_name,
-                          email, phone, address, source, interest_level, status,
-                          notes, converted_at, created_at, updated_at
-                """
-            ),
-            params,
-        )
-        row = result.mappings().fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Lead not found")
-    return LeadResponse(**row)
+    lead = await db.get(Lead, lead_id)
+    if not lead or lead.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    update_data = payload.model_dump(exclude_unset=True)
+    if "status" in update_data and update_data["status"]:
+        update_data["status"] = update_data["status"].upper()
+    for key, value in update_data.items():
+        setattr(lead, key, value)
+    lead.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return LeadResponse(
+        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
+        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
+        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
+        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
+        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
+    )
 
 
 @app.post("/leads/{lead_id}/convert", response_model=dict)
@@ -1920,92 +1512,226 @@ async def convert_lead(
     lead_id: uuid.UUID,
     payload: LeadConvert,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    engine = _get_engine()
-    now = datetime.utcnow()
-    deal_id = uuid.uuid4()
-    async with engine.begin() as conn:
-        lead_row = await conn.execute(
-            text("select * from leads where id = :id and tenant_id = :tenant_id"),
-            {"id": str(lead_id), "tenant_id": str(tenant_id)},
+    lead = await db.get(Lead, lead_id)
+    if not lead or lead.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    now = datetime.now(timezone.utc)
+
+    # Create contact from lead details when none linked yet.
+    contact_id = lead.contact_id
+    if not contact_id:
+        contact = Contact(
+            id=uuid.uuid4(), tenant_id=tenant_id,
+            first_name=lead.first_name, last_name=lead.last_name,
+            email=lead.email, phone=lead.phone,
+            physical_address=lead.address,
+            status="ACTIVE", lifecycle_stage="QUALIFIED",
+            created_at=now, updated_at=now,
         )
-        lead = lead_row.mappings().fetchone()
-        if not lead:
-            raise HTTPException(status_code=404, detail="Lead not found")
+        db.add(contact)
+        await db.flush()
+        contact_id = contact.id
+        lead.contact_id = contact_id
 
-        contact_id = lead.get("contact_id")
-        if not contact_id:
-            contact_id = uuid.uuid4()
-            await conn.execute(
-                text(
-                    """
-                    insert into contacts (
-                        id, tenant_id, first_name, last_name, email, phone, physical_address,
-                        status, lifecycle_stage, created_at, updated_at
-                    )
-                    values (
-                        :id, :tenant_id, :first_name, :last_name, :email, :phone, :address,
-                        'ACTIVE', 'QUALIFIED', :created_at, :updated_at
-                    )
-                    """
-                ),
-                {
-                    "id": str(contact_id),
-                    "tenant_id": str(tenant_id),
-                    "first_name": lead["first_name"],
-                    "last_name": lead["last_name"],
-                    "email": lead.get("email"),
-                    "phone": lead.get("phone"),
-                    "address": lead.get("address"),
-                    "created_at": now,
-                    "updated_at": now,
-                },
-            )
+    deal_name = payload.name or f"{lead.first_name} {lead.last_name} - New Deal"
+    agent_id = payload.agent_id or lead.agent_id
+    stage_id = await _resolve_stage_id(db, tenant_id, None, "Prospecting")
+    deal = Deal(
+        id=uuid.uuid4(), tenant_id=tenant_id, contact_id=contact_id,
+        lead_id=lead.id, agent_id=agent_id, stage_id=stage_id,
+        name=deal_name, amount=payload.value_zar, value_zar=payload.value_zar,
+        status="OPEN", created_at=now, updated_at=now,
+    )
+    db.add(deal)
 
-        deal_name = payload.name or f"{lead['first_name']} {lead['last_name']} - New Deal"
-        stage_id = await _resolve_stage_id(conn, tenant_id, None, "Prospecting")
-        await conn.execute(
-            text(
-                """
-                insert into deals (
-                    id, tenant_id, contact_id, lead_id, agent_id, stage_id,
-                    name, amount, value_zar, status, created_at, updated_at
-                )
-                values (
-                    :id, :tenant_id, :contact_id, :lead_id, :agent_id, :stage_id,
-                    :name, :value_zar, :value_zar, 'OPEN', :created_at, :updated_at
-                )
-                """
-            ),
-            {
-                "id": str(deal_id),
-                "tenant_id": str(tenant_id),
-                "contact_id": str(contact_id),
-                "lead_id": str(lead_id),
-                "agent_id": str(payload.agent_id or lead.get("agent_id")) if (payload.agent_id or lead.get("agent_id")) else None,
-                "stage_id": str(stage_id),
-                "name": deal_name,
-                "value_zar": payload.value_zar,
-                "created_at": now,
-                "updated_at": now,
-            },
+    lead.status = "CONVERTED"
+    lead.converted_at = now
+    lead.updated_at = now
+    await db.flush()
+
+    return {"deal_id": str(deal.id), "contact_id": str(contact_id), "message": "Lead converted"}
+
+
+# ── Contacts ─────────────────────────────────────────────────────────────
+
+@app.get("/contacts", response_model=List[ContactResponse])
+async def list_contacts(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    lifecycle_stage: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(Contact).where(Contact.tenant_id == tenant_id)
+    if status:
+        q = q.where(Contact.status == status.upper())
+    if lifecycle_stage:
+        q = q.where(Contact.lifecycle_stage == lifecycle_stage)
+    if search:
+        term = f"%{search}%"
+        q = q.where(
+            Contact.first_name.ilike(term) | Contact.last_name.ilike(term) |
+            Contact.email.ilike(term) | Contact.phone.ilike(term)
         )
+    q = q.order_by(Contact.created_at.desc()).limit(limit)
+    result = await db.execute(q)
+    return [
+        ContactResponse(
+            id=c.id, tenant_id=c.tenant_id, first_name=c.first_name,
+            last_name=c.last_name, email=c.email, phone=c.phone,
+            physical_address=c.physical_address, city=c.city,
+            province=c.province, rica_verified=c.rica_verified,
+            status=c.status, lifecycle_stage=c.lifecycle_stage,
+            nps_score=c.nps_score, created_at=c.created_at, updated_at=c.updated_at,
+        ) for c in result.scalars().all()
+    ]
 
-        await conn.execute(
-            text(
-                """
-                update leads
-                set status = 'CONVERTED', contact_id = :contact_id, converted_at = :now, updated_at = :now
-                where id = :lead_id and tenant_id = :tenant_id
-                """
-            ),
-            {"contact_id": str(contact_id), "now": now, "lead_id": str(lead_id), "tenant_id": str(tenant_id)},
+
+@app.get("/contacts/{contact_id}", response_model=ContactResponse)
+async def get_contact(
+    contact_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+@app.post("/contacts", response_model=ContactResponse, status_code=201)
+async def create_contact(
+    payload: ContactCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    now = datetime.now(timezone.utc)
+    contact = Contact(
+        id=uuid.uuid4(), tenant_id=tenant_id,
+        first_name=payload.first_name, last_name=payload.last_name,
+        email=payload.email, phone=payload.phone,
+        physical_address=payload.physical_address,
+        postal_code=payload.postal_code, city=payload.city,
+        province=payload.province, rica_id_number=payload.rica_id_number,
+        status="ACTIVE", lifecycle_stage="PROSPECT",
+        created_at=now, updated_at=now,
+    )
+    db.add(contact)
+    await db.flush()
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+@app.put("/contacts/{contact_id}", response_model=ContactResponse)
+async def update_contact(
+    contact_id: uuid.UUID,
+    payload: ContactUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    update_data = payload.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(contact, key, value)
+    contact.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    return ContactResponse(
+        id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
+        last_name=contact.last_name, email=contact.email, phone=contact.phone,
+        physical_address=contact.physical_address, city=contact.city,
+        province=contact.province, rica_verified=contact.rica_verified,
+        status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+        nps_score=contact.nps_score, created_at=contact.created_at, updated_at=contact.updated_at,
+    )
+
+
+# ── Customer 360 ─────────────────────────────────────────────────────────
+
+@app.get("/contacts/{contact_id}/360", response_model=Customer360Response)
+async def get_customer_360(
+    contact_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    contact = await db.get(Contact, contact_id)
+    if not contact or contact.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Contact not found")
+
+    deals_result = await db.execute(
+        select(Deal, DealStage.name.label("stage_name"))
+        .outerjoin(DealStage, DealStage.id == Deal.stage_id)
+        .where(Deal.tenant_id == tenant_id, Deal.contact_id == contact_id)
+        .order_by(Deal.created_at.desc())
+    )
+    deals: List[DealResponse] = []
+    total_revenue = Decimal("0")
+    open_deals_value = Decimal("0")
+    for row in deals_result.all():
+        d = row.Deal
+        deals.append(_deal_to_response(d, row.stage_name))
+        if d.status == "WON":
+            total_revenue += d.value_zar or Decimal("0")
+        elif d.status == "OPEN":
+            open_deals_value += d.value_zar or Decimal("0")
+
+    quotes_result = await db.execute(
+        select(Quote).where(Quote.tenant_id == tenant_id, Quote.customer_id == contact_id)
+        .order_by(Quote.created_at.desc()).limit(20)
+    )
+    quotes = [
+        QuoteResponse(
+            id=q.id, tenant_id=q.tenant_id, deal_id=q.deal_id,
+            customer_id=q.customer_id, lead_id=q.lead_id, agent_id=q.agent_id,
+            package_id=q.package_id, items=deserialize_items(q.items),
+            total_monthly=q.total_monthly, total_once_off=q.total_once_off,
+            term_months=q.term_months, valid_until=q.valid_until,
+            status=q.status, terms=q.terms, created_at=q.created_at,
+            sent_at=q.sent_at, accepted_at=q.accepted_at,
         )
+        for q in quotes_result.scalars().all()
+    ]
 
-    return {"deal_id": str(deal_id), "contact_id": str(contact_id), "message": "Lead converted"}
+    return Customer360Response(
+        contact=ContactResponse(
+            id=contact.id, tenant_id=contact.tenant_id,
+            first_name=contact.first_name, last_name=contact.last_name,
+            email=contact.email, phone=contact.phone,
+            physical_address=contact.physical_address, city=contact.city,
+            province=contact.province, rica_verified=contact.rica_verified,
+            status=contact.status, lifecycle_stage=contact.lifecycle_stage,
+            nps_score=contact.nps_score, created_at=contact.created_at,
+            updated_at=contact.updated_at,
+        ),
+        deals=deals,
+        quotes=quotes,
+        invoices=[],  # Populated from billing service when available
+        total_revenue=float(total_revenue),
+        open_deals_value=float(open_deals_value),
+    )
 
+
+# ── Entrypoint ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8002)
+    port = int(os.getenv("PORT", "8002"))
+    host = os.getenv("UVICORN_HOST", "0.0.0.0")
+    uvicorn.run(app, host=host, port=port)
