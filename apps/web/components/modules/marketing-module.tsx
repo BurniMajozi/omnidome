@@ -538,10 +538,10 @@ function SocialInboxTab() {
     try {
       const [msgData, countData] = await Promise.all([
         listInboxMessages(filter !== "all" ? { status: filter } : undefined).catch(() => []),
-        getInboxUnreadCount().catch(() => ({ total: 0, by_platform: {} as Record<string, number> })),
+        getInboxUnreadCount().catch(() => ({ unread_count: 0 })),
       ])
       setMessages(msgData || [])
-      setUnreadCount(countData?.total || 0)
+      setUnreadCount(countData?.unread_count || 0)
     } catch (e) {
       console.error(e)
     } finally {

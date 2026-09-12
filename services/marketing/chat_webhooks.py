@@ -1,5 +1,4 @@
-"""
-Zernio Webhook Handler + Chat Engine for OmniDome Marketing Service
+"""Zernio Webhook Handler + Chat Engine for OmniDome Marketing Service
 ------------------------------------------------------------------
 Handles incoming Zernio webhooks (messages, comments, reactions),
 normalizes them into our SocialInboxMessage model, and provides
@@ -9,15 +8,25 @@ Webhook events handled:
   - message.received  → new DM/comment from customer
   - comment.received  → new comment on a post
   - reaction.received → emoji reaction (WhatsApp/Telegram)
+
+Support bridge contract (verified against services/support/main.py):
+  POST {SUPPORT_SERVICE_URL}/tickets  (NOT /api/support/tickets)
+  body: { customer_id: UUID, subject, description, category, priority }
+  tenant: propagated from the caller via X-Tenant-Id header (never hardcoded).
+  customer_id: social senders have no CRM record, so the caller passes a
+  per-tenant SOCIAL_TICKET_CUSTOMER_ID env UUID (a real contacts row) or the
+  bridge is skipped gracefully.
 """
 
 from __future__ import annotations
 
-import json
 import logging
+import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+import httpx
 
 from services.marketing.zernio_client import ZernioClient
 
@@ -141,9 +150,26 @@ class ChatEngine:
     3. Agent notification (call centre integration)
     """
 
-    def __init__(self, db_session_factory, zernio_client: Optional[ZernioClient] = None):
+    def __init__(
+        self,
+        db_session_factory,
+        zernio_client: Optional[ZernioClient] = None,
+        tenant_id: Optional[uuid.UUID] = None,
+        support_url: Optional[str] = None,
+        ticket_customer_id: Optional[uuid.UUID] = None,
+    ):
         self.db = db_session_factory
         self.zernio = zernio_client
+        # Tenant propagated from the webhook caller — never hardcoded.
+        self.tenant_id = tenant_id
+        self.support_url = support_url or os.getenv("SUPPORT_SERVICE_URL", "http://support:8008")
+        raw_customer = os.getenv("SOCIAL_TICKET_CUSTOMER_ID", "")
+        self.ticket_customer_id = ticket_customer_id
+        if self.ticket_customer_id is None and raw_customer:
+            try:
+                self.ticket_customer_id = uuid.UUID(raw_customer)
+            except ValueError:
+                logger.warning("SOCIAL_TICKET_CUSTOMER_ID is not a valid UUID — ticket bridge disabled")
 
     async def process_inbound_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -222,33 +248,47 @@ class ChatEngine:
         return any(kw in content_lower for kw in escalation_keywords)
 
     async def _create_ticket(self, normalized: Dict) -> Optional[str]:
-        """Create a support ticket from a social message."""
+        """Create a support ticket from a social message.
+
+        Verified contract: POST {support_url}/tickets with
+        { customer_id, subject, description, category, priority }.
+        Returns None (graceful skip) when tenant or customer id is unknown.
+        """
+        if not self.tenant_id or not self.ticket_customer_id:
+            logger.info("Ticket bridge skipped: tenant or SOCIAL_TICKET_CUSTOMER_ID not set")
+            return None
+        sender = normalized.get("sender_name", "Unknown")
+        handle = normalized.get("sender_handle", "")
+        from_line = f"From: {sender} (@{handle})" if handle else f"From: {sender}"
+        description_lines = [
+            f"Platform: {normalized.get('platform', 'unknown')}",
+            from_line,
+            f"External ID: {normalized.get('external_id', '')}",
+            "",
+            normalized.get("content", ""),
+        ]
         try:
-            import httpx
-            support_url = "http://support:8008"
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.post(
-                    f"{support_url}/api/support/tickets",
+                    f"{self.support_url}/tickets",
                     json={
-                        "subject": f"Social: {normalized['message_type']} from {normalized['sender_name']} on {normalized['platform']}",
-                        "description": f"Platform: {normalized['platform']}\nFrom: {normalized['sender_name']} (@{normalized['sender_handle']})\n\n{normalized['content']}",
-                        "priority": "high",
-                        "source": "SOCIAL",
-                        "source_id": normalized.get("external_id", ""),
+                        "customer_id": str(self.ticket_customer_id),
+                        "subject": f"Social message from {sender} on {normalized.get('platform', 'unknown')}",
+                        "description": "\n".join(description_lines),
+                        "category": "SOCIAL",
+                        "priority": "HIGH",
                     },
-                    headers={"x-tenant-id": "00000000-0000-0000-0000-000000000001"},
+                    headers={"X-Tenant-Id": str(self.tenant_id)},
                 )
                 if resp.status_code == 201:
                     return resp.json().get("id")
+                logger.warning(f"Ticket creation returned {resp.status_code}")
         except Exception as e:
             logger.error(f"Ticket creation failed: {e}")
         return None
 
-    async def handle_reaction(self, event: Dict[str, Any]) -> Dict[str, Any]:
+    async def handle_reaction(self, event):
         """Handle a reaction event."""
         normalized = normalize_reaction_event(event)
-        logger.info(
-            f"Reaction: {normalized.get('emoji')} {'added' if normalized.get('added') else 'removed'} "
-            f"on {normalized.get('platform')}"
-        )
+        logger.info("Reaction on %s", normalized.get("platform"))
         return {"action": "logged", "reaction": normalized}

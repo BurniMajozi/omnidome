@@ -7,19 +7,21 @@ Social Media · WhatsApp · Ad Campaigns · Comment Automation · Webhooks
 Port: 8014
 """
 
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from decimal import Decimal
+import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text, select, insert, update, delete, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
-from services.common.db import get_engine, get_async_session
+from services.common.db import get_engine, get_async_session, run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.marketing.database import (
@@ -38,18 +40,28 @@ from services.marketing.database import (
     TraditionalMediaCampaign,
 )
 
+logger = logging.getLogger("marketing")
+
 app = FastAPI(title="OmniDome Marketing Service", version="2.0.0")
 guard = EntitlementGuard(module_id="marketing")
 
 configure_production(app)
 
 
-@app.on_event("startup")
-async def startup() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     guard.ensure_startup()
-    # Run sync init_tables in a thread so we can await it
     import anyio
-    await anyio.to_thread.run_sync(init_tables)
+    await run_with_db_retry(
+        lambda: anyio.to_thread.run_sync(init_tables),
+        logger=logger,
+    )
+    logger.info("Marketing service started — tables initialized")
+    yield
+    logger.info("Marketing service shutting down")
+
+
+app.router.lifespan_context = lifespan
 
 
 @app.middleware("http")
@@ -1791,7 +1803,13 @@ async def reply_to_message(
     body: InboxReplyRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Reply to a social inbox message."""
+    """Reply to a social inbox message — via Zernio when configured.
+
+    Needs the Zernio conversation_id, which the webhook stores on the
+    SocialWebhookEvent payload (payload.conversation_id) matched by
+    external_id. Without a key or conversation match, the reply is recorded
+    locally with sent_via="local" so the agent UI stays truthful.
+    """
     async with get_session() as session:
         stmt = select(SocialInboxMessage).where(
             SocialInboxMessage.id == message_id,
@@ -1802,15 +1820,38 @@ async def reply_to_message(
         if not msg:
             raise HTTPException(status_code=404, detail="Message not found")
 
-        # In production, this would call the platform's reply API
+        sent_via = "local"
+        conversation_id: Optional[str] = None
+        evt_stmt = select(SocialWebhookEvent).where(
+            SocialWebhookEvent.tenant_id == tenant_id,
+            SocialWebhookEvent.payload["external_id"].astext == (msg.external_id or ""),
+        ).order_by(SocialWebhookEvent.created_at.desc()).limit(1) if msg.external_id else None
+        if evt_stmt is not None:
+            evt_result = await session.execute(evt_stmt)
+            evt = evt_result.scalar_one_or_none()
+            if evt and isinstance(evt.payload, dict):
+                conversation_id = evt.payload.get("conversation_id")
+
+        client = get_zernio_client()
+        if client is not None and conversation_id:
+            try:
+                await client.send_inbox_message(
+                    conversation_id=conversation_id,
+                    content=body.content,
+                )
+                sent_via = "zernio"
+            except Exception as e:
+                logger.error(f"Zernio reply failed, recording locally: {e}")
+
         msg.status = "REPLIED"
-        msg.replied_at = datetime.utcnow()
+        msg.replied_at = datetime.now(timezone.utc)
         await session.flush()
         return {
             "id": msg.id,
             "status": msg.status,
             "replied_at": msg.replied_at,
             "reply_content": body.content,
+            "sent_via": sent_via,
         }
 
 
@@ -2626,6 +2667,94 @@ async def delete_comment_automation(
 # SOCIAL WEBHOOKS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+# Lazy Zernio client — only constructed when ZERNIO_API_KEY is set, so local
+# dev and Railway (pre-key) boot and serve everything else untouched.
+_zernio_client = None
+
+
+def get_zernio_client():
+    """Return a ZernioClient, or None when no API key is configured."""
+    global _zernio_client
+    if _zernio_client is not None:
+        return _zernio_client
+    if not os.getenv("ZERNIO_API_KEY"):
+        return None
+    from services.marketing.zernio_client import ZernioClient
+    _zernio_client = ZernioClient()
+    return _zernio_client
+
+
+@app.get("/social/zernio/status", response_model=Dict[str, Any])
+async def zernio_status():
+    """Zernio integration status — configured flag only, never the key."""
+    return {
+        "configured": bool(os.getenv("ZERNIO_API_KEY")),
+        "webhook_secret_set": bool(os.getenv("ZERNIO_WEBHOOK_SECRET")),
+        "base_url": os.getenv("ZERNIO_BASE_URL", "https://zernio.com/api/v1"),
+    }
+
+
+@app.get("/social/zernio/accounts", response_model=List[Dict[str, Any]])
+async def zernio_accounts(
+    platform: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Live connected accounts from Zernio (proxied, not stored)."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        return await client.list_accounts(platform=platform)
+    except Exception as e:
+        logger.error(f"Zernio list_accounts failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+
+
+@app.get("/social/zernio/conversations", response_model=Dict[str, Any])
+async def zernio_conversations(
+    platform: Optional[str] = None,
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    limit: int = Query(20, ge=1, le=100),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Live inbox conversations from Zernio (proxied, not stored)."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        return await client.list_conversations(platform=platform, status=status_filter, limit=limit)
+    except Exception as e:
+        logger.error(f"Zernio list_conversations failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+
+
+async def _resolve_inbox_account(session, tenant_id: uuid.UUID, platform: str):
+    """Find the tenant's account row for a platform, or create a stub one.
+
+    SocialInboxMessage.account_id is a non-nullable FK, so webhook ingestion
+    must resolve an account first. A stub row (no tokens) is created on first
+    webhook per platform; connecting real credentials happens via the
+    /social/accounts endpoints or Zernio OAuth.
+    """
+    stmt = select(SocialMediaAccount).where(
+        SocialMediaAccount.tenant_id == tenant_id,
+        SocialMediaAccount.platform == platform,
+    ).order_by(SocialMediaAccount.created_at.desc()).limit(1)
+    result = await session.execute(stmt)
+    account = result.scalar_one_or_none()
+    if account:
+        return account
+    account = SocialMediaAccount(
+        tenant_id=tenant_id,
+        platform=platform,
+        account_name=f"{platform} (via Zernio)",
+        status="ACTIVE",
+    )
+    session.add(account)
+    await session.flush()
+    return account
+
+
 @app.post("/social/webhooks/{platform}")
 async def receive_social_webhook(
     platform: str,
@@ -2645,6 +2774,119 @@ async def receive_social_webhook(
         await session.flush()
     # In production, this would trigger async processing (auto-reply, inbox creation, etc.)
     return {"status": "received", "event_id": str(event.id)}
+
+
+@app.post("/social/webhooks/zernio/inbound")
+async def receive_zernio_webhook(
+    request: Request,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Zernio webhook receiver: HMAC verify -> store event -> normalize to
+    inbox -> comment automations (auto-reply via Zernio) -> support escalation.
+
+    Configure in the Zernio dashboard:
+      URL: https://<marketing-host>/social/webhooks/zernio/inbound
+      Header: X-Tenant-Id: <tenant uuid>  (tenant-scoped ingestion)
+      Events: message.received, comment.received, mention.received
+    """
+    raw_body = await request.body()
+    signature = request.headers.get("X-Zernio-Signature", "")
+
+    secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "")
+    if secret:
+        import hashlib
+        import hmac
+        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, signature):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    else:
+        logger.warning("ZERNIO_WEBHOOK_SECRET not set — accepting unsigned webhook")
+
+    try:
+        import json
+        payload = json.loads(raw_body)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    platform = str(payload.get("platform", "unknown")).lower()
+
+    # 1. Store raw event.
+    async with get_session() as session:
+        event = SocialWebhookEvent(
+            tenant_id=tenant_id,
+            platform=platform,
+            event_type=payload.get("event_type", "unknown"),
+            payload=payload,
+            processed=False,
+        )
+        session.add(event)
+        await session.flush()
+        event_id = event.id
+
+    # 2. Reactions: log only, no inbox row.
+    if payload.get("event_type") == "reaction.received":
+        from services.marketing.chat_webhooks import ChatEngine
+        engine = ChatEngine(get_session, get_zernio_client(), tenant_id=tenant_id)
+        result = await engine.handle_reaction(payload)
+        async with get_session() as session2:
+            evt = await session2.get(SocialWebhookEvent, event_id)
+            if evt:
+                evt.processed = True
+                await session2.flush()
+        return {"status": "received", "event_id": str(event_id), "action": result["action"]}
+
+    # 3. Normalize + store inbox message (resolve account row for the FK).
+    from services.marketing.chat_webhooks import ChatEngine, normalize_webhook_event
+    normalized = normalize_webhook_event(payload)
+    message_id: Optional[uuid.UUID] = None
+    async with get_session() as session:
+        account = await _resolve_inbox_account(session, tenant_id, normalized.get("platform", platform))
+        msg = SocialInboxMessage(
+            tenant_id=tenant_id,
+            account_id=account.id,
+            platform=normalized.get("platform", platform),
+            message_type=normalized.get("message_type", "DM"),
+            external_id=normalized.get("external_id"),
+            sender_name=normalized.get("sender_name"),
+            sender_handle=normalized.get("sender_handle"),
+            sender_profile_url=normalized.get("sender_profile_url"),
+            content=normalized.get("content"),
+            status="UNREAD",
+            sentiment=normalized.get("sentiment"),
+        )
+        session.add(msg)
+        await session.flush()
+        message_id = msg.id
+        evt = await session.get(SocialWebhookEvent, event_id)
+        if evt:
+            evt.processed = True
+            await session.flush()
+
+    # 4. Automations + escalation (never fail the webhook on downstream errors).
+    action = "queued"
+    ticket_id: Optional[str] = None
+    try:
+        engine = ChatEngine(get_session, get_zernio_client(), tenant_id=tenant_id)
+        outcome = await engine.process_inbound_message(payload)
+        action = outcome.get("action", "queued")
+        ticket_id = outcome.get("ticket_id")
+        if action == "auto_replied" and message_id:
+            async with get_session() as session3:
+                stored = await session3.get(SocialInboxMessage, message_id)
+                if stored:
+                    stored.status = "REPLIED"
+                    stored.replied_at = datetime.now(timezone.utc)
+                    await session3.flush()
+    except Exception as e:
+        logger.error(f"Zernio post-processing failed: {e}")
+
+    return {
+        "status": "received",
+        "event_id": str(event_id),
+        "message_id": str(message_id) if message_id else None,
+        "action": action,
+        "ticket_id": ticket_id,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

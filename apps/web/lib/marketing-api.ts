@@ -134,8 +134,7 @@ export interface InboxMessage {
 }
 
 export interface InboxUnreadCount {
-  total: number
-  by_platform: Record<string, number>
+  unread_count: number
 }
 
 export interface AccountAnalytics {
@@ -359,7 +358,7 @@ export const getCampaign = (id: string) =>
 
 export const updateCampaign = (id: string, data: Partial<Campaign>) =>
   fetchMarketing<Campaign>(`/campaigns/${id}`, {
-    method: "PUT",
+    method: "PATCH",
     body: JSON.stringify(data),
   })
 
@@ -374,35 +373,35 @@ export const listSocialAccounts = (params?: { platform?: string; status?: string
   const q = new URLSearchParams()
   if (params?.platform) q.set("platform", params.platform)
   if (params?.status) q.set("status", params.status)
-  return fetchMarketing<SocialAccount[]>(`/social-accounts?${q}`)
+  return fetchMarketing<SocialAccount[]>(`/social/accounts?${q}`)
 }
 
 export const createSocialAccount = (data: SocialAccountCreate) =>
-  fetchMarketing<SocialAccount>("/social-accounts", {
+  fetchMarketing<SocialAccount>("/social/accounts", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const getSocialAccount = (id: string) =>
-  fetchMarketing<SocialAccount>(`/social-accounts/${id}`)
+  fetchMarketing<SocialAccount>(`/social/accounts/${id}`)
 
 export const updateSocialAccount = (id: string, data: Partial<SocialAccount>) =>
-  fetchMarketing<SocialAccount>(`/social-accounts/${id}`, {
+  fetchMarketing<SocialAccount>(`/social/accounts/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   })
 
 export const deleteSocialAccount = (id: string) =>
-  fetchMarketing<{ status: string }>(`/social-accounts/${id}`, {
+  fetchMarketing<{ status: string }>(`/social/accounts/${id}`, {
     method: "DELETE",
   })
 
 export const connectSocialAccount = (platform: string) =>
-  fetchMarketing<{ oauth_url: string }>(`/social-accounts/connect?platform=${encodeURIComponent(platform)}`)
+  fetchMarketing<{ oauth_url: string }>(`/social/accounts/connect/${encodeURIComponent(platform)}`)
 
 export const disconnectSocialAccount = (id: string) =>
-  fetchMarketing<{ status: string }>(`/social-accounts/${id}/disconnect`, {
-    method: "POST",
+  fetchMarketing<{ status: string }>(`/social/accounts/${id}`, {
+    method: "DELETE",
   })
 
 // ── Social Posts ─────────────────────────────────────────────────────
@@ -412,39 +411,39 @@ export const listSocialPosts = (params?: { status?: string; account_id?: string;
   if (params?.status) q.set("status", params.status)
   if (params?.account_id) q.set("account_id", params.account_id)
   if (params?.campaign_id) q.set("campaign_id", params.campaign_id)
-  return fetchMarketing<SocialPost[]>(`/social-posts?${q}`)
+  return fetchMarketing<SocialPost[]>(`/social/posts?${q}`)
 }
 
 export const createSocialPost = (data: SocialPostCreate) =>
-  fetchMarketing<SocialPost>("/social-posts", {
+  fetchMarketing<SocialPost>("/social/posts", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const updateSocialPost = (id: string, data: Partial<SocialPost>) =>
-  fetchMarketing<SocialPost>(`/social-posts/${id}`, {
+  fetchMarketing<SocialPost>(`/social/posts/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   })
 
 export const deleteSocialPost = (id: string) =>
-  fetchMarketing<{ status: string }>(`/social-posts/${id}`, {
+  fetchMarketing<{ status: string }>(`/social/posts/${id}`, {
     method: "DELETE",
   })
 
 export const publishSocialPost = (id: string) =>
-  fetchMarketing<{ status: string; published_at: string }>(`/social-posts/${id}/publish`, {
+  fetchMarketing<{ status: string; published_at: string }>(`/social/posts/${id}/publish`, {
     method: "POST",
   })
 
 export const crossPost = (data: CrossPostInput) =>
-  fetchMarketing<{ status: string; posted_to: string[] }>("/social-posts/cross-post", {
+  fetchMarketing<{ status: string; posted_to: string[] }>("/social/posts/cross-post", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const getSocialPostAnalytics = (id: string) =>
-  fetchMarketing<Record<string, unknown>>(`/social-posts/${id}/analytics`)
+  fetchMarketing<Record<string, unknown>>(`/social/posts/${id}/analytics`)
 
 // ── Social Inbox ─────────────────────────────────────────────────────
 
@@ -454,57 +453,55 @@ export const listInboxMessages = (params?: { status?: string; platform?: string;
   if (params?.platform) q.set("platform", params.platform)
   if (params?.message_type) q.set("message_type", params.message_type)
   if (params?.account_id) q.set("account_id", params.account_id)
-  return fetchMarketing<InboxMessage[]>(`/social-inbox?${q}`)
+  return fetchMarketing<InboxMessage[]>(`/social/inbox?${q}`)
 }
 
 export const getInboxMessage = (id: string) =>
-  fetchMarketing<InboxMessage>(`/social-inbox/${id}`)
+  fetchMarketing<InboxMessage>(`/social/inbox/${id}`)
 
 export const replyToInboxMessage = (id: string, content: string) =>
-  fetchMarketing<{ status: string }>(`/social-inbox/${id}/reply`, {
+  fetchMarketing<{ status: string }>(`/social/inbox/${id}/reply`, {
     method: "POST",
     body: JSON.stringify({ content }),
   })
 
 export const archiveInboxMessage = (id: string) =>
-  fetchMarketing<{ status: string }>(`/social-inbox/${id}/archive`, {
-    method: "POST",
+  fetchMarketing<{ status: string }>(`/social/inbox/${id}/archive`, {
+    method: "PUT",
   })
 
 export const markInboxRead = (id: string) =>
-  fetchMarketing<{ status: string }>(`/social-inbox/${id}/read`, {
+  fetchMarketing<{ status: string }>(`/social/inbox/${id}/read`, {
     method: "PUT",
   })
 
 export const getInboxUnreadCount = () =>
-  fetchMarketing<InboxUnreadCount>("/social-inbox/unread-count")
+  fetchMarketing<InboxUnreadCount>("/social/inbox/unread-count")
 
 // ── Social Analytics ─────────────────────────────────────────────────
 
 export const getAccountAnalytics = (account_id: string, from_date?: string, to_date?: string) => {
   const q = new URLSearchParams()
-  q.set("account_id", account_id)
   if (from_date) q.set("from_date", from_date)
   if (to_date) q.set("to_date", to_date)
-  return fetchMarketing<AccountAnalytics>(`/analytics/accounts?${q}`)
+  return fetchMarketing<AccountAnalytics>(`/social/analytics/account/${encodeURIComponent(account_id)}?${q}`)
 }
 
 export const getPlatformAnalytics = (platform: string, from_date?: string, to_date?: string) => {
   const q = new URLSearchParams()
-  q.set("platform", platform)
   if (from_date) q.set("from_date", from_date)
   if (to_date) q.set("to_date", to_date)
-  return fetchMarketing<PlatformAnalytics>(`/analytics/platforms?${q}`)
+  return fetchMarketing<PlatformAnalytics>(`/social/analytics/platform/${encodeURIComponent(platform)}?${q}`)
 }
 
 export const getBestTimeToPost = (account_id: string) =>
-  fetchMarketing<BestTimeToPost>(`/analytics/best-time?account_id=${encodeURIComponent(account_id)}`)
+  fetchMarketing<BestTimeToPost>(`/social/analytics/best-time?account_id=${encodeURIComponent(account_id)}`)
 
 export const getEngagementSummary = (params?: { from_date?: string; to_date?: string }) => {
   const q = new URLSearchParams()
   if (params?.from_date) q.set("from_date", params.from_date)
   if (params?.to_date) q.set("to_date", params.to_date)
-  return fetchMarketing<EngagementSummary>(`/analytics/engagement-summary?${q}`)
+  return fetchMarketing<EngagementSummary>(`/social/analytics/engagement?${q}`)
 }
 
 // ── WhatsApp ─────────────────────────────────────────────────────────
@@ -523,7 +520,7 @@ export const createWhatsAppContact = (data: WhatsAppContactCreate) =>
   })
 
 export const bulkImportWhatsAppContacts = (contacts: WhatsAppContactCreate[]) =>
-  fetchMarketing<{ imported: number; contacts: WhatsAppContact[] }>("/whatsapp/contacts/bulk", {
+  fetchMarketing<{ imported: number; contacts: WhatsAppContact[] }>("/whatsapp/contacts/bulk-import", {
     method: "POST",
     body: JSON.stringify({ contacts }),
   })
@@ -554,28 +551,28 @@ export const listAdCampaigns = (params?: { platform?: string; status?: string })
   const q = new URLSearchParams()
   if (params?.platform) q.set("platform", params.platform)
   if (params?.status) q.set("status", params.status)
-  return fetchMarketing<AdCampaign[]>(`/ad-campaigns?${q}`)
+  return fetchMarketing<AdCampaign[]>(`/ads/campaigns?${q}`)
 }
 
 export const createAdCampaign = (data: AdCampaignCreate) =>
-  fetchMarketing<AdCampaign>("/ad-campaigns", {
+  fetchMarketing<AdCampaign>("/ads/campaigns", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const updateAdCampaign = (id: string, data: Partial<AdCampaign>) =>
-  fetchMarketing<AdCampaign>(`/ad-campaigns/${id}`, {
+  fetchMarketing<AdCampaign>(`/ads/campaigns/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   })
 
 export const deleteAdCampaign = (id: string) =>
-  fetchMarketing<{ status: string }>(`/ad-campaigns/${id}`, {
+  fetchMarketing<{ status: string }>(`/ads/campaigns/${id}`, {
     method: "DELETE",
   })
 
 export const getAdCampaignAnalytics = (id: string) =>
-  fetchMarketing<AdCampaignAnalytics>(`/ad-campaigns/${id}/analytics`)
+  fetchMarketing<AdCampaignAnalytics>(`/ads/campaigns/${id}/analytics`)
 
 // ── Comment Automations ──────────────────────────────────────────────
 
@@ -583,23 +580,23 @@ export const listCommentAutomations = (params?: { account_id?: string; is_active
   const q = new URLSearchParams()
   if (params?.account_id) q.set("account_id", params.account_id)
   if (params?.is_active != null) q.set("is_active", String(params.is_active))
-  return fetchMarketing<CommentAutomation[]>(`/comment-automations?${q}`)
+  return fetchMarketing<CommentAutomation[]>(`/social/automations?${q}`)
 }
 
 export const createCommentAutomation = (data: CommentAutomationCreate) =>
-  fetchMarketing<CommentAutomation>("/comment-automations", {
+  fetchMarketing<CommentAutomation>("/social/automations", {
     method: "POST",
     body: JSON.stringify(data),
   })
 
 export const updateCommentAutomation = (id: string, data: Partial<CommentAutomation>) =>
-  fetchMarketing<CommentAutomation>(`/comment-automations/${id}`, {
+  fetchMarketing<CommentAutomation>(`/social/automations/${id}`, {
     method: "PUT",
     body: JSON.stringify(data),
   })
 
 export const deleteCommentAutomation = (id: string) =>
-  fetchMarketing<{ status: string }>(`/comment-automations/${id}`, {
+  fetchMarketing<{ status: string }>(`/social/automations/${id}`, {
     method: "DELETE",
   })
 
@@ -650,4 +647,36 @@ export interface TraditionalCampaign {
 export const listTraditionalCampaigns = (medium?: string) => {
   const q = medium ? `?medium=${encodeURIComponent(medium)}` : ""
   return fetchMarketing<TraditionalCampaign[]>(`/traditional-campaigns${q}`)
+}
+
+// ── Social → Support ticket bridge ───────────────────────────────────
+
+export const createTicketFromSocial = (id: string, data: { subject?: string; priority?: string; assignee_id?: string }) =>
+  fetchMarketing<{ ticket_id: string | null; status: string; message: string }>(`/social/inbox/${id}/create-ticket`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+// ── Zernio live integration ──────────────────────────────────────────
+
+export interface ZernioStatus {
+  configured: boolean
+  webhook_secret_set: boolean
+  base_url: string
+}
+
+export const getZernioStatus = () =>
+  fetchMarketing<ZernioStatus>("/social/zernio/status")
+
+export const listZernioAccounts = (platform?: string) => {
+  const q = platform ? `?platform=${encodeURIComponent(platform)}` : ""
+  return fetchMarketing<Array<Record<string, unknown>>>(`/social/zernio/accounts${q}`)
+}
+
+export const listZernioConversations = (params?: { platform?: string; status?: string; limit?: number }) => {
+  const q = new URLSearchParams()
+  if (params?.platform) q.set("platform", params.platform)
+  if (params?.status) q.set("status", params.status)
+  if (params?.limit != null) q.set("limit", String(params.limit))
+  return fetchMarketing<Record<string, unknown>>(`/social/zernio/conversations?${q}`)
 }
