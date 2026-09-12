@@ -39,28 +39,38 @@ def normalize_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize a Zernio webhook payload into our SocialInboxMessage schema.
 
-    Zernio webhook payload shape (message.received):
+    REAL Zernio webhook payload shape (message.received, Sep 2026):
     {
-      "event_type": "message.received",
-      "platform": "instagram",
-      "conversation_id": "conv_abc",
-      "message_id": "msg_xyz",
-      "sender": {
-        "name": "John Doe",
-        "handle": "johndoe",
-        "profile_url": "https://...",
-        "phoneNumber": "+27...",       # WhatsApp only
-        "instagramProfile": { ... },   # IG only
+      "id": "8dafe19b-24b2-4b75-a862-93d9127c882e",
+      "event": "message.received",
+      "message": {
+        "id": "6aa5920dc7f9323ddc0ea8c2",
+        "conversationId": "6aa57f8a726ebfe037e0851e",
+        "platform": "telegram",
+        "platformMessageId": "25393",
+        "direction": "incoming",
+        "text": "Hey testing again.",
+        "attachments": [],
+        "sender": {
+          "id": "8975916657",
+          "name": "Bene Majozi",
+          "contactId": "6aa57f8ad6acdc682e22771e"
+        },
+        "sentAt": "2026-09-12T17:55:24.000Z",
+        "isRead": false,
+        "sentVia": null
       },
-      "content": "Hello, I need help",
-      "attachments": [{"type": "image", "url": "https://..."}],
-      "parent_id": null,  # for threaded replies
-      "timestamp": "2026-07-02T10:00:00Z",
+      "conversation": { ... },
+      "account": { ... },
+      "timestamp": "2026-09-12T17:55:25.157Z"
     }
     """
-    event_type = event.get("event_type", "unknown")
-    platform = event.get("platform", "unknown")
-    sender = event.get("sender", {})
+    # Event type is at top-level "event" key, not "event_type"
+    event_type = event.get("event", event.get("event_type", "unknown"))
+    # Platform lives inside message object
+    msg = event.get("message", {})
+    platform = msg.get("platform", event.get("platform", "unknown"))
+    sender = msg.get("sender", {})
 
     # Map Zernio event types to our message_type
     type_map = {
@@ -92,18 +102,18 @@ def normalize_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "message_type": type_map.get(event_type, "DM"),
         "platform": platform_map.get(platform, platform),
-        "external_id": event.get("message_id", event.get("id", "")),
+        "external_id": msg.get("id", msg.get("platformMessageId", event.get("id", ""))),
         "sender_name": sender.get("name", sender.get("handle", "Unknown")),
-        "sender_handle": sender.get("handle", ""),
-        "sender_profile_url": sender.get("profile_url", ""),
-        "content": event.get("content", event.get("text", "")),
-        "parent_id": event.get("parent_id"),
+        "sender_handle": sender.get("handle", sender.get("id", "")),
+        "sender_profile_url": "",
+        "content": msg.get("text", msg.get("content", "")),
+        "parent_id": None,
         "status": "UNREAD",
-        "sentiment": _detect_sentiment(event.get("content", "")),
-        "attachments": event.get("attachments", []),
-        "conversation_id": event.get("conversation_id"),
+        "sentiment": _detect_sentiment(msg.get("text", msg.get("content", ""))),
+        "attachments": msg.get("attachments", []),
+        "conversation_id": msg.get("conversationId", event.get("conversation_id")),
         "raw_payload": event,
-        "received_at": event.get("timestamp", datetime.utcnow().isoformat()),
+        "received_at": msg.get("sentAt", event.get("timestamp", datetime.utcnow().isoformat())),
     }
 
 

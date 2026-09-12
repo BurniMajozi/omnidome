@@ -22,16 +22,46 @@ from services.marketing.zernio_client import ZernioClient  # noqa: E402
 
 
 def sample_event(**overrides):
+    """Real Zernio message.received payload shape (Sep 2026)."""
     evt = {
-        "event_type": "message.received",
-        "platform": "telegram",
-        "conversation_id": "conv_abc",
-        "message_id": "msg_xyz",
-        "sender": {"name": "John Doe", "handle": "johndoe"},
-        "content": "Hello, I need help",
-        "timestamp": "2026-07-02T10:00:00Z",
+        "id": "8dafe19b-24b2-4b75-a862-93d9127c882e",
+        "event": "message.received",
+        "message": {
+            "id": "6aa5920dc7f9323ddc0ea8c2",
+            "conversationId": "conv_abc",
+            "platform": "telegram",
+            "platformMessageId": "25393",
+            "direction": "incoming",
+            "text": "Hello, I need help",
+            "attachments": [],
+            "sender": {"id": "8975916657", "name": "John Doe", "handle": "johndoe", "contactId": "contact_123"},
+            "sentAt": "2026-09-12T17:55:24.000Z",
+            "isRead": False,
+            "sentVia": None
+        },
+        "conversation": {
+            "id": "6aa57f8a726ebfe037e0851e",
+            "platformConversationId": "-5286740183",
+            "participantId": "8975916657",
+            "participantName": "John Doe",
+            "status": "active",
+            "contactId": "contact_123"
+        },
+        "account": {
+            "id": "6a281f5f2b2567671a469f50",
+            "platform": "telegram",
+            "username": "OmniDome",
+            "displayName": "OmniDome",
+            "profileId": "6a281d3beb3b0bd452f03cc4",
+            "accountId": "6a281f5f2b2567671a469f50"
+        },
+        "timestamp": "2026-09-12T17:55:25.157Z"
     }
-    evt.update(overrides)
+    # Allow nested overrides for message fields
+    if overrides:
+        if "message" in overrides:
+            evt["message"].update(overrides.pop("message"))
+        evt.update(overrides)
     return evt
 
 
@@ -41,32 +71,31 @@ def test_normalize_dm():
     n = normalize_webhook_event(sample_event())
     assert n["message_type"] == "DM"
     assert n["platform"] == "telegram"
-    assert n["external_id"] == "msg_xyz"
+    assert n["external_id"] == "6aa5920dc7f9323ddc0ea8c2"
     assert n["sender_name"] == "John Doe"
     assert n["status"] == "UNREAD"
     assert n["conversation_id"] == "conv_abc"
 
 
 def test_normalize_comment_and_mention():
-    assert normalize_webhook_event(sample_event(event_type="comment.received"))["message_type"] == "COMMENT"
-    assert normalize_webhook_event(sample_event(event_type="mention.received"))["message_type"] == "MENTION"
+    assert normalize_webhook_event(sample_event(event="comment.received"))["message_type"] == "COMMENT"
+    assert normalize_webhook_event(sample_event(event="mention.received"))["message_type"] == "MENTION"
 
 
 def test_normalize_platform_alias():
-    n = normalize_webhook_event(sample_event(platform="x"))
+    n = normalize_webhook_event(sample_event(message={"platform": "x"}))
     assert n["platform"] == "twitter"
 
 
 def test_normalize_missing_sender():
-    n = normalize_webhook_event(sample_event(sender={}))
+    n = normalize_webhook_event(sample_event(message={"sender": {}}))
     assert n["sender_name"] == "Unknown"
 
 
 def test_normalize_text_fallback_and_thread():
-    n = normalize_webhook_event({"event_type": "message.received", "platform": "whatsapp",
-                                 "text": "hi", "parent_id": "p1"})
+    n = normalize_webhook_event(sample_event(message={"text": "hi", "platform": "whatsapp"}))
     assert n["content"] == "hi"
-    assert n["parent_id"] == "p1"
+    assert n["parent_id"] is None  # parent_id not in real payload, defaults to None
 
 
 # ── sentiment ──────────────────────────────────────────────────────────
@@ -85,7 +114,7 @@ def test_sentiment_neutral_and_empty():
 
 
 def test_sentiment_attached_to_normalized():
-    n = normalize_webhook_event(sample_event(content="Terrible service, very angry"))
+    n = normalize_webhook_event(sample_event(message={"text": "Terrible service, very angry"}))
     assert n["sentiment"] == "NEGATIVE"
 
 
