@@ -20,9 +20,12 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Bind host: 0.0.0.0 (IPv4) for local Docker; :: (IPv6 dual-stack) for Railway private networking
+ENV UVICORN_HOST=0.0.0.0
+
 EXPOSE 8026
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8026/health')" || exit 1
 
-CMD ["uvicorn", "services.portal_builder.main:app", "--host", "0.0.0.0", "--port", "8026", "--workers", "2"]
+CMD ["sh", "-c", "uvicorn services.portal_builder.main:app --host ${UVICORN_HOST} --port 8026 --workers 2"]
