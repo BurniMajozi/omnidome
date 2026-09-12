@@ -131,7 +131,7 @@ def normalize_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
         "attachments": msg.get("attachments", []),
         "conversation_id": msg.get("conversationId", event.get("conversation_id")),
         "raw_payload": event,
-        "received_at": msg.get("sentAt", event.get("timestamp", datetime.utcnow().isoformat())),
+        "received_at": msg.get("sentAt", event.get("timestamp", datetime.now(timezone.utc).isoformat())),
     }
 
 
@@ -154,16 +154,28 @@ def _detect_sentiment(text: str) -> Optional[str]:
 
 
 def normalize_reaction_event(event: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize a Zernio reaction.received webhook payload."""
+    """Normalize a Zernio reaction.received webhook payload.
+
+    Real Zernio events nest their fields under a ``message`` object (same
+    envelope as message.received), so read those first and fall back to the
+    legacy flat top-level keys. Platform comes from the shared extractor so
+    it resolves identically to messages (nested ``message.platform`` first).
+    """
+    _, platform = extract_event_meta(event)
+    raw_msg = event.get("message")
+    msg = raw_msg if isinstance(raw_msg, dict) else {}
+    raw_sender = msg.get("sender", event.get("sender"))
+    sender = raw_sender if isinstance(raw_sender, dict) else {}
+    emoji = msg.get("emoji", event.get("emoji", ""))
     return {
         "event_type": "reaction.received",
-        "platform": event.get("platform", "unknown"),
-        "emoji": event.get("emoji", ""),
-        "raw_emoji": event.get("rawEmoji", event.get("emoji", "")),
-        "added": event.get("added", True),
-        "message_id": event.get("messageId", event.get("message_id", "")),
-        "conversation_id": event.get("conversation_id"),
-        "sender": event.get("sender", {}),
+        "platform": platform,
+        "emoji": emoji,
+        "raw_emoji": msg.get("rawEmoji", event.get("rawEmoji", emoji)),
+        "added": msg.get("added", event.get("added", True)),
+        "message_id": msg.get("messageId", msg.get("id", event.get("messageId", event.get("message_id", "")))),
+        "conversation_id": msg.get("conversationId", event.get("conversation_id")),
+        "sender": sender,
         "raw_payload": event,
     }
 

@@ -191,6 +191,7 @@ def test_client_requires_key():
 # ── reactions ──────────────────────────────────────────────────────────
 
 def test_normalize_reaction():
+    # Legacy flat shape (fallback path).
     n = normalize_reaction_event({
         "platform": "whatsapp", "emoji": "👍",
         "messageId": "m1", "conversation_id": "c1",
@@ -200,6 +201,28 @@ def test_normalize_reaction():
     assert n["emoji"] == "👍"
     assert n["message_id"] == "m1"
     assert n["added"] is True
+
+
+def test_normalize_reaction_nested():
+    # Real Zernio envelope: fields nested under "message" like message.received.
+    n = normalize_reaction_event({
+        "event": "reaction.received",
+        "message": {
+            "platform": "telegram",
+            "emoji": "❤️",
+            "messageId": "6aa5920dc7f9323ddc0ea8c2",
+            "conversationId": "conv_abc",
+            "added": False,
+            "sender": {"id": "897", "name": "Bene"},
+        },
+        "timestamp": "2026-09-12T17:55:25.157Z",
+    })
+    assert n["platform"] == "telegram"
+    assert n["emoji"] == "❤️"
+    assert n["message_id"] == "6aa5920dc7f9323ddc0ea8c2"
+    assert n["conversation_id"] == "conv_abc"
+    assert n["added"] is False
+    assert n["sender"]["name"] == "Bene"
 
 
 # ── spec-verified endpoint paths ───────────────────────────────────────
