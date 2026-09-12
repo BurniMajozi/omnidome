@@ -1,0 +1,45 @@
+# Local sales-only dev overlay — stops Railway usage burn while iterating.
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker-compose.override.yml up --build db sales
+#
+# What this gives you:
+#   - Postgres (port 5432) seeded from config/master_schema.sql on first boot
+#   - Sales service (port 8002) with source bind-mounted + --reload (no rebuild loop)
+#   - External bridges (lifecycle/finance/webhooks) UNSET -> bridge helpers
+#     skip silently, so close-won works fully offline
+#   - License enforcement + auto-create tables forced on (matches Railway)
+#
+# Everything else in docker-compose.yaml stays untouched — other services only
+# start if you name them explicitly.
+
+services:
+  db:
+    ports:
+      - "5432:5432"
+
+  sales:
+    build:
+      context: .
+      dockerfile: services/sales/Dockerfile
+    command: >
+      sh -c "uvicorn services.sales.main:app --host 0.0.0.0 --port 8002 --reload"
+    environment:
+      - DATABASE_URL=postgresql://admin:change_me@db:5432/coreconnect
+      - LICENSE_ENFORCEMENT=warn
+      - AUTO_CREATE_TABLES=true
+      # External bridges deliberately BLANKED (offline dev — base .env would
+      # otherwise inject localhost URLs that fail slowly instead of skipping).
+      - LIFECYCLE_SERVICE_URL=
+      - FINANCE_SERVICE_URL=
+      - BILLING_WEBHOOK_URL=
+      - NETWORK_WEBHOOK_URL=
+      - SALES_PROVISIONING_WEBHOOKS=
+      - AUTH_ALLOW_ANONYMOUS=true
+    volumes:
+      # Hot reload: no rebuild after each edit.
+      - ./services/sales:/app/services/sales:ro
+      - ./services/common:/app/services/common:ro
+    depends_on:
+      db:
+        condition: service_healthy
