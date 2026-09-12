@@ -147,3 +147,101 @@ def test_normalize_reaction():
     assert n["emoji"] == "👍"
     assert n["message_id"] == "m1"
     assert n["added"] is True
+
+
+# ── spec-verified endpoint paths ───────────────────────────────────────
+# Every path below was cross-checked against https://zernio.com/openapi.json
+# (484 paths). These tests pin the client to the real API so imagined
+# endpoints (e.g. /messages/list-inbox-conversations) can never regress.
+
+class _RecordingClient(ZernioClient):
+    """Capture (method, path, params, json) instead of hitting the network."""
+
+    def __init__(self):
+        super().__init__(api_key="dummy", webhook_secret="dummy")
+        self.calls = []
+
+    async def _request(self, method, path, params=None, json_data=None):
+        self.calls.append({
+            "method": method, "path": path,
+            "params": params or {}, "json": json_data or {},
+        })
+        return {"data": []}
+
+
+def test_spec_list_conversations_path():
+    import asyncio
+    c = _RecordingClient()
+    asyncio.new_event_loop().run_until_complete(
+        c.list_conversations(platform="telegram", limit=3, account_id="acc1")
+    )
+    call = c.calls[0]
+    assert call["method"] == "GET"
+    assert call["path"] == "/inbox/conversations"
+    assert call["params"]["platform"] == "telegram"
+    assert call["params"]["limit"] == 3
+    assert call["params"]["accountId"] == "acc1"
+
+
+def test_spec_get_conversation_path():
+    import asyncio
+    c = _RecordingClient()
+    asyncio.new_event_loop().run_until_complete(
+        c.get_conversation("conv1", account_id="acc1")
+    )
+    call = c.calls[0]
+    assert call["path"] == "/inbox/conversations/conv1"
+    assert call["params"]["accountId"] == "acc1"
+
+
+def test_spec_fetch_messages_path():
+    import asyncio
+    c = _RecordingClient()
+    asyncio.new_event_loop().run_until_complete(
+        c.fetch_messages("conv1", account_id="acc1", limit=10)
+    )
+    call = c.calls[0]
+    assert call["path"] == "/inbox/conversations/conv1/messages"
+    assert call["params"]["accountId"] == "acc1"
+    assert "direction" not in call["params"]  # spec uses sortOrder, not direction
+
+
+def test_spec_send_message_path_and_body():
+    import asyncio
+    c = _RecordingClient()
+    asyncio.new_event_loop().run_until_complete(
+        c.send_message("conv1", "hello", account_id="acc1")
+    )
+    call = c.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/inbox/conversations/conv1/messages"
+    assert call["json"]["message"] == "hello"
+    assert call["json"]["accountId"] == "acc1"
+    assert "attachmentType" not in call["json"]  # not in spec schema
+
+
+def test_spec_get_account_uses_list():
+    import asyncio
+    c = _RecordingClient()
+    c.calls.clear()
+    # stub list response by patching _request once
+    async def fake_list(method, path, params=None, json_data=None):
+        c.calls.append({"method": method, "path": path})
+        return [{"_id": "a1", "platform": "telegram"}]
+    c._request = fake_list
+    result = asyncio.new_event_loop().run_until_complete(c.get_account("a1"))
+    assert result["_id"] == "a1"
+    assert all(call["path"] == "/accounts" for call in c.calls)  # no GET /accounts/{id}
+
+
+def test_spec_connect_url_needs_profile():
+    import asyncio
+    c = _RecordingClient()
+    env_backup = os.environ.pop("ZERNIO_PROFILE_ID", None)
+    try:
+        url = asyncio.new_event_loop().run_until_complete(c.get_connect_url("telegram"))
+        assert url == ""  # graceful skip without profile id, no network call
+        assert c.calls == []
+    finally:
+        if env_backup is not None:
+            os.environ["ZERNIO_PROFILE_ID"] = env_backup

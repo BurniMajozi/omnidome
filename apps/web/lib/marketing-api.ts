@@ -673,10 +673,11 @@ export const listZernioAccounts = (platform?: string) => {
   return fetchMarketing<Array<Record<string, unknown>>>(`/social/zernio/accounts${q}`)
 }
 
-export const listZernioConversations = (params?: { platform?: string; status?: string; limit?: number }) => {
+export const listZernioConversations = (params?: { platform?: string; status?: string; limit?: number; account_id?: string }) => {
   const q = new URLSearchParams()
   if (params?.platform) q.set("platform", params.platform)
   if (params?.status) q.set("status", params.status)
   if (params?.limit != null) q.set("limit", String(params.limit))
+  if (params?.account_id) q.set("account_id", params.account_id)
   return fetchMarketing<Record<string, unknown>>(`/social/zernio/conversations?${q}`)
 }
