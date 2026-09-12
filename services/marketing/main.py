@@ -43,7 +43,13 @@ from services.marketing.database import (
 logger = logging.getLogger("marketing")
 
 app = FastAPI(title="OmniDome Marketing Service", version="2.0.0")
-guard = EntitlementGuard(module_id="marketing")
+# NOTE: /social/webhooks/zernio/inbound is public at the middleware layer
+# because Zernio (external) cannot send X-User-Id. Its authentication is the
+# X-Zernio-Signature HMAC check inside the route itself (Sep 2026).
+guard = EntitlementGuard(
+    module_id="marketing",
+    public_paths={"/social/webhooks/zernio/inbound"},
+)
 
 configure_production(app)
 
@@ -2783,16 +2789,25 @@ async def receive_social_webhook(
 @app.post("/social/webhooks/zernio/inbound")
 async def receive_zernio_webhook(
     request: Request,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """Zernio webhook receiver: HMAC verify -> store event -> normalize to
     inbox -> comment automations (auto-reply via Zernio) -> support escalation.
+
+    AUTH: HMAC-signed, NOT user-authenticated. External providers (Zernio)
+    cannot send X-User-Id, so this route takes NO auth Depends() — the
+    X-Zernio-Signature check IS the authentication. Tenant comes from the
+    X-Tenant-Id header configured in the Zernio dashboard per subscription.
 
     Configure in the Zernio dashboard:
       URL: https://<marketing-host>/social/webhooks/zernio/inbound
       Header: X-Tenant-Id: <tenant uuid>  (tenant-scoped ingestion)
       Events: message.received, comment.received, mention.received
     """
+    tenant_raw = request.headers.get("X-Tenant-Id", "")
+    try:
+        tenant_id = uuid.UUID(str(tenant_raw))
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=401, detail="Missing or invalid X-Tenant-Id")
     raw_body = await request.body()
     signature = request.headers.get("X-Zernio-Signature", "")
     zernio_event = request.headers.get("X-Zernio-Event", "")
