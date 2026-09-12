@@ -35,6 +35,22 @@ logger = logging.getLogger(__name__)
 
 # ── Webhook Normalizer ─────────────────────────────────────────────────
 
+def extract_event_meta(event: Dict[str, Any]) -> tuple[str, str]:
+    """Pull (event_type, platform) from a Zernio webhook payload.
+
+    Single source of truth for the real payload shape (Sep 2026): the event
+    type is the top-level ``event`` key and the platform is nested at
+    ``message.platform``. Legacy flat keys (``event_type``, top-level
+    ``platform``) are accepted as fallbacks. The webhook route and the
+    normalizer both call this so they can never read the payload differently.
+    """
+    event_type = event.get("event") or event.get("event_type") or "unknown"
+    raw_msg = event.get("message")
+    msg = raw_msg if isinstance(raw_msg, dict) else {}
+    platform = (msg.get("platform") or event.get("platform") or "unknown")
+    return event_type, str(platform).lower()
+
+
 def normalize_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize a Zernio webhook payload into our SocialInboxMessage schema.
@@ -65,12 +81,14 @@ def normalize_webhook_event(event: Dict[str, Any]) -> Dict[str, Any]:
       "timestamp": "2026-09-12T17:55:25.157Z"
     }
     """
-    # Event type is at top-level "event" key, not "event_type"
-    event_type = event.get("event", event.get("event_type", "unknown"))
-    # Platform lives inside message object
-    msg = event.get("message", {})
-    platform = msg.get("platform", event.get("platform", "unknown"))
-    sender = msg.get("sender", {})
+    # Event type ("event" top-level) and platform ("message.platform") come
+    # from the shared extractor so this can never drift from the route.
+    event_type, platform = extract_event_meta(event)
+    # message/sender may be missing or a non-dict for non-message events.
+    raw_msg = event.get("message")
+    msg = raw_msg if isinstance(raw_msg, dict) else {}
+    raw_sender = msg.get("sender")
+    sender = raw_sender if isinstance(raw_sender, dict) else {}
 
     # Map Zernio event types to our message_type
     type_map = {
