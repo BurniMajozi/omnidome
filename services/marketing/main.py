@@ -2795,6 +2795,8 @@ async def receive_zernio_webhook(
     """
     raw_body = await request.body()
     signature = request.headers.get("X-Zernio-Signature", "")
+    zernio_event = request.headers.get("X-Zernio-Event", "")
+    zernio_event_id = request.headers.get("X-Zernio-Event-Id", "")
 
     secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "")
     if secret:
@@ -2802,6 +2804,14 @@ async def receive_zernio_webhook(
         import hmac
         expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, signature):
+            # Debug aid (never logs the secret): distinguishes proxy-stripped
+            # headers from genuine secret mismatch on the next delivery.
+            logger.warning(
+                "Zernio signature mismatch: sig_present=%s sig_len=%d "
+                "expected_len=%d body_len=%d event=%s event_id_present=%s",
+                bool(signature), len(signature), len(expected), len(raw_body),
+                zernio_event or "missing", bool(zernio_event_id),
+            )
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
     else:
         logger.warning("ZERNIO_WEBHOOK_SECRET not set — accepting unsigned webhook")
