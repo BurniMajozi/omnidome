@@ -2837,14 +2837,18 @@ async def receive_zernio_webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    platform = str(payload.get("platform", "unknown")).lower()
+    # Real Zernio payload keys the event as "event" and nests platform under
+    # "message"; read both through the shared extractor so the stored event
+    # metadata and the reaction branch below match the normalizer.
+    from services.marketing.chat_webhooks import extract_event_meta
+    event_type, platform = extract_event_meta(payload)
 
     # 1. Store raw event.
     async with get_session() as session:
         event = SocialWebhookEvent(
             tenant_id=tenant_id,
             platform=platform,
-            event_type=payload.get("event_type", "unknown"),
+            event_type=event_type,
             payload=payload,
             processed=False,
         )
@@ -2853,7 +2857,7 @@ async def receive_zernio_webhook(
         event_id = event.id
 
     # 2. Reactions: log only, no inbox row.
-    if payload.get("event_type") == "reaction.received":
+    if event_type == "reaction.received":
         from services.marketing.chat_webhooks import ChatEngine
         engine = ChatEngine(get_session, get_zernio_client(), tenant_id=tenant_id)
         result = await engine.handle_reaction(payload)

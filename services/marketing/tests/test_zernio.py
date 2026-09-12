@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from services.marketing.chat_webhooks import (  # noqa: E402
     ChatEngine,
     _detect_sentiment,
+    extract_event_meta,
     normalize_reaction_event,
     normalize_webhook_event,
 )
@@ -96,6 +97,29 @@ def test_normalize_text_fallback_and_thread():
     n = normalize_webhook_event(sample_event(message={"text": "hi", "platform": "whatsapp"}))
     assert n["content"] == "hi"
     assert n["parent_id"] is None  # parent_id not in real payload, defaults to None
+
+
+# ── event meta (route + normalizer share this) ─────────────────────────
+
+def test_extract_event_meta_real_shape():
+    # Real payload: event at top level, platform nested under message.
+    assert extract_event_meta(sample_event()) == ("message.received", "telegram")
+
+
+def test_extract_event_meta_reaction():
+    # The route branches on this — must see the top-level "event" key.
+    evt = sample_event(event="reaction.received", message={"platform": "whatsapp"})
+    assert extract_event_meta(evt) == ("reaction.received", "whatsapp")
+
+
+def test_extract_event_meta_legacy_and_missing():
+    # Legacy flat shape still works; junk degrades to ("unknown", "unknown").
+    assert extract_event_meta({"event_type": "message.received", "platform": "x"}) == (
+        "message.received", "x",
+    )
+    assert extract_event_meta({}) == ("unknown", "unknown")
+    # A non-dict "message" must not raise (defensive: some events send a string).
+    assert extract_event_meta({"event": "ping", "message": "not-a-dict"}) == ("ping", "unknown")
 
 
 # ── sentiment ──────────────────────────────────────────────────────────
