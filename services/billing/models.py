@@ -29,6 +29,15 @@ class Base(DeclarativeBase):
     pass
 
 
+# NOT registered with services.common.db.register_tenant_scoped_base:
+# BundleItem and SubscriptionUsage have no tenant_id column (they scope
+# through their parent's FK), and BillingPlan.tenant_id is nullable (NULL =
+# global plan shared across tenants) — the automatic filter would either
+# break at query time or hide global plans. Add tenant_id to those tables
+# (needs a schema migration) before opting this Base in. Until then every
+# query must keep its manual .where(tenant_id == ...) clause.
+
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------

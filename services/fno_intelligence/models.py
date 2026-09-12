@@ -30,6 +30,8 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from services.common.db import register_tenant_scoped_base
+
 
 # ════════════════════════════════════════════════════════════════════════
 # ENUMS
@@ -91,6 +93,12 @@ REPORT_TYPE = SAEnum(
 
 class Base(DeclarativeBase):
     pass
+
+
+# Every model below carries tenant_id; opt this Base into the automatic
+# tenant filter in services.common.db so a missed manual .where() clause
+# can no longer leak rows across tenants.
+register_tenant_scoped_base(Base)
 
 
 # ════════════════════════════════════════════════════════════════════════

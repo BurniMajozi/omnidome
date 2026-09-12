@@ -26,6 +26,14 @@ class Base(DeclarativeBase):
     pass
 
 
+# NOT registered with services.common.db.register_tenant_scoped_base:
+# PackageItem, PurchaseOrderItem and GoodsReceiptItem have no tenant_id
+# column (they scope through their parent's FK), and the automatic filter
+# is applied unconditionally to every mapped subclass. Add tenant_id to
+# those tables (needs a schema migration) before opting this Base in.
+# Until then every query must keep its manual .where(tenant_id == ...) clause.
+
+
 # ════════════════════════════════════════════════════════════════════════
 # ENUMERIES
 # ════════════════════════════════════════════════════════════════════════
