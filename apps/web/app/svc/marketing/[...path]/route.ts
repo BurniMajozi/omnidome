@@ -16,7 +16,10 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   })
 
   const headers = new Headers()
-  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
+  // NOTE: x-zernio-* must be forwarded — the marketing webhook receiver
+  // HMAC-verifies X-Zernio-Signature over the raw body. Dropping it here
+  // caused every signed Zernio delivery to 401 (Sep 2026).
+  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type", "x-zernio-signature", "x-zernio-event", "x-zernio-event-id"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }
