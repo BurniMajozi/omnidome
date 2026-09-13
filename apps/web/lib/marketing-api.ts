@@ -841,6 +841,9 @@ export interface AnalyticsOverview {
   reach: number
   shares: number
   clicks: number
+  followers?: number
+  engagementRate?: number
+  bestPost?: string
   lastSync: string | null
   dataStaleness: { pendingCount: number }
   lastError: string | null
