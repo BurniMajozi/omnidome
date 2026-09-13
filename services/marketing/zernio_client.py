@@ -35,6 +35,18 @@ class ZernioError(Exception):
         super().__init__(f"Zernio API error {status}: {message}")
 
 
+class ZernioRateLimitError(ZernioError):
+    """Raised on HTTP 429. Carries seconds until the limit resets so a worker
+    can sleep exactly that long and retry the same page."""
+
+    def __init__(self, message: str, retry_after: Optional[int] = None):
+        self.retry_after = retry_after
+        super().__init__(429, message)
+
+    def seconds_until_reset(self, default: int = 5) -> int:
+        return self.retry_after if self.retry_after and self.retry_after > 0 else default
+
+
 class ZernioClient:
     """Async REST client for Zernio API v1."""
 
@@ -80,6 +92,18 @@ class ZernioClient:
     ) -> Any:
         client = await self._get_client()
         resp = await client.request(method, path, params=params, json=json_data)
+        if resp.status_code == 429:
+            # Prefer Retry-After; fall back to X-RateLimit-Reset (epoch seconds).
+            retry_after: Optional[int] = None
+            ra = resp.headers.get("Retry-After")
+            if ra and ra.isdigit():
+                retry_after = int(ra)
+            else:
+                reset = resp.headers.get("X-RateLimit-Reset")
+                if reset and reset.isdigit():
+                    import time
+                    retry_after = max(1, int(reset) - int(time.time()))
+            raise ZernioRateLimitError(resp.text, retry_after=retry_after)
         if resp.status_code >= 400:
             raise ZernioError(resp.status_code, resp.text)
         return resp.json()
@@ -264,28 +288,95 @@ class ZernioClient:
         ).hexdigest()
         return hmac.compare_digest(expected, signature)
 
+    # ── Profiles (one per customer/tenant) ─────────────────────────────
+
+    async def create_profile(self, name: str, description: Optional[str] = None) -> Dict:
+        """POST /v1/profiles — one profile per customer. Names are unique per
+        team; a duplicate name returns 409 (ZernioError.status == 409) with
+        details.existingProfileId, which the caller reuses."""
+        payload: Dict[str, Any] = {"name": name}
+        if description:
+            payload["description"] = description
+        return await self._request("POST", "/profiles", json_data=payload)
+
+    async def list_profiles(self) -> List[Dict]:
+        result = await self._request("GET", "/profiles")
+        if isinstance(result, dict):
+            return result.get("profiles", result.get("data", []))
+        return result if isinstance(result, list) else []
+
+    async def delete_profile(self, profile_id: str) -> Dict:
+        """DELETE /v1/profiles/{id}. Active connected accounts block deletion
+        with a 400 — disconnect them first."""
+        return await self._request("DELETE", f"/profiles/{profile_id}")
+
     # ── Social Account Connection ──────────────────────────────────────
 
-    async def get_connect_url(self, platform: str) -> str:
-        """Get OAuth connect URL for a platform.
-
-        Spec note: GET /v1/connect/{platform} requires profileId query.
-        Without a profile id we return "" so callers degrade gracefully.
-        """
-        profile_id = os.getenv("ZERNIO_PROFILE_ID", "")
-        if not profile_id:
-            logger.warning("ZERNIO_PROFILE_ID not set — connect URL unavailable")
+    async def get_connect_url(
+        self,
+        platform: str,
+        profile_id: Optional[str] = None,
+        redirect_url: Optional[str] = None,
+    ) -> str:
+        """Get OAuth connect URL so the account lands in `profile_id` (defaults
+        to ZERNIO_PROFILE_ID). Returns "" when no profile id is available so
+        callers degrade gracefully."""
+        pid = profile_id or os.getenv("ZERNIO_PROFILE_ID", "")
+        if not pid:
+            logger.warning("no profileId available — connect URL unavailable")
             return ""
-        result = await self._request(
-            "GET", f"/connect/{platform}", params={"profileId": profile_id}
-        )
+        params: Dict[str, Any] = {"profileId": pid}
+        if redirect_url:
+            params["redirect_url"] = redirect_url
+        result = await self._request("GET", f"/connect/{platform}", params=params)
         if isinstance(result, dict):
-            return result.get("connect_url", result.get("url", ""))
+            return result.get("authUrl", result.get("connect_url", result.get("url", "")))
         return str(result)
 
     async def disconnect_account(self, account_id: str) -> Dict:
         """Disconnect a social media account."""
         return await self._request("DELETE", f"/accounts/{account_id}")
+
+    async def get_accounts_health(
+        self, profile_id: str, status: Optional[str] = None
+    ) -> Dict:
+        """GET /v1/accounts/health — per-account token health + a summary with
+        needsReconnect. `status` (e.g. 'error') filters the list."""
+        params: Dict[str, Any] = {"profileId": profile_id}
+        if status:
+            params["status"] = status
+        return await self._request("GET", "/accounts/health", params=params)
+
+    # ── Billing / usage + API keys (platform admin) ─────────────────────
+
+    async def get_usage(self, range_: str = "cycle", group_by: str = "profile") -> Dict:
+        """GET /v1/usage — spend for the period, split per profile when
+        group_by='profile' (attribution.groups[])."""
+        return await self._request("GET", "/usage", params={"range": range_, "groupBy": group_by})
+
+    async def create_api_key(
+        self,
+        name: str,
+        scope: Optional[str] = None,
+        profile_ids: Optional[List[str]] = None,
+        permission: Optional[str] = None,
+        disabled_resource_groups: Optional[List[str]] = None,
+        expires_in: Optional[int] = None,
+    ) -> Dict:
+        """POST /v1/api-keys — mint a (optionally profile-scoped, read-only,
+        or group-restricted) key. There is no update endpoint."""
+        payload: Dict[str, Any] = {"name": name}
+        if scope:
+            payload["scope"] = scope
+        if profile_ids:
+            payload["profileIds"] = profile_ids
+        if permission:
+            payload["permission"] = permission
+        if disabled_resource_groups:
+            payload["disabledResourceGroups"] = disabled_resource_groups
+        if expires_in is not None:
+            payload["expiresIn"] = expires_in
+        return await self._request("POST", "/api-keys", json_data=payload)
 
     # ── Analytics ──────────────────────────────────────────────────────
 
@@ -295,7 +386,7 @@ class ZernioClient:
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
     ) -> Dict:
-        """Get analytics data."""
+        """Legacy overview call (platform + from/to). Kept for back-compat."""
         params: Dict[str, Any] = {}
         if platform:
             params["platform"] = platform
@@ -304,3 +395,52 @@ class ZernioClient:
         if to_date:
             params["to"] = to_date
         return await self._request("GET", "/analytics", params=params)
+
+    # ── Analytics: profile-scoped (what the sync worker uses) ──────────────
+
+    async def get_post_analytics(
+        self,
+        profile_id: str,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        page: int = 1,
+        limit: int = 50,
+        source: str = "all",
+    ) -> Dict[str, Any]:
+        """GET /v1/analytics — per-post metrics + overview, paginated, for one
+        customer's profile. `source`: late | external | all."""
+        params: Dict[str, Any] = {"profileId": profile_id, "page": page, "limit": limit, "source": source}
+        if from_date:
+            params["fromDate"] = from_date
+        if to_date:
+            params["toDate"] = to_date
+        return await self._request("GET", "/analytics", params=params)
+
+    async def get_daily_metrics(
+        self,
+        profile_id: str,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        attribution: str = "publish",
+        source: str = "all",
+    ) -> Dict[str, Any]:
+        """GET /v1/analytics/daily-metrics — day-by-day sums + platform
+        breakdown. `attribution`: publish (default) | received."""
+        params: Dict[str, Any] = {"profileId": profile_id, "attribution": attribution, "source": source}
+        if from_date:
+            params["fromDate"] = from_date
+        if to_date:
+            params["toDate"] = to_date
+        return await self._request("GET", "/analytics/daily-metrics", params=params)
+
+    async def get_follower_stats(
+        self,
+        profile_id: str,
+        granularity: str = "daily",
+    ) -> Dict[str, Any]:
+        """GET /v1/accounts/follower-stats — follower counts + growth.
+        `granularity`: daily | weekly | monthly."""
+        return await self._request(
+            "GET", "/accounts/follower-stats",
+            params={"profileId": profile_id, "granularity": granularity},
+        )

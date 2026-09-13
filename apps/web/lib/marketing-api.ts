@@ -397,7 +397,8 @@ export const deleteSocialAccount = (id: string) =>
   })
 
 export const connectSocialAccount = (platform: string) =>
-  fetchMarketing<{ oauth_url: string }>(`/social/accounts/connect/${encodeURIComponent(platform)}`)
+  // Backend returns { platform, auth_url } (Zernio hosted connect URL).
+  fetchMarketing<{ platform: string; auth_url: string }>(`/social/accounts/connect/${encodeURIComponent(platform)}`)
 
 export const disconnectSocialAccount = (id: string) =>
   fetchMarketing<{ status: string }>(`/social/accounts/${id}`, {
@@ -662,11 +663,144 @@ export const createTicketFromSocial = (id: string, data: { subject?: string; pri
 export interface ZernioStatus {
   configured: boolean
   webhook_secret_set: boolean
+  profile_ready?: boolean
   base_url: string
 }
 
 export const getZernioStatus = () =>
   fetchMarketing<ZernioStatus>("/social/zernio/status")
+
+export interface MarketingConnector {
+  id: string
+  label: string
+  category: string
+  coming_soon?: boolean
+  connected: boolean
+  accounts: Array<{ id?: string; name?: string; username?: string }>
+}
+
+export interface ConnectorsResponse {
+  configured: boolean
+  profile_ready: boolean
+  connectable: boolean
+  connectors: MarketingConnector[]
+}
+
+export const listConnectors = () =>
+  fetchMarketing<ConnectorsResponse>("/social/zernio/connectors")
+
+// ── DB-backed analytics (filled by the sync worker; never calls Zernio live) ──
+
+export interface AnalyticsOverview {
+  totalPosts: number
+  likes: number
+  comments: number
+  impressions: number
+  reach: number
+  shares: number
+  clicks: number
+  lastSync: string | null
+  dataStaleness: { pendingCount: number }
+  lastError: string | null
+}
+
+export interface DailyMetricPoint {
+  date: string
+  postCount: number
+  metrics: {
+    impressions: number; reach: number; likes: number; comments: number
+    shares: number; saves: number; clicks: number; views: number
+  }
+}
+
+export interface AnalyticsPostRow {
+  postId: string
+  platform: string
+  publishedAt: string | null
+  url: string | null
+  syncStatus: string
+  lastUpdated: string | null
+  analytics: Record<string, number>
+}
+
+export interface FollowerPoint {
+  date: string
+  platform: string | null
+  followers: number
+  growth: number
+}
+
+export const getAnalyticsOverview = () =>
+  fetchMarketing<{ overview: AnalyticsOverview }>("/social/analytics/overview")
+
+export const getAnalyticsDaily = (params?: { attribution?: "publish" | "received"; days?: number; platform?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.attribution) q.set("attribution", params.attribution)
+  if (params?.days != null) q.set("days", String(params.days))
+  if (params?.platform) q.set("platform", params.platform)
+  return fetchMarketing<{ attribution: string; platform: string; dailyData: DailyMetricPoint[] }>(
+    `/social/analytics/daily?${q}`,
+  )
+}
+
+export const getAnalyticsPosts = (params?: { page?: number; limit?: number; platform?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.page != null) q.set("page", String(params.page))
+  if (params?.limit != null) q.set("limit", String(params.limit))
+  if (params?.platform) q.set("platform", params.platform)
+  return fetchMarketing<{ posts: AnalyticsPostRow[]; pagination: { page: number; limit: number; total: number; pages: number } }>(
+    `/social/analytics/posts?${q}`,
+  )
+}
+
+export const getAnalyticsFollowers = (params?: { granularity?: "daily" | "weekly" | "monthly"; days?: number }) => {
+  const q = new URLSearchParams()
+  if (params?.granularity) q.set("granularity", params.granularity)
+  if (params?.days != null) q.set("days", String(params.days))
+  return fetchMarketing<{ granularity: string; series: FollowerPoint[] }>(`/social/analytics/followers?${q}`)
+}
+
+export const setTenantProfile = (zernioProfileId: string) =>
+  fetchMarketing<{ tenant_id: string; zernio_profile_id: string }>("/social/analytics/profile", {
+    method: "PUT",
+    body: JSON.stringify({ zernio_profile_id: zernioProfileId }),
+  })
+
+// ── Platform: profile-per-tenant, account health, usage, scoped keys ──
+
+export interface AccountHealthEntry {
+  accountId: string
+  platform: string
+  username?: string
+  status: string
+  canPost?: boolean
+  tokenValid?: boolean
+  needsReconnect?: boolean
+  issues?: string[]
+}
+
+export interface AccountHealth {
+  summary: { total: number; healthy?: number; warning?: number; error?: number; needsReconnect: number }
+  accounts: AccountHealthEntry[]
+}
+
+export const ensureTenantProfile = () =>
+  fetchMarketing<{ tenant_id: string; zernio_profile_id: string }>("/social/profile/ensure", { method: "POST" })
+
+export const listConnectedAccounts = () =>
+  fetchMarketing<{ accounts: Array<Record<string, unknown>> }>("/social/connected-accounts")
+
+export const getAccountsHealth = (status?: "error" | "warning" | "healthy") =>
+  fetchMarketing<AccountHealth>(`/social/accounts-health${status ? `?status=${status}` : ""}`)
+
+export const getSocialUsage = () =>
+  fetchMarketing<{ profile_id: string | null; usage: Record<string, unknown> | null; restricted: boolean }>("/social/usage")
+
+export const createScopedKey = (body: { name: string; permission?: "read"; disabled_resource_groups?: string[]; expires_in?: number }) =>
+  fetchMarketing<Record<string, unknown>>("/social/api-keys", { method: "POST", body: JSON.stringify(body) })
+
+export const offboardProfile = () =>
+  fetchMarketing<{ status: string; disconnected_accounts?: number; profile_id?: string }>("/social/profile/offboard", { method: "POST" })
 
 export const listZernioAccounts = (platform?: string) => {
   const q = platform ? `?platform=${encodeURIComponent(platform)}` : ""

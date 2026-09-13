@@ -16,20 +16,25 @@ import {
   Megaphone, Mail, TrendingUp, Users, Target, Zap, Radio, Tv, Monitor,
   Send, Plus, Eye, MousePointerClick, DollarSign, UserCheck, Award,
   MessageSquare, Heart, Share2, Bell, Settings, BarChart3, Globe,
-  Smartphone, Image, Calendar, Clock, CheckCircle, AlertTriangle, XCircle,
-  ArrowUpRight, ArrowDownRight, Minus, Search, Filter, Download, RefreshCw,
+  Image, Calendar, Clock, CheckCircle, AlertTriangle, XCircle,
+  ArrowUpRight, ArrowDownRight, Minus, Search, Filter, Download, RefreshCw, ChevronRight,
   Link2, Unlink, Play, Pause, Trash2, Edit, Reply, Archive, ExternalLink,
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
-  Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy,
+  Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag,
 } from "lucide-react"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
-  listAdCampaigns, listCommentAutomations, getEngagementSummary,
+  listAdCampaigns, listCommentAutomations,
   createSocialPost, publishSocialPost, crossPost, createWhatsAppBroadcast,
   sendWhatsAppBroadcast, createCommentAutomation, replyToInboxMessage,
   archiveInboxMessage, markInboxRead, createAdCampaign, updateAdCampaign,
   listTraditionalCampaigns, type TraditionalCampaign,
+  listConnectors, connectSocialAccount, type MarketingConnector,
+  getAccountsHealth, type AccountHealth,
+  listEmailTemplates, createEmailTemplate, sendEmailBatch, type EmailTemplate,
+  getAnalyticsOverview, getAnalyticsDaily, getAnalyticsPosts,
+  type AnalyticsOverview, type DailyMetricPoint, type AnalyticsPostRow,
 } from "@/lib/marketing-api"
 
 const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
@@ -81,21 +86,95 @@ const statusColor: Record<string, string> = {
 // MAIN MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
 
-type MarketingTab = "campaigns" | "social-composer" | "social-inbox" | "social-analytics" | "whatsapp" | "ads" | "automations" | "traditional"
+type MarketingTab =
+  | "connections"
+  | "campaigns" | "social-composer" | "social-inbox" | "social-analytics"
+  | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
+  | "email-templates" | "email-compose"
+  | "ads" | "automations" | "traditional"
+
+type IconType = React.ComponentType<{ className?: string }>
+type NavLeaf = { key: MarketingTab; label: string; icon: IconType }
+type NavGroup = { id: string; label: string; icon: IconType; children: NavLeaf[] }
+type NavEntry = NavLeaf | NavGroup
+
+const isGroup = (e: NavEntry): e is NavGroup => "children" in e
+
+// Zernio-style grouped navigation: expandable sections + flat items, each
+// icon-led, so the eye follows a vertical rail instead of scanning a row of
+// look-alike horizontal buttons.
+const MARKETING_NAV: NavEntry[] = [
+  { key: "connections", label: "Connections", icon: Link2 },
+  {
+    id: "campaigns", label: "Campaigns", icon: Megaphone, children: [
+      { key: "campaigns", label: "Overview", icon: BarChart3 },
+      { key: "ads", label: "Ad Campaigns", icon: Target },
+      { key: "traditional", label: "Traditional", icon: Radio },
+    ],
+  },
+  {
+    id: "social", label: "Social", icon: Share2, children: [
+      { key: "social-composer", label: "Composer", icon: Send },
+      { key: "social-inbox", label: "Inbox", icon: MessageSquare },
+      { key: "social-analytics", label: "Analytics", icon: BarChart3 },
+    ],
+  },
+  {
+    id: "whatsapp", label: "WhatsApp", icon: MessageCircle, children: [
+      { key: "whatsapp-broadcasts", label: "Broadcasts", icon: Send },
+      { key: "whatsapp-contacts", label: "Contacts", icon: UserCheck },
+      { key: "whatsapp-templates", label: "Templates", icon: FileText },
+      { key: "whatsapp-flows", label: "Flows", icon: RefreshCw },
+      { key: "whatsapp-groups", label: "Groups", icon: Users },
+    ],
+  },
+  {
+    id: "email", label: "Email", icon: Mail, children: [
+      { key: "email-templates", label: "Templates", icon: FileText },
+      { key: "email-compose", label: "Compose", icon: Send },
+    ],
+  },
+  { key: "automations", label: "Automations", icon: Zap },
+]
 
 export function MarketingModule() {
   const [activeTab, setActiveTab] = useState<MarketingTab>("campaigns")
+  // Track which nav groups are open; auto-open the group holding the active tab.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {}
+    for (const entry of MARKETING_NAV) {
+      if (isGroup(entry)) init[entry.id] = entry.children.some((c) => c.key === "campaigns")
+    }
+    return init
+  })
 
-  const tabs: { key: MarketingTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { key: "campaigns", label: "Campaigns", icon: Megaphone },
-    { key: "social-composer", label: "Social Composer", icon: Send },
-    { key: "social-inbox", label: "Social Inbox", icon: MessageSquare },
-    { key: "social-analytics", label: "Social Analytics", icon: BarChart3 },
-    { key: "whatsapp", label: "WhatsApp", icon: Smartphone },
-    { key: "ads", label: "Ad Campaigns", icon: Target },
-    { key: "automations", label: "Automations", icon: Zap },
-    { key: "traditional", label: "Traditional", icon: Radio },
-  ]
+  const toggleGroup = (id: string) =>
+    setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
+
+  const renderLeaf = (leaf: NavLeaf, nested: boolean) => {
+    const Icon = leaf.icon
+    const isActive = leaf.key === activeTab
+    return (
+      <button
+        key={leaf.key}
+        onClick={() => setActiveTab(leaf.key)}
+        aria-current={isActive ? "page" : undefined}
+        className={`group flex w-full items-center gap-2.5 rounded-lg py-2 pr-3 text-sm font-medium transition-colors ${nested ? "pl-9" : "pl-3"} ${
+          isActive
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-card hover:text-foreground"
+        }`}
+      >
+        <Icon
+          className={`h-4 w-4 shrink-0 transition-colors ${
+            isActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+          }`}
+        />
+        <span className="truncate">{leaf.label}</span>
+        {isActive && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-primary" />}
+      </button>
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -108,37 +187,504 @@ export function MarketingModule() {
         }
       />
 
-      {/* Tab Navigation */}
-      <div className="flex items-center gap-1 border-b border-border pb-1 overflow-x-auto">
-        {tabs.map((tab) => {
-          const Icon = tab.icon
-          const isActive = tab.key === activeTab
-          return (
-            <button
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap ${
-                isActive
-                  ? "bg-card text-foreground border border-border border-b-0 -mb-px"
-                  : "text-muted-foreground hover:text-foreground hover:bg-card/50"
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              {tab.label}
-            </button>
-          )
-        })}
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        {/* Left sub-nav — Zernio-style collapsible groups */}
+        <nav className="w-full shrink-0 space-y-1 lg:sticky lg:top-4 lg:w-56">
+          {MARKETING_NAV.map((entry) => {
+            if (!isGroup(entry)) return renderLeaf(entry, false)
+            const Icon = entry.icon
+            const isOpen = expanded[entry.id]
+            const hasActive = entry.children.some((c) => c.key === activeTab)
+            return (
+              <div key={entry.id}>
+                <button
+                  onClick={() => toggleGroup(entry.id)}
+                  aria-expanded={isOpen}
+                  className={`group flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${
+                    hasActive ? "text-foreground" : "text-muted-foreground hover:bg-card hover:text-foreground"
+                  }`}
+                >
+                  <Icon
+                    className={`h-4 w-4 shrink-0 ${
+                      hasActive ? "text-primary" : "text-muted-foreground group-hover:text-foreground"
+                    }`}
+                  />
+                  <span className="truncate">{entry.label}</span>
+                  <ChevronRight
+                    className={`ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
+                  />
+                </button>
+                {isOpen && (
+                  <div className="mt-0.5 space-y-0.5">
+                    {entry.children.map((c) => renderLeaf(c, true))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </nav>
+
+        {/* Content */}
+        <div className="min-w-0 flex-1">
+          {activeTab === "connections" && <ConnectionsTab />}
+          {activeTab === "campaigns" && <CampaignsTab />}
+          {activeTab === "social-composer" && <SocialComposerTab />}
+          {activeTab === "social-inbox" && <SocialInboxTab />}
+          {activeTab === "social-analytics" && <SocialAnalyticsTab />}
+          {activeTab === "whatsapp-broadcasts" && <WhatsAppTab view="broadcasts" />}
+          {activeTab === "whatsapp-contacts" && <WhatsAppTab view="contacts" />}
+          {activeTab === "whatsapp-templates" && (
+            <WhatsAppComingSoon
+              icon={FileText}
+              title="WhatsApp Message Templates"
+              description="Create and manage reusable, pre-approved WhatsApp message templates for broadcasts and automated replies. Backend support is not wired up yet."
+            />
+          )}
+          {activeTab === "whatsapp-flows" && (
+            <WhatsAppComingSoon
+              icon={RefreshCw}
+              title="WhatsApp Flows"
+              description="Build interactive, multi-step WhatsApp conversation flows (menus, forms, guided journeys). Backend support is not wired up yet."
+            />
+          )}
+          {activeTab === "whatsapp-groups" && (
+            <WhatsAppComingSoon
+              icon={Users}
+              title="WhatsApp Groups"
+              description="Organize contacts into targetable groups for segmented broadcasts. Backend support is not wired up yet."
+            />
+          )}
+          {activeTab === "email-templates" && <EmailTemplatesTab />}
+          {activeTab === "email-compose" && <EmailComposeTab />}
+          {activeTab === "ads" && <AdsTab />}
+          {activeTab === "automations" && <AutomationsTab />}
+          {activeTab === "traditional" && <TraditionalTab />}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONNECTIONS TAB (brand connectors via Zernio)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Brand color + glyph per connector. Recognizable brand chips without pulling
+// in a brand-icon dependency; swap in exact logos later if desired.
+const connectorVisual: Record<string, { color: string; icon: IconType }> = {
+  tiktok: { color: "#111827", icon: Video },
+  instagram: { color: "#E4405F", icon: Instagram },
+  facebook: { color: "#1877F2", icon: Facebook },
+  youtube: { color: "#FF0000", icon: Youtube },
+  linkedin: { color: "#0A66C2", icon: Linkedin },
+  twitter: { color: "#111827", icon: Twitter },
+  threads: { color: "#111827", icon: AtSign },
+  bluesky: { color: "#0085FF", icon: Globe },
+  pinterest: { color: "#BD081C", icon: Image },
+  reddit: { color: "#FF4500", icon: MessageSquare },
+  googlebusiness: { color: "#4285F4", icon: Globe },
+  snapchat: { color: "#FFFC00", icon: Image },
+  telegram: { color: "#26A5E4", icon: Send },
+  whatsapp: { color: "#25D366", icon: MessageCircle },
+  shopify: { color: "#7AB55C", icon: ShoppingBag },
+}
+
+const LIGHT_BG_BRANDS = new Set(["snapchat"])
+
+function BrandChip({ id, size = 40 }: { id: string; size?: number }) {
+  const v = connectorVisual[id] ?? { color: "#6366f1", icon: Globe }
+  const Icon = v.icon
+  const dark = LIGHT_BG_BRANDS.has(id)
+  return (
+    <div
+      className="flex shrink-0 items-center justify-center rounded-lg"
+      style={{ width: size, height: size, backgroundColor: v.color }}
+    >
+      <Icon className={`h-5 w-5 ${dark ? "text-black" : "text-white"}`} />
+    </div>
+  )
+}
+
+function ConnectionsTab() {
+  const [data, setData] = useState<{ connectable: boolean; configured: boolean; profile_ready: boolean; connectors: MarketingConnector[] } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [connectingId, setConnectingId] = useState<string | null>(null)
+  const [health, setHealth] = useState<AccountHealth | null>(null)
+  const [checkingHealth, setCheckingHealth] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await listConnectors()
+      setData(res)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load connectors")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const checkHealth = async () => {
+    setCheckingHealth(true)
+    try {
+      setHealth(await getAccountsHealth())
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Health check failed")
+    } finally {
+      setCheckingHealth(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleConnect = async (id: string) => {
+    setConnectingId(id)
+    setError(null)
+    try {
+      const res = await connectSocialAccount(id)
+      if (res?.auth_url) {
+        window.open(res.auth_url, "_blank", "noopener,noreferrer")
+      } else {
+        setError("Zernio returned no connect URL for this platform.")
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start connection")
+    } finally {
+      setConnectingId(null)
+    }
+  }
+
+  const connectors = data?.connectors ?? []
+  const connectedCount = connectors.filter((c) => c.connected).length
+  const categories = ["Social", "Messaging", "Commerce"]
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Connections</h3>
+          <p className="text-sm text-muted-foreground">
+            {loading ? "Loading…" : `${connectedCount} connected · ${connectors.length} platforms available via Zernio`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={checkHealth} disabled={checkingHealth}>
+            <Radio className={`mr-2 h-4 w-4 ${checkingHealth ? "animate-spin" : ""}`} /> Check health
+          </Button>
+          <Button size="sm" variant="ghost" onClick={load} disabled={loading}>
+            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+        </div>
       </div>
 
-      {/* Tab Content */}
-      {activeTab === "campaigns" && <CampaignsTab />}
-      {activeTab === "social-composer" && <SocialComposerTab />}
-      {activeTab === "social-inbox" && <SocialInboxTab />}
-      {activeTab === "social-analytics" && <SocialAnalyticsTab />}
-      {activeTab === "whatsapp" && <WhatsAppTab />}
-      {activeTab === "ads" && <AdsTab />}
-      {activeTab === "automations" && <AutomationsTab />}
-      {activeTab === "traditional" && <TraditionalTab />}
+      {health && (
+        <div className={`rounded-lg border p-3 ${health.summary.needsReconnect > 0 ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
+          {health.summary.needsReconnect > 0 ? (
+            <div className="space-y-2">
+              <p className="flex items-center gap-2 text-sm font-medium text-amber-500">
+                <AlertTriangle className="h-4 w-4" /> {health.summary.needsReconnect} account(s) need reconnection
+              </p>
+              {health.accounts.filter((a) => a.needsReconnect).map((a) => (
+                <div key={a.accountId} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2 text-foreground">
+                    <BrandChip id={a.platform} size={24} />
+                    {a.username || a.platform}
+                    <span className="text-xs text-muted-foreground">{(a.issues || []).join(", ")}</span>
+                  </span>
+                  <Button size="sm" variant="outline" className="shrink-0" onClick={() => handleConnect(a.platform)}>
+                    <RefreshCw className="mr-1 h-3.5 w-3.5" /> Reconnect
+                  </Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="flex items-center gap-2 text-sm text-emerald-500">
+              <CheckCircle className="h-4 w-4" /> All {health.summary.total} account(s) healthy
+            </p>
+          )}
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {data && !data.connectable && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <div className="text-sm text-amber-500">
+            <p className="font-medium">Connecting is disabled</p>
+            <p className="text-amber-500/80">
+              {!data.configured
+                ? "Set ZERNIO_API_KEY to enable Zernio connectors."
+                : "Set ZERNIO_PROFILE_ID so new accounts attach to your Zernio profile."}
+              {" "}You can still browse the catalogue below.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {categories.map((cat) => {
+        const items = connectors.filter((c) => c.category === cat)
+        if (items.length === 0) return null
+        return (
+          <div key={cat} className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{cat}</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {items.map((c) => (
+                <Card key={c.id} className="border-border bg-card">
+                  <CardContent className="flex items-center gap-3 p-4">
+                    <BrandChip id={c.id} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-tight text-foreground">{c.label}</p>
+                      {c.connected ? (
+                        <p className="truncate text-xs text-emerald-500">
+                          {c.accounts[0]?.name || c.accounts[0]?.username || "Connected"}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Not connected</p>
+                      )}
+                    </div>
+                    {c.coming_soon ? (
+                      <Badge variant="outline" className="shrink-0 border-amber-500/40 text-amber-500">Soon</Badge>
+                    ) : c.connected ? (
+                      <Badge variant="outline" className="shrink-0 border-emerald-500/40 text-emerald-500">
+                        <CheckCircle className="mr-1 h-3 w-3" /> Connected
+                      </Badge>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="shrink-0"
+                        disabled={!data?.connectable || connectingId === c.id}
+                        onClick={() => handleConnect(c.id)}
+                      >
+                        {connectingId === c.id ? (
+                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <><Link2 className="mr-1 h-3.5 w-3.5" /> Connect</>
+                        )}
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMAIL TABS (templates + compose/send over the marketing email backend)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function EmailTemplatesTab() {
+  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [draft, setDraft] = useState({ name: "", subject: "", body_html: "", category: "" })
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      setTemplates((await listEmailTemplates()) || [])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load templates")
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleCreate = async () => {
+    if (!draft.name || !draft.subject) return
+    setError(null)
+    try {
+      await createEmailTemplate(draft)
+      setShowCreate(false)
+      setDraft({ name: "", subject: "", body_html: "", category: "" })
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create template")
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{templates.length} email templates</p>
+        <Button size="sm" onClick={() => setShowCreate(!showCreate)}>
+          <Plus className="mr-2 h-4 w-4" /> New Template
+        </Button>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+          <p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {showCreate && (
+        <Card className="border-border bg-card">
+          <CardHeader><CardTitle className="text-sm">Create Email Template</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <Input placeholder="Template name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
+            <Input placeholder="Subject line" value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
+            <Input placeholder="Category (optional)" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
+            <Textarea placeholder="HTML body…" value={draft.body_html} onChange={(e) => setDraft({ ...draft, body_html: e.target.value })} rows={6} className="resize-none font-mono text-xs" />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleCreate}>Save Template</Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      ) : templates.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground">No email templates yet</div>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {templates.map((t) => (
+            <Card key={t.id} className="border-border bg-card">
+              <CardContent className="p-4">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <p className="truncate font-medium text-foreground">{t.name}</p>
+                  {t.category && <Badge variant="outline" className="border-border text-muted-foreground">{t.category}</Badge>}
+                </div>
+                <p className="truncate text-sm text-muted-foreground">{t.subject}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function EmailComposeTab() {
+  const [campaigns, setCampaigns] = useState<any[]>([])
+  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  const [campaignId, setCampaignId] = useState("")
+  const [subject, setSubject] = useState("")
+  const [bodyHtml, setBodyHtml] = useState("")
+  const [recipientsRaw, setRecipientsRaw] = useState("")
+  const [fromName, setFromName] = useState("")
+  const [fromEmail, setFromEmail] = useState("")
+  const [sending, setSending] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listCampaigns().then((c) => setCampaigns((c || []).filter((x: any) => (x.channel || "").toLowerCase() === "email" || true))).catch(() => {})
+    listEmailTemplates().then((t) => setTemplates(t || [])).catch(() => {})
+  }, [])
+
+  const recipients = useMemo(
+    () => recipientsRaw.split(/[\s,;]+/).map((r) => r.trim()).filter((r) => r.includes("@")),
+    [recipientsRaw],
+  )
+
+  const applyTemplate = (id: string) => {
+    const t = templates.find((x) => x.id === id)
+    if (t) { setSubject(t.subject); setBodyHtml(t.body_html) }
+  }
+
+  const handleSend = async () => {
+    if (!campaignId || !subject || recipients.length === 0) return
+    setSending(true)
+    setResult(null)
+    setError(null)
+    try {
+      const res = await sendEmailBatch({
+        campaign_id: campaignId,
+        subject,
+        body_html: bodyHtml,
+        recipients,
+        from_name: fromName || undefined,
+        from_email: fromEmail || undefined,
+      })
+      setResult(`Queued ${res?.sent ?? recipients.length} email(s).`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to queue email")
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-foreground">Compose Email</h3>
+        <p className="text-sm text-muted-foreground">Send a batch to a recipient list, tied to a campaign for tracking.</p>
+      </div>
+
+      <div className="flex items-start gap-2 rounded-lg border border-border bg-card/40 p-3">
+        <Bell className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+        <p className="text-xs text-muted-foreground">
+          Sends are queued and tracked (delivered / opened / clicked via the email webhook). Actual delivery
+          requires an email provider worker to be wired to the queue.
+        </p>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+      {result && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" /><p className="text-sm text-emerald-500">{result}</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-foreground">Campaign</label>
+          <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
+            <option value="">Select a campaign…</option>
+            {campaigns.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
+        {templates.length > 0 && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">Start from template (optional)</label>
+            <select onChange={(e) => applyTemplate(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
+              <option value="">None</option>
+              {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        )}
+
+        <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
+        <div className="grid grid-cols-2 gap-3">
+          <Input placeholder="From name (optional)" value={fromName} onChange={(e) => setFromName(e.target.value)} />
+          <Input placeholder="From email (optional)" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} />
+        </div>
+        <Textarea placeholder="HTML body…" value={bodyHtml} onChange={(e) => setBodyHtml(e.target.value)} rows={6} className="resize-none font-mono text-xs" />
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-foreground">Recipients</label>
+          <Textarea placeholder="Comma, space or newline separated email addresses" value={recipientsRaw} onChange={(e) => setRecipientsRaw(e.target.value)} rows={3} className="resize-none" />
+          <p className="mt-1 text-xs text-muted-foreground">{recipients.length} valid recipient(s)</p>
+        </div>
+        <Button onClick={handleSend} disabled={sending || !campaignId || !subject || recipients.length === 0}>
+          {sending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Queuing…</> : <><Send className="mr-2 h-4 w-4" /> Send Email</>}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -687,100 +1233,222 @@ function SocialInboxTab() {
 // SOCIAL ANALYTICS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const DAILY_METRICS: { key: keyof DailyMetricPoint["metrics"]; label: string; color: string }[] = [
+  { key: "impressions", label: "Impressions", color: "#60a5fa" },
+  { key: "reach", label: "Reach", color: "#a78bfa" },
+  { key: "likes", label: "Likes", color: "#f472b6" },
+  { key: "comments", label: "Comments", color: "#4ade80" },
+  { key: "clicks", label: "Clicks", color: "#f59e0b" },
+  { key: "views", label: "Views", color: "#22d3ee" },
+]
+
 function SocialAnalyticsTab() {
-  const [summary, setSummary] = useState<any>(null)
+  const [overview, setOverview] = useState<AnalyticsOverview | null>(null)
+  const [daily, setDaily] = useState<DailyMetricPoint[]>([])
+  const [posts, setPosts] = useState<AnalyticsPostRow[]>([])
+  const [attribution, setAttribution] = useState<"publish" | "received">("publish")
+  const [metric, setMetric] = useState<keyof DailyMetricPoint["metrics"]>("impressions")
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    loadAnalytics()
-  }, [])
-
-  const loadAnalytics = async () => {
-    setLoading(true)
-    try {
-      const data = await getEngagementSummary().catch(() => null)
-      setSummary(data)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
+  const loadDaily = async (attr: "publish" | "received") => {
+    const d = await getAnalyticsDaily({ attribution: attr, days: 30 }).catch(() => null)
+    setDaily(d?.dailyData ?? [])
   }
 
-  const engagementData = summary?.by_platform || [
-    { platform: "Twitter", followers: 12400, impressions: 450000, engagement: 3.2 },
-    { platform: "Instagram", followers: 28100, impressions: 890000, engagement: 4.8 },
-    { platform: "Facebook", followers: 18600, impressions: 620000, engagement: 2.9 },
-    { platform: "LinkedIn", followers: 8200, impressions: 180000, engagement: 5.1 },
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      setLoading(true)
+      try {
+        const [ov, pg] = await Promise.all([
+          getAnalyticsOverview().catch(() => null),
+          getAnalyticsPosts({ limit: 20 }).catch(() => null),
+        ])
+        if (cancelled) return
+        setOverview(ov?.overview ?? null)
+        setPosts(pg?.posts ?? [])
+        await loadDaily(attribution)
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load analytics")
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => { loadDaily(attribution) }, [attribution])
+
+  const chartData = useMemo(
+    () => daily.map((d) => ({ date: d.date.slice(5), value: d.metrics[metric] ?? 0 })),
+    [daily, metric],
+  )
+  const metricDef = DAILY_METRICS.find((m) => m.key === metric) ?? DAILY_METRICS[0]
+
+  const fmt = (n?: number) => (n ?? 0).toLocaleString()
+  const asOf = overview?.lastSync
+    ? new Date(overview.lastSync).toLocaleString()
+    : null
+
+  const stats = [
+    { label: "Posts", value: fmt(overview?.totalPosts), icon: FileText, color: "text-blue-400", bg: "bg-blue-500/10" },
+    { label: "Impressions", value: fmt(overview?.impressions), icon: Eye, color: "text-purple-400", bg: "bg-purple-500/10" },
+    { label: "Reach", value: fmt(overview?.reach), icon: Radio, color: "text-cyan-400", bg: "bg-cyan-500/10" },
+    { label: "Likes", value: fmt(overview?.likes), icon: Heart, color: "text-pink-400", bg: "bg-pink-500/10" },
+    { label: "Comments", value: fmt(overview?.comments), icon: MessageSquare, color: "text-emerald-400", bg: "bg-emerald-500/10" },
+    { label: "Clicks", value: fmt(overview?.clicks), icon: MousePointerClick, color: "text-amber-400", bg: "bg-amber-500/10" },
   ]
+
+  const isEmpty = !loading && (overview?.totalPosts ?? 0) === 0 && daily.length === 0
 
   return (
     <div className="space-y-6">
-      {/* KPI Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Total Followers", value: engagementData.reduce((s: number, d: any) => s + (d.followers || 0), 0).toLocaleString(), icon: Users, color: "text-blue-400", bg: "bg-blue-500/10" },
-          { label: "Total Impressions", value: engagementData.reduce((s: number, d: any) => s + (d.impressions || 0), 0).toLocaleString(), icon: Eye, color: "text-purple-400", bg: "bg-purple-500/10" },
-          { label: "Avg Engagement", value: (engagementData.reduce((s: number, d: any) => s + (d.engagement || 0), 0) / Math.max(engagementData.length, 1)).toFixed(1) + "%", icon: Heart, color: "text-pink-400", bg: "bg-pink-500/10" },
-          { label: "Platforms", value: engagementData.length, icon: Globe, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-        ].map((kpi: any) => (
-          <Card key={kpi.label} className="border-border bg-card">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs text-muted-foreground">{kpi.label}</p>
-                  <p className="text-2xl font-semibold text-foreground">{kpi.value}</p>
+      {/* Freshness — dashboards read stored data; the worker keeps it fresh */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Social Analytics</h3>
+          <p className="text-sm text-muted-foreground">
+            {loading ? "Loading…" : asOf ? `Data as of ${asOf}` : "No sync yet"}
+            {overview?.dataStaleness?.pendingCount ? ` · ${overview.dataStaleness.pendingCount} still syncing` : ""}
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {isEmpty ? (
+        <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
+          <BarChart3 className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="font-medium text-foreground">No analytics yet</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            The sync worker fills this from Zernio. Connect an account under <span className="text-foreground">Connections</span>,
+            set your Zernio profile, and the worker pulls per-post metrics on its next pass.
+          </p>
+        </div>
+      ) : (
+        <>
+          {/* Stat cards */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            {stats.map((s) => (
+              <Card key={s.label} className="border-border bg-card">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-muted-foreground">{s.label}</p>
+                      <p className="text-xl font-semibold text-foreground">{s.value}</p>
+                    </div>
+                    <div className={`rounded-lg ${s.bg} p-2`}><s.icon className={`h-4 w-4 ${s.color}`} /></div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Daily trend with attribution toggle */}
+          <Card className="border-border bg-card">
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+              <CardTitle className="text-sm">Daily {metricDef.label}</CardTitle>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={metric}
+                  onChange={(e) => setMetric(e.target.value as keyof DailyMetricPoint["metrics"])}
+                  className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-foreground"
+                >
+                  {DAILY_METRICS.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+                </select>
+                <div className="flex overflow-hidden rounded-lg border border-border text-xs">
+                  {(["publish", "received"] as const).map((a) => (
+                    <button
+                      key={a}
+                      onClick={() => setAttribution(a)}
+                      className={`px-3 py-1 transition-colors ${attribution === a ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"}`}
+                    >
+                      {a === "publish" ? "By publish date" : "By day received"}
+                    </button>
+                  ))}
                 </div>
-                <div className={`rounded-lg ${kpi.bg} p-2`}><kpi.icon className={`h-5 w-5 ${kpi.color}`} /></div>
               </div>
+            </CardHeader>
+            <CardContent>
+              {chartData.length === 0 ? (
+                <div className="py-16 text-center text-sm text-muted-foreground">No daily data in this window yet</div>
+              ) : (
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                      <XAxis dataKey="date" tick={{ fill: "#737373", fontSize: 12 }} />
+                      <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
+                      <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
+                      <Line type="monotone" dataKey="value" stroke={metricDef.color} strokeWidth={2} dot={false} name={metricDef.label} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground">
+                {attribution === "publish"
+                  ? "Each post's lifetime totals sit on its publish date."
+                  : "Engagement bucketed by the day it arrived — moves in weeks you didn't post."}
+              </p>
             </CardContent>
           </Card>
-        ))}
-      </div>
 
-      {/* Charts */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle>Followers by Platform</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={engagementData}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="platform" tick={{ fill: "#737373", fontSize: 12 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="followers" fill="#60a5fa" name="Followers" /></BarChart></ResponsiveContainer></div></CardContent>
-        </Card>
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle>Engagement Rate by Platform</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={engagementData}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="platform" tick={{ fill: "#737373", fontSize: 12 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="engagement" fill="#4ade80" name="Engagement %" /></BarChart></ResponsiveContainer></div></CardContent>
-        </Card>
-      </div>
-
-      {/* Platform Breakdown Table */}
-      <Card className="border-border bg-card">
-        <CardHeader><CardTitle>Platform Breakdown</CardTitle></CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[600px]">
-              <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="py-2 pr-4 font-medium">Platform</th>
-                  <th className="py-2 pr-4 font-medium">Followers</th>
-                  <th className="py-2 pr-4 font-medium">Impressions</th>
-                  <th className="py-2 font-medium">Engagement Rate</th>
-                </tr>
-              </thead>
-              <tbody>
-                {engagementData.map((row: any) => (
-                  <tr key={row.platform} className="border-b border-border/60 text-sm">
-                    <td className="py-3 pr-4 text-foreground font-medium flex items-center gap-2">
-                      <div className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[row.platform?.toLowerCase()] || "#666" }} />
-                      {row.platform}
-                    </td>
-                    <td className="py-3 pr-4 text-muted-foreground">{(row.followers || 0).toLocaleString()}</td>
-                    <td className="py-3 pr-4 text-muted-foreground">{(row.impressions || 0).toLocaleString()}</td>
-                    <td className="py-3 text-muted-foreground">{row.engagement || 0}%</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+          {/* Recent posts */}
+          <Card className="border-border bg-card">
+            <CardHeader><CardTitle className="text-sm">Recent posts</CardTitle></CardHeader>
+            <CardContent>
+              {posts.length === 0 ? (
+                <div className="py-8 text-center text-sm text-muted-foreground">No posts synced yet</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[640px]">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Platform</th>
+                        <th className="py-2 pr-4 font-medium">Published</th>
+                        <th className="py-2 pr-4 font-medium">Likes</th>
+                        <th className="py-2 pr-4 font-medium">Comments</th>
+                        <th className="py-2 pr-4 font-medium">Impressions</th>
+                        <th className="py-2 font-medium">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {posts.map((p) => (
+                        <tr key={`${p.postId}-${p.platform}`} className="border-b border-border/60 text-sm">
+                          <td className="py-3 pr-4 font-medium text-foreground">
+                            <span className="flex items-center gap-2">
+                              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[p.platform?.toLowerCase()] || "#666" }} />
+                              {p.platform}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4 text-muted-foreground">{p.publishedAt ? new Date(p.publishedAt).toLocaleDateString() : "—"}</td>
+                          <td className="py-3 pr-4 text-muted-foreground">{fmt(p.analytics.likes)}</td>
+                          <td className="py-3 pr-4 text-muted-foreground">{fmt(p.analytics.comments)}</td>
+                          <td className="py-3 pr-4 text-muted-foreground">{fmt(p.analytics.impressions)}</td>
+                          <td className="py-3">
+                            {p.syncStatus === "pending" ? (
+                              <span className="flex items-center gap-1 text-amber-500"><RefreshCw className="h-3 w-3 animate-spin" /> syncing</span>
+                            ) : p.syncStatus === "unavailable" ? (
+                              <span className="text-muted-foreground">unavailable</span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-emerald-500"><CheckCircle className="h-3 w-3" /> synced</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   )
 }
@@ -789,10 +1457,9 @@ function SocialAnalyticsTab() {
 // WHATSAPP TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function WhatsAppTab() {
+function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
   const [contacts, setContacts] = useState<any[]>([])
   const [broadcasts, setBroadcasts] = useState<any[]>([])
-  const [activeWhatsappTab, setActiveWhatsappTab] = useState<"contacts" | "broadcasts">("broadcasts")
   const [loading, setLoading] = useState(true)
   const [showCreateBroadcast, setShowCreateBroadcast] = useState(false)
   const [newBroadcast, setNewBroadcast] = useState({ name: "", content: "", template_name: "" })
@@ -840,17 +1507,7 @@ function WhatsAppTab() {
 
   return (
     <div className="space-y-6">
-      {/* Sub-tabs */}
-      <div className="flex items-center gap-2 border-b border-border pb-2">
-        <button onClick={() => setActiveWhatsappTab("broadcasts")} className={`px-4 py-2 text-sm font-medium rounded-t-lg ${activeWhatsappTab === "broadcasts" ? "bg-card text-foreground border border-border border-b-0 -mb-px" : "text-muted-foreground"}`}>
-          Broadcasts
-        </button>
-        <button onClick={() => setActiveWhatsappTab("contacts")} className={`px-4 py-2 text-sm font-medium rounded-t-lg ${activeWhatsappTab === "contacts" ? "bg-card text-foreground border border-border border-b-0 -mb-px" : "text-muted-foreground"}`}>
-          Contacts ({contacts.length})
-        </button>
-      </div>
-
-      {activeWhatsappTab === "broadcasts" && (
+      {view === "broadcasts" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{broadcasts.length} broadcasts</p>
@@ -910,7 +1567,7 @@ function WhatsAppTab() {
         </div>
       )}
 
-      {activeWhatsappTab === "contacts" && (
+      {view === "contacts" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{contacts.length} contacts</p>
           {loading ? (
@@ -944,6 +1601,35 @@ function WhatsAppTab() {
         </div>
       )}
     </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WHATSAPP PLACEHOLDER (Templates / Flows / Groups — not yet backed)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function WhatsAppComingSoon({
+  title,
+  description,
+  icon: Icon,
+}: {
+  title: string
+  description: string
+  icon: IconType
+}) {
+  return (
+    <Card className="border-dashed border-border bg-card/40">
+      <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+          <Icon className="h-6 w-6 text-primary" />
+        </div>
+        <div className="space-y-1">
+          <p className="text-base font-semibold text-foreground">{title}</p>
+          <Badge variant="outline" className="border-amber-500/40 text-amber-500">Coming soon</Badge>
+        </div>
+        <p className="max-w-md text-sm text-muted-foreground">{description}</p>
+      </CardContent>
+    </Card>
   )
 }
 

@@ -660,10 +660,108 @@ def _ensure_marketing_tables(engine) -> None:
         created_at TIMESTAMPTZ DEFAULT now()
     );
 
+    -- ── Zernio analytics (DB-backed dashboards, filled by the sync worker) ──
+    -- Maps each tenant (customer) to its Zernio profile. The worker iterates
+    -- rows here; dashboards read the tables below and never call Zernio live.
+    CREATE TABLE IF NOT EXISTS marketing_tenant_profiles (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        zernio_profile_id VARCHAR(64) NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    -- Account → tenant map (the mapping webhooks route on). Written by the
+    -- connect flow and by account.connected / account.disconnected events.
+    CREATE TABLE IF NOT EXISTS marketing_connected_accounts (
+        account_id VARCHAR(128) PRIMARY KEY,
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        profile_id VARCHAR(64) NOT NULL,
+        platform VARCHAR(40),
+        username VARCHAR(255),
+        status VARCHAR(20) DEFAULT 'connected',
+        issues JSONB DEFAULT '[]',
+        connected_at TIMESTAMPTZ DEFAULT now(),
+        disconnected_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS marketing_post_analytics (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        profile_id VARCHAR(64) NOT NULL,
+        post_id VARCHAR(128) NOT NULL,
+        platform VARCHAR(40) NOT NULL,
+        published_at TIMESTAMPTZ,
+        platform_post_url TEXT,
+        source VARCHAR(20) DEFAULT 'all',
+        likes INT DEFAULT 0,
+        comments INT DEFAULT 0,
+        impressions INT DEFAULT 0,
+        reach INT DEFAULT 0,
+        shares INT DEFAULT 0,
+        saves INT DEFAULT 0,
+        clicks INT DEFAULT 0,
+        views INT DEFAULT 0,
+        sync_status VARCHAR(20) DEFAULT 'synced',
+        raw JSONB DEFAULT '{}',
+        last_updated TIMESTAMPTZ DEFAULT now(),
+        UNIQUE (tenant_id, post_id, platform)
+    );
+
+    CREATE TABLE IF NOT EXISTS marketing_daily_metrics (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        profile_id VARCHAR(64) NOT NULL,
+        metric_date DATE NOT NULL,
+        attribution VARCHAR(10) NOT NULL DEFAULT 'publish',
+        platform VARCHAR(40) NOT NULL DEFAULT 'all',
+        post_count INT DEFAULT 0,
+        impressions INT DEFAULT 0,
+        reach INT DEFAULT 0,
+        likes INT DEFAULT 0,
+        comments INT DEFAULT 0,
+        shares INT DEFAULT 0,
+        saves INT DEFAULT 0,
+        clicks INT DEFAULT 0,
+        views INT DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE (tenant_id, metric_date, attribution, platform)
+    );
+
+    CREATE TABLE IF NOT EXISTS marketing_follower_stats (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        profile_id VARCHAR(64) NOT NULL,
+        account_id VARCHAR(128) NOT NULL,
+        platform VARCHAR(40),
+        stat_date DATE NOT NULL,
+        granularity VARCHAR(10) NOT NULL DEFAULT 'daily',
+        followers INT DEFAULT 0,
+        growth INT DEFAULT 0,
+        updated_at TIMESTAMPTZ DEFAULT now(),
+        UNIQUE (tenant_id, account_id, stat_date, granularity)
+    );
+
+    CREATE TABLE IF NOT EXISTS marketing_analytics_sync_state (
+        tenant_id UUID PRIMARY KEY REFERENCES tenants(id),
+        profile_id VARCHAR(64) NOT NULL,
+        last_hot_sync TIMESTAMPTZ,
+        last_longtail_sync TIMESTAMPTZ,
+        last_follower_sync TIMESTAMPTZ,
+        backfilled_at TIMESTAMPTZ,
+        last_error TEXT,
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+
     CREATE INDEX IF NOT EXISTS idx_mkt_campaigns_tenant ON marketing_campaigns(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_batches_campaign ON marketing_email_batches(campaign_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_events_batch ON marketing_email_events(batch_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_lead_scores_tenant ON marketing_lead_scores(tenant_id, contact_id);
+    CREATE INDEX IF NOT EXISTS idx_mkt_post_analytics_tenant ON marketing_post_analytics(tenant_id, published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_mkt_daily_metrics_tenant ON marketing_daily_metrics(tenant_id, attribution, metric_date);
+    CREATE INDEX IF NOT EXISTS idx_mkt_follower_stats_tenant ON marketing_follower_stats(tenant_id, granularity, stat_date);
+    CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_tenant ON marketing_connected_accounts(tenant_id);
+    CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_profile ON marketing_connected_accounts(profile_id);
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
@@ -1354,22 +1452,28 @@ async def delete_social_account(
 @app.get("/social/accounts/connect/{platform}", response_model=OAuthUrlResponse)
 async def get_oauth_url(
     platform: str,
+    redirect_url: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Get the OAuth URL for a given platform."""
-    # In production, this would generate a real OAuth URL with state, redirect_uri, etc.
-    oauth_urls = {
-        "twitter": f"https://twitter.com/i/oauth2/authorize?response_type=code&client_id=OAUTH_CLIENT_ID&redirect_uri=https://api.omnidome.io/social/callback/twitter&scope=tweet.read tweet.write users.read offline.access&state={tenant_id}",
-        "instagram": f"https://api.instagram.com/oauth/authorize?client_id=OAUTH_CLIENT_ID&redirect_uri=https://api.omnidome.io/social/callback/instagram&scope=basic,comments,relationships&response_type=code&state={tenant_id}",
-        "facebook": f"https://www.facebook.com/v18.0/dialog/oauth?client_id=OAUTH_CLIENT_ID&redirect_uri=https://api.omnidome.io/social/callback/facebook&scope=pages_manage_posts,pages_read_engagement,pages_messaging&state={tenant_id}",
-        "linkedin": f"https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=OAUTH_CLIENT_ID&redirect_uri=https://api.omnidome.io/social/callback/linkedin&scope=r_liteprofile,r_basicprofile,w_member_social&state={tenant_id}",
-        "tiktok": f"https://www.tiktok.com/v2/auth/authorize?client_key=OAUTH_CLIENT_ID&redirect_uri=https://api.omnidome.io/social/callback/tiktok&scope=user.info.basic,video.publish&response_type=code&state={tenant_id}",
-    }
-    auth_url = oauth_urls.get(platform)
+    """Get the OAuth connect URL for a platform via Zernio's hosted flow, scoped
+    to THIS tenant's profile (auto-created on first connect). The account then
+    lands in the customer's own profile — the profile-per-customer model.
+    """
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = await _ensure_tenant_profile(tenant_id)
+    if not profile_id:
+        raise HTTPException(status_code=503, detail="Could not resolve a Zernio profile for this tenant")
+    try:
+        auth_url = await client.get_connect_url(platform.lower(), profile_id=profile_id, redirect_url=redirect_url)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Zernio connect URL failed for {platform}: {e}")
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
     if not auth_url:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported platform: {platform}. Supported: {', '.join(oauth_urls.keys())}",
+            status_code=502,
+            detail=f"Zernio returned no connect URL for '{platform}' (unsupported platform?)",
         )
     return OAuthUrlResponse(platform=platform, auth_url=auth_url)
 
@@ -2696,8 +2800,508 @@ async def zernio_status():
     return {
         "configured": bool(os.getenv("ZERNIO_API_KEY")),
         "webhook_secret_set": bool(os.getenv("ZERNIO_WEBHOOK_SECRET")),
+        "profile_ready": bool(os.getenv("ZERNIO_PROFILE_ID")),
         "base_url": os.getenv("ZERNIO_BASE_URL", "https://zernio.com/api/v1"),
     }
+
+
+# Catalog of Zernio-supported platforms — drives the Connections UI. Zernio
+# owns each platform's OAuth app; connecting one goes through its hosted flow.
+ZERNIO_CONNECTORS: List[Dict[str, Any]] = [
+    {"id": "tiktok", "label": "TikTok", "category": "Social"},
+    {"id": "instagram", "label": "Instagram", "category": "Social"},
+    {"id": "facebook", "label": "Facebook", "category": "Social"},
+    {"id": "youtube", "label": "YouTube", "category": "Social"},
+    {"id": "linkedin", "label": "LinkedIn", "category": "Social"},
+    {"id": "twitter", "label": "Twitter/X", "category": "Social"},
+    {"id": "threads", "label": "Threads", "category": "Social"},
+    {"id": "bluesky", "label": "Bluesky", "category": "Social"},
+    {"id": "pinterest", "label": "Pinterest", "category": "Social"},
+    {"id": "reddit", "label": "Reddit", "category": "Social"},
+    {"id": "googlebusiness", "label": "Google Business", "category": "Social"},
+    {"id": "snapchat", "label": "Snapchat", "category": "Social", "coming_soon": True},
+    {"id": "telegram", "label": "Telegram", "category": "Messaging"},
+    {"id": "whatsapp", "label": "WhatsApp", "category": "Messaging"},
+    {"id": "shopify", "label": "Shopify", "category": "Commerce"},
+]
+
+
+@app.get("/social/zernio/connectors", response_model=Dict[str, Any])
+async def zernio_connectors(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Platform catalog + this tenant's connected state, for the Connections UI.
+
+    Connected state comes from THIS tenant's account map (per-customer), not the
+    team-wide account list — each customer sees only their own connections.
+    """
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    connected_by_platform: Dict[str, List[Dict[str, Any]]] = {}
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT account_id, platform, username, status FROM marketing_connected_accounts
+                WHERE tenant_id = :tid AND status <> 'disconnected'
+            """),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    for acct in rows:
+        p = str(acct["platform"] or "").lower()
+        connected_by_platform.setdefault(p, []).append({
+            "id": acct["account_id"], "name": acct["username"], "username": acct["username"],
+            "status": acct["status"],
+        })
+
+    client = get_zernio_client()
+    configured = client is not None
+    # A tenant is connectable once Zernio is configured — its profile is created
+    # on demand at connect time, so we no longer require a preset profile env.
+    profile_ready = bool(_get_tenant_profile(tenant_id)) or configured
+    connectors = [
+        {
+            **c,
+            "connected": bool(connected_by_platform.get(c["id"])),
+            "accounts": connected_by_platform.get(c["id"], []),
+        }
+        for c in ZERNIO_CONNECTORS
+    ]
+    return {
+        "configured": configured,
+        "profile_ready": profile_ready,
+        "connectable": configured and profile_ready,
+        "connectors": connectors,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DB-BACKED ANALYTICS  — dashboards read here; the sync worker fills the tables.
+# These endpoints NEVER call Zernio (per the profile-per-customer model).
+# ═══════════════════════════════════════════════════════════════════════════
+
+_METRIC_COLS = ["impressions", "reach", "likes", "comments", "shares", "saves", "clicks", "views"]
+
+
+class TenantProfileIn(BaseModel):
+    zernio_profile_id: str
+
+
+@app.put("/social/analytics/profile", response_model=Dict[str, Any])
+async def set_tenant_profile(
+    body: TenantProfileIn,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Map this tenant (customer) to its Zernio profile — the id the sync
+    worker filters every analytics pull on."""
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO marketing_tenant_profiles (tenant_id, zernio_profile_id)
+                VALUES (:tid, :pid)
+                ON CONFLICT (tenant_id)
+                DO UPDATE SET zernio_profile_id = EXCLUDED.zernio_profile_id, updated_at = now()
+            """),
+            {"tid": str(tenant_id), "pid": body.zernio_profile_id},
+        )
+    return {"tenant_id": str(tenant_id), "zernio_profile_id": body.zernio_profile_id}
+
+
+@app.get("/social/analytics/overview", response_model=Dict[str, Any])
+async def analytics_overview(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        t = conn.execute(
+            text("""
+                SELECT COUNT(*) AS total_posts,
+                       COALESCE(SUM(likes),0) AS likes, COALESCE(SUM(comments),0) AS comments,
+                       COALESCE(SUM(impressions),0) AS impressions, COALESCE(SUM(reach),0) AS reach,
+                       COALESCE(SUM(shares),0) AS shares, COALESCE(SUM(clicks),0) AS clicks,
+                       COUNT(*) FILTER (WHERE sync_status = 'pending') AS pending_count
+                FROM marketing_post_analytics WHERE tenant_id = :tid
+            """),
+            {"tid": str(tenant_id)},
+        ).mappings().first() or {}
+        state = conn.execute(
+            text("SELECT * FROM marketing_analytics_sync_state WHERE tenant_id = :tid"),
+            {"tid": str(tenant_id)},
+        ).mappings().first()
+    last_sync = state.get("last_hot_sync") if state else None
+    return {
+        "overview": {
+            "totalPosts": int(t.get("total_posts", 0)),
+            "likes": int(t.get("likes", 0)),
+            "comments": int(t.get("comments", 0)),
+            "impressions": int(t.get("impressions", 0)),
+            "reach": int(t.get("reach", 0)),
+            "shares": int(t.get("shares", 0)),
+            "clicks": int(t.get("clicks", 0)),
+            "lastSync": last_sync.isoformat() if last_sync else None,
+            "dataStaleness": {"pendingCount": int(t.get("pending_count", 0))},
+            "lastError": state.get("last_error") if state else None,
+        }
+    }
+
+
+@app.get("/social/analytics/daily", response_model=Dict[str, Any])
+async def analytics_daily(
+    attribution: str = Query("publish"),
+    days: int = Query(30, ge=1, le=366),
+    platform: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    plat = platform or "all"
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT metric_date, post_count, impressions, reach, likes, comments, shares, saves, clicks, views
+                FROM marketing_daily_metrics
+                WHERE tenant_id = :tid AND attribution = :attr AND platform = :plat
+                  AND metric_date >= (CURRENT_DATE - make_interval(days => :days))
+                ORDER BY metric_date
+            """),
+            {"tid": str(tenant_id), "attr": attribution, "plat": plat, "days": days},
+        ).mappings().all()
+    return {
+        "attribution": attribution,
+        "platform": plat,
+        "dailyData": [
+            {
+                "date": r["metric_date"].isoformat(),
+                "postCount": r["post_count"],
+                "metrics": {k: r[k] for k in _METRIC_COLS},
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.get("/social/analytics/posts", response_model=Dict[str, Any])
+async def analytics_posts(
+    page: int = Query(1, ge=1),
+    limit: int = Query(50, ge=1, le=200),
+    platform: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    where = "tenant_id = :tid"
+    params: Dict[str, Any] = {"tid": str(tenant_id), "limit": limit, "offset": (page - 1) * limit}
+    if platform:
+        where += " AND platform = :plat"
+        params["plat"] = platform
+    with engine.connect() as conn:
+        total = conn.execute(text(f"SELECT COUNT(*) FROM marketing_post_analytics WHERE {where}"), params).scalar() or 0
+        rows = conn.execute(
+            text(f"""
+                SELECT post_id, platform, published_at, platform_post_url, sync_status, last_updated,
+                       likes, comments, impressions, reach, shares, saves, clicks, views
+                FROM marketing_post_analytics WHERE {where}
+                ORDER BY published_at DESC NULLS LAST
+                LIMIT :limit OFFSET :offset
+            """),
+            params,
+        ).mappings().all()
+    return {
+        "posts": [
+            {
+                "postId": r["post_id"],
+                "platform": r["platform"],
+                "publishedAt": r["published_at"].isoformat() if r["published_at"] else None,
+                "url": r["platform_post_url"],
+                "syncStatus": r["sync_status"],
+                "lastUpdated": r["last_updated"].isoformat() if r["last_updated"] else None,
+                "analytics": {k: r[k] for k in ["likes", "comments", "impressions", "reach", "shares", "saves", "clicks", "views"]},
+            }
+            for r in rows
+        ],
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": int(total),
+            "pages": max(1, (int(total) + limit - 1) // limit),
+        },
+    }
+
+
+@app.get("/social/analytics/followers", response_model=Dict[str, Any])
+async def analytics_followers(
+    granularity: str = Query("daily"),
+    days: int = Query(90, ge=1, le=366),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT stat_date, platform, followers, growth
+                FROM marketing_follower_stats
+                WHERE tenant_id = :tid AND granularity = :g
+                  AND stat_date >= (CURRENT_DATE - make_interval(days => :days))
+                ORDER BY stat_date
+            """),
+            {"tid": str(tenant_id), "g": granularity, "days": days},
+        ).mappings().all()
+    return {
+        "granularity": granularity,
+        "series": [
+            {"date": r["stat_date"].isoformat(), "platform": r["platform"], "followers": r["followers"], "growth": r["growth"]}
+            for r in rows
+        ],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PLATFORM  — one Zernio profile per tenant, account→tenant map, health,
+# usage/cost per customer, scoped keys, offboarding. (Zernio "Build a Platform")
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _get_tenant_profile(tenant_id: uuid.UUID) -> Optional[str]:
+    """Read the tenant's Zernio profile id (no creation). Falls back to the
+    shared ZERNIO_PROFILE_ID env for single-profile setups."""
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT zernio_profile_id FROM marketing_tenant_profiles WHERE tenant_id = :tid"),
+            {"tid": str(tenant_id)},
+        ).first()
+    if row:
+        return row[0]
+    return os.getenv("ZERNIO_PROFILE_ID") or None
+
+
+async def _ensure_tenant_profile(tenant_id: uuid.UUID) -> Optional[str]:
+    """Get-or-create the tenant's Zernio profile. On a 409 name conflict, reuse
+    details.existingProfileId. Returns None when Zernio isn't configured."""
+    import json as _json
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT zernio_profile_id FROM marketing_tenant_profiles WHERE tenant_id = :tid"),
+            {"tid": str(tenant_id)},
+        ).first()
+    if row:
+        return row[0]
+
+    client = get_zernio_client()
+    if client is None:
+        return None
+    from services.marketing.zernio_client import ZernioError
+
+    profile_id: Optional[str] = None
+    try:
+        created = await client.create_profile(name=str(tenant_id), description=f"OmniDome tenant {tenant_id}")
+        profile_id = ((created or {}).get("profile") or {}).get("_id") or (created or {}).get("_id")
+    except ZernioError as e:
+        if e.status == 409:
+            try:
+                profile_id = (_json.loads(e.message).get("details") or {}).get("existingProfileId")
+            except Exception:  # noqa: BLE001
+                profile_id = None
+        if not profile_id:
+            raise
+    if not profile_id:
+        return None
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO marketing_tenant_profiles (tenant_id, zernio_profile_id)
+                VALUES (:tid, :pid)
+                ON CONFLICT (tenant_id) DO UPDATE SET zernio_profile_id = EXCLUDED.zernio_profile_id, updated_at = now()
+            """),
+            {"tid": str(tenant_id), "pid": profile_id},
+        )
+    return profile_id
+
+
+def _upsert_connected_account(tenant_id: str, profile_id: str, acct: Dict[str, Any], status: str = "connected") -> None:
+    """Write/refresh the account→tenant map row (from connect, webhook or health)."""
+    import json as _json
+    account_id = str(acct.get("accountId") or acct.get("_id") or acct.get("id") or "")
+    if not account_id:
+        return
+    engine = get_engine()
+    disconnected = status == "disconnected"
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO marketing_connected_accounts
+                    (account_id, tenant_id, profile_id, platform, username, status, issues, disconnected_at, updated_at)
+                VALUES (:aid, :tid, :pid, :platform, :username, :status, :issues,
+                        CASE WHEN :disc THEN now() ELSE NULL END, now())
+                ON CONFLICT (account_id) DO UPDATE SET
+                    tenant_id = EXCLUDED.tenant_id, profile_id = EXCLUDED.profile_id,
+                    platform = COALESCE(EXCLUDED.platform, marketing_connected_accounts.platform),
+                    username = COALESCE(EXCLUDED.username, marketing_connected_accounts.username),
+                    status = EXCLUDED.status, issues = EXCLUDED.issues,
+                    disconnected_at = CASE WHEN :disc THEN now() ELSE NULL END, updated_at = now()
+            """),
+            {
+                "aid": account_id, "tid": tenant_id, "pid": profile_id,
+                "platform": acct.get("platform"), "username": acct.get("username"),
+                "status": status, "issues": _json.dumps(acct.get("issues") or []), "disc": disconnected,
+            },
+        )
+
+
+def _tenant_for_account(account_id: str) -> Optional[str]:
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT tenant_id FROM marketing_connected_accounts WHERE account_id = :aid"),
+            {"aid": account_id},
+        ).first()
+    return str(row[0]) if row else None
+
+
+def _tenant_for_profile(profile_id: str) -> Optional[str]:
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT tenant_id FROM marketing_tenant_profiles WHERE zernio_profile_id = :pid"),
+            {"pid": profile_id},
+        ).first()
+    return str(row[0]) if row else None
+
+
+@app.post("/social/profile/ensure", response_model=Dict[str, Any])
+async def ensure_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Create this tenant's Zernio profile if it doesn't have one yet, and
+    return the id. Idempotent; safe to call on every login/onboarding."""
+    pid = await _ensure_tenant_profile(tenant_id)
+    if not pid:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    return {"tenant_id": str(tenant_id), "zernio_profile_id": pid}
+
+
+@app.get("/social/connected-accounts", response_model=Dict[str, Any])
+async def list_connected_accounts(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Accounts connected into this tenant's profile (from the map)."""
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT account_id, profile_id, platform, username, status, issues, connected_at
+                FROM marketing_connected_accounts WHERE tenant_id = :tid
+                ORDER BY connected_at DESC
+            """),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    return {"accounts": [dict(r) for r in rows]}
+
+
+@app.get("/social/accounts-health", response_model=Dict[str, Any])
+async def accounts_health(
+    status_filter: Optional[str] = Query(None, alias="status"),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Live token health for the tenant's accounts. Refreshes the map's status
+    so the dashboard can prompt reconnection."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = _get_tenant_profile(tenant_id)
+    if not profile_id:
+        return {"summary": {"total": 0, "needsReconnect": 0}, "accounts": []}
+    try:
+        health = await client.get_accounts_health(profile_id, status=status_filter)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Zernio accounts health failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+    for acct in (health or {}).get("accounts", []):
+        st = "error" if acct.get("needsReconnect") else acct.get("status", "connected")
+        _upsert_connected_account(str(tenant_id), profile_id, acct, status=st)
+    return health
+
+
+@app.get("/social/usage", response_model=Dict[str, Any])
+async def social_usage(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """This tenant's slice of the Zernio bill for the current cycle — the
+    attribution group for its profile."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = _get_tenant_profile(tenant_id)
+    try:
+        usage = await client.get_usage(range_="cycle", group_by="profile")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+    groups = ((usage or {}).get("attribution") or {}).get("groups") or []
+    mine = next((g for g in groups if g.get("profileId") == profile_id or g.get("id") == profile_id), None)
+    return {"profile_id": profile_id, "usage": mine, "restricted": ((usage or {}).get("attribution") or {}).get("restricted", False)}
+
+
+class ScopedKeyIn(BaseModel):
+    name: str
+    permission: Optional[str] = None  # "read" for read-only
+    disabled_resource_groups: Optional[List[str]] = None
+    expires_in: Optional[int] = None  # days
+
+
+@app.post("/social/api-keys", response_model=Dict[str, Any])
+async def create_scoped_key(
+    body: ScopedKeyIn,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Mint a Zernio API key scoped to this tenant's profile (access control;
+    the rate limit still belongs to the team)."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = await _ensure_tenant_profile(tenant_id)
+    if not profile_id:
+        raise HTTPException(status_code=503, detail="Could not resolve a Zernio profile for this tenant")
+    try:
+        result = await client.create_api_key(
+            name=body.name, scope="profiles", profile_ids=[profile_id],
+            permission=body.permission, disabled_resource_groups=body.disabled_resource_groups,
+            expires_in=body.expires_in,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+    return result
+
+
+@app.post("/social/profile/offboard", response_model=Dict[str, Any])
+async def offboard_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Disconnect the tenant's accounts, then delete its Zernio profile, then
+    clear local rows. Active accounts block profile deletion, so they go first."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = _get_tenant_profile(tenant_id)
+    if not profile_id:
+        return {"status": "nothing_to_offboard"}
+    engine = get_engine()
+    with engine.connect() as conn:
+        account_ids = [
+            r[0] for r in conn.execute(
+                text("SELECT account_id FROM marketing_connected_accounts WHERE tenant_id = :tid AND status <> 'disconnected'"),
+                {"tid": str(tenant_id)},
+            ).all()
+        ]
+    disconnected = 0
+    for aid in account_ids:
+        try:
+            await client.disconnect_account(aid)
+            disconnected += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"offboard: disconnect {aid} failed: {e}")
+    try:
+        await client.delete_profile(profile_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Profile delete failed (disconnect accounts first?): {e}")
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM marketing_connected_accounts WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
+        conn.execute(text("DELETE FROM marketing_tenant_profiles WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
+    return {"status": "offboarded", "disconnected_accounts": disconnected, "profile_id": profile_id}
 
 
 @app.get("/social/zernio/accounts", response_model=List[Dict[str, Any]])
@@ -2803,11 +3407,6 @@ async def receive_zernio_webhook(
       Header: X-Tenant-Id: <tenant uuid>  (tenant-scoped ingestion)
       Events: message.received, comment.received, mention.received
     """
-    tenant_raw = request.headers.get("X-Tenant-Id", "")
-    try:
-        tenant_id = uuid.UUID(str(tenant_raw))
-    except (ValueError, AttributeError):
-        raise HTTPException(status_code=401, detail="Missing or invalid X-Tenant-Id")
     raw_body = await request.body()
     signature = request.headers.get("X-Zernio-Signature", "")
     zernio_event = request.headers.get("X-Zernio-Event", "")
@@ -2838,10 +3437,53 @@ async def receive_zernio_webhook(
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     # Real Zernio payload keys the event as "event" and nests platform under
-    # "message"; read both through the shared extractor so the stored event
-    # metadata and the reaction branch below match the normalizer.
+    # "message"; read both through the shared extractor.
     from services.marketing.chat_webhooks import extract_event_meta
     event_type, platform = extract_event_meta(payload)
+
+    header_tenant = request.headers.get("X-Tenant-Id", "")
+
+    # ── Account lifecycle: keep the account→tenant map current, then return.
+    # Routed by profileId (account events carry it), header as a fallback.
+    if event_type in ("account.connected", "account.disconnected"):
+        acct = payload.get("account") or {}
+        pid = acct.get("profileId") or payload.get("profileId")
+        atid = (_tenant_for_profile(str(pid)) if pid else None) or (header_tenant or None)
+        if atid and pid:
+            _upsert_connected_account(
+                str(atid), str(pid), acct,
+                status="disconnected" if event_type == "account.disconnected" else "connected",
+            )
+            return {"status": "received", "event": event_type,
+                    "account_id": str(acct.get("accountId") or acct.get("_id") or "")}
+        logger.warning("account event %s unrouted (profileId=%s)", event_type, pid)
+        return {"status": "unrouted", "event": event_type}
+
+    # ── Content events (message/comment/post): resolve the tenant. Prefer the
+    # X-Tenant-Id header (per-subscription setups); otherwise map the accountId
+    # in the payload back to a customer (per-team single-endpoint setups).
+    tenant_id: Optional[uuid.UUID] = None
+    if header_tenant:
+        try:
+            tenant_id = uuid.UUID(str(header_tenant))
+        except (ValueError, AttributeError):
+            tenant_id = None
+    if tenant_id is None:
+        msg = payload.get("message") or {}
+        acct_id = (msg.get("account") or {}).get("id") or msg.get("accountId")
+        if not acct_id:
+            plats = payload.get("platforms") or (payload.get("post") or {}).get("platforms") or []
+            if plats and isinstance(plats[0], dict):
+                acct_id = plats[0].get("accountId")
+        if acct_id:
+            resolved = _tenant_for_account(str(acct_id))
+            if resolved:
+                tenant_id = uuid.UUID(resolved)
+    if tenant_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not route webhook to a tenant (no X-Tenant-Id and no known accountId)",
+        )
 
     # 1. Store raw event.
     async with get_session() as session:
