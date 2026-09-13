@@ -26,7 +26,7 @@ import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
   listAdCampaigns, listCommentAutomations,
-  createSocialPost, publishSocialPost, crossPost, createWhatsAppBroadcast,
+  createSocialPost, publishSocialPost, crossPost, deleteSocialPost, createWhatsAppBroadcast,
   sendWhatsAppBroadcast, createCommentAutomation, replyToInboxMessage,
   archiveInboxMessage, markInboxRead, createAdCampaign, updateAdCampaign,
   listTraditionalCampaigns, type TraditionalCampaign,
@@ -89,7 +89,7 @@ const statusColor: Record<string, string> = {
 
 type MarketingTab =
   | "connections"
-  | "campaigns" | "social-composer" | "social-inbox" | "social-analytics"
+  | "campaigns" | "social-composer" | "social-scheduled" | "social-inbox" | "social-analytics"
   | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
   | "email-templates" | "email-compose"
   | "ads" | "automations" | "traditional"
@@ -117,6 +117,7 @@ const MARKETING_NAV: NavEntry[] = [
   {
     id: "social", label: "Social", icon: Share2, children: [
       { key: "social-composer", label: "Composer", icon: Send },
+      { key: "social-scheduled", label: "Scheduled", icon: Calendar },
       { key: "social-inbox", label: "Inbox", icon: MessageSquare },
       { key: "social-analytics", label: "Analytics", icon: BarChart3 },
     ],
@@ -238,6 +239,7 @@ export function MarketingModule() {
           {activeTab === "connections" && <ConnectionsTab />}
           {activeTab === "campaigns" && <CampaignsTab />}
           {activeTab === "social-composer" && <SocialComposerTab />}
+          {activeTab === "social-scheduled" && <ScheduledPostsTab />}
           {activeTab === "social-inbox" && <SocialInboxTab />}
           {activeTab === "social-analytics" && <SocialAnalyticsTab />}
           {activeTab === "whatsapp-broadcasts" && <WhatsAppTab view="broadcasts" />}
@@ -1124,12 +1126,102 @@ function CampaignsTab() {
 // SOCIAL COMPOSER TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
+function ScheduledPostsTab() {
+  const [posts, setPosts] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [cancelling, setCancelling] = useState<string | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const data = await listSocialPosts({ status: "scheduled" }).catch(() => [])
+      const list = (data || []).slice().sort(
+        (a: any, b: any) => new Date(a.scheduled_for || 0).getTime() - new Date(b.scheduled_for || 0).getTime(),
+      )
+      setPosts(list)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  const cancel = async (id: string) => {
+    setCancelling(id)
+    try { await deleteSocialPost(id); await load() }
+    catch (e) { console.error(e) }
+    finally { setCancelling(null) }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Scheduled posts</h3>
+          <p className="text-sm text-muted-foreground">{loading ? "Loading…" : `${posts.length} upcoming`}</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={load} disabled={loading}>
+          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
+        </Button>
+      </div>
+
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      ) : posts.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
+          <Calendar className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="font-medium text-foreground">Nothing scheduled</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            In the <span className="text-foreground">Composer</span>, pick &ldquo;Schedule for later&rdquo; and choose a date/time — queued posts appear here.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {posts.map((post: any) => (
+            <Card key={post.id} className="border-border bg-card">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-cyan-500/40 text-cyan-400">
+                        <Clock className="mr-1 h-3 w-3" />
+                        {post.scheduled_for ? new Date(post.scheduled_for).toLocaleString() : "—"}
+                      </Badge>
+                      {(post.platforms || []).map((p: string) => (
+                        <span key={p} className="rounded-full border px-2 py-0.5 text-xs" style={{ borderColor: (platformColors[p] || "#666") + "40", color: platformColors[p] || "#999" }}>{p}</span>
+                      ))}
+                    </div>
+                    <p className="line-clamp-2 text-sm text-foreground">{post.content}</p>
+                  </div>
+                  <Button
+                    size="sm" variant="ghost"
+                    className="shrink-0 text-red-400 hover:text-red-300"
+                    disabled={cancelling === post.id}
+                    onClick={() => cancel(post.id)}
+                  >
+                    {cancelling === post.id ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <><Trash2 className="mr-1 h-3.5 w-3.5" /> Cancel</>}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SocialComposerTab() {
   const [accounts, setAccounts] = useState<any[]>([])
   const [posts, setPosts] = useState<any[]>([])
   const [content, setContent] = useState("")
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
-  const [scheduleMinutes, setScheduleMinutes] = useState(60)
+  // Default the picker to ~1 hour ahead, formatted for <input type="datetime-local">.
+  const defaultScheduleAt = () => {
+    const d = new Date(Date.now() + 60 * 60000 - new Date().getTimezoneOffset() * 60000)
+    return d.toISOString().slice(0, 16)
+  }
+  const [scheduleAt, setScheduleAt] = useState(defaultScheduleAt)
   const [publishNow, setPublishNow] = useState(true)
   const [loading, setLoading] = useState(true)
 
@@ -1159,13 +1251,17 @@ function SocialComposerTab() {
     )
   }
 
+  const scheduledFor = () => new Date(scheduleAt).toISOString()
+  const scheduleMinutesFromNow = () => Math.max(1, Math.round((new Date(scheduleAt).getTime() - Date.now()) / 60000))
+  const scheduleInvalid = !publishNow && (!scheduleAt || new Date(scheduleAt).getTime() <= Date.now())
+
   const handlePublish = async () => {
-    if (!content.trim() || selectedPlatforms.length === 0) return
+    if (!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid) return
     try {
       if (publishNow) {
         await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "published" })
       } else {
-        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "scheduled", scheduled_for: new Date(Date.now() + scheduleMinutes * 60000).toISOString() })
+        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "scheduled", scheduled_for: scheduledFor() })
       }
       setContent("")
       setSelectedPlatforms([])
@@ -1176,9 +1272,9 @@ function SocialComposerTab() {
   }
 
   const handleCrossPost = async () => {
-    if (!content.trim() || selectedPlatforms.length === 0) return
+    if (!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid) return
     try {
-      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: publishNow ? undefined : scheduleMinutes })
+      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: publishNow ? undefined : scheduleMinutesFromNow() })
       setContent("")
       setSelectedPlatforms([])
       loadData()
@@ -1228,24 +1324,41 @@ function SocialComposerTab() {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" checked={publishNow} onChange={() => setPublishNow(true)} className="accent-cyan-500" />
-                Publish Now
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="radio" checked={!publishNow} onChange={() => setPublishNow(false)} className="accent-cyan-500" />
-                Schedule
-              </label>
+            <div className="space-y-2">
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="radio" checked={publishNow} onChange={() => setPublishNow(true)} className="accent-cyan-500" />
+                  Publish now
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="radio" checked={!publishNow} onChange={() => setPublishNow(false)} className="accent-cyan-500" />
+                  <Calendar className="h-4 w-4" /> Schedule for later
+                </label>
+              </div>
               {!publishNow && (
-                <Input type="number" value={scheduleMinutes} onChange={(e) => setScheduleMinutes(Number(e.target.value))} className="w-24" placeholder="min" />
+                <div>
+                  <Input
+                    type="datetime-local"
+                    value={scheduleAt}
+                    min={defaultScheduleAt()}
+                    onChange={(e) => setScheduleAt(e.target.value)}
+                    className="w-full sm:w-64"
+                  />
+                  {scheduleInvalid ? (
+                    <p className="mt-1 text-xs text-amber-500">Pick a date and time in the future.</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Goes out {new Date(scheduleAt).toLocaleString()} · appears under <span className="text-foreground">Scheduled</span>.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
             <div className="flex gap-2">
-              <Button onClick={handlePublish} disabled={!content.trim() || selectedPlatforms.length === 0}>
+              <Button onClick={handlePublish} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid}>
                 <Send className="mr-2 h-4 w-4" /> {publishNow ? "Publish" : "Schedule"}
               </Button>
-              <Button variant="outline" onClick={handleCrossPost} disabled={!content.trim() || selectedPlatforms.length === 0}>
+              <Button variant="outline" onClick={handleCrossPost} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid}>
                 <Copy className="mr-2 h-4 w-4" /> Cross-Post
               </Button>
             </div>
