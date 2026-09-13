@@ -32,6 +32,7 @@ import {
   listTraditionalCampaigns, type TraditionalCampaign,
   listConnectors, connectSocialAccount, type MarketingConnector,
   getAccountsHealth, type AccountHealth,
+  getSocialUsage, createScopedKey, offboardProfile,
   listEmailTemplates, createEmailTemplate, sendEmailBatch, type EmailTemplate,
   getAnalyticsOverview, getAnalyticsDaily, getAnalyticsPosts,
   type AnalyticsOverview, type DailyMetricPoint, type AnalyticsPostRow,
@@ -92,6 +93,7 @@ type MarketingTab =
   | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
   | "email-templates" | "email-compose"
   | "ads" | "automations" | "traditional"
+  | "platform-usage" | "platform-keys" | "platform-offboard"
 
 type IconType = React.ComponentType<{ className?: string }>
 type NavLeaf = { key: MarketingTab; label: string; icon: IconType }
@@ -135,6 +137,13 @@ const MARKETING_NAV: NavEntry[] = [
     ],
   },
   { key: "automations", label: "Automations", icon: Zap },
+  {
+    id: "platform", label: "Platform", icon: Settings, children: [
+      { key: "platform-usage", label: "Usage & Cost", icon: DollarSign },
+      { key: "platform-keys", label: "API Keys", icon: Hash },
+      { key: "platform-offboard", label: "Offboarding", icon: Trash2 },
+    ],
+  },
 ]
 
 export function MarketingModule() {
@@ -258,6 +267,9 @@ export function MarketingModule() {
           {activeTab === "email-compose" && <EmailComposeTab />}
           {activeTab === "ads" && <AdsTab />}
           {activeTab === "automations" && <AutomationsTab />}
+          {activeTab === "platform-usage" && <UsageTab />}
+          {activeTab === "platform-keys" && <ApiKeysTab />}
+          {activeTab === "platform-offboard" && <OffboardTab />}
           {activeTab === "traditional" && <TraditionalTab />}
         </div>
       </div>
@@ -685,6 +697,224 @@ function EmailComposeTab() {
           {sending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Queuing…</> : <><Send className="mr-2 h-4 w-4" /> Send Email</>}
         </Button>
       </div>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLATFORM TABS — usage/cost, scoped API keys, offboarding
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const RESOURCE_GROUPS = [
+  "publishing", "engagement", "messages", "contacts", "analytics",
+  "ads", "telephony", "accounts", "billing", "webhooks",
+]
+
+function UsageTab() {
+  const [data, setData] = useState<{ profile_id: string | null; usage: Record<string, unknown> | null; restricted: boolean } | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    ;(async () => {
+      try { setData(await getSocialUsage()) }
+      catch (e) { setError(e instanceof Error ? e.message : "Failed to load usage") }
+      finally { setLoading(false) }
+    })()
+  }, [])
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-foreground">Usage &amp; Cost</h3>
+        <p className="text-sm text-muted-foreground">This customer&apos;s share of your Zernio bill for the current cycle, by profile.</p>
+      </div>
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      ) : !data?.usage ? (
+        <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
+          <DollarSign className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="font-medium text-foreground">No usage data</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+            Spend shows here once this tenant&apos;s profile has metered, connected accounts and Zernio is configured with a live API key.
+          </p>
+        </div>
+      ) : (
+        <Card className="border-border bg-card">
+          <CardContent className="space-y-2 p-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-muted-foreground">Profile {data.profile_id}</p>
+              {data.restricted && <Badge variant="outline" className="border-amber-500/40 text-amber-500">restricted key</Badge>}
+            </div>
+            {Object.entries(data.usage).map(([k, v]) => (
+              <div key={k} className="flex items-center justify-between border-b border-border/50 py-1.5 text-sm">
+                <span className="text-muted-foreground">{k}</span>
+                <span className="font-medium text-foreground">{typeof v === "object" ? JSON.stringify(v) : String(v)}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function ApiKeysTab() {
+  const [name, setName] = useState("")
+  const [readOnly, setReadOnly] = useState(false)
+  const [expiresIn, setExpiresIn] = useState("")
+  const [disabled, setDisabled] = useState<string[]>([])
+  const [creating, setCreating] = useState(false)
+  const [created, setCreated] = useState<Record<string, any> | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const toggle = (g: string) => setDisabled((d) => (d.includes(g) ? d.filter((x) => x !== g) : [...d, g]))
+
+  const submit = async () => {
+    if (!name) return
+    setCreating(true); setError(null); setCreated(null)
+    try {
+      const res = await createScopedKey({
+        name,
+        permission: readOnly ? "read" : undefined,
+        disabled_resource_groups: disabled.length ? disabled : undefined,
+        expires_in: expiresIn ? Number(expiresIn) : undefined,
+      })
+      setCreated(res as Record<string, any>)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create key")
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const keyStr = created ? String(created.apiKey?.key ?? created.key ?? "") : ""
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-foreground">Scoped API Keys</h3>
+        <p className="text-sm text-muted-foreground">Mint a Zernio key limited to this customer&apos;s profile (access control — the rate limit stays with the team).</p>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {created ? (
+        <Card className="border-emerald-500/30 bg-emerald-500/5">
+          <CardHeader><CardTitle className="text-sm text-emerald-500">Key created — copy it now</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">Zernio shows a key once. Store it securely; you can&apos;t retrieve it again.</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 truncate rounded-lg border border-border bg-card px-3 py-2 text-xs text-foreground">{keyStr || "(no key returned)"}</code>
+              <Button size="sm" variant="outline" onClick={() => keyStr && navigator.clipboard.writeText(keyStr)}>
+                <Copy className="mr-1 h-3.5 w-3.5" /> Copy
+              </Button>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => { setCreated(null); setName("") }}>Create another</Button>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="border-border bg-card">
+          <CardContent className="space-y-4 p-4">
+            <Input placeholder="Key name (e.g. acme-readonly)" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input type="checkbox" checked={readOnly} onChange={(e) => setReadOnly(e.target.checked)} /> Read-only
+              </label>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                Expires in
+                <Input type="number" value={expiresIn} onChange={(e) => setExpiresIn(e.target.value)} placeholder="days" className="w-24" />
+              </label>
+            </div>
+            <div>
+              <p className="mb-1.5 text-sm font-medium text-foreground">Disable resource groups (denylist)</p>
+              <div className="flex flex-wrap gap-2">
+                {RESOURCE_GROUPS.map((g) => (
+                  <button
+                    key={g}
+                    onClick={() => toggle(g)}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${disabled.includes(g) ? "border-red-500/40 bg-red-500/10 text-red-400" : "border-border text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {g}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">Any group disabled mints a <code>zrk_</code> key that 403s those calls; otherwise <code>sk_</code>.</p>
+            </div>
+            <Button onClick={submit} disabled={creating || !name}>
+              {creating ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Creating…</> : <><Hash className="mr-2 h-4 w-4" /> Create key</>}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function OffboardTab() {
+  const [ack, setAck] = useState(false)
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const run = async () => {
+    setRunning(true); setError(null); setResult(null)
+    try {
+      const res = await offboardProfile()
+      setResult(res?.status === "offboarded"
+        ? `Offboarded — disconnected ${res.disconnected_accounts ?? 0} account(s) and deleted the profile.`
+        : "Nothing to offboard.")
+      setAck(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Offboarding failed")
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  return (
+    <div className="max-w-2xl space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-foreground">Offboarding</h3>
+        <p className="text-sm text-muted-foreground">Disconnect this customer&apos;s accounts and delete their Zernio profile.</p>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+      {result && (
+        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+          <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" /><p className="text-sm text-emerald-500">{result}</p>
+        </div>
+      )}
+
+      <Card className="border-red-500/30 bg-red-500/5">
+        <CardHeader><CardTitle className="text-sm text-red-400">Danger zone</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            This disconnects every connected account for this tenant, then deletes its Zernio profile and clears the local map.
+            Active accounts are disconnected first (Zernio blocks profile deletion otherwise). This cannot be undone.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+            I understand this permanently offboards this customer.
+          </label>
+          <Button variant="destructive" disabled={!ack || running} onClick={run}>
+            {running ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Offboarding…</> : <><Trash2 className="mr-2 h-4 w-4" /> Disconnect &amp; delete profile</>}
+          </Button>
+        </CardContent>
+      </Card>
     </div>
   )
 }
