@@ -89,7 +89,9 @@ const statusColor: Record<string, string> = {
 
 type MarketingTab =
   | "connections"
-  | "campaigns" | "social-composer" | "social-scheduled" | "social-inbox" | "social-analytics"
+  | "campaigns" | "social-composer" | "social-scheduled"
+  | "inbox-messages" | "inbox-comments" | "inbox-reviews" | "inbox-contacts"
+  | "analytics"
   | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
   | "email-templates" | "email-compose"
   | "ads" | "automations" | "traditional"
@@ -118,10 +120,17 @@ const MARKETING_NAV: NavEntry[] = [
     id: "social", label: "Social", icon: Share2, children: [
       { key: "social-composer", label: "Composer", icon: Send },
       { key: "social-scheduled", label: "Scheduled", icon: Calendar },
-      { key: "social-inbox", label: "Inbox", icon: MessageSquare },
-      { key: "social-analytics", label: "Analytics", icon: BarChart3 },
     ],
   },
+  {
+    id: "inbox", label: "Inbox", icon: MessageSquare, children: [
+      { key: "inbox-messages", label: "Messages", icon: MessageSquare },
+      { key: "inbox-comments", label: "Comments", icon: MessageCircle },
+      { key: "inbox-reviews", label: "Reviews", icon: Star },
+      { key: "inbox-contacts", label: "Contacts", icon: Users },
+    ],
+  },
+  { key: "analytics", label: "Analytics", icon: BarChart3 },
   {
     id: "whatsapp", label: "WhatsApp", icon: MessageCircle, children: [
       { key: "whatsapp-broadcasts", label: "Broadcasts", icon: Send },
@@ -240,8 +249,11 @@ export function MarketingModule() {
           {activeTab === "campaigns" && <CampaignsTab />}
           {activeTab === "social-composer" && <SocialComposerTab />}
           {activeTab === "social-scheduled" && <ScheduledPostsTab />}
-          {activeTab === "social-inbox" && <SocialInboxTab />}
-          {activeTab === "social-analytics" && <SocialAnalyticsTab />}
+          {activeTab === "inbox-messages" && <SocialInboxTab kind="messages" />}
+          {activeTab === "inbox-comments" && <SocialInboxTab kind="comments" />}
+          {activeTab === "inbox-reviews" && <SocialInboxTab kind="reviews" />}
+          {activeTab === "inbox-contacts" && <InboxContactsTab />}
+          {activeTab === "analytics" && <SocialAnalyticsTab />}
           {activeTab === "whatsapp-broadcasts" && <WhatsAppTab view="broadcasts" />}
           {activeTab === "whatsapp-contacts" && <WhatsAppTab view="contacts" />}
           {activeTab === "whatsapp-templates" && (
@@ -1410,23 +1422,96 @@ function SocialComposerTab() {
 // SOCIAL INBOX TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function SocialInboxTab() {
+function InboxContactsTab() {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const msgs = await listInboxMessages().catch(() => [])
+        const byKey: Record<string, any> = {}
+        for (const m of msgs || []) {
+          const key = (m.sender_handle || m.sender_name || "unknown") + "|" + (m.platform || "")
+          if (!byKey[key]) byKey[key] = { name: m.sender_name || "Unknown", handle: m.sender_handle || "", platform: m.platform, count: 0 }
+          byKey[key].count++
+        }
+        setRows(Object.values(byKey).sort((a: any, b: any) => b.count - a.count))
+      } finally {
+        setLoading(false)
+      }
+    })()
+  }, [])
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-foreground">Contacts</h3>
+        <p className="text-sm text-muted-foreground">{loading ? "Loading…" : `${rows.length} people who've messaged you`}</p>
+      </div>
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
+          <Users className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="font-medium text-foreground">No contacts yet</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">People who DM or comment show up here once inbox messages arrive.</p>
+        </div>
+      ) : (
+        <Card className="border-border bg-card">
+          <CardContent className="overflow-x-auto p-0">
+            <table className="w-full min-w-[520px] text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-4 py-2 font-medium">Name</th>
+                  <th className="px-4 py-2 font-medium">Handle</th>
+                  <th className="px-4 py-2 font-medium">Platform</th>
+                  <th className="px-4 py-2 font-medium">Messages</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className="border-b border-border/60">
+                    <td className="px-4 py-2.5 font-medium text-foreground">{r.name}</td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{r.handle ? "@" + r.handle : "—"}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="flex items-center gap-2 text-muted-foreground">
+                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[r.platform?.toLowerCase()] || "#666" }} />
+                        {r.platform || "—"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-muted-foreground">{r.count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+const INBOX_KIND_TYPE: Record<string, string> = { messages: "DM", comments: "COMMENT", reviews: "REVIEW" }
+
+function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" | "reviews" }) {
   const [messages, setMessages] = useState<any[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [filter, setFilter] = useState<string>("all")
   const [selectedMessage, setSelectedMessage] = useState<any>(null)
   const [replyText, setReplyText] = useState("")
   const [loading, setLoading] = useState(true)
+  const messageType = INBOX_KIND_TYPE[kind] || "DM"
 
   useEffect(() => {
     loadInbox()
-  }, [filter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filter, kind])
 
   const loadInbox = async () => {
     setLoading(true)
     try {
       const [msgData, countData] = await Promise.all([
-        listInboxMessages(filter !== "all" ? { status: filter } : undefined).catch(() => []),
+        listInboxMessages({ message_type: messageType, ...(filter !== "all" ? { status: filter } : {}) }).catch(() => []),
         getInboxUnreadCount().catch(() => ({ unread_count: 0 })),
       ])
       setMessages(msgData || [])
