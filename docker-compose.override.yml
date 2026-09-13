@@ -55,14 +55,11 @@ services:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - LICENSE_ENFORCEMENT=warn
       - AUTO_CREATE_TABLES=true
-      # Zernio + support bridge deliberately BLANKED (offline dev — the lazy
-      # client returns None and webhooks/automations degrade to local-only).
-      # To test connectors locally, paste your real Zernio values here (or in
-      # the root .env): API key, webhook secret, and the profile id that the
-      # /connect/{platform} flow attaches new accounts to.
-      - ZERNIO_API_KEY=
-      - ZERNIO_WEBHOOK_SECRET=
-      - ZERNIO_PROFILE_ID=
+      # Zernio pulled from the gitignored root .env (empty there = offline dev,
+      # lazy client returns None). Never hardcode the key in this tracked file.
+      - ZERNIO_API_KEY=${ZERNIO_API_KEY:-}
+      - ZERNIO_WEBHOOK_SECRET=${ZERNIO_WEBHOOK_SECRET:-}
+      - ZERNIO_PROFILE_ID=${ZERNIO_PROFILE_ID:-}
       - SUPPORT_SERVICE_URL=
       - SOCIAL_TICKET_CUSTOMER_ID=
       - AUTH_ALLOW_ANONYMOUS=true
@@ -86,9 +83,10 @@ services:
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - LICENSE_ENFORCEMENT=warn
-      - ZERNIO_API_KEY=
-      - ZERNIO_PROFILE_ID=
-      - SEED_TENANT_ID=
+      # From the gitignored root .env (empty = worker idles). Never hardcode here.
+      - ZERNIO_API_KEY=${ZERNIO_API_KEY:-}
+      - ZERNIO_PROFILE_ID=${ZERNIO_PROFILE_ID:-}
+      - SEED_TENANT_ID=${SEED_TENANT_ID:-}
       - LOG_LEVEL=INFO
     volumes:
       - ./services/analytics_worker:/app/services/analytics_worker:ro
