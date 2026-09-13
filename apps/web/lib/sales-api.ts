@@ -50,9 +50,11 @@ export type SalesChannel =
   | "FIELD_SALES"
   | "WALK_IN"
   | "REFERRAL"
+  | "MARKETING"
   | "OTHER"
 
 export const SALES_CHANNELS: { id: SalesChannel; label: string; description: string; icon: string; color: string }[] = [
+  { id: "MARKETING", label: "Marketing Campaigns", description: "Campaign lead forms, social ads & marketing funnels", icon: "Megaphone", color: "#e03131" },
   { id: "INBOUND_EMAIL", label: "Inbound Email", description: "Email inquiries & quote requests", icon: "Mail", color: "#60a5fa" },
   { id: "CALL_CENTER_INBOUND", label: "Call Center Inbound", description: "Toll-free customer hotline calls", icon: "PhoneCall", color: "#34d399" },
   { id: "CALL_CENTER_OUTBOUND", label: "Call Center Outbound", description: "Telesales campaigns & cold calls", icon: "PhoneOutgoing", color: "#fbbf24" },

@@ -93,6 +93,7 @@ const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
 
 // Default Channel Breakdown Data
 const defaultChannelSales = [
+  { channel: "Marketing Campaigns", source: "MARKETING", deals: 36, revenue: 1950000, color: "#e03131", fill: "#e03131" },
   { channel: "Walk-in Customers", source: "WALK_IN", deals: 28, revenue: 1450000, color: "#38bdf8", fill: "#38bdf8" },
   { channel: "Portal & Website", source: "PORTAL_WEBSITE", deals: 42, revenue: 2180000, color: "#a78bfa", fill: "#a78bfa" },
   { channel: "Call Center Inbound", source: "CALL_CENTER_INBOUND", deals: 35, revenue: 1820000, color: "#34d399", fill: "#34d399" },

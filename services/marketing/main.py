@@ -3962,6 +3962,8 @@ async def create_traditional_campaign(
 _WHATSAPP_SENDERS: Dict[str, List[Dict[str, Any]]] = {}
 _WHATSAPP_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {}
 _WHATSAPP_FLOWS: Dict[str, List[Dict[str, Any]]] = {}
+_WHATSAPP_GROUPS: Dict[str, List[Dict[str, Any]]] = {}
+_WHATSAPP_CONVERSIONS: Dict[str, List[Dict[str, Any]]] = {}
 
 
 def _init_default_whatsapp(tenant_key: str):
@@ -4032,6 +4034,74 @@ def _init_default_whatsapp(tenant_key: str):
                     {"id": "n2", "type": "diagnostic", "label": "Query ONT status via Network Dome"},
                     {"id": "n3", "type": "ticket", "label": "Open Priority Trouble Ticket"},
                 ],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+    if tenant_key not in _WHATSAPP_GROUPS:
+        _WHATSAPP_GROUPS[tenant_key] = [
+            {
+                "id": "grp-1",
+                "sender_id": "snd-sandbox-01",
+                "sender_name": "Sandbox",
+                "sender_number": "+1 202 908 7457",
+                "name": "Cape Town Fiber Expansion Leads",
+                "participant_count": 142,
+                "role": "admin",
+                "invite_link": "https://chat.whatsapp.com/invite/CPT-FIBRE-2026",
+                "is_active": True,
+                "last_message_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": "grp-2",
+                "sender_id": "snd-sandbox-01",
+                "sender_name": "Sandbox",
+                "sender_number": "+1 202 908 7457",
+                "name": "Johannesburg Business Internet SLA",
+                "participant_count": 48,
+                "role": "admin",
+                "invite_link": "https://chat.whatsapp.com/invite/JHB-BIZ-SLA",
+                "is_active": True,
+                "last_message_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+    if tenant_key not in _WHATSAPP_CONVERSIONS:
+        _WHATSAPP_CONVERSIONS[tenant_key] = [
+            {
+                "id": "conv-1",
+                "customer_name": "Sipho Khumalo",
+                "phone_number": "+27 82 456 7890",
+                "deal_name": "200Mbps Home Uncapped - Sandton",
+                "deal_value_zar": 12800,
+                "event_type": "QUOTE_REQUEST",
+                "flow_or_template": "Customer Welcome & Quote",
+                "sales_channel": "MARKETING",
+                "status": "DEAL_CREATED",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": "conv-2",
+                "customer_name": "Nadia Van Der Merwe",
+                "phone_number": "+27 71 890 1234",
+                "deal_name": "500Mbps Dedicated Business Fiber",
+                "deal_value_zar": 34500,
+                "event_type": "CHECKOUT_COMPLETED",
+                "flow_or_template": "fiber_cart_recovery",
+                "sales_channel": "MARKETING",
+                "status": "CONVERTED",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": "conv-3",
+                "customer_name": "Tshepo Modise",
+                "phone_number": "+27 83 234 5678",
+                "deal_name": "100Mbps Prepaid Fiber Bundle",
+                "deal_value_zar": 7990,
+                "event_type": "LEAD_CAPTURED",
+                "flow_or_template": "welcome_onboarding",
+                "sales_channel": "MARKETING",
+                "status": "PENDING_SALES",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         ]
@@ -4159,6 +4229,58 @@ async def create_whatsapp_flow(
     }
     _WHATSAPP_FLOWS[tkey].append(flow)
     return flow
+
+
+@app.get("/whatsapp/groups", response_model=List[Dict[str, Any]])
+async def list_whatsapp_groups(
+    sender_id: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    groups = _WHATSAPP_GROUPS.get(tkey, [])
+    if sender_id:
+        groups = [g for g in groups if g.get("sender_id") == sender_id]
+    return groups
+
+
+class WhatsAppGroupCreate(BaseModel):
+    name: str
+    sender_id: Optional[str] = None
+    invite_link: Optional[str] = None
+
+
+@app.post("/whatsapp/groups", status_code=201, response_model=Dict[str, Any])
+async def create_whatsapp_group(
+    body: WhatsAppGroupCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    # Match sender info if available
+    sender = next((s for s in _WHATSAPP_SENDERS.get(tkey, []) if s.get("id") == body.sender_id), None)
+    group = {
+        "id": f"grp-{uuid.uuid4().hex[:8]}",
+        "sender_id": body.sender_id or (sender.get("id") if sender else "snd-sandbox-01"),
+        "sender_name": sender.get("name") if sender else "Sandbox",
+        "sender_number": sender.get("number") if sender else "+1 202 908 7457",
+        "name": body.name,
+        "participant_count": 1,
+        "role": "admin",
+        "invite_link": body.invite_link or f"https://chat.whatsapp.com/invite/{uuid.uuid4().hex[:10].upper()}",
+        "is_active": True,
+        "last_message_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _WHATSAPP_GROUPS[tkey].append(group)
+    return group
+
+
+@app.get("/whatsapp/conversions", response_model=List[Dict[str, Any]])
+async def list_whatsapp_conversions(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    return _WHATSAPP_CONVERSIONS.get(tkey, [])
 
 
 if __name__ == "__main__":

@@ -272,6 +272,33 @@ export interface WhatsAppFlow {
   created_at?: string
 }
 
+export interface WhatsAppGroup {
+  id: string
+  sender_id?: string
+  sender_name?: string
+  sender_number?: string
+  name: string
+  participant_count: number
+  role: "admin" | "member"
+  invite_link?: string
+  is_active: boolean
+  last_message_at?: string
+  created_at?: string
+}
+
+export interface WhatsAppConversion {
+  id: string
+  customer_name: string
+  phone_number: string
+  deal_name: string
+  deal_value_zar: number
+  event_type: "QUOTE_REQUEST" | "ORDER_PLACED" | "LEAD_CAPTURED" | "CHECKOUT_COMPLETED"
+  flow_or_template: string
+  sales_channel: "MARKETING"
+  status: "DEAL_CREATED" | "CONVERTED" | "PENDING_SALES"
+  created_at: string
+}
+
 export interface AdCampaign {
   id: string
   tenant_id: string
@@ -646,6 +673,20 @@ export const createWhatsAppFlow = (data: { name: string; trigger: string; nodes:
     method: "POST",
     body: JSON.stringify(data),
   })
+
+export const listWhatsAppGroups = (senderId?: string) => {
+  const q = senderId ? `?sender_id=${encodeURIComponent(senderId)}` : ""
+  return fetchMarketing<WhatsAppGroup[]>(`/whatsapp/groups${q}`)
+}
+
+export const createWhatsAppGroup = (data: { sender_id?: string; name: string; invite_link?: string }) =>
+  fetchMarketing<WhatsAppGroup>("/whatsapp/groups", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const listWhatsAppConversions = () =>
+  fetchMarketing<WhatsAppConversion[]>("/whatsapp/conversions")
 
 // ── Ad Campaigns ─────────────────────────────────────────────────────
 
