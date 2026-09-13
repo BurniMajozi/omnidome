@@ -960,3 +960,77 @@ export const listZernioConversations = (params?: { platform?: string; status?: s
   if (params?.account_id) q.set("account_id", params.account_id)
   return fetchMarketing<Record<string, unknown>>(`/social/zernio/conversations?${q}`)
 }
+
+// ── SMS Sender IDs & Sending ──────────────────────────────────────────────────
+
+export interface SmsSenderId {
+  id: string
+  sender_id: string
+  status: "active" | "pending" | "rejected"
+  type: string
+  created_at: string
+}
+
+export const listSmsSenderIds = () =>
+  fetchMarketing<SmsSenderId[]>("/sms/senders")
+
+export const createSmsSenderId = (sender_id: string) =>
+  fetchMarketing<SmsSenderId>("/sms/senders", {
+    method: "POST",
+    body: JSON.stringify({ sender_id }),
+  })
+
+export const deleteSmsSenderId = (sender_id: string) =>
+  fetchMarketing<{ status: string; sender_id: string }>(`/sms/senders/${encodeURIComponent(sender_id)}`, {
+    method: "DELETE",
+  })
+
+export const sendSmsMessage = (data: { sender_id: string; to: string; message: string }) =>
+  fetchMarketing<{ status: string; message_id?: string; provider?: string }>("/sms/send", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+// ── Team & Users Management ───────────────────────────────────────────────────
+
+export interface TeamMember {
+  id: string
+  name: string
+  email: string
+  role: "Owner" | "Admin" | "Member" | "Billing Manager" | "Viewer" | string
+  access: string
+  access_all_profiles: boolean
+  profiles?: string[]
+  status?: string
+  created_at: string
+}
+
+export interface TeamMemberInviteRequest {
+  emails?: string
+  role: string
+  access_all_profiles: boolean
+  profile_ids?: string[]
+}
+
+export interface TeamInviteResult {
+  invite_link: string
+  token: string
+  invited_emails: string[]
+  role: string
+  access_all_profiles: boolean
+}
+
+export const listTeamMembers = () =>
+  fetchMarketing<TeamMember[]>("/team/members")
+
+export const inviteTeamMember = (data: TeamMemberInviteRequest) =>
+  fetchMarketing<TeamInviteResult>("/team/members/invite", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const deleteTeamMember = (member_id: string) =>
+  fetchMarketing<{ status: string; member_id: string }>(`/team/members/${encodeURIComponent(member_id)}`, {
+    method: "DELETE",
+  })
+

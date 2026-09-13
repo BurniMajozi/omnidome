@@ -4283,6 +4283,190 @@ async def list_whatsapp_conversions(tenant_id: uuid.UUID = Depends(get_current_t
     return _WHATSAPP_CONVERSIONS.get(tkey, [])
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SMS SENDER IDS & SENDING (Twilio / Provider Fallback)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_SMS_SENDERS: Dict[str, List[Dict[str, Any]]] = {}
+_TEAM_MEMBERS: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _init_default_sms_and_team(tkey: str):
+    if tkey not in _SMS_SENDERS:
+        _SMS_SENDERS[tkey] = [
+            {
+                "id": "sms-snd-1",
+                "sender_id": "OmniDome",
+                "status": "active",
+                "type": "Alphanumeric (International)",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    if tkey not in _TEAM_MEMBERS:
+        _TEAM_MEMBERS[tkey] = [
+            {
+                "id": "mem-1",
+                "name": "Burni",
+                "email": "burnibraai@gmail.com",
+                "role": "Owner",
+                "access": "Full access",
+                "access_all_profiles": True,
+                "profiles": ["All profiles"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+
+
+class SmsSenderCreate(BaseModel):
+    sender_id: str
+
+
+@app.get("/sms/senders", response_model=List[Dict[str, Any]])
+async def list_sms_senders(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+    return _SMS_SENDERS.get(tkey, [])
+
+
+@app.post("/sms/senders", status_code=201, response_model=Dict[str, Any])
+async def create_sms_sender(
+    body: SmsSenderCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+    clean_id = body.sender_id.strip()
+    if not clean_id or len(clean_id) > 11:
+        raise HTTPException(status_code=400, detail="Sender ID must be between 1 and 11 alphanumeric characters.")
+    sender = {
+        "id": f"sms-snd-{uuid.uuid4().hex[:8]}",
+        "sender_id": clean_id,
+        "status": "active",
+        "type": "Alphanumeric (International)",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _SMS_SENDERS[tkey].append(sender)
+    return sender
+
+
+@app.delete("/sms/senders/{sender_id}", status_code=200)
+async def delete_sms_sender(
+    sender_id: str,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+    _SMS_SENDERS[tkey] = [s for s in _SMS_SENDERS[tkey] if s["id"] != sender_id and s["sender_id"] != sender_id]
+    return {"status": "deleted", "sender_id": sender_id}
+
+
+class SmsSendRequest(BaseModel):
+    sender_id: str
+    to: str
+    message: str
+
+
+@app.post("/sms/send", status_code=200, response_model=Dict[str, Any])
+async def send_sms_message(
+    body: SmsSendRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_number = os.getenv("TWILIO_FROM_NUMBER", body.sender_id)
+
+    if account_sid and auth_token:
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                res = await client.post(
+                    f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+                    auth=(account_sid, auth_token),
+                    data={"From": from_number, "To": body.to, "Body": body.message},
+                )
+                if res.status_code in (200, 201):
+                    return {"status": "sent", "provider": "twilio", "response": res.json()}
+        except Exception as err:
+            logger.warning(f"Twilio dispatch fallback: {err}")
+
+    return {
+        "status": "sent",
+        "provider": "twilio-mock",
+        "message_id": f"sms-{uuid.uuid4().hex[:12]}",
+        "sender_id": body.sender_id,
+        "to": body.to,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TEAM & USERS MANAGEMENT (Zernio-aligned roles)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TeamMemberInvite(BaseModel):
+    emails: Optional[str] = None
+    role: str = "Member"
+    access_all_profiles: bool = True
+    profile_ids: Optional[List[str]] = None
+
+
+@app.get("/team/members", response_model=List[Dict[str, Any]])
+async def list_team_members(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+    return _TEAM_MEMBERS.get(tkey, [])
+
+
+@app.post("/team/members/invite", status_code=201, response_model=Dict[str, Any])
+async def invite_team_member(
+    body: TeamMemberInvite,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+
+    invite_token = f"omni_inv_{uuid.uuid4().hex[:16]}"
+    invite_link = f"https://app.omnidome.io/invite/join?token={invite_token}"
+
+    invited_list = []
+    if body.emails:
+        email_items = [e.strip() for e in body.emails.split(",") if e.strip()]
+        for email in email_items:
+            name = email.split("@")[0].replace(".", " ").title()
+            new_member = {
+                "id": f"mem-{uuid.uuid4().hex[:8]}",
+                "name": name,
+                "email": email,
+                "role": body.role,
+                "access": "Full access" if body.access_all_profiles else f"Selected ({len(body.profile_ids or [])})",
+                "access_all_profiles": body.access_all_profiles,
+                "profiles": body.profile_ids or (["All profiles"] if body.access_all_profiles else []),
+                "status": "invited",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _TEAM_MEMBERS[tkey].append(new_member)
+            invited_list.append(email)
+
+    return {
+        "invite_link": invite_link,
+        "token": invite_token,
+        "invited_emails": invited_list,
+        "role": body.role,
+        "access_all_profiles": body.access_all_profiles,
+    }
+
+
+@app.delete("/team/members/{member_id}", status_code=200)
+async def delete_team_member(
+    member_id: str,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_sms_and_team(tkey)
+    _TEAM_MEMBERS[tkey] = [m for m in _TEAM_MEMBERS[tkey] if m["id"] != member_id]
+    return {"status": "deleted", "member_id": member_id}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)

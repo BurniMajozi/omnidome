@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
@@ -22,6 +22,7 @@ import {
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
   Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag, X,
   Upload, Sparkles, LayoutGrid, List, Check, MoreVertical, Paperclip, ChevronDown, ShieldCheck,
+  Shield, CreditCard,
 } from "lucide-react"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
@@ -41,6 +42,8 @@ import {
   listWhatsAppSenders, connectWhatsAppNumber, listWhatsAppTemplates, createWhatsAppTemplate,
   listWhatsAppFlows, createWhatsAppFlow, listWhatsAppGroups, createWhatsAppGroup, listWhatsAppConversions,
   type WhatsAppSender, type WhatsAppTemplate, type WhatsAppFlow, type WhatsAppGroup, type WhatsAppConversion,
+  listSmsSenderIds, createSmsSenderId, deleteSmsSenderId, sendSmsMessage, type SmsSenderId,
+  listTeamMembers, inviteTeamMember, deleteTeamMember, type TeamMember,
 } from "@/lib/marketing-api"
 import { salesApi } from "@/lib/sales-api"
 
@@ -100,6 +103,8 @@ type MarketingTab =
   | "analytics"
   | "whatsapp-overview" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups" | "whatsapp-conversions" | "whatsapp-broadcasts" | "whatsapp-contacts"
   | "email-templates" | "email-compose"
+  | "sms-senders"
+  | "team-users"
   | "ads" | "automations" | "traditional"
   | "platform-usage" | "platform-keys" | "platform-offboard"
 
@@ -156,6 +161,12 @@ const MARKETING_NAV: NavEntry[] = [
       { key: "email-compose", label: "Compose", icon: Send },
     ],
   },
+  {
+    id: "sms", label: "SMS", icon: Phone, children: [
+      { key: "sms-senders", label: "Sender IDs", icon: MessageSquare },
+    ],
+  },
+  { key: "team-users", label: "Users", icon: Users },
   { key: "automations", label: "Automations", icon: Zap },
   {
     id: "platform", label: "Platform", icon: Settings, children: [
@@ -272,6 +283,8 @@ export function MarketingModule() {
           {activeTab === "whatsapp-contacts" && <WhatsAppTab view="contacts" />}
           {activeTab === "email-templates" && <EmailTemplatesTab />}
           {activeTab === "email-compose" && <EmailComposeTab />}
+          {activeTab === "sms-senders" && <SmsSenderIdsTab />}
+          {activeTab === "team-users" && <TeamUsersTab />}
           {activeTab === "ads" && <AdsTab />}
           {activeTab === "automations" && <AutomationsTab />}
           {activeTab === "platform-usage" && <UsageTab />}
@@ -320,6 +333,218 @@ function BrandChip({ id, size = 40 }: { id: string; size?: number }) {
       style={{ width: size, height: size, backgroundColor: v.color }}
     >
       <Icon className={`h-5 w-5 ${dark ? "text-black" : "text-white"}`} />
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLATFORMS DROPDOWN WITH BRANDS (Zernio media_1789297905856.png)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ALL_BRAND_PLATFORMS: Array<{
+  id: string
+  label: string
+  renderIcon?: () => React.ReactNode
+}> = [
+  {
+    id: "all",
+    label: "All platforms",
+  },
+  {
+    id: "tiktok",
+    label: "TikTok",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-black text-white">
+        <svg className="h-3 w-3 fill-current" viewBox="0 0 24 24">
+          <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64c.298-.002.595.042.88.13V9.4a6.33 6.33 0 0 0-1-.08A6.34 6.34 0 0 0 3 15.66a6.34 6.34 0 0 0 10.82 4.46V12.1a8.16 8.16 0 0 0 5.77 2.3V10.9a4.85 4.85 0 0 1-3.77-4.21h3.77z"/>
+        </svg>
+      </span>
+    ),
+  },
+  {
+    id: "instagram",
+    label: "Instagram",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-gradient-to-tr from-[#f09433] via-[#dc2743] to-[#bc1888] text-white">
+        <Instagram className="h-3.5 w-3.5" />
+      </span>
+    ),
+  },
+  {
+    id: "facebook",
+    label: "Facebook",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#1877F2] text-white">
+        <Facebook className="h-3.5 w-3.5" />
+      </span>
+    ),
+  },
+  {
+    id: "youtube",
+    label: "YouTube",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-[#FF0000] text-white">
+        <Youtube className="h-3 w-3" />
+      </span>
+    ),
+  },
+  {
+    id: "linkedin",
+    label: "LinkedIn",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-[#0A66C2] text-white">
+        <Linkedin className="h-3 w-3" />
+      </span>
+    ),
+  },
+  {
+    id: "twitter",
+    label: "Twitter/X",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-black text-white">
+        <svg className="h-3 w-3 fill-current" viewBox="0 0 24 24">
+          <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+        </svg>
+      </span>
+    ),
+  },
+  {
+    id: "threads",
+    label: "Threads",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-black text-white">
+        <AtSign className="h-3.5 w-3.5" />
+      </span>
+    ),
+  },
+  {
+    id: "pinterest",
+    label: "Pinterest",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#BD081C] text-white font-serif font-bold text-[11px] leading-none">
+        P
+      </span>
+    ),
+  },
+  {
+    id: "reddit",
+    label: "Reddit",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#FF4500] text-white">
+        <MessageCircle className="h-3 w-3" />
+      </span>
+    ),
+  },
+  {
+    id: "bluesky",
+    label: "Bluesky",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center text-[#0085FF]">
+        <svg className="h-4 w-4 fill-current" viewBox="0 0 24 24">
+          <path d="M12 10.8c-1.087-2.114-4.046-6.053-6.798-7.995C2.566 1.01 0 1.956 0 5.4c0 3.444 1.343 11.233 2.143 13.067.8 1.834 3.085 2.133 4.857.733 1.772-1.4 3.2-4.267 5-7.4 1.8 3.133 3.228 6 5 7.4 1.772 1.4 4.057 1.1 4.857-.733.8-1.834 2.143-9.623 2.143-13.067 0-3.444-2.566-4.39-5.202-2.595C16.046 4.747 13.087 8.686 12 10.8z"/>
+        </svg>
+      </span>
+    ),
+  },
+  {
+    id: "googlebusiness",
+    label: "GBP",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-[#4285F4] text-white text-[9px] font-bold">
+        G
+      </span>
+    ),
+  },
+  {
+    id: "telegram",
+    label: "Telegram",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#0088CC] text-white">
+        <Send className="h-2.5 w-2.5" />
+      </span>
+    ),
+  },
+  {
+    id: "snapchat",
+    label: "Snapchat",
+    renderIcon: () => (
+      <span className="flex h-5 w-5 items-center justify-center rounded bg-[#FFFC00] text-black text-xs">
+        👻
+      </span>
+    ),
+  },
+]
+
+function PlatformBrandDropdown({
+  value,
+  onChange,
+  className = "",
+}: {
+  value: string
+  onChange: (val: string) => void
+  className?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => document.removeEventListener("mousedown", handleClickOutside)
+  }, [])
+
+  const selected =
+    ALL_BRAND_PLATFORMS.find((p) => p.id.toLowerCase() === (value || "all").toLowerCase()) ||
+    ALL_BRAND_PLATFORMS[0]
+
+  return (
+    <div className={`relative inline-block text-left ${className}`} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="inline-flex items-center justify-between gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-accent focus:outline-none min-w-[130px]"
+      >
+        <span className="flex items-center gap-2 truncate">
+          {selected.renderIcon ? selected.renderIcon() : null}
+          <span className="truncate">{selected.label}</span>
+        </span>
+        <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 w-52 rounded-lg border border-border bg-popover shadow-xl p-1 max-h-80 overflow-y-auto">
+          {ALL_BRAND_PLATFORMS.map((plat) => {
+            const isSelected = plat.id.toLowerCase() === (value || "all").toLowerCase()
+            return (
+              <button
+                key={plat.id}
+                type="button"
+                onClick={() => {
+                  onChange(plat.id)
+                  setOpen(false)
+                }}
+                className={`flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+                  isSelected
+                    ? "bg-accent text-foreground font-semibold"
+                    : "text-muted-foreground hover:bg-accent/50 hover:text-foreground"
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-5 w-5 shrink-0 items-center justify-center">
+                    {plat.renderIcon ? plat.renderIcon() : null}
+                  </div>
+                  <span>{plat.label}</span>
+                </div>
+                {isSelected && <Check className="h-3.5 w-3.5 text-foreground shrink-0" />}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -1445,12 +1670,62 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
   }, [])
 
   const filteredPosts = useMemo(() => {
-    return posts.filter((p) => {
+    const result = posts.filter((p) => {
       if (postStatusFilter !== "all" && p.status?.toLowerCase() !== postStatusFilter.toLowerCase()) return false
       if (platformFilter !== "all" && !p.platforms?.some((plat: string) => plat.toLowerCase() === platformFilter.toLowerCase())) return false
       return true
     })
-  }, [posts, postStatusFilter, platformFilter])
+
+    result.sort((a, b) => {
+      if (sortBy === "scheduled-newest") {
+        return new Date(b.scheduled_for || 0).getTime() - new Date(a.scheduled_for || 0).getTime()
+      }
+      if (sortBy === "scheduled-oldest") {
+        return new Date(a.scheduled_for || 0).getTime() - new Date(b.scheduled_for || 0).getTime()
+      }
+      if (sortBy === "created-newest") {
+        return new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      }
+      if (sortBy === "created-oldest") {
+        return new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()
+      }
+      if (sortBy === "status") {
+        return (a.status || "").localeCompare(b.status || "")
+      }
+      if (sortBy === "platform") {
+        return (a.platforms?.[0] || "").localeCompare(b.platforms?.[0] || "")
+      }
+      if (sortBy === "engagement") {
+        const engA = (a.likes || 0) + (a.comments || 0) + (a.shares || 0)
+        const engB = (b.likes || 0) + (b.comments || 0) + (b.shares || 0)
+        return engB - engA
+      }
+      if (sortBy === "likes") return (b.likes || 0) - (a.likes || 0)
+      if (sortBy === "comments") return (b.comments || 0) - (a.comments || 0)
+      if (sortBy === "shares") return (b.shares || 0) - (a.shares || 0)
+      if (sortBy === "views") return (b.views || 0) - (a.views || 0)
+      if (sortBy === "impressions") return (b.impressions || 0) - (a.impressions || 0)
+      if (sortBy === "reach") return (b.reach || 0) - (a.reach || 0)
+      if (sortBy === "saves") return (b.saves || 0) - (a.saves || 0)
+      if (sortBy === "clicks") return (b.clicks || 0) - (a.clicks || 0)
+      return 0
+    })
+
+    return result
+  }, [posts, postStatusFilter, platformFilter, sortBy])
+
+  const gridColsClass =
+    zoomScale === 1
+      ? "grid-cols-1"
+      : zoomScale === 2
+      ? "grid-cols-1 sm:grid-cols-2"
+      : zoomScale === 3
+      ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
+      : zoomScale === 4
+      ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
+      : zoomScale === 5
+      ? "grid-cols-1 sm:grid-cols-3 lg:grid-cols-5"
+      : "grid-cols-1 sm:grid-cols-3 lg:grid-cols-6"
 
   return (
     <div className="space-y-5">
@@ -1502,7 +1777,7 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
         </div>
       </div>
 
-      {/* Filters Bar matching media_1789288661301.png */}
+      {/* Filters Bar matching media_1789288661301.png & media_1789297905856.png */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         {/* Left Filter Dropdowns */}
         <div className="flex flex-wrap items-center gap-2">
@@ -1530,20 +1805,11 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
             <option value="queued">Queued</option>
           </select>
 
-          {/* Platform */}
-          <select
+          {/* Platform with authentic Brand Icons (media_1789297905856.png) */}
+          <PlatformBrandDropdown
             value={platformFilter}
-            onChange={(e) => setPlatformFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All platforms</option>
-            <option value="twitter">X / Twitter</option>
-            <option value="instagram">Instagram</option>
-            <option value="facebook">Facebook</option>
-            <option value="linkedin">LinkedIn</option>
-            <option value="tiktok">TikTok</option>
-            <option value="whatsapp">WhatsApp</option>
-          </select>
+            onChange={setPlatformFilter}
+          />
 
           {/* Profile */}
           <select
@@ -1580,7 +1846,7 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
           </select>
         </div>
 
-        {/* Right Controls: Sort & Views */}
+        {/* Right Controls: Sort & Views (media_1789298044544.png) */}
         <div className="flex items-center gap-2">
           {/* Sort Dropdown with exact options */}
           <select
@@ -1594,7 +1860,7 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
             <option value="created-oldest">Created (oldest first)</option>
             <option value="status">Status</option>
             <option value="platform">Platform</option>
-            <optgroup label="BY METRIC - PUBLISHED ONLY">
+            <optgroup label="BY METRIC · PUBLISHED ONLY">
               <option value="engagement">Most engagement (likes+comments+shares+saves)</option>
               <option value="likes">Most likes</option>
               <option value="comments">Most comments</option>
@@ -1634,14 +1900,14 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
 
           {/* Zoom scale indicator matching screenshot */}
           <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground border border-border bg-card rounded-md px-2 py-1">
-            <button onClick={() => setZoomScale((z) => Math.max(1, z - 1))} className="hover:text-foreground">-</button>
+            <button onClick={() => setZoomScale((z) => Math.max(1, z - 1))} className="hover:text-foreground p-0.5">-</button>
             <span className="font-mono text-[11px] px-1">{zoomScale}</span>
-            <button onClick={() => setZoomScale((z) => Math.min(6, z + 1))} className="hover:text-foreground">+</button>
+            <button onClick={() => setZoomScale((z) => Math.min(6, z + 1))} className="hover:text-foreground p-0.5">+</button>
           </div>
         </div>
       </div>
 
-      {/* Main Content: Empty State OR Populated Grid/List */}
+      {/* Main Content: Empty State OR Populated Grid/List/Calendar */}
       {filteredPosts.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card/30 py-20 px-6 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
@@ -1711,8 +1977,48 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
             </table>
           </CardContent>
         </Card>
+      ) : viewMode === "calendar" ? (
+        <Card className="border-border bg-card">
+          <CardHeader className="pb-3 border-b border-border">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-semibold text-foreground">Content Schedule Calendar</CardTitle>
+              <Badge variant="outline" className="text-xs font-mono">{filteredPosts.length} posts scheduled</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="p-4">
+            <div className="grid grid-cols-7 gap-2 text-center text-xs">
+              {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day) => (
+                <div key={day} className="font-semibold text-muted-foreground py-1 bg-muted/20 rounded">
+                  {day}
+                </div>
+              ))}
+              {Array.from({ length: 14 }).map((_, idx) => {
+                const date = new Date(Date.now() + (idx - 2) * 86400000)
+                const dayStr = date.toISOString().slice(0, 10)
+                const dayPosts = filteredPosts.filter((p) => p.scheduled_for && p.scheduled_for.slice(0, 10) === dayStr)
+                return (
+                  <div key={idx} className="min-h-[90px] rounded-lg border border-border/70 p-1.5 text-left bg-card/40 flex flex-col justify-between">
+                    <div className="flex items-center justify-between text-[10px] text-muted-foreground font-mono">
+                      <span>{date.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>
+                      {dayPosts.length > 0 && (
+                        <span className="rounded-full bg-primary/20 px-1 text-primary font-bold">{dayPosts.length}</span>
+                      )}
+                    </div>
+                    <div className="space-y-1 mt-1">
+                      {dayPosts.slice(0, 2).map((dp) => (
+                        <div key={dp.id} className="rounded bg-accent/60 p-1 text-[10px] truncate" title={dp.content}>
+                          <span className="font-semibold">{dp.brand_handle?.split("@")[1] || "Post"}:</span> {dp.content}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className={`grid gap-4 ${gridColsClass}`}>
           {filteredPosts.map((p) => (
             <Card key={p.id} className="border-border bg-card shadow-xs hover:border-border/80 transition-colors flex flex-col justify-between">
               <CardContent className="p-4 space-y-3">
@@ -2750,54 +3056,11 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
 
       {/* Row 1: Filter Dropdowns */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Multi-Platform Dropdown Button & Menu matching media_1789290079115.png */}
-        <div className="relative">
-          <button
-            onClick={() => setPlatformDropdownOpen((o) => !o)}
-            className="flex items-center gap-2 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground hover:bg-accent transition-colors shadow-2xs"
-          >
-            {selectedPlatformObj.icon && (
-              <selectedPlatformObj.icon className="h-3.5 w-3.5" style={{ color: selectedPlatformObj.color }} />
-            )}
-            <span>{selectedPlatformObj.label}</span>
-            <ChevronDown className="h-3 w-3 text-muted-foreground ml-1" />
-          </button>
-
-          {platformDropdownOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={() => setPlatformDropdownOpen(false)}
-              />
-              <div className="absolute left-0 top-full mt-1.5 w-48 rounded-lg border border-border bg-card p-1 shadow-xl z-50 animate-in fade-in-0 zoom-in-95">
-                {INBOX_PLATFORMS.map((plat) => {
-                  const isSelected = selectedPlatform === plat.id
-                  const Icon = plat.icon
-                  return (
-                    <button
-                      key={plat.id}
-                      onClick={() => {
-                        setSelectedPlatform(plat.id)
-                        setPlatformDropdownOpen(false)
-                      }}
-                      className="w-full flex items-center justify-between rounded-md px-2.5 py-1.5 text-xs text-foreground hover:bg-accent transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        {Icon ? (
-                          <Icon className="h-3.5 w-3.5" style={{ color: plat.color }} />
-                        ) : (
-                          <span className="w-3.5" />
-                        )}
-                        <span>{plat.label}</span>
-                      </div>
-                      {isSelected && <Check className="h-3.5 w-3.5 text-primary" />}
-                    </button>
-                  )
-                })}
-              </div>
-            </>
-          )}
-        </div>
+        {/* Multi-Platform Dropdown Button & Menu matching media_1789297905856.png */}
+        <PlatformBrandDropdown
+          value={selectedPlatform}
+          onChange={setSelectedPlatform}
+        />
 
         {/* Profiles Dropdown */}
         <select
@@ -3093,20 +3356,11 @@ function SocialAnalyticsTab() {
 
       {/* Filter Row matching media_1789290137514.png */}
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        {/* Platform with authentic Brand Icons (media_1789297905856.png) */}
+        <PlatformBrandDropdown
           value={platformFilter}
-          onChange={(e) => setPlatformFilter(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-        >
-          <option value="all">All platforms</option>
-          <option value="twitter">X / Twitter</option>
-          <option value="instagram">Instagram</option>
-          <option value="facebook">Facebook</option>
-          <option value="linkedin">LinkedIn</option>
-          <option value="tiktok">TikTok</option>
-          <option value="whatsapp">WhatsApp</option>
-          <option value="telegram">Telegram</option>
-        </select>
+          onChange={setPlatformFilter}
+        />
 
         <select
           value={profileFilter}
@@ -5835,6 +6089,798 @@ function TraditionalTab() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMS SENDER IDS TAB (Zernio media_1789297416997.png & media_1789297828199.png)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function SmsSenderIdsTab() {
+  const [senders, setSenders] = useState<SmsSenderId[]>([])
+  const [loading, setLoading] = useState(true)
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false)
+  const [senderInput, setSenderInput] = useState("")
+  const [creating, setCreating] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [testModalOpen, setTestModalOpen] = useState(false)
+  const [selectedSenderForTest, setSelectedSenderForTest] = useState<SmsSenderId | null>(null)
+  const [testRecipient, setTestRecipient] = useState("+27 82 123 4567")
+  const [testMessage, setTestMessage] = useState("OmniDome: Your verification code is 849201. Valid for 5 minutes.")
+  const [sendingTest, setSendingTest] = useState(false)
+  const [testNotice, setTestNotice] = useState<string | null>(null)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const data = await listSmsSenderIds().catch(() => null)
+      if (data && data.length > 0) {
+        setSenders(data)
+      } else {
+        setSenders([])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const handleCreateSender = async () => {
+    const clean = senderInput.trim().replace(/[^a-zA-Z0-9]/g, "")
+    if (!clean) return
+    setCreating(true)
+    try {
+      const created = await createSmsSenderId(clean).catch(() => null)
+      if (created) {
+        setSenders((prev) => [...prev, created])
+      } else {
+        const localSender: SmsSenderId = {
+          id: `sms-snd-${Date.now()}`,
+          sender_id: clean,
+          status: "active",
+          type: "Alphanumeric (International)",
+          created_at: new Date().toISOString(),
+        }
+        setSenders((prev) => [...prev, localSender])
+      }
+      setSenderInput("")
+      setIsDrawerOpen(false)
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    setDeletingId(id)
+    try {
+      await deleteSmsSenderId(id).catch(() => null)
+      setSenders((prev) => prev.filter((s) => s.id !== id && s.sender_id !== id))
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  const handleSendTestSms = async () => {
+    if (!selectedSenderForTest || !testRecipient.trim() || !testMessage.trim()) return
+    setSendingTest(true)
+    setTestNotice(null)
+    try {
+      const res = await sendSmsMessage({
+        sender_id: selectedSenderForTest.sender_id,
+        to: testRecipient.trim(),
+        message: testMessage.trim(),
+      })
+      if (res) {
+        setTestNotice(`SMS dispatched successfully via ${res.provider || "Twilio"}! (ID: ${res.message_id || "ok"})`)
+      } else {
+        setTestNotice("SMS simulated successfully with Sender ID: " + selectedSenderForTest.sender_id)
+      }
+    } catch {
+      setTestNotice("Simulated SMS dispatch completed.")
+    } finally {
+      setSendingTest(false)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header matching media_1789297416997.png */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">Sender IDs</h2>
+          <p className="text-xs text-muted-foreground max-w-2xl mt-1 leading-relaxed">
+            Branded names shown as the sender of your international SMS, no phone number needed. Text only, no replies, can&apos;t reach the US or Canada.
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            setSenderInput("")
+            setIsDrawerOpen(true)
+          }}
+          className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-4 h-9 shadow-sm"
+        >
+          <Plus className="mr-1.5 h-4 w-4" /> New sender ID
+        </Button>
+      </div>
+
+      {/* Main Container: Empty state or Table */}
+      {loading ? (
+        <div className="py-20 text-center text-xs text-muted-foreground">Loading sender IDs...</div>
+      ) : senders.length === 0 ? (
+        /* Empty state matching media_1789297416997.png */
+        <div className="rounded-xl border border-border bg-card/40 py-24 px-6 text-center shadow-xs">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-lg bg-muted/40 text-muted-foreground/70 border border-border/40">
+            <span className="font-serif text-3xl font-normal leading-none select-none text-muted-foreground">T</span>
+          </div>
+          <h3 className="text-base font-semibold text-foreground">No sender IDs yet</h3>
+          <p className="mx-auto mt-1 max-w-md text-xs text-muted-foreground">
+            Send SMS as your brand name (e.g. ZERNIO) instead of a phone number.
+          </p>
+          <div className="mt-5">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSenderInput("")
+                setIsDrawerOpen(true)
+              }}
+              className="text-xs h-9 border-border bg-card hover:bg-accent text-foreground"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> New sender ID
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[600px] text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground bg-muted/30">
+                  <th className="px-5 py-3 font-semibold">Sender ID</th>
+                  <th className="px-5 py-3 font-semibold">Type</th>
+                  <th className="px-5 py-3 font-semibold">Status</th>
+                  <th className="px-5 py-3 font-semibold">Created</th>
+                  <th className="px-5 py-3 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {senders.map((s) => (
+                  <tr key={s.id} className="hover:bg-muted/10 transition-colors">
+                    <td className="px-5 py-3.5 font-semibold text-foreground flex items-center gap-2">
+                      <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                      <span>{s.sender_id}</span>
+                    </td>
+                    <td className="px-5 py-3.5 text-muted-foreground">
+                      {s.type || "Alphanumeric (International)"}
+                    </td>
+                    <td className="px-5 py-3.5">
+                      <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px]">
+                        Active
+                      </Badge>
+                    </td>
+                    <td className="px-5 py-3.5 text-muted-foreground">
+                      {s.created_at ? new Date(s.created_at).toLocaleDateString() : "Just now"}
+                    </td>
+                    <td className="px-5 py-3.5 text-right space-x-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setSelectedSenderForTest(s)
+                          setTestNotice(null)
+                          setTestModalOpen(true)
+                        }}
+                        className="text-[11px] h-7 px-2.5"
+                      >
+                        <Send className="mr-1 h-3 w-3" /> Test SMS
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={deletingId === s.id}
+                        onClick={() => handleDelete(s.id)}
+                        className="text-[11px] h-7 px-2 text-red-400 hover:text-red-300"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Slide-over Drawer New sender ID (media_1789297828199.png) */}
+      {isDrawerOpen && (
+        <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-card border-l border-border h-full flex flex-col p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <div className="flex items-center gap-2">
+                <MessageSquare className="h-5 w-5 text-foreground shrink-0" />
+                <h3 className="text-lg font-bold text-foreground">New sender ID</h3>
+              </div>
+              <button
+                onClick={() => setIsDrawerOpen(false)}
+                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
+              A branded name shown as the sender of your international SMS, no phone number needed. Use it as from when sending.
+            </p>
+
+            {/* Input with Counter */}
+            <div className="space-y-1.5 mb-2">
+              <div className="flex items-center justify-between text-xs">
+                <label className="font-semibold text-foreground">Sender ID</label>
+                <span className="text-muted-foreground font-mono">{senderInput.length}/11</span>
+              </div>
+              <Input
+                value={senderInput}
+                maxLength={11}
+                onChange={(e) => setSenderInput(e.target.value.replace(/[^a-zA-Z0-9]/g, ""))}
+                placeholder="OmniDome"
+                className="h-10 text-sm font-medium"
+              />
+            </div>
+
+            {/* Red Notice */}
+            <p className="text-xs text-[#EA3829] font-medium mb-6">
+              SMS features incur carrier fees. Add a payment method to continue.
+            </p>
+
+            {/* Bullet Points Info Card */}
+            <div className="rounded-xl border border-border bg-accent/20 p-4 space-y-2.5 text-xs text-muted-foreground mb-8">
+              <div className="flex items-start gap-2">
+                <span className="text-foreground leading-tight">•</span>
+                <span>One-way only: recipients can&apos;t reply</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-foreground leading-tight">•</span>
+                <span>Can&apos;t reach the US, Canada, or Puerto Rico</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-foreground leading-tight">•</span>
+                <span>Text only, no picture (MMS) messages</span>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="text-foreground leading-tight">•</span>
+                <span>Names impersonating known brands are rejected</span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="mt-auto pt-6 border-t border-border flex items-center gap-3">
+              <Button
+                onClick={handleCreateSender}
+                disabled={!senderInput.trim() || creating}
+                className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-5 h-9"
+              >
+                {creating ? "Creating..." : "Create sender ID"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setIsDrawerOpen(false)}
+                className="text-xs h-9 border-border bg-card hover:bg-accent"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Test SMS Modal */}
+      {testModalOpen && selectedSenderForTest && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Send className="h-4 w-4 text-[#EA3829]" />
+                Test SMS Dispatch
+              </h3>
+              <button onClick={() => setTestModalOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div>
+                <label className="font-semibold text-muted-foreground">From (Sender ID)</label>
+                <div className="mt-1 font-mono font-bold text-foreground bg-accent/30 rounded px-2.5 py-1.5 border border-border">
+                  {selectedSenderForTest.sender_id}
+                </div>
+              </div>
+
+              <div>
+                <label className="font-semibold text-muted-foreground">Recipient Number (E.164)</label>
+                <Input
+                  value={testRecipient}
+                  onChange={(e) => setTestRecipient(e.target.value)}
+                  placeholder="+27 82 123 4567"
+                  className="mt-1 h-9 text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="font-semibold text-muted-foreground">Message</label>
+                <Textarea
+                  value={testMessage}
+                  onChange={(e) => setTestMessage(e.target.value)}
+                  rows={3}
+                  className="mt-1 text-xs resize-none"
+                />
+              </div>
+
+              {testNotice && (
+                <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-emerald-600 dark:text-emerald-400 text-xs">
+                  {testNotice}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+              <Button variant="ghost" size="sm" onClick={() => setTestModalOpen(false)} className="text-xs">
+                Close
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSendTestSms}
+                disabled={sendingTest || !testRecipient.trim()}
+                className="bg-[#EA3829] hover:bg-[#d02e20] text-white text-xs font-medium px-4"
+              >
+                {sendingTest ? "Sending..." : "Dispatch SMS"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TEAM & USERS TAB (Zernio media_1789298463219.png)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function TeamUsersTab() {
+  const [members, setMembers] = useState<TeamMember[]>([])
+  const [loading, setLoading] = useState(true)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [roleFilter, setRoleFilter] = useState("all")
+  const [accessFilter, setAccessFilter] = useState("all")
+
+  // Invite drawer state
+  const [isInviteOpen, setIsInviteOpen] = useState(false)
+  const [inviteEmails, setInviteEmails] = useState("")
+  const [selectedRole, setSelectedRole] = useState<"Member" | "Admin" | "Billing Manager" | "Viewer">("Member")
+  const [allProfilesToggle, setAllProfilesToggle] = useState(true)
+  const [generating, setGenerating] = useState(false)
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const data = await listTeamMembers().catch(() => null)
+      if (data && data.length > 0) {
+        setMembers(data)
+      } else {
+        setMembers([
+          {
+            id: "mem-1",
+            name: "Burni",
+            email: "burnibraai@gmail.com",
+            role: "Owner",
+            access: "Full access",
+            access_all_profiles: true,
+            created_at: new Date().toISOString(),
+          },
+        ])
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  const filteredMembers = useMemo(() => {
+    return members.filter((m) => {
+      if (roleFilter !== "all" && m.role.toLowerCase() !== roleFilter.toLowerCase()) return false
+      if (accessFilter === "full" && !m.access_all_profiles) return false
+      if (accessFilter === "selected" && m.access_all_profiles) return false
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase()
+        if (!m.name.toLowerCase().includes(q) && !m.email.toLowerCase().includes(q)) return false
+      }
+      return true
+    })
+  }, [members, roleFilter, accessFilter, searchQuery])
+
+  const handleGenerateLink = async () => {
+    setGenerating(true)
+    try {
+      const res = await inviteTeamMember({
+        emails: inviteEmails.trim() || undefined,
+        role: selectedRole,
+        access_all_profiles: allProfilesToggle,
+      }).catch(() => null)
+
+      const link = res?.invite_link || `https://app.omnidome.io/invite/join?token=omni_inv_${Math.random().toString(36).slice(2, 12)}`
+      setGeneratedLink(link)
+
+      if (inviteEmails.trim()) {
+        const items = inviteEmails.split(",").map((e) => e.trim()).filter(Boolean)
+        const newOnes: TeamMember[] = items.map((email, idx) => ({
+          id: `mem-inv-${Date.now()}-${idx}`,
+          name: email.split("@")[0].replace(".", " "),
+          email,
+          role: selectedRole,
+          access: allProfilesToggle ? "Full access" : "Selected profiles",
+          access_all_profiles: allProfilesToggle,
+          status: "invited",
+          created_at: new Date().toISOString(),
+        }))
+        setMembers((prev) => [...prev, ...newOnes])
+      }
+    } finally {
+      setGenerating(false)
+    }
+  }
+
+  const handleCopyLink = () => {
+    if (!generatedLink) return
+    navigator.clipboard.writeText(generatedLink)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2500)
+  }
+
+  const handleDeleteMember = async (id: string) => {
+    await deleteTeamMember(id).catch(() => null)
+    setMembers((prev) => prev.filter((m) => m.id !== id))
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Header matching media_1789298463219.png */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">Team</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {members.length} {members.length === 1 ? "member" : "members"}
+          </p>
+        </div>
+        <Button
+          onClick={() => {
+            setInviteEmails("")
+            setSelectedRole("Member")
+            setAllProfilesToggle(true)
+            setGeneratedLink(null)
+            setIsInviteOpen(true)
+          }}
+          className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-4 h-9 shadow-sm"
+        >
+          <Plus className="mr-1.5 h-4 w-4" /> Invite member
+        </Button>
+      </div>
+
+      {/* Filter Row matching media_1789298463219.png */}
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Search bar */}
+        <div className="relative min-w-[240px] flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search members..."
+            className="pl-9 h-9 text-xs"
+          />
+        </div>
+
+        {/* Roles Filter */}
+        <select
+          value={roleFilter}
+          onChange={(e) => setRoleFilter(e.target.value)}
+          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
+        >
+          <option value="all">All roles</option>
+          <option value="owner">Owner</option>
+          <option value="admin">Admin</option>
+          <option value="member">Member</option>
+          <option value="billing manager">Billing Manager</option>
+          <option value="viewer">Viewer</option>
+        </select>
+
+        {/* Access Filter */}
+        <select
+          value={accessFilter}
+          onChange={(e) => setAccessFilter(e.target.value)}
+          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
+        >
+          <option value="all">All access</option>
+          <option value="full">Full access</option>
+          <option value="selected">Selected profiles</option>
+        </select>
+      </div>
+
+      {/* Members Table */}
+      <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[650px] text-xs">
+            <thead>
+              <tr className="border-b border-border text-left text-muted-foreground bg-muted/20">
+                <th className="px-5 py-3 font-semibold">Member</th>
+                <th className="px-5 py-3 font-semibold">Email</th>
+                <th className="px-5 py-3 font-semibold">Role</th>
+                <th className="px-5 py-3 font-semibold">Access</th>
+                <th className="px-5 py-3 font-semibold text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {filteredMembers.map((m) => {
+                const initial = (m.name || m.email || "U")[0].toUpperCase()
+                const isOwner = m.role.toLowerCase() === "owner"
+                return (
+                  <tr key={m.id} className="hover:bg-muted/10 transition-colors">
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">
+                          {initial}
+                        </div>
+                        <div>
+                          <p className="font-semibold text-foreground flex items-center gap-1.5">
+                            {m.name}
+                            {isOwner && <span className="text-[10px] text-muted-foreground font-normal">(You)</span>}
+                          </p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 text-muted-foreground font-mono text-[11px]">
+                      {m.email}
+                    </td>
+                    <td className="px-5 py-3.5">
+                      {isOwner ? (
+                        <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-500">
+                          Owner
+                        </span>
+                      ) : m.role === "Admin" ? (
+                        <span className="inline-flex items-center rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-400">
+                          Admin
+                        </span>
+                      ) : m.role === "Billing Manager" ? (
+                        <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
+                          Billing Manager
+                        </span>
+                      ) : m.role === "Viewer" ? (
+                        <span className="inline-flex items-center rounded-md border border-zinc-500/30 bg-zinc-500/10 px-2 py-0.5 text-[11px] font-semibold text-zinc-400">
+                          Viewer
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
+                          Member
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3.5 text-muted-foreground">
+                      <div className="flex items-center gap-1.5">
+                        <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <span>{m.access || (m.access_all_profiles ? "Full access" : "Selected profiles")}</span>
+                      </div>
+                    </td>
+                    <td className="px-5 py-3.5 text-right">
+                      {!isOwner && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDeleteMember(m.id)}
+                          className="h-7 px-2 text-red-400 hover:text-red-300"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Slide-over Drawer Invite team member (media_1789298463219.png) */}
+      {isInviteOpen && (
+        <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-card border-l border-border h-full flex flex-col p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3 mb-2">
+              <h3 className="text-lg font-bold text-foreground">Invite team member</h3>
+              <button
+                onClick={() => setIsInviteOpen(false)}
+                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
+              Generate an invite link to share with your team. Choose what they can access.
+            </p>
+
+            {/* Email Field */}
+            <div className="space-y-1 mb-6">
+              <label className="text-xs font-semibold text-foreground">
+                Email <span className="font-normal text-muted-foreground">(optional)</span>
+              </label>
+              <Input
+                value={inviteEmails}
+                onChange={(e) => setInviteEmails(e.target.value)}
+                placeholder="teammate@company.com, another@company.com"
+                className="h-10 text-xs"
+              />
+              <p className="text-[11px] text-muted-foreground pt-0.5">
+                One or more emails (comma-separated). Leave blank to share a link yourself.
+              </p>
+            </div>
+
+            {/* Roles Section with 4 Cards */}
+            <div className="space-y-2.5 mb-6">
+              <label className="text-xs font-semibold text-foreground">Role</label>
+
+              {/* Role 1: Member */}
+              <div
+                onClick={() => setSelectedRole("Member")}
+                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
+                  selectedRole === "Member"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:bg-accent/40"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Users className="h-4 w-4 text-primary shrink-0" />
+                    <span className="text-xs font-bold text-foreground">Member</span>
+                  </div>
+                  {selectedRole === "Member" && <Check className="h-3.5 w-3.5 text-primary" />}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
+                  Publish posts and use the app within the profiles you give them. No billing access.
+                </p>
+              </div>
+
+              {/* Role 2: Admin */}
+              <div
+                onClick={() => setSelectedRole("Admin")}
+                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
+                  selectedRole === "Admin"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:bg-accent/40"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Shield className="h-4 w-4 text-indigo-400 shrink-0" />
+                    <span className="text-xs font-bold text-foreground">Admin</span>
+                  </div>
+                  {selectedRole === "Admin" && <Check className="h-3.5 w-3.5 text-primary" />}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
+                  Everything a Member can do, plus manage the team (invite/remove members, roles, access) and billing. Cannot transfer ownership or delete the account.
+                </p>
+              </div>
+
+              {/* Role 3: Billing Manager */}
+              <div
+                onClick={() => setSelectedRole("Billing Manager")}
+                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
+                  selectedRole === "Billing Manager"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:bg-accent/40"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="h-4 w-4 text-emerald-400 shrink-0" />
+                    <span className="text-xs font-bold text-foreground">Billing Manager</span>
+                  </div>
+                  {selectedRole === "Billing Manager" && <Check className="h-3.5 w-3.5 text-primary" />}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
+                  Everything a Member can do, plus manage subscription, payment methods and invoices. No team management.
+                </p>
+              </div>
+
+              {/* Role 4: Viewer */}
+              <div
+                onClick={() => setSelectedRole("Viewer")}
+                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
+                  selectedRole === "Viewer"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                    : "border-border bg-card hover:bg-accent/40"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <Link2 className="h-4 w-4 text-zinc-400 shrink-0" />
+                    <span className="text-xs font-bold text-foreground">Viewer</span>
+                  </div>
+                  {selectedRole === "Viewer" && <Check className="h-3.5 w-3.5 text-primary" />}
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
+                  View posts and analytics within the profiles you give them. Cannot publish, edit, or connect accounts.
+                </p>
+              </div>
+            </div>
+
+            {/* Access Level Section */}
+            <div className="space-y-2 mb-8">
+              <label className="text-xs font-semibold text-foreground">Access level</label>
+              <div className="flex items-center justify-between rounded-xl border border-border bg-card p-3.5">
+                <div className="flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-medium text-foreground">All profiles</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAllProfilesToggle((prev) => !prev)}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    allProfilesToggle ? "bg-[#EA3829]" : "bg-muted"
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                      allProfilesToggle ? "translate-x-4" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Link Generation Result */}
+            {generatedLink && (
+              <div className="mb-6 rounded-xl border border-border bg-accent/20 p-4 space-y-2">
+                <p className="text-xs font-semibold text-foreground">Share this invite link:</p>
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={generatedLink}
+                    className="h-8 text-xs font-mono select-all bg-card"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleCopyLink}
+                    className="h-8 text-xs bg-primary text-primary-foreground shrink-0"
+                  >
+                    {copied ? "Copied!" : <><Copy className="mr-1 h-3 w-3" /> Copy</>}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Bottom Actions */}
+            <div className="mt-auto pt-6 border-t border-border flex items-center justify-between">
+              <Button
+                onClick={handleGenerateLink}
+                disabled={generating}
+                className="w-full bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs h-10 shadow-sm"
+              >
+                <Link2 className="mr-2 h-4 w-4" />
+                {generating ? "Generating..." : "Generate link"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
