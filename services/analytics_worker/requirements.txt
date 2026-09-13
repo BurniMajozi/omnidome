@@ -1,0 +1,3 @@
+-r ../common/requirements.txt
+-r ../marketing/requirements.txt
+apscheduler==3.10.4

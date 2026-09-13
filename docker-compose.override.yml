@@ -26,7 +26,7 @@ services:
     command: >
       sh -c "uvicorn services.sales.main:app --host 0.0.0.0 --port 8002 --reload"
     environment:
-      - DATABASE_URL=postgresql://admin:change_me@db:5432/coreconnect
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - LICENSE_ENFORCEMENT=warn
       - AUTO_CREATE_TABLES=true
       # External bridges deliberately BLANKED (offline dev — base .env would
@@ -52,13 +52,17 @@ services:
     command: >
       sh -c "uvicorn services.marketing.main:app --host 0.0.0.0 --port 8014 --reload"
     environment:
-      - DATABASE_URL=postgresql://admin:***@db:5432/coreconnect
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - LICENSE_ENFORCEMENT=warn
       - AUTO_CREATE_TABLES=true
       # Zernio + support bridge deliberately BLANKED (offline dev — the lazy
       # client returns None and webhooks/automations degrade to local-only).
+      # To test connectors locally, paste your real Zernio values here (or in
+      # the root .env): API key, webhook secret, and the profile id that the
+      # /connect/{platform} flow attaches new accounts to.
       - ZERNIO_API_KEY=
       - ZERNIO_WEBHOOK_SECRET=
+      - ZERNIO_PROFILE_ID=
       - SUPPORT_SERVICE_URL=
       - SOCIAL_TICKET_CUSTOMER_ID=
       - AUTH_ALLOW_ANONYMOUS=true
@@ -66,6 +70,28 @@ services:
       - "8014:8014"
     volumes:
       # Hot reload: no rebuild after each edit.
+      - ./services/marketing:/app/services/marketing:ro
+      - ./services/common:/app/services/common:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Analytics sync worker (dev). Idle until ZERNIO_API_KEY + ZERNIO_PROFILE_ID
+  # are set. SEED_TENANT_ID (optional) maps one tenant to the profile so a
+  # single-profile dev setup starts syncing without calling the API by hand.
+  analytics_worker:
+    build:
+      context: .
+      dockerfile: services/analytics_worker/Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      - LICENSE_ENFORCEMENT=warn
+      - ZERNIO_API_KEY=
+      - ZERNIO_PROFILE_ID=
+      - SEED_TENANT_ID=
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./services/analytics_worker:/app/services/analytics_worker:ro
       - ./services/marketing:/app/services/marketing:ro
       - ./services/common:/app/services/common:ro
     depends_on:
