@@ -232,6 +232,46 @@ export interface WhatsAppBroadcastStats {
   failed: number
 }
 
+export interface WhatsAppSender {
+  id: string
+  name: string
+  number: string
+  type: string
+  name_review: string
+  business_verification: string
+  status: string
+  created_at?: string
+}
+
+export interface WhatsAppTemplate {
+  id: string
+  name: string
+  category: string
+  language: string
+  status: string
+  header?: string
+  body: string
+  footer?: string
+  buttons?: string[]
+  created_at?: string
+}
+
+export interface WhatsAppFlowNode {
+  id: string
+  type: string
+  label: string
+}
+
+export interface WhatsAppFlow {
+  id: string
+  name: string
+  trigger: string
+  status: string
+  steps_count: number
+  nodes: WhatsAppFlowNode[]
+  created_at?: string
+}
+
 export interface AdCampaign {
   id: string
   tenant_id: string
@@ -259,6 +299,7 @@ export interface AdCampaignCreate {
   end_date?: string
   targeting?: Record<string, unknown>
   creative?: Record<string, unknown>
+  status?: string
 }
 
 export interface AdCampaignAnalytics {
@@ -578,6 +619,33 @@ export const sendWhatsAppBroadcast = (id: string) =>
 
 export const getWhatsAppBroadcastStats = (id: string) =>
   fetchMarketing<WhatsAppBroadcastStats>(`/whatsapp/broadcasts/${id}/stats`)
+
+export const listWhatsAppSenders = () =>
+  fetchMarketing<WhatsAppSender[]>("/whatsapp/senders")
+
+export const connectWhatsAppNumber = (data: { mode: "get_number" | "own_number"; country_code?: string; phone_number?: string; display_name?: string }) =>
+  fetchMarketing<WhatsAppSender>("/whatsapp/senders/connect", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const listWhatsAppTemplates = () =>
+  fetchMarketing<WhatsAppTemplate[]>("/whatsapp/templates")
+
+export const createWhatsAppTemplate = (data: { name: string; category: string; language: string; header?: string; body: string; footer?: string; buttons?: string[] }) =>
+  fetchMarketing<WhatsAppTemplate>("/whatsapp/templates", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const listWhatsAppFlows = () =>
+  fetchMarketing<WhatsAppFlow[]>("/whatsapp/flows")
+
+export const createWhatsAppFlow = (data: { name: string; trigger: string; nodes: WhatsAppFlowNode[] }) =>
+  fetchMarketing<WhatsAppFlow>("/whatsapp/flows", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
 
 // ── Ad Campaigns ─────────────────────────────────────────────────────
 

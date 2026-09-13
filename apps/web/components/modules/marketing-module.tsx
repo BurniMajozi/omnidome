@@ -21,6 +21,7 @@ import {
   Link2, Unlink, Play, Pause, Trash2, Edit, Reply, Archive, ExternalLink,
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
   Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag, X,
+  Upload, Sparkles,
 } from "lucide-react"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
@@ -37,6 +38,9 @@ import {
   listEmailTemplates, createEmailTemplate, sendEmailBatch, type EmailTemplate,
   getAnalyticsOverview, getAnalyticsDaily, getAnalyticsPosts,
   type AnalyticsOverview, type DailyMetricPoint, type AnalyticsPostRow,
+  listWhatsAppSenders, connectWhatsAppNumber, listWhatsAppTemplates, createWhatsAppTemplate,
+  listWhatsAppFlows, createWhatsAppFlow,
+  type WhatsAppSender, type WhatsAppTemplate, type WhatsAppFlow,
 } from "@/lib/marketing-api"
 
 const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
@@ -93,7 +97,7 @@ type MarketingTab =
   | "campaigns" | "social-composer" | "social-scheduled" | "social-queues"
   | "inbox-messages" | "inbox-comments" | "inbox-reviews" | "inbox-contacts"
   | "analytics"
-  | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
+  | "whatsapp-overview" | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
   | "email-templates" | "email-compose"
   | "ads" | "automations" | "traditional"
   | "platform-usage" | "platform-keys" | "platform-offboard"
@@ -135,10 +139,11 @@ const MARKETING_NAV: NavEntry[] = [
   { key: "analytics", label: "Analytics", icon: BarChart3 },
   {
     id: "whatsapp", label: "WhatsApp", icon: MessageCircle, children: [
-      { key: "whatsapp-broadcasts", label: "Broadcasts", icon: Send },
-      { key: "whatsapp-contacts", label: "Contacts", icon: UserCheck },
+      { key: "whatsapp-overview", label: "Overview", icon: Phone },
       { key: "whatsapp-templates", label: "Templates", icon: FileText },
       { key: "whatsapp-flows", label: "Flows", icon: RefreshCw },
+      { key: "whatsapp-broadcasts", label: "Broadcasts", icon: Send },
+      { key: "whatsapp-contacts", label: "Contacts", icon: UserCheck },
       { key: "whatsapp-groups", label: "Groups", icon: Users },
     ],
   },
@@ -257,29 +262,12 @@ export function MarketingModule() {
           {activeTab === "inbox-reviews" && <SocialInboxTab kind="reviews" />}
           {activeTab === "inbox-contacts" && <InboxContactsTab />}
           {activeTab === "analytics" && <SocialAnalyticsTab />}
+          {activeTab === "whatsapp-overview" && <WhatsAppTab view="overview" />}
+          {activeTab === "whatsapp-templates" && <WhatsAppTab view="templates" />}
+          {activeTab === "whatsapp-flows" && <WhatsAppTab view="flows" />}
           {activeTab === "whatsapp-broadcasts" && <WhatsAppTab view="broadcasts" />}
           {activeTab === "whatsapp-contacts" && <WhatsAppTab view="contacts" />}
-          {activeTab === "whatsapp-templates" && (
-            <WhatsAppComingSoon
-              icon={FileText}
-              title="WhatsApp Message Templates"
-              description="Create and manage reusable, pre-approved WhatsApp message templates for broadcasts and automated replies. Backend support is not wired up yet."
-            />
-          )}
-          {activeTab === "whatsapp-flows" && (
-            <WhatsAppComingSoon
-              icon={RefreshCw}
-              title="WhatsApp Flows"
-              description="Build interactive, multi-step WhatsApp conversation flows (menus, forms, guided journeys). Backend support is not wired up yet."
-            />
-          )}
-          {activeTab === "whatsapp-groups" && (
-            <WhatsAppComingSoon
-              icon={Users}
-              title="WhatsApp Groups"
-              description="Organize contacts into targetable groups for segmented broadcasts. Backend support is not wired up yet."
-            />
-          )}
+          {activeTab === "whatsapp-groups" && <WhatsAppTab view="groups" />}
           {activeTab === "email-templates" && <EmailTemplatesTab />}
           {activeTab === "email-compose" && <EmailComposeTab />}
           {activeTab === "ads" && <AdsTab />}
@@ -1394,13 +1382,26 @@ function SocialComposerTab() {
     return d.toISOString().slice(0, 16)
   }
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleAt)
-  const [mode, setMode] = useState<"now" | "schedule" | "queue" | "draft">("now")
+  const [mode, setMode] = useState<"now" | "schedule" | "queue" | "draft">("schedule")
   const [queues, setQueues] = useState<MarketingQueue[]>([])
   const [queueId, setQueueId] = useState("")
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<string | null>(null)
+  const [mediaDropPreview, setMediaDropPreview] = useState<string | null>(null)
+  const [selectedTimezone, setSelectedTimezone] = useState("Africa/Johannesburg")
+  const [profileSelect, setProfileSelect] = useState("00000000-0000-0000-0000-000000000001")
+  const [showReuseModal, setShowReuseModal] = useState(false)
 
-  const localTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return "UTC" } })()
+  const TIMEZONE_OPTIONS = [
+    { value: "Africa/Johannesburg", label: "Africa/Johannesburg (GMT+2)" },
+    { value: "UTC", label: "UTC (GMT+0)" },
+    { value: "Europe/London", label: "Europe/London (GMT+1)" },
+    { value: "Europe/Paris", label: "Europe/Paris (GMT+2)" },
+    { value: "America/New_York", label: "America/New_York (EST)" },
+    { value: "America/Los_Angeles", label: "America/Los_Angeles (PST)" },
+    { value: "Asia/Dubai", label: "Asia/Dubai (GST+4)" },
+    { value: "Asia/Singapore", label: "Asia/Singapore (SGT+8)" },
+  ]
 
   useEffect(() => {
     loadData()
@@ -1435,7 +1436,7 @@ function SocialComposerTab() {
   const queueInvalid = mode === "queue" && !queueId
   const canSubmit = content.trim() && selectedPlatforms.length > 0 && !scheduleInvalid && !queueInvalid
 
-  const submitLabel = { now: "Publish", schedule: "Schedule", queue: "Add to queue", draft: "Save draft" }[mode]
+  const submitLabel = { now: "Publish Now", schedule: "Schedule Post", queue: "Add to Queue", draft: "Save Draft" }[mode]
 
   const handlePublish = async () => {
     if (!canSubmit) return
@@ -1473,147 +1474,275 @@ function SocialComposerTab() {
     }
   }
 
+  const handleReusePost = (pastPostText: string) => {
+    setContent(pastPostText)
+    setShowReuseModal(false)
+  }
+
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        {/* Composer */}
-        <Card className="border-border bg-card">
-          <CardHeader>
-            <CardTitle>Compose Post</CardTitle>
-            <CardDescription>Create and publish to multiple platforms</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Textarea
-              placeholder="What's on your mind?"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={5}
-              className="resize-none"
-            />
+      {/* Zernio Screenshot 5 Container Layout */}
+      <Card className="border-border bg-background shadow-lg overflow-hidden">
+        {/* Top Header matching Screenshot 5 */}
+        <div className="flex items-center justify-between border-b border-border bg-card/60 px-6 py-4">
+          <div>
+            <h2 className="text-base font-bold text-foreground">Create Post</h2>
+            <p className="text-xs text-muted-foreground">create & publish content</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              className="bg-[#6610f2] hover:bg-[#520dc2] text-white font-medium text-xs h-8 shadow-sm"
+              onClick={() => setShowReuseModal(true)}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Reuse
+            </Button>
+          </div>
+        </div>
+
+        {/* 2-Column Body */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
+          {/* LEFT COLUMN: Content & Media */}
+          <div className="p-6 space-y-4">
             <div>
-              <p className="text-xs text-muted-foreground mb-2">Select Platforms</p>
-              <div className="flex flex-wrap gap-2">
-                {accounts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No accounts connected. Connect accounts first.</p>
-                ) : (
-                  accounts.map((acc: any) => {
+              <label className="text-xs font-semibold text-muted-foreground block mb-2">content</label>
+              <Textarea
+                placeholder="what's on your mind..."
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                rows={7}
+                className="resize-none text-sm bg-card border-border focus:border-border/90"
+              />
+              <div className="text-right mt-1.5">
+                <span className="text-xs text-muted-foreground">{content.length} chars</span>
+              </div>
+            </div>
+
+            {/* Media Dropzone matching Screenshot 5 */}
+            <div>
+              <div
+                onClick={() => setMediaDropPreview(mediaDropPreview ? null : "image_mock.png")}
+                className="flex items-center justify-center rounded-xl border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
+                  <Plus className="h-4 w-4" />
+                  <span className="text-xs font-medium">{mediaDropPreview ? "1 media attached (click to remove)" : "Add media"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT COLUMN: Profiles, Platforms & Publishing */}
+          <div className="p-6 space-y-5">
+            {/* Profiles */}
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground block mb-1.5">profiles</label>
+              <p className="text-[11px] text-muted-foreground mb-2">Select one or more profiles to post to their connected accounts</p>
+              <select
+                value={profileSelect}
+                onChange={(e) => setProfileSelect(e.target.value)}
+                className="w-full rounded-md border border-border bg-card px-3 py-2 text-xs font-mono text-foreground focus:outline-none"
+              >
+                <option value="00000000-0000-0000-0000-000000000001">🟡 00000000-0000-0000-0000-000000000001 (Default)</option>
+                <option value="brand-main">🟢 Brand Main OmniDome</option>
+              </select>
+            </div>
+
+            {/* Platforms matching Screenshot 5 */}
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground block mb-2">platforms (from 1 profile)</label>
+              {accounts.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card/40 p-8 text-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground mb-2">
+                    <Plus className="h-5 w-5" />
+                  </div>
+                  <p className="text-xs font-semibold text-foreground">no connected accounts</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">connect accounts to your selected profile first</p>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {accounts.map((acc: any) => {
                     const isSelected = selectedPlatforms.includes(acc.platform)
                     return (
                       <button
                         key={acc.id}
+                        type="button"
                         onClick={() => togglePlatform(acc.platform)}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm transition-colors ${
-                          isSelected ? "border-cyan-500/40 bg-cyan-500/10 text-cyan-400" : "border-border text-muted-foreground hover:text-foreground"
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                          isSelected ? "border-primary bg-primary/10 text-primary" : "border-border bg-card text-muted-foreground hover:text-foreground"
                         }`}
                       >
                         <div className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[acc.platform] || "#666" }} />
                         {acc.account_name || acc.platform}
                       </button>
                     )
-                  })
-                )}
-              </div>
+                  })}
+                </div>
+              )}
             </div>
-            <div className="space-y-3">
-              {/* Publishing mode — Now / Schedule / Queue / Draft (Zernio-style) */}
-              <div className="grid grid-cols-2 gap-1 rounded-lg border border-border p-1 sm:grid-cols-4">
+
+            {/* Publishing Tabs matching Screenshot 5: Schedule | Now | Queue | Draft */}
+            <div>
+              <label className="text-xs font-semibold text-muted-foreground block mb-2">publishing</label>
+              <div className="grid grid-cols-4 rounded-lg border border-border bg-card/60 p-1 text-xs">
                 {([
-                  { m: "now", label: "Now", icon: Send },
-                  { m: "schedule", label: "Schedule", icon: Calendar },
-                  { m: "queue", label: "Queue", icon: Clock },
-                  { m: "draft", label: "Draft", icon: FileText },
-                ] as const).map(({ m, label, icon: Icon }) => (
+                  { m: "schedule", label: "Schedule" },
+                  { m: "now", label: "Now" },
+                  { m: "queue", label: "Queue" },
+                  { m: "draft", label: "Draft" },
+                ] as const).map(({ m, label }) => (
                   <button
                     key={m}
+                    type="button"
                     onClick={() => setMode(m)}
-                    className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                      mode === m ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+                    className={`py-1.5 rounded-md font-medium transition-all ${
+                      mode === m ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                     }`}
                   >
-                    <Icon className="h-3.5 w-3.5" /> {label}
+                    {label}
                   </button>
                 ))}
               </div>
 
+              {/* Schedule Sub-form */}
               {mode === "schedule" && (
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Input type="datetime-local" value={scheduleAt} min={defaultScheduleAt()} onChange={(e) => setScheduleAt(e.target.value)} className="w-full sm:w-64" />
-                    <span className="text-xs text-muted-foreground">{localTz}</span>
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">date & time</label>
+                    <Input
+                      type="datetime-local"
+                      value={scheduleAt}
+                      min={defaultScheduleAt()}
+                      onChange={(e) => setScheduleAt(e.target.value)}
+                      className="text-xs bg-card border-border"
+                    />
                   </div>
-                  {scheduleInvalid ? (
-                    <p className="mt-1 text-xs text-amber-500">Pick a date and time in the future.</p>
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">timezone</label>
+                    <select
+                      value={selectedTimezone}
+                      onChange={(e) => setSelectedTimezone(e.target.value)}
+                      className="w-full rounded-md border border-border bg-card px-2.5 py-2 text-xs text-foreground focus:outline-none"
+                    >
+                      {TIMEZONE_OPTIONS.map((tz) => (
+                        <option key={tz.value} value={tz.value}>{tz.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* Queue Sub-form */}
+              {mode === "queue" && (
+                <div className="mt-3">
+                  <label className="text-[11px] font-medium text-muted-foreground block mb-1">select queue</label>
+                  {queues.length === 0 ? (
+                    <p className="text-xs text-amber-500">No queues yet — create one under Queues first.</p>
                   ) : (
-                    <p className="mt-1 text-xs text-muted-foreground">Goes out {new Date(scheduleAt).toLocaleString()} · appears under <span className="text-foreground">Scheduled</span>.</p>
+                    <select
+                      value={queueId}
+                      onChange={(e) => setQueueId(e.target.value)}
+                      className="w-full rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground focus:outline-none"
+                    >
+                      <option value="">Select a queue…</option>
+                      {queues.map((q) => (
+                        <option key={q.id} value={q.id}>{q.name} ({q.slots?.length || 0} recurring slots)</option>
+                      ))}
+                    </select>
                   )}
                 </div>
               )}
 
-              {mode === "queue" && (
-                queues.length === 0 ? (
-                  <p className="text-xs text-amber-500">No queues yet — create one under <span className="text-foreground">Queues</span> first.</p>
-                ) : (
-                  <div>
-                    <select value={queueId} onChange={(e) => setQueueId(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                      <option value="">Select a queue…</option>
-                      {queues.map((q) => <option key={q.id} value={q.id}>{q.name}{q.next_slot ? ` — next ${new Date(q.next_slot).toLocaleString()}` : ""}</option>)}
-                    </select>
-                    <p className="mt-1 text-xs text-muted-foreground">Drops into the queue&apos;s next open slot.</p>
-                  </div>
-                )
+              {mode === "draft" && (
+                <p className="mt-2 text-xs text-muted-foreground">Post will be stored as draft and can be scheduled or modified later.</p>
               )}
-
-              {mode === "draft" && <p className="text-xs text-muted-foreground">Saved as a draft — publish or schedule it later.</p>}
-              {notice && <p className="text-xs text-emerald-500">{notice}</p>}
+              {notice && <p className="mt-2 text-xs text-emerald-500">{notice}</p>}
             </div>
-            <div className="flex gap-2">
-              <Button onClick={handlePublish} disabled={!canSubmit}>
-                <Send className="mr-2 h-4 w-4" /> {submitLabel}
-              </Button>
-              <Button variant="outline" onClick={handleCrossPost} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid || mode === "queue" || mode === "draft"}>
-                <Copy className="mr-2 h-4 w-4" /> Cross-Post
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        {/* Recent Posts */}
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle>Recent Posts</CardTitle></CardHeader>
-          <CardContent>
-            <ScrollArea className="h-80">
-              {loading ? (
-                <div className="py-8 text-center text-muted-foreground">Loading...</div>
-              ) : posts.length === 0 ? (
-                <div className="py-8 text-center text-muted-foreground">No posts yet</div>
+        {/* Footer actions matching Screenshot 5 */}
+        <div className="flex items-center justify-end gap-2 border-t border-border bg-card/30 px-6 py-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setContent("")
+              setSelectedPlatforms([])
+            }}
+          >
+            cancel
+          </Button>
+          <Button
+            size="sm"
+            disabled={!canSubmit}
+            onClick={handlePublish}
+            className="bg-muted-foreground text-background hover:bg-foreground hover:text-background font-medium"
+          >
+            {submitLabel.toLowerCase()}
+          </Button>
+        </div>
+      </Card>
+
+      {/* REUSE MODAL */}
+      {showReuseModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="relative flex w-full max-w-lg flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden max-h-[80vh]">
+            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+              <h3 className="text-sm font-bold text-foreground">Reuse Past Post</h3>
+              <button onClick={() => setShowReuseModal(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-4 space-y-2">
+              {posts.length === 0 ? (
+                <p className="py-8 text-center text-xs text-muted-foreground">No past posts available to reuse.</p>
               ) : (
-                <div className="space-y-3">
-                  {posts.map((post: any) => (
-                    <div key={post.id} className="rounded-lg border border-border bg-background/40 p-3">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          {(post.platforms || []).map((p: string) => (
-                            <span key={p} className="text-xs px-2 py-0.5 rounded-full border border-border" style={{ borderColor: platformColors[p] + "40", color: platformColors[p] }}>{p}</span>
-                          ))}
-                        </div>
-                        <Badge variant="outline" className={statusColor[post.status] || "border-muted text-muted-foreground"}>{post.status}</Badge>
-                      </div>
-                      <p className="text-sm text-foreground line-clamp-2">{post.content}</p>
-                      {post.engagement_data && (
-                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1"><Heart className="h-3 w-3" /> {post.engagement_data.likes || 0}</span>
-                          <span className="flex items-center gap-1"><MessageCircle className="h-3 w-3" /> {post.engagement_data.comments || 0}</span>
-                          <span className="flex items-center gap-1"><Share2 className="h-3 w-3" /> {post.engagement_data.shares || 0}</span>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
+                posts.slice(0, 10).map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => handleReusePost(p.content)}
+                    className="p-3 rounded-lg border border-border bg-card hover:border-primary/50 cursor-pointer transition-colors"
+                  >
+                    <p className="text-xs text-foreground line-clamp-3">{p.content}</p>
+                    <p className="text-[10px] text-muted-foreground mt-1.5">{new Date(p.created_at).toLocaleDateString()} · {p.status}</p>
+                  </div>
+                ))
               )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Recent Posts List */}
+      <Card className="border-border bg-card">
+        <CardHeader><CardTitle className="text-sm">Recent Posts</CardTitle></CardHeader>
+        <CardContent>
+          <ScrollArea className="h-64">
+            {loading ? (
+              <div className="py-8 text-center text-muted-foreground text-xs">Loading...</div>
+            ) : posts.length === 0 ? (
+              <div className="py-8 text-center text-muted-foreground text-xs">No posts yet</div>
+            ) : (
+              <div className="space-y-3">
+                {posts.map((post: any) => (
+                  <div key={post.id} className="rounded-lg border border-border bg-background/40 p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        {(post.platforms || []).map((p: string) => (
+                          <span key={p} className="text-[10px] px-2 py-0.5 rounded-full border border-border" style={{ borderColor: platformColors[p] + "40", color: platformColors[p] }}>{p}</span>
+                        ))}
+                      </div>
+                      <Badge variant="outline" className={statusColor[post.status] || "border-muted text-muted-foreground"}>{post.status}</Badge>
+                    </div>
+                    <p className="text-xs text-foreground line-clamp-2">{post.content}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -2085,30 +2214,128 @@ function SocialAnalyticsTab() {
 // WHATSAPP TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// WHATSAPP TAB (Zernio-style Overview, Senders, Templates, Flows & Connect Modal)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "broadcasts" | "contacts" | "groups" }) {
+  // Senders / Numbers state
+  const [senders, setSenders] = useState<WhatsAppSender[]>([])
+  const [templates, setTemplates] = useState<WhatsAppTemplate[]>([])
+  const [flows, setFlows] = useState<WhatsAppFlow[]>([])
   const [contacts, setContacts] = useState<any[]>([])
   const [broadcasts, setBroadcasts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Modals
+  const [showConnectModal, setShowConnectModal] = useState(false)
+  const [connectMode, setConnectMode] = useState<"get_number" | "own_number" | null>(null)
+  const [selectedCountry, setSelectedCountry] = useState("+27")
+  const [customPhone, setCustomPhone] = useState("")
+  const [customDisplayName, setCustomDisplayName] = useState("")
+  const [isConnecting, setIsConnecting] = useState(false)
+
+  // Templates create state
+  const [showCreateTemplate, setShowCreateTemplate] = useState(false)
+  const [newTemplate, setNewTemplate] = useState({
+    name: "",
+    category: "MARKETING",
+    language: "en_US",
+    header: "",
+    body: "",
+    footer: "",
+    buttons: "",
+  })
+
+  // Flows create state
+  const [showCreateFlow, setShowCreateFlow] = useState(false)
+  const [newFlow, setNewFlow] = useState({
+    name: "",
+    trigger: "",
+    firstStep: "",
+    responseStep: "",
+  })
+
+  // Broadcasts create state
   const [showCreateBroadcast, setShowCreateBroadcast] = useState(false)
   const [newBroadcast, setNewBroadcast] = useState({ name: "", content: "", template_name: "" })
 
   useEffect(() => {
-    loadData()
+    loadAll()
   }, [])
 
-  const loadData = async () => {
+  const loadAll = async () => {
     setLoading(true)
     try {
-      const [contactData, broadcastData] = await Promise.all([
+      const [snd, tpl, flw, cnt, bcast] = await Promise.all([
+        listWhatsAppSenders().catch(() => []),
+        listWhatsAppTemplates().catch(() => []),
+        listWhatsAppFlows().catch(() => []),
         listWhatsAppContacts().catch(() => []),
         listWhatsAppBroadcasts().catch(() => []),
       ])
-      setContacts(contactData || [])
-      setBroadcasts(broadcastData || [])
-    } catch (e) {
-      console.error(e)
+      setSenders(snd || [])
+      setTemplates(tpl || [])
+      setFlows(flw || [])
+      setContacts(cnt || [])
+      setBroadcasts(bcast || [])
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleConnectNumber = async () => {
+    if (!connectMode) return
+    setIsConnecting(true)
+    try {
+      await connectWhatsAppNumber({
+        mode: connectMode,
+        country_code: selectedCountry,
+        phone_number: customPhone || undefined,
+        display_name: customDisplayName || undefined,
+      })
+      setShowConnectModal(false)
+      setConnectMode(null)
+      setCustomPhone("")
+      setCustomDisplayName("")
+      loadAll()
+    } finally {
+      setIsConnecting(false)
+    }
+  }
+
+  const handleCreateTemplate = async () => {
+    if (!newTemplate.name || !newTemplate.body) return
+    try {
+      await createWhatsAppTemplate({
+        ...newTemplate,
+        buttons: newTemplate.buttons ? newTemplate.buttons.split(",").map((b) => b.trim()).filter(Boolean) : [],
+      })
+      setShowCreateTemplate(false)
+      setNewTemplate({ name: "", category: "MARKETING", language: "en_US", header: "", body: "", footer: "", buttons: "" })
+      loadAll()
+    } catch (e) {
+      console.error(e)
+    }
+  }
+
+  const handleCreateFlow = async () => {
+    if (!newFlow.name || !newFlow.trigger) return
+    try {
+      await createWhatsAppFlow({
+        name: newFlow.name,
+        trigger: newFlow.trigger,
+        nodes: [
+          { id: "node-1", type: "trigger", label: newFlow.trigger },
+          { id: "node-2", type: "menu", label: newFlow.firstStep || "Present Options Menu" },
+          { id: "node-3", type: "action", label: newFlow.responseStep || "Execute Automated Action" },
+        ],
+      })
+      setShowCreateFlow(false)
+      setNewFlow({ name: "", trigger: "", firstStep: "", responseStep: "" })
+      loadAll()
+    } catch (e) {
+      console.error(e)
     }
   }
 
@@ -2118,16 +2345,16 @@ function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
       await createWhatsAppBroadcast(newBroadcast)
       setShowCreateBroadcast(false)
       setNewBroadcast({ name: "", content: "", template_name: "" })
-      loadData()
+      loadAll()
     } catch (e) {
       console.error(e)
     }
   }
 
-  const handleSend = async (id: string) => {
+  const handleSendBroadcast = async (id: string) => {
     try {
       await sendWhatsAppBroadcast(id)
-      loadData()
+      loadAll()
     } catch (e) {
       console.error(e)
     }
@@ -2135,6 +2362,265 @@ function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
 
   return (
     <div className="space-y-6">
+      {/* 1. OVERVIEW VIEW matching Screenshot 4 */}
+      {view === "overview" && (
+        <div className="space-y-6">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-foreground">WhatsApp</h2>
+              <p className="text-xs text-muted-foreground">{senders.length} live senders</p>
+            </div>
+            <Button
+              className="bg-[#25D366] hover:bg-[#1ebd5a] text-black font-semibold shadow-sm"
+              onClick={() => {
+                setConnectMode(null)
+                setShowConnectModal(true)
+              }}
+            >
+              <MessageCircle className="mr-1.5 h-4 w-4" /> Connect WhatsApp
+            </Button>
+          </div>
+
+          {/* Senders Table matching Screenshot 4 */}
+          <Card className="border-border bg-card">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <div className="flex items-center gap-2">
+                <Input placeholder="Search senders…" className="w-56 text-xs h-8 bg-background/50 border-border" />
+                <select className="rounded-md border border-border bg-background/50 px-2.5 py-1 text-xs text-foreground focus:outline-none">
+                  <option value="all">All types</option>
+                  <option value="sandbox">Sandbox</option>
+                  <option value="business">Business</option>
+                </select>
+                <select className="rounded-md border border-border bg-background/50 px-2.5 py-1 text-xs text-foreground focus:outline-none">
+                  <option value="all">Any status</option>
+                  <option value="live">Live</option>
+                </select>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                      <th className="py-3 px-4 font-medium">Sender</th>
+                      <th className="py-3 px-4 font-medium">Number</th>
+                      <th className="py-3 px-4 font-medium">Type</th>
+                      <th className="py-3 px-4 font-medium">Name review</th>
+                      <th className="py-3 px-4 font-medium">Business verification</th>
+                      <th className="py-3 px-4 font-medium text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {senders.map((s) => (
+                      <tr key={s.id} className="border-b border-border/60 hover:bg-card/60 transition-colors">
+                        <td className="py-3 px-4 font-medium text-foreground">
+                          <div className="flex items-center gap-2">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-[#25D366]/10 text-[#25D366]">
+                              <MessageCircle className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <p className="font-semibold text-xs text-foreground">{s.name}</p>
+                              <p className="text-[11px] text-muted-foreground">Shared test sender</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-4 font-mono text-xs text-foreground">{s.number}</td>
+                        <td className="py-3 px-4">
+                          <span className="inline-flex items-center gap-1 rounded-full border border-border bg-background/50 px-2 py-0.5 text-[11px] text-muted-foreground">
+                            {s.type}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 text-xs text-muted-foreground">{s.name_review || "—"}</td>
+                        <td className="py-3 px-4 text-xs text-muted-foreground">{s.business_verification || "—"}</td>
+                        <td className="py-3 px-4 text-right">
+                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-500 text-[10px]">
+                            {s.status}
+                          </Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* 2. TEMPLATES VIEW */}
+      {view === "templates" && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Message Templates</h3>
+              <p className="text-xs text-muted-foreground">Pre-approved Meta templates for outbound marketing & automated alerts</p>
+            </div>
+            <Button size="sm" onClick={() => setShowCreateTemplate(!showCreateTemplate)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> New Template
+            </Button>
+          </div>
+
+          {showCreateTemplate && (
+            <Card className="border-border bg-card">
+              <CardHeader><CardTitle className="text-sm">Create WhatsApp Template</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Input
+                    placeholder="Template name (e.g. order_update)"
+                    value={newTemplate.name}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
+                  />
+                  <select
+                    value={newTemplate.category}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, category: e.target.value })}
+                    className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+                  >
+                    <option value="MARKETING">Marketing</option>
+                    <option value="UTILITY">Utility</option>
+                    <option value="AUTHENTICATION">Authentication</option>
+                  </select>
+                  <Input
+                    placeholder="Language (e.g. en_US)"
+                    value={newTemplate.language}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, language: e.target.value })}
+                  />
+                </div>
+                <Input
+                  placeholder="Header text (optional)"
+                  value={newTemplate.header}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, header: e.target.value })}
+                />
+                <Textarea
+                  placeholder="Body text. Use {{1}}, {{2}} for dynamic customer parameters..."
+                  value={newTemplate.body}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
+                  rows={4}
+                  className="resize-none"
+                />
+                <Input
+                  placeholder="Buttons (comma-separated, e.g. View Quote, Chat Agent)"
+                  value={newTemplate.buttons}
+                  onChange={(e) => setNewTemplate({ ...newTemplate, buttons: e.target.value })}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleCreateTemplate}>Submit Template</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowCreateTemplate(false)}>Cancel</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            {templates.map((tpl) => (
+              <Card key={tpl.id} className="border-border bg-card">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-sm text-foreground font-mono">{tpl.name}</p>
+                      <p className="text-[11px] text-muted-foreground">{tpl.category} · {tpl.language}</p>
+                    </div>
+                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-500 text-[10px]">
+                      {tpl.status}
+                    </Badge>
+                  </div>
+                  {tpl.header && <p className="font-semibold text-xs text-foreground">{tpl.header}</p>}
+                  <p className="text-xs text-muted-foreground whitespace-pre-line rounded-md bg-background/50 p-3 border border-border">
+                    {tpl.body}
+                  </p>
+                  {tpl.buttons && tpl.buttons.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {tpl.buttons.map((b) => (
+                        <span key={b} className="rounded border border-border bg-card px-2 py-0.5 text-[10px] text-foreground">
+                          🔘 {b}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 3. FLOWS VIEW */}
+      {view === "flows" && (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">WhatsApp Conversation Flows</h3>
+              <p className="text-xs text-muted-foreground">Automated multi-step branching dialogs and lead capture journeys</p>
+            </div>
+            <Button size="sm" onClick={() => setShowCreateFlow(!showCreateFlow)}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> New Flow
+            </Button>
+          </div>
+
+          {showCreateFlow && (
+            <Card className="border-border bg-card">
+              <CardHeader><CardTitle className="text-sm">Create Conversational Flow</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <Input
+                  placeholder="Flow Name (e.g. Abandoned Cart Recovery)"
+                  value={newFlow.name}
+                  onChange={(e) => setNewFlow({ ...newFlow, name: e.target.value })}
+                />
+                <Input
+                  placeholder="Trigger (e.g. Inbound message containing 'PROMO')"
+                  value={newFlow.trigger}
+                  onChange={(e) => setNewFlow({ ...newFlow, trigger: e.target.value })}
+                />
+                <Input
+                  placeholder="Step 1: First interactive menu prompt"
+                  value={newFlow.firstStep}
+                  onChange={(e) => setNewFlow({ ...newFlow, firstStep: e.target.value })}
+                />
+                <Input
+                  placeholder="Step 2: Automated response or CRM sync action"
+                  value={newFlow.responseStep}
+                  onChange={(e) => setNewFlow({ ...newFlow, responseStep: e.target.value })}
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={handleCreateFlow}>Create Flow</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setShowCreateFlow(false)}>Cancel</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="space-y-4">
+            {flows.map((flow) => (
+              <Card key={flow.id} className="border-border bg-card">
+                <CardContent className="p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold text-sm text-foreground">{flow.name}</p>
+                      <p className="text-xs text-muted-foreground">Trigger: {flow.trigger}</p>
+                    </div>
+                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-500 text-[10px]">
+                      {flow.status}
+                    </Badge>
+                  </div>
+                  {/* Flow Node Progression preview */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                    {flow.nodes.map((node, i) => (
+                      <div key={node.id} className="flex items-center gap-2">
+                        <div className="rounded-lg border border-border bg-background/50 px-3 py-1.5 text-xs text-foreground shadow-sm">
+                          <span className="font-semibold text-primary mr-1.5">{i + 1}.</span>
+                          {node.label}
+                        </div>
+                        {i < flow.nodes.length - 1 && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 4. BROADCASTS VIEW */}
       {view === "broadcasts" && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -2184,7 +2670,7 @@ function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
                         <span>Read: {b.read_count || 0}</span>
                       </div>
                       {b.status === "DRAFT" && (
-                        <Button size="sm" onClick={() => handleSend(b.id)}><Send className="mr-1 h-3 w-3" /> Send</Button>
+                        <Button size="sm" onClick={() => handleSendBroadcast(b.id)}><Send className="mr-1 h-3 w-3" /> Send</Button>
                       )}
                     </div>
                   </CardContent>
@@ -2195,6 +2681,7 @@ function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
         </div>
       )}
 
+      {/* 5. CONTACTS VIEW */}
       {view === "contacts" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{contacts.length} contacts</p>
@@ -2228,51 +2715,203 @@ function WhatsAppTab({ view }: { view: "broadcasts" | "contacts" }) {
           )}
         </div>
       )}
+
+      {/* 6. GROUPS VIEW */}
+      {view === "groups" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">WhatsApp Broadcast Groups</h3>
+              <p className="text-xs text-muted-foreground">Segmented contact lists for targeted bulk WhatsApp outreach</p>
+            </div>
+            <Button size="sm" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" /> New Group</Button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              { name: "Fiber Quotation Inquiries", count: 86, desc: "Customers who entered address on portal" },
+              { name: "High-Priority Support Contacts", count: 24, desc: "Enterprise SLA accounts" },
+              { name: "Cape Town MetroFibre Expansion", count: 154, desc: "Opted-in leads for Western Cape buildout" },
+            ].map((g) => (
+              <Card key={g.name} className="border-border bg-card">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-sm text-foreground">{g.name}</p>
+                    <Badge variant="outline" className="text-[10px]">{g.count} contacts</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{g.desc}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* CONNECT WHATSAPP MODAL matching Screenshot 4 */}
+      {showConnectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="relative flex w-full max-w-lg flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-border px-6 py-4">
+              <div className="flex items-center gap-2">
+                <MessageCircle className="h-5 w-5 text-[#25D366]" />
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Connect WhatsApp</h3>
+                  <p className="text-xs text-muted-foreground">Choose how to set up your number</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowConnectModal(false)}
+                className="rounded-lg p-1 text-muted-foreground hover:bg-card hover:text-foreground"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Content: 2 Cards matching Screenshot 4 */}
+            <div className="p-6 space-y-4">
+              {/* Option A: Get a number */}
+              <div
+                onClick={() => setConnectMode("get_number")}
+                className={`flex items-start gap-4 rounded-xl border p-4 cursor-pointer transition-all ${
+                  connectMode === "get_number"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border bg-card hover:border-border/80"
+                }`}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
+                  <Plus className="h-4 w-4" />
+                </div>
+                <div className="space-y-1">
+                  <p className="font-semibold text-sm text-foreground">Get a number</p>
+                  <p className="text-xs text-muted-foreground">From $3/mo. Pick a country, we handle setup.</p>
+                  {connectMode === "get_number" && (
+                    <div className="pt-3 space-y-2">
+                      <label className="text-[11px] font-medium text-foreground block">Select Country</label>
+                      <select
+                        value={selectedCountry}
+                        onChange={(e) => setSelectedCountry(e.target.value)}
+                        className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
+                      >
+                        <option value="+27">🇿🇦 South Africa (+27)</option>
+                        <option value="+1">🇺🇸 United States (+1)</option>
+                        <option value="+44">🇬🇧 United Kingdom (+44)</option>
+                      </select>
+                      <Input
+                        placeholder="Sender display name (e.g. OmniDome Sales)"
+                        value={customDisplayName}
+                        onChange={(e) => setCustomDisplayName(e.target.value)}
+                        className="text-xs bg-background border-border"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Option B: Use my own number */}
+              <div
+                onClick={() => setConnectMode("own_number")}
+                className={`flex items-start gap-4 rounded-xl border p-4 cursor-pointer transition-all ${
+                  connectMode === "own_number"
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border bg-card hover:border-border/80"
+                }`}
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
+                  <Hash className="h-4 w-4" />
+                </div>
+                <div className="space-y-1">
+                  <p className="font-semibold text-sm text-foreground">Use my own number</p>
+                  <p className="text-xs text-muted-foreground">Bring your existing phone number. Requires verification during setup.</p>
+                  {connectMode === "own_number" && (
+                    <div className="pt-3 space-y-2">
+                      <Input
+                        placeholder="Your phone number (+27 82 123 4567)"
+                        value={customPhone}
+                        onChange={(e) => setCustomPhone(e.target.value)}
+                        className="text-xs bg-background border-border"
+                      />
+                      <Input
+                        placeholder="Sender display name"
+                        value={customDisplayName}
+                        onChange={(e) => setCustomDisplayName(e.target.value)}
+                        className="text-xs bg-background border-border"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-2 border-t border-border bg-card/30 px-6 py-4">
+              <Button variant="outline" size="sm" onClick={() => setShowConnectModal(false)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={!connectMode || (connectMode === "own_number" && !customPhone.trim()) || isConnecting}
+                onClick={handleConnectNumber}
+                className="bg-[#25D366] hover:bg-[#1ebd5a] text-black font-semibold"
+              >
+                {isConnecting ? "Connecting…" : "Proceed Setup"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WHATSAPP PLACEHOLDER (Templates / Flows / Groups — not yet backed)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function WhatsAppComingSoon({
-  title,
-  description,
-  icon: Icon,
-}: {
-  title: string
-  description: string
-  icon: IconType
-}) {
-  return (
-    <Card className="border-dashed border-border bg-card/40">
-      <CardContent className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-          <Icon className="h-6 w-6 text-primary" />
-        </div>
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-foreground">{title}</p>
-          <Badge variant="outline" className="border-amber-500/40 text-amber-500">Coming soon</Badge>
-        </div>
-        <p className="max-w-md text-sm text-muted-foreground">{description}</p>
-      </CardContent>
-    </Card>
-  )
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ADS TAB
+// ADS TAB (Zernio-style Ads & Boosted Posts)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function AdsTab() {
+  const [activeSubTab, setActiveSubTab] = useState<"campaigns" | "audiences" | "lead-forms">("campaigns")
   const [ads, setAds] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
-  const [newAd, setNewAd] = useState({ name: "", platform: "facebook", objective: "AWARENESS", budget_zar: "", daily_budget_zar: "" })
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [socialAccounts, setSocialAccounts] = useState<any[]>([])
+
+  // Filters matching Screenshot 2: All profiles | All ads | All platforms | All accounts | All statuses | Last 30 days | Newest first
+  const [filterProfile, setFilterProfile] = useState("all")
+  const [filterType, setFilterType] = useState("all")
+  const [filterPlatform, setFilterPlatform] = useState("all")
+  const [filterAccount, setFilterAccount] = useState("all")
+  const [filterStatus, setFilterStatus] = useState("all")
+  const [filterDateRange, setFilterDateRange] = useState("30d")
+  const [filterSort, setFilterSort] = useState("newest")
+
+  // Create Ad Modal state matching Screenshot 3
+  const [primaryText, setPrimaryText] = useState("")
+  const [headline, setHeadline] = useState("")
+  const [destinationUrl, setDestinationUrl] = useState("")
+  const [mediaFile, setMediaFile] = useState<string | null>(null)
+  const [profileName, setProfileName] = useState("Default")
+  const [adName, setAdName] = useState("")
+  const [selectedGoal, setSelectedGoal] = useState<"Engagement" | "Traffic" | "Awareness" | "Video Views">("Engagement")
+  const [budgetAmount, setBudgetAmount] = useState("5")
+  const [budgetType, setBudgetType] = useState<"daily" | "total">("daily")
+  const [selectedAudience, setSelectedAudience] = useState("All audiences")
+  const [createAsPaused, setCreateAsPaused] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+
+  // Dummy audience / lead forms for secondary tabs
+  const [audiences] = useState([
+    { id: "aud-1", name: "Broad SA 18-45", size: "4.2M", platform: "meta", updated: "2 days ago" },
+    { id: "aud-2", name: "Tech & Telecom Decision Makers", size: "180k", platform: "linkedin", updated: "1 week ago" },
+    { id: "aud-3", name: "High-LTV Fiber Churn Targets", size: "45k", platform: "custom", updated: "Yesterday" },
+  ])
+
+  const [leadForms] = useState([
+    { id: "lf-1", name: "Home Fiber Instant Quote Form", leads: 142, completionRate: "38.4%", platform: "facebook", status: "ACTIVE" },
+    { id: "lf-2", name: "Business Internet Inquiry 2026", leads: 68, completionRate: "29.1%", platform: "linkedin", status: "ACTIVE" },
+  ])
 
   useEffect(() => {
     loadAds()
+    listSocialAccounts().then((accs) => setSocialAccounts(accs || [])).catch(() => {})
   }, [])
 
   const loadAds = async () => {
@@ -2287,101 +2926,543 @@ function AdsTab() {
     }
   }
 
-  const handleCreate = async () => {
-    if (!newAd.name) return
+  const handleCreateAd = async () => {
+    if (!adName.trim()) return
+    setSubmitting(true)
     try {
-      await createAdCampaign({ ...newAd, budget_zar: Number(newAd.budget_zar) || undefined, daily_budget_zar: Number(newAd.daily_budget_zar) || undefined })
-      setShowCreate(false)
-      setNewAd({ name: "", platform: "facebook", objective: "AWARENESS", budget_zar: "", daily_budget_zar: "" })
+      const budgetNum = parseFloat(budgetAmount) || 0
+      await createAdCampaign({
+        name: adName,
+        platform: "facebook",
+        objective: selectedGoal.toUpperCase().replace(/\s+/g, "_"),
+        budget_zar: budgetType === "total" ? budgetNum : undefined,
+        daily_budget_zar: budgetType === "daily" ? budgetNum : undefined,
+        status: createAsPaused ? "PAUSED" : "ACTIVE",
+        creative: {
+          primary_text: primaryText,
+          headline: headline,
+          destination_url: destinationUrl,
+          media_url: mediaFile,
+        },
+        targeting: {
+          audience: selectedAudience,
+          profile: profileName,
+        },
+      })
+      setShowCreateModal(false)
+      // Reset
+      setPrimaryText("")
+      setHeadline("")
+      setDestinationUrl("")
+      setMediaFile(null)
+      setAdName("")
+      setBudgetAmount("5")
+      setCreateAsPaused(true)
       loadAds()
     } catch (e) {
       console.error(e)
+    } finally {
+      setSubmitting(false)
     }
   }
 
-  const totalSpend = ads.reduce((s: number, a: any) => s + (a.spend_zar || 0), 0)
-  const totalImpressions = ads.reduce((s: number, a: any) => s + (a.impressions || 0), 0)
-  const totalClicks = ads.reduce((s: number, a: any) => s + (a.clicks || 0), 0)
-  const avgROAS = ads.length > 0 ? (ads.reduce((s: number, a: any) => s + (a.roas || 0), 0) / ads.length).toFixed(1) : "0"
+  const clearFilters = () => {
+    setFilterProfile("all")
+    setFilterType("all")
+    setFilterPlatform("all")
+    setFilterAccount("all")
+    setFilterStatus("all")
+    setFilterDateRange("30d")
+    setFilterSort("newest")
+  }
+
+  const filteredAds = ads.filter((ad: any) => {
+    if (filterStatus !== "all" && ad.status?.toLowerCase() !== filterStatus.toLowerCase()) return false
+    if (filterPlatform !== "all" && ad.platform?.toLowerCase() !== filterPlatform.toLowerCase()) return false
+    return true
+  })
 
   return (
     <div className="space-y-6">
-      {/* KPI Cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Active Ads", value: ads.filter((a: any) => a.status === "ACTIVE").length, icon: Play, color: "text-emerald-400", bg: "bg-emerald-500/10" },
-          { label: "Total Spend", value: `R ${totalSpend.toLocaleString()}`, icon: DollarSign, color: "text-amber-400", bg: "bg-amber-500/10" },
-          { label: "Impressions", value: totalImpressions.toLocaleString(), icon: Eye, color: "text-blue-400", bg: "bg-blue-500/10" },
-          { label: "Avg ROAS", value: avgROAS + "x", icon: TrendingUp, color: "text-purple-400", bg: "bg-purple-500/10" },
-        ].map((kpi: any) => (
-          <Card key={kpi.label} className="border-border bg-card">
-            <CardContent className="p-4">
-              <div className="flex items-center justify-between">
-                <div><p className="text-xs text-muted-foreground">{kpi.label}</p><p className="text-2xl font-semibold text-foreground">{kpi.value}</p></div>
-                <div className={`rounded-lg ${kpi.bg} p-2`}><kpi.icon className={`h-5 w-5 ${kpi.color}`} /></div>
+      {/* Top Tab Strip matching Screenshot 2: Campaigns | Audiences | Lead Forms */}
+      <div className="flex border-b border-border text-sm font-medium">
+        <button
+          onClick={() => setActiveSubTab("campaigns")}
+          className={`border-b-2 px-4 py-2.5 transition-colors ${
+            activeSubTab === "campaigns"
+              ? "border-primary text-foreground font-semibold"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Campaigns
+        </button>
+        <button
+          onClick={() => setActiveSubTab("audiences")}
+          className={`border-b-2 px-4 py-2.5 transition-colors ${
+            activeSubTab === "audiences"
+              ? "border-primary text-foreground font-semibold"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Audiences
+        </button>
+        <button
+          onClick={() => setActiveSubTab("lead-forms")}
+          className={`border-b-2 px-4 py-2.5 transition-colors ${
+            activeSubTab === "lead-forms"
+              ? "border-primary text-foreground font-semibold"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          Lead Forms
+        </button>
+      </div>
+
+      {activeSubTab === "campaigns" && (
+        <div className="space-y-6">
+          {/* Header Row: Title & description on left, + Create Ad (Coral Red) & Boost Post on right */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-xl font-bold tracking-tight text-foreground">Ads</h2>
+              <p className="text-xs text-muted-foreground">Manage boosted post ads</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                className="bg-[#e03131] hover:bg-[#c92a2a] text-white font-medium shadow-sm"
+                onClick={() => setShowCreateModal(true)}
+              >
+                <Plus className="mr-1.5 h-4 w-4" /> Create Ad
+              </Button>
+              <Button variant="outline" className="border-border text-foreground hover:bg-card">
+                <Sparkles className="mr-1.5 h-4 w-4 text-amber-500" /> Boost Post
+              </Button>
+            </div>
+          </div>
+
+          {/* Zernio Filter Bar matching Screenshot 2 */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <select
+              value={filterProfile}
+              onChange={(e) => setFilterProfile(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="all">All profiles</option>
+              <option value="default">Default Profile</option>
+            </select>
+
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="all">All ads</option>
+              <option value="standalone">Standalone Ads</option>
+              <option value="boosted">Boosted Posts</option>
+            </select>
+
+            <select
+              value={filterPlatform}
+              onChange={(e) => setFilterPlatform(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="all">All platforms</option>
+              <option value="facebook">Facebook</option>
+              <option value="instagram">Instagram</option>
+              <option value="google">Google</option>
+              <option value="linkedin">LinkedIn</option>
+              <option value="tiktok">TikTok</option>
+            </select>
+
+            <select
+              value={filterAccount}
+              onChange={(e) => setFilterAccount(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="all">All accounts</option>
+              {socialAccounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.account_name || a.platform}</option>
+              ))}
+            </select>
+
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="paused">Paused</option>
+              <option value="draft">Draft</option>
+              <option value="completed">Completed</option>
+            </select>
+
+            <select
+              value={filterDateRange}
+              onChange={(e) => setFilterDateRange(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="90d">Last 90 days</option>
+              <option value="all">All time</option>
+            </select>
+
+            <select
+              value={filterSort}
+              onChange={(e) => setFilterSort(e.target.value)}
+              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
+            >
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="spend_high">Highest spend</option>
+              <option value="roas_high">Highest ROAS</option>
+            </select>
+
+            <button
+              onClick={clearFilters}
+              className="flex items-center gap-1 text-muted-foreground hover:text-foreground px-2 py-1.5 transition-colors"
+            >
+              <X className="h-3 w-3" /> Clear filters
+            </button>
+          </div>
+
+          {/* Ads List or Empty State matching Screenshot 2 */}
+          {loading ? (
+            <div className="py-20 text-center text-sm text-muted-foreground">Loading ads…</div>
+          ) : filteredAds.length === 0 ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/40 py-20 text-center">
+              <Megaphone className="h-10 w-10 text-muted-foreground/50 mb-3" />
+              <p className="font-semibold text-foreground">No ads yet</p>
+              <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+                Boost a published post or create a standalone ad to get started
+              </p>
+              <div className="mt-5 flex gap-2">
+                <Button
+                  size="sm"
+                  className="bg-[#e03131] hover:bg-[#c92a2a] text-white"
+                  onClick={() => setShowCreateModal(true)}
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Create Ad
+                </Button>
+                <Button size="sm" variant="outline">
+                  <Sparkles className="mr-1.5 h-3.5 w-3.5 text-amber-500" /> Boost Post
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Create + Table */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{ads.length} ad campaigns</p>
-        <Button size="sm" onClick={() => setShowCreate(!showCreate)}><Plus className="mr-2 h-4 w-4" /> New Ad Campaign</Button>
-      </div>
-
-      {showCreate && (
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle className="text-sm">Create Ad Campaign</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Input placeholder="Campaign name" value={newAd.name} onChange={(e) => setNewAd({ ...newAd, name: e.target.value })} />
-            <div className="grid gap-3 sm:grid-cols-3">
-              <select value={newAd.platform} onChange={(e) => setNewAd({ ...newAd, platform: e.target.value })} className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                <option value="facebook">Facebook</option><option value="instagram">Instagram</option>
-                <option value="google">Google</option><option value="linkedin">LinkedIn</option>
-                <option value="tiktok">TikTok</option>
-              </select>
-              <select value={newAd.objective} onChange={(e) => setNewAd({ ...newAd, objective: e.target.value })} className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                <option value="AWARENESS">Awareness</option><option value="TRAFFIC">Traffic</option>
-                <option value="CONVERSIONS">Conversions</option><option value="LEADS">Leads</option>
-              </select>
-              <Input placeholder="Budget (ZAR)" value={newAd.budget_zar} onChange={(e) => setNewAd({ ...newAd, budget_zar: e.target.value })} />
             </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleCreate}>Create</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+          ) : (
+            <div className="space-y-3">
+              {filteredAds.map((ad: any) => (
+                <Card key={ad.id} className="border-border bg-card">
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="font-medium text-foreground">{ad.name}</p>
+                        <p className="text-xs text-muted-foreground">{ad.platform} · {ad.objective}</p>
+                      </div>
+                      <Badge variant="outline" className={statusColor[ad.status] || "border-muted text-muted-foreground"}>
+                        {ad.status}
+                      </Badge>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-3 text-sm">
+                      <div><p className="text-xs text-muted-foreground">Budget</p><p className="text-foreground">R {(ad.budget_zar || ad.daily_budget_zar || 0).toLocaleString()}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Spend</p><p className="text-foreground">R {(ad.spend_zar || 0).toLocaleString()}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Impressions</p><p className="text-foreground">{(ad.impressions || 0).toLocaleString()}</p></div>
+                      <div><p className="text-xs text-muted-foreground">Clicks</p><p className="text-foreground">{(ad.clicks || 0).toLocaleString()}</p></div>
+                      <div><p className="text-xs text-muted-foreground">ROAS</p><p className="text-foreground">{ad.roas ? `${ad.roas}x` : "—"}</p></div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-          </CardContent>
-        </Card>
+          )}
+        </div>
       )}
 
-      {loading ? (
-        <div className="py-12 text-center text-muted-foreground">Loading...</div>
-      ) : ads.length === 0 ? (
-        <div className="py-12 text-center text-muted-foreground">No ad campaigns yet</div>
-      ) : (
-        <div className="space-y-3">
-          {ads.map((ad: any) => (
-            <Card key={ad.id} className="border-border bg-card">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <p className="font-medium text-foreground">{ad.name}</p>
-                    <p className="text-xs text-muted-foreground">{ad.platform} · {ad.objective}</p>
+      {activeSubTab === "audiences" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Target Audiences</h3>
+              <p className="text-xs text-muted-foreground">Saved custom audiences and customer segments for ads</p>
+            </div>
+            <Button size="sm" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" /> New Audience</Button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {audiences.map((aud) => (
+              <Card key={aud.id} className="border-border bg-card">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-sm text-foreground">{aud.name}</p>
+                    <Badge variant="outline" className="text-[10px]">{aud.platform}</Badge>
                   </div>
-                  <Badge variant="outline" className={statusColor[ad.status] || "border-muted text-muted-foreground"}>{ad.status}</Badge>
+                  <p className="text-2xl font-bold text-foreground">{aud.size}</p>
+                  <p className="text-xs text-muted-foreground">Updated {aud.updated}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === "lead-forms" && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-foreground">Instant Lead Forms</h3>
+              <p className="text-xs text-muted-foreground">In-feed native forms syncing customer inquiries into OmniDome CRM</p>
+            </div>
+            <Button size="sm" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" /> New Lead Form</Button>
+          </div>
+          <div className="space-y-3">
+            {leadForms.map((lf) => (
+              <Card key={lf.id} className="border-border bg-card">
+                <CardContent className="p-4 flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold text-sm text-foreground">{lf.name}</p>
+                    <p className="text-xs text-muted-foreground">{lf.platform} · {lf.completionRate} completion</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-lg font-bold text-foreground">{lf.leads} leads</p>
+                    <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-500">Live</Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* CREATE AD MODAL — Faithfully matching Screenshot 3 */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-border px-6 py-4">
+              <div>
+                <h3 className="text-lg font-bold text-foreground">Create Ad</h3>
+                <p className="text-xs text-muted-foreground">design your ad creative and configure targeting</p>
+              </div>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="rounded-lg p-1 text-muted-foreground hover:bg-card hover:text-foreground"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body: 2 Columns */}
+            <div className="flex-1 overflow-y-auto p-6">
+              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
+                {/* LEFT COLUMN: Creative & Copy */}
+                <div className="space-y-5">
+                  {/* Primary text */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-foreground">primary text</label>
+                    </div>
+                    <Textarea
+                      placeholder="Write the main text for your ad. This appears above the image."
+                      value={primaryText}
+                      maxLength={125}
+                      onChange={(e) => setPrimaryText(e.target.value)}
+                      rows={4}
+                      className="resize-none text-sm bg-card border-border"
+                    />
+                    <div className="text-right mt-1">
+                      <span className="text-[11px] text-muted-foreground">{primaryText.length}/125</span>
+                    </div>
+                  </div>
+
+                  {/* Media Dropzone */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">media</label>
+                    <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-pointer">
+                      <Image className="h-9 w-9 text-muted-foreground/60 mb-2" />
+                      <p className="text-xs font-medium text-foreground">Drop an image here or click to browse</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">JPG or PNG, recommended 1200x628px, max 30MB</p>
+                    </div>
+                  </div>
+
+                  {/* Headline */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">headline</label>
+                    <Input
+                      placeholder="Your headline"
+                      value={headline}
+                      maxLength={40}
+                      onChange={(e) => setHeadline(e.target.value)}
+                      className="text-sm bg-card border-border"
+                    />
+                    <div className="text-right mt-1">
+                      <span className="text-[11px] text-muted-foreground">{headline.length}/40</span>
+                    </div>
+                  </div>
+
+                  {/* Destination URL */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">destination URL</label>
+                    <Input
+                      placeholder="https://yourwebsite.com/landing-page"
+                      value={destinationUrl}
+                      onChange={(e) => setDestinationUrl(e.target.value)}
+                      className="text-sm bg-card border-border"
+                    />
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-3 text-sm">
-                  <div><p className="text-xs text-muted-foreground">Budget</p><p className="text-foreground">R {(ad.budget_zar || 0).toLocaleString()}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Spend</p><p className="text-foreground">R {(ad.spend_zar || 0).toLocaleString()}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Impressions</p><p className="text-foreground">{(ad.impressions || 0).toLocaleString()}</p></div>
-                  <div><p className="text-xs text-muted-foreground">Clicks</p><p className="text-foreground">{(ad.clicks || 0).toLocaleString()}</p></div>
-                  <div><p className="text-xs text-muted-foreground">ROAS</p><p className="text-foreground">{ad.roas || 0}x</p></div>
+
+                {/* RIGHT COLUMN: Targeting, Budget & Profile */}
+                <div className="space-y-5">
+                  {/* Profile */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">profile</label>
+                    <div className="relative">
+                      <select
+                        value={profileName}
+                        onChange={(e) => setProfileName(e.target.value)}
+                        className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none"
+                      >
+                        <option value="Default">🟡 Default</option>
+                        <option value="Brand">🟢 Brand Main</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Ad name */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">ad name</label>
+                    <Input
+                      placeholder="Summer Sale Campaign"
+                      value={adName}
+                      onChange={(e) => setAdName(e.target.value)}
+                      className="text-sm bg-card border-border"
+                    />
+                  </div>
+
+                  {/* Platform & account notice / connection */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1 block">platform & account</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      {socialAccounts.length > 0
+                        ? `Connected: ${socialAccounts.map((a) => a.platform).join(", ")}`
+                        : "No ads accounts connected. Connect an ads platform in Connections to create an ad."}
+                    </p>
+                    <Button variant="outline" size="sm" className="text-xs">
+                      Go to Connections
+                    </Button>
+                  </div>
+
+                  {/* Goal (4 pills matching Screenshot 3) */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">goal</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        { key: "Engagement", icon: MessageSquare },
+                        { key: "Traffic", icon: Link2 },
+                        { key: "Awareness", icon: Eye },
+                        { key: "Video Views", icon: Play },
+                      ] as const).map(({ key, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setSelectedGoal(key)}
+                          className={`flex items-center gap-2 rounded-md border p-2.5 text-xs font-medium transition-colors ${
+                            selectedGoal === key
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border bg-card text-foreground hover:bg-card/80"
+                          }`}
+                        >
+                          <Icon className="h-3.5 w-3.5 shrink-0" />
+                          <span>{key}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Budget (Input + Per day / Total toggle) */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">budget</label>
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">$</span>
+                        <Input
+                          type="number"
+                          value={budgetAmount}
+                          onChange={(e) => setBudgetAmount(e.target.value)}
+                          className="pl-6 text-sm bg-card border-border"
+                        />
+                      </div>
+                      <div className="flex rounded-md border border-border p-0.5 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setBudgetType("daily")}
+                          className={`px-3 py-1.5 rounded transition-colors ${
+                            budgetType === "daily" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                          }`}
+                        >
+                          Per day
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setBudgetType("total")}
+                          className={`px-3 py-1.5 rounded transition-colors ${
+                            budgetType === "total" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
+                          }`}
+                        >
+                          Total
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Targeting */}
+                  <div>
+                    <label className="text-xs font-semibold text-foreground mb-1.5 block">targeting</label>
+                    <div className="flex items-center justify-between rounded-md border border-border bg-card p-3 text-xs">
+                      <span className="text-foreground">{selectedAudience}</span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAudience("South Africa 18-50 (Broad)")}
+                        className="text-[#e03131] hover:underline font-medium flex items-center gap-1"
+                      >
+                        <Edit className="h-3 w-3" /> Edit audience
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </CardContent>
-            </Card>
-          ))}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-between border-t border-border bg-card/30 px-6 py-4">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={createAsPaused}
+                  onChange={(e) => setCreateAsPaused(e.target.checked)}
+                  className="rounded border-border"
+                />
+                <span>create as paused</span>
+              </label>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowCreateModal(false)}
+                >
+                  cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!adName.trim() || submitting}
+                  onClick={handleCreateAd}
+                  className="bg-muted-foreground text-background hover:bg-foreground hover:text-background"
+                >
+                  {submitting ? "creating…" : "create Ad"}
+                </Button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

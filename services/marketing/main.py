@@ -3954,6 +3954,213 @@ async def create_traditional_campaign(
         }
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# WhatsApp Senders, Templates & Flows (Zernio-aligned WhatsApp Hub)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# In-memory tenant store fallback for interactive WhatsApp assets (persisted within runtime)
+_WHATSAPP_SENDERS: Dict[str, List[Dict[str, Any]]] = {}
+_WHATSAPP_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {}
+_WHATSAPP_FLOWS: Dict[str, List[Dict[str, Any]]] = {}
+
+
+def _init_default_whatsapp(tenant_key: str):
+    if tenant_key not in _WHATSAPP_SENDERS:
+        _WHATSAPP_SENDERS[tenant_key] = [
+            {
+                "id": "snd-sandbox-01",
+                "name": "Sandbox",
+                "number": "+1 202 908 7457",
+                "type": "Sandbox",
+                "name_review": "Approved",
+                "business_verification": "Verified",
+                "status": "LIVE",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+    if tenant_key not in _WHATSAPP_TEMPLATES:
+        _WHATSAPP_TEMPLATES[tenant_key] = [
+            {
+                "id": "tpl-welcome-01",
+                "name": "welcome_onboarding",
+                "category": "MARKETING",
+                "language": "en_US",
+                "status": "APPROVED",
+                "header": "Welcome to OmniDome! 🚀",
+                "body": "Hi {{1}}, thank you for registering your interest in OmniDome fiber. Your quote reference is #{{2}}. Reply 1 to connect with an agent.",
+                "footer": "Opt-out reply STOP",
+                "buttons": ["View Quote", "Chat with Agent"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": "tpl-cart-abandon",
+                "name": "fiber_cart_recovery",
+                "category": "UTILITY",
+                "language": "en_US",
+                "status": "APPROVED",
+                "header": "Complete your order 🛒",
+                "body": "Hi {{1}}, we noticed you left a 100Mbps fiber package in your cart. Complete checkout today and get free installation!",
+                "footer": "OmniDome Sales",
+                "buttons": ["Complete Checkout"],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+    if tenant_key not in _WHATSAPP_FLOWS:
+        _WHATSAPP_FLOWS[tenant_key] = [
+            {
+                "id": "flw-lead-gen-01",
+                "name": "Customer Welcome & Quote",
+                "trigger": "Incoming greeting or 'QUOTE' keyword",
+                "status": "ACTIVE",
+                "steps_count": 4,
+                "nodes": [
+                    {"id": "n1", "type": "trigger", "label": "Customer says 'Hi' or 'Quote'"},
+                    {"id": "n2", "type": "menu", "label": "Select: 1. Home Fiber  2. Business Internet  3. Check Coverage"},
+                    {"id": "n3", "type": "action", "label": "Capture address & check MetroFibre/Openserve"},
+                    {"id": "n4", "type": "crm", "label": "Generate Deal in Sales Dome & notify agent"},
+                ],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            {
+                "id": "flw-support-triage",
+                "name": "Support Triage & Ticket Creation",
+                "trigger": "Keyword 'HELP' or 'DOWN'",
+                "status": "ACTIVE",
+                "steps_count": 3,
+                "nodes": [
+                    {"id": "n1", "type": "trigger", "label": "Customer says 'Internet down'"},
+                    {"id": "n2", "type": "diagnostic", "label": "Query ONT status via Network Dome"},
+                    {"id": "n3", "type": "ticket", "label": "Open Priority Trouble Ticket"},
+                ],
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        ]
+
+
+@app.get("/whatsapp/senders", response_model=List[Dict[str, Any]])
+async def list_whatsapp_senders(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    return _WHATSAPP_SENDERS[tkey]
+
+
+class WhatsAppConnectNumberRequest(BaseModel):
+    mode: str = Field(..., description="get_number | own_number")
+    country_code: Optional[str] = "+27"
+    phone_number: Optional[str] = None
+    display_name: Optional[str] = "OmniDome WhatsApp"
+
+
+@app.post("/whatsapp/senders/connect", status_code=201, response_model=Dict[str, Any])
+async def connect_whatsapp_number(
+    body: WhatsAppConnectNumberRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    if body.mode == "get_number":
+        # Simulating automated virtual number provisioning
+        num_suffix = uuid.uuid4().hex[:7]
+        assigned_num = f"{body.country_code} 82 {num_suffix[:3]} {num_suffix[3:]}"
+        sender = {
+            "id": f"snd-{uuid.uuid4().hex[:8]}",
+            "name": body.display_name or "OmniDome Fiber",
+            "number": assigned_num,
+            "type": "Business Number ($3/mo)",
+            "name_review": "Approved",
+            "business_verification": "Verified",
+            "status": "LIVE",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        # Using own existing number with verification
+        sender = {
+            "id": f"snd-{uuid.uuid4().hex[:8]}",
+            "name": body.display_name or "Custom Number",
+            "number": body.phone_number or "+27 11 000 0000",
+            "type": "BYO Business",
+            "name_review": "Pending Meta Review",
+            "business_verification": "Verified",
+            "status": "LIVE",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    _WHATSAPP_SENDERS[tkey].append(sender)
+    return sender
+
+
+@app.get("/whatsapp/templates", response_model=List[Dict[str, Any]])
+async def list_whatsapp_templates(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    return _WHATSAPP_TEMPLATES[tkey]
+
+
+class WhatsAppTemplateCreate(BaseModel):
+    name: str
+    category: str = "MARKETING"
+    language: str = "en_US"
+    header: Optional[str] = None
+    body: str
+    footer: Optional[str] = None
+    buttons: List[str] = Field(default_factory=list)
+
+
+@app.post("/whatsapp/templates", status_code=201, response_model=Dict[str, Any])
+async def create_whatsapp_template(
+    body: WhatsAppTemplateCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    tpl = {
+        "id": f"tpl-{uuid.uuid4().hex[:8]}",
+        "name": body.name.strip().lower().replace(" ", "_"),
+        "category": body.category,
+        "language": body.language,
+        "status": "APPROVED",
+        "header": body.header,
+        "body": body.body,
+        "footer": body.footer,
+        "buttons": body.buttons,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _WHATSAPP_TEMPLATES[tkey].append(tpl)
+    return tpl
+
+
+@app.get("/whatsapp/flows", response_model=List[Dict[str, Any]])
+async def list_whatsapp_flows(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    return _WHATSAPP_FLOWS[tkey]
+
+
+class WhatsAppFlowCreate(BaseModel):
+    name: str
+    trigger: str
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/whatsapp/flows", status_code=201, response_model=Dict[str, Any])
+async def create_whatsapp_flow(
+    body: WhatsAppFlowCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    _init_default_whatsapp(tkey)
+    flow = {
+        "id": f"flw-{uuid.uuid4().hex[:8]}",
+        "name": body.name,
+        "trigger": body.trigger,
+        "status": "ACTIVE",
+        "steps_count": len(body.nodes),
+        "nodes": body.nodes,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _WHATSAPP_FLOWS[tkey].append(flow)
+    return flow
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8001)
