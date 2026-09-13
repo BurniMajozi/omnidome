@@ -670,6 +670,21 @@ def _ensure_marketing_tables(engine) -> None:
         updated_at TIMESTAMPTZ DEFAULT now()
     );
 
+    -- Posting queues (recurring weekly slots a post drops into). Slots are a
+    -- JSONB array of {day:0-6 (0=Sun), time:"HH:MM"}; times are in `timezone`.
+    CREATE TABLE IF NOT EXISTS marketing_post_queues (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        profile_id VARCHAR(64),
+        name VARCHAR(200) NOT NULL,
+        description TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'active',
+        timezone VARCHAR(64) DEFAULT 'UTC',
+        slots JSONB DEFAULT '[]',
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+
     -- Account → tenant map (the mapping webhooks route on). Written by the
     -- connect flow and by account.connected / account.disconnected events.
     CREATE TABLE IF NOT EXISTS marketing_connected_accounts (
@@ -762,6 +777,7 @@ def _ensure_marketing_tables(engine) -> None:
     CREATE INDEX IF NOT EXISTS idx_mkt_follower_stats_tenant ON marketing_follower_stats(tenant_id, granularity, stat_date);
     CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_tenant ON marketing_connected_accounts(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_profile ON marketing_connected_accounts(profile_id);
+    CREATE INDEX IF NOT EXISTS idx_mkt_queues_tenant ON marketing_post_queues(tenant_id);
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
@@ -3302,6 +3318,208 @@ async def offboard_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)
         conn.execute(text("DELETE FROM marketing_connected_accounts WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
         conn.execute(text("DELETE FROM marketing_tenant_profiles WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
     return {"status": "offboarded", "disconnected_accounts": disconnected, "profile_id": profile_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# POSTING QUEUES — recurring weekly slots; a post drops into the next open slot
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _queue_next_slot(slots: List[Dict[str, Any]], tz_name: str, taken_iso: set) -> Optional[str]:
+    """Soonest future slot (in the queue's timezone) not already occupied by a
+    scheduled post. Slots: [{day:0-6 (0=Sun), time:'HH:MM'}]. Returns ISO UTC."""
+    if not slots:
+        return None
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(tz_name or "UTC")
+    except Exception:  # noqa: BLE001
+        from datetime import timezone as _tzmod
+        tz = _tzmod.utc
+    now = _dt.now(tz)
+    candidates: List[_dt] = []
+    for offset in range(0, 15):  # look ~2 weeks ahead
+        day = now + _td(days=offset)
+        # Python weekday(): Mon=0..Sun=6 → convert to Sun=0..Sat=6
+        dow = (day.weekday() + 1) % 7
+        for slot in slots:
+            if int(slot.get("day", -1)) != dow:
+                continue
+            try:
+                hh, mm = str(slot.get("time", "09:00")).split(":")[:2]
+                cand = day.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+            except Exception:  # noqa: BLE001
+                continue
+            if cand <= now:
+                continue
+            iso = cand.astimezone(__import__("datetime").timezone.utc).isoformat()
+            if iso in taken_iso:
+                continue
+            candidates.append(cand)
+    if not candidates:
+        return None
+    return min(candidates).astimezone(__import__("datetime").timezone.utc).isoformat()
+
+
+def _taken_slot_isos(engine, tenant_id: uuid.UUID) -> set:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT scheduled_for FROM social_posts WHERE tenant_id = :tid AND status = 'scheduled' AND scheduled_for IS NOT NULL"),
+            {"tid": str(tenant_id)},
+        ).all()
+    out = set()
+    for r in rows:
+        v = r[0]
+        if v is not None:
+            iso = v.isoformat() if hasattr(v, "isoformat") else str(v)
+            out.add(iso)
+    return out
+
+
+class QueueSlot(BaseModel):
+    day: int   # 0=Sun .. 6=Sat
+    time: str  # "HH:MM"
+
+
+class QueueCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    timezone: str = "UTC"
+    status: str = "active"
+    slots: List[QueueSlot] = []
+
+
+class QueueUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    timezone: Optional[str] = None
+    status: Optional[str] = None
+    slots: Optional[List[QueueSlot]] = None
+
+
+def _serialize_queue(row, next_slot: Optional[str]) -> Dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "description": row["description"],
+        "status": row["status"],
+        "timezone": row["timezone"],
+        "slots": row["slots"] or [],
+        "next_slot": next_slot,
+        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+    }
+
+
+@app.get("/social/queues", response_model=Dict[str, Any])
+async def list_queues(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT * FROM marketing_post_queues WHERE tenant_id = :tid ORDER BY created_at DESC"),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    taken = _taken_slot_isos(engine, tenant_id)
+    return {"queues": [
+        _serialize_queue(r, _queue_next_slot(r["slots"] or [], r["timezone"], taken) if r["status"] == "active" else None)
+        for r in rows
+    ]}
+
+
+@app.post("/social/queues", status_code=201, response_model=Dict[str, Any])
+async def create_queue(body: QueueCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    import json as _json
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    qid = uuid.uuid4()
+    slots = [s.dict() for s in body.slots]
+    profile_id = _get_tenant_profile(tenant_id)
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO marketing_post_queues (id, tenant_id, profile_id, name, description, status, timezone, slots)
+                VALUES (:id, :tid, :pid, :name, :desc, :status, :tz, CAST(:slots AS jsonb))
+            """),
+            {"id": str(qid), "tid": str(tenant_id), "pid": profile_id, "name": body.name,
+             "desc": body.description, "status": body.status, "tz": body.timezone, "slots": _json.dumps(slots)},
+        )
+    return {"id": str(qid), "name": body.name, "status": body.status, "timezone": body.timezone, "slots": slots}
+
+
+@app.patch("/social/queues/{queue_id}", response_model=Dict[str, Any])
+async def update_queue(queue_id: uuid.UUID, body: QueueUpdate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    import json as _json
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    sets, params = [], {"id": str(queue_id), "tid": str(tenant_id)}
+    if body.name is not None:
+        sets.append("name = :name"); params["name"] = body.name
+    if body.description is not None:
+        sets.append("description = :desc"); params["desc"] = body.description
+    if body.timezone is not None:
+        sets.append("timezone = :tz"); params["tz"] = body.timezone
+    if body.status is not None:
+        sets.append("status = :status"); params["status"] = body.status
+    if body.slots is not None:
+        sets.append("slots = CAST(:slots AS jsonb)"); params["slots"] = _json.dumps([s.dict() for s in body.slots])
+    if not sets:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    sets.append("updated_at = now()")
+    with engine.begin() as conn:
+        res = conn.execute(
+            text(f"UPDATE marketing_post_queues SET {', '.join(sets)} WHERE id = :id AND tenant_id = :tid"),
+            params,
+        )
+        if res.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Queue not found")
+    return {"id": str(queue_id), "updated": True}
+
+
+@app.delete("/social/queues/{queue_id}", status_code=204)
+async def delete_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM marketing_post_queues WHERE id = :id AND tenant_id = :tid"),
+            {"id": str(queue_id), "tid": str(tenant_id)},
+        )
+    return None
+
+
+@app.post("/social/queues/{queue_id}/enqueue", status_code=201, response_model=Dict[str, Any])
+async def enqueue_post(
+    queue_id: uuid.UUID,
+    body: SocialPostCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Drop a post into the queue's next open slot (creates a scheduled post)."""
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        q = conn.execute(
+            text("SELECT * FROM marketing_post_queues WHERE id = :id AND tenant_id = :tid"),
+            {"id": str(queue_id), "tid": str(tenant_id)},
+        ).mappings().first()
+    if not q:
+        raise HTTPException(status_code=404, detail="Queue not found")
+    if q["status"] != "active":
+        raise HTTPException(status_code=400, detail="Queue is paused")
+    slot = _queue_next_slot(q["slots"] or [], q["timezone"], _taken_slot_isos(engine, tenant_id))
+    if not slot:
+        raise HTTPException(status_code=400, detail="Queue has no available slots — add slots first")
+    slot_dt = datetime.fromisoformat(slot)
+    async with get_session() as session:
+        post = SocialPost(
+            tenant_id=tenant_id, account_id=body.account_id, content=body.content,
+            media_urls=body.media_urls, platforms=body.platforms or [],
+            status="scheduled", scheduled_for=slot_dt,
+        )
+        session.add(post)
+        await session.flush()
+        await session.refresh(post)
+        return {"id": str(post.id), "status": post.status, "scheduled_for": post.scheduled_for.isoformat() if post.scheduled_for else slot, "queue_id": str(queue_id)}
 
 
 @app.get("/social/zernio/accounts", response_model=List[Dict[str, Any]])

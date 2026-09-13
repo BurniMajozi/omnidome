@@ -20,7 +20,7 @@ import {
   ArrowUpRight, ArrowDownRight, Minus, Search, Filter, Download, RefreshCw, ChevronRight,
   Link2, Unlink, Play, Pause, Trash2, Edit, Reply, Archive, ExternalLink,
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
-  Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag,
+  Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag, X,
 } from "lucide-react"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
@@ -33,6 +33,7 @@ import {
   listConnectors, connectSocialAccount, type MarketingConnector,
   getAccountsHealth, type AccountHealth,
   getSocialUsage, createScopedKey, offboardProfile,
+  listQueues, createQueue, updateQueue, deleteQueue, enqueuePost, type MarketingQueue,
   listEmailTemplates, createEmailTemplate, sendEmailBatch, type EmailTemplate,
   getAnalyticsOverview, getAnalyticsDaily, getAnalyticsPosts,
   type AnalyticsOverview, type DailyMetricPoint, type AnalyticsPostRow,
@@ -89,7 +90,7 @@ const statusColor: Record<string, string> = {
 
 type MarketingTab =
   | "connections"
-  | "campaigns" | "social-composer" | "social-scheduled"
+  | "campaigns" | "social-composer" | "social-scheduled" | "social-queues"
   | "inbox-messages" | "inbox-comments" | "inbox-reviews" | "inbox-contacts"
   | "analytics"
   | "whatsapp-broadcasts" | "whatsapp-contacts" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups"
@@ -120,6 +121,7 @@ const MARKETING_NAV: NavEntry[] = [
     id: "social", label: "Social", icon: Share2, children: [
       { key: "social-composer", label: "Composer", icon: Send },
       { key: "social-scheduled", label: "Scheduled", icon: Calendar },
+      { key: "social-queues", label: "Queues", icon: Clock },
     ],
   },
   {
@@ -249,6 +251,7 @@ export function MarketingModule() {
           {activeTab === "campaigns" && <CampaignsTab />}
           {activeTab === "social-composer" && <SocialComposerTab />}
           {activeTab === "social-scheduled" && <ScheduledPostsTab />}
+          {activeTab === "social-queues" && <QueuesTab />}
           {activeTab === "inbox-messages" && <SocialInboxTab kind="messages" />}
           {activeTab === "inbox-comments" && <SocialInboxTab kind="comments" />}
           {activeTab === "inbox-reviews" && <SocialInboxTab kind="reviews" />}
@@ -1138,6 +1141,163 @@ function CampaignsTab() {
 // SOCIAL COMPOSER TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+function QueuesTab() {
+  const [queues, setQueues] = useState<MarketingQueue[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showCreate, setShowCreate] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
+  const [tz, setTz] = useState(() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return "UTC" } })
+  const [days, setDays] = useState<number[]>([])
+  const [time, setTime] = useState("09:00")
+  const [slots, setSlots] = useState<{ day: number; time: string }[]>([])
+  const [saving, setSaving] = useState(false)
+
+  const load = async () => {
+    setLoading(true)
+    try { setQueues((await listQueues())?.queues ?? []) }
+    catch (e) { setError(e instanceof Error ? e.message : "Failed to load queues") }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { load() }, [])
+
+  const toggleDay = (d: number) => setDays((ds) => (ds.includes(d) ? ds.filter((x) => x !== d) : [...ds, d]))
+  const addSlots = () => {
+    if (days.length === 0 || !time) return
+    setSlots((s) => {
+      const next = [...s]
+      for (const d of days) if (!next.some((x) => x.day === d && x.time === time)) next.push({ day: d, time })
+      return next.sort((a, b) => a.day - b.day || a.time.localeCompare(b.time))
+    })
+    setDays([])
+  }
+  const removeSlot = (i: number) => setSlots((s) => s.filter((_, idx) => idx !== i))
+
+  const resetForm = () => { setName(""); setDescription(""); setDays([]); setTime("09:00"); setSlots([]) }
+
+  const save = async () => {
+    if (!name || slots.length === 0) return
+    setSaving(true); setError(null)
+    try {
+      await createQueue({ name, description: description || undefined, timezone: tz, slots })
+      setShowCreate(false); resetForm(); load()
+    } catch (e) { setError(e instanceof Error ? e.message : "Failed to create queue") }
+    finally { setSaving(false) }
+  }
+
+  const toggleStatus = async (q: MarketingQueue) => {
+    await updateQueue(q.id, { status: q.status === "active" ? "paused" : "active" }).catch(() => {})
+    load()
+  }
+  const remove = async (id: string) => { await deleteQueue(id).catch(() => {}); load() }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Queues</h3>
+          <p className="text-sm text-muted-foreground">Recurring posting schedules — posts drop into the next open slot.</p>
+        </div>
+        <Button size="sm" onClick={() => setShowCreate((v) => !v)}><Plus className="mr-2 h-4 w-4" /> New queue</Button>
+      </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
+        </div>
+      )}
+
+      {showCreate && (
+        <Card className="border-border bg-card">
+          <CardHeader><CardTitle className="text-sm">Create queue</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <Input placeholder="Queue name (e.g. Morning Posts)" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input placeholder="Description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Timezone</label>
+              <Input value={tz} onChange={(e) => setTz(e.target.value)} className="w-full sm:w-72" />
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="mb-2 text-sm font-medium text-foreground">Add slots</p>
+              <div className="mb-2 flex flex-wrap gap-1.5">
+                {WEEKDAYS.map((w, d) => (
+                  <button key={w} onClick={() => toggleDay(d)}
+                    className={`rounded-lg border px-3 py-1 text-xs transition-colors ${days.includes(d) ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground"}`}>
+                    {w}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="w-32" />
+                <Button size="sm" variant="outline" onClick={addSlots} disabled={days.length === 0}>Add slots</Button>
+              </div>
+              {slots.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {slots.map((s, i) => (
+                    <span key={i} className="inline-flex items-center gap-1 rounded-full border border-border bg-background/40 px-2 py-0.5 text-xs text-foreground">
+                      {WEEKDAYS[s.day]} {s.time}
+                      <button onClick={() => removeSlot(i)} className="text-muted-foreground hover:text-red-400"><X className="h-3 w-3" /></button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={save} disabled={saving || !name || slots.length === 0}>
+                {saving ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Creating…</> : "Create queue"}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setShowCreate(false); resetForm() }}>Cancel</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      ) : queues.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
+          <Clock className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="font-medium text-foreground">No queues yet</p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">Create a queue with weekly time slots, then choose &ldquo;Queue&rdquo; in the Composer to drop posts into the next open slot.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {queues.map((q) => (
+            <Card key={q.id} className="border-border bg-card">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex items-center gap-2">
+                      <p className="font-medium text-foreground">{q.name}</p>
+                      <Badge variant="outline" className={q.status === "active" ? "border-emerald-500/40 text-emerald-500" : "border-amber-500/40 text-amber-500"}>{q.status}</Badge>
+                    </div>
+                    {q.description && <p className="mb-1 text-xs text-muted-foreground">{q.description}</p>}
+                    <div className="flex flex-wrap gap-1.5">
+                      {(q.slots || []).map((s, i) => (
+                        <span key={i} className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">{WEEKDAYS[s.day]} {s.time}</span>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {q.timezone} · {q.next_slot ? `next slot ${new Date(q.next_slot).toLocaleString()}` : "no upcoming slot"}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <Button size="sm" variant="ghost" onClick={() => toggleStatus(q)}>{q.status === "active" ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}</Button>
+                    <Button size="sm" variant="ghost" className="text-red-400 hover:text-red-300" onClick={() => remove(q.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ScheduledPostsTab() {
   const [posts, setPosts] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -1234,8 +1394,13 @@ function SocialComposerTab() {
     return d.toISOString().slice(0, 16)
   }
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleAt)
-  const [publishNow, setPublishNow] = useState(true)
+  const [mode, setMode] = useState<"now" | "schedule" | "queue" | "draft">("now")
+  const [queues, setQueues] = useState<MarketingQueue[]>([])
+  const [queueId, setQueueId] = useState("")
   const [loading, setLoading] = useState(true)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const localTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return "UTC" } })()
 
   useEffect(() => {
     loadData()
@@ -1244,12 +1409,14 @@ function SocialComposerTab() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const [accData, postData] = await Promise.all([
+      const [accData, postData, qData] = await Promise.all([
         listSocialAccounts().catch(() => []),
         listSocialPosts().catch(() => []),
+        listQueues().catch(() => null),
       ])
       setAccounts(accData || [])
       setPosts(postData || [])
+      setQueues(qData?.queues ?? [])
     } catch (e) {
       console.error(e)
     } finally {
@@ -1264,29 +1431,40 @@ function SocialComposerTab() {
   }
 
   const scheduledFor = () => new Date(scheduleAt).toISOString()
-  const scheduleMinutesFromNow = () => Math.max(1, Math.round((new Date(scheduleAt).getTime() - Date.now()) / 60000))
-  const scheduleInvalid = !publishNow && (!scheduleAt || new Date(scheduleAt).getTime() <= Date.now())
+  const scheduleInvalid = mode === "schedule" && (!scheduleAt || new Date(scheduleAt).getTime() <= Date.now())
+  const queueInvalid = mode === "queue" && !queueId
+  const canSubmit = content.trim() && selectedPlatforms.length > 0 && !scheduleInvalid && !queueInvalid
+
+  const submitLabel = { now: "Publish", schedule: "Schedule", queue: "Add to queue", draft: "Save draft" }[mode]
 
   const handlePublish = async () => {
-    if (!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid) return
+    if (!canSubmit) return
+    setNotice(null)
     try {
-      if (publishNow) {
-        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "published" })
-      } else {
-        await createSocialPost({ account_id: accounts[0]?.id, content, platforms: selectedPlatforms, status: "scheduled", scheduled_for: scheduledFor() })
+      const base = { account_id: accounts[0]?.id, content, platforms: selectedPlatforms }
+      if (mode === "now") {
+        await createSocialPost({ ...base, status: "published" })
+      } else if (mode === "schedule") {
+        await createSocialPost({ ...base, status: "scheduled", scheduled_for: scheduledFor() })
+      } else if (mode === "draft") {
+        await createSocialPost({ ...base, status: "draft" })
+      } else if (mode === "queue") {
+        const res = await enqueuePost(queueId, { ...base, status: "scheduled" })
+        if (res?.scheduled_for) setNotice(`Queued for ${new Date(res.scheduled_for).toLocaleString()}`)
       }
       setContent("")
       setSelectedPlatforms([])
       loadData()
     } catch (e) {
       console.error("Failed to publish:", e)
+      setNotice(e instanceof Error ? e.message : "Failed to publish")
     }
   }
 
   const handleCrossPost = async () => {
     if (!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid) return
     try {
-      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: publishNow ? undefined : scheduleMinutesFromNow() })
+      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: mode === "schedule" ? Math.max(1, Math.round((new Date(scheduleAt).getTime() - Date.now()) / 60000)) : undefined })
       setContent("")
       setSelectedPlatforms([])
       loadData()
@@ -1336,41 +1514,63 @@ function SocialComposerTab() {
                 )}
               </div>
             </div>
-            <div className="space-y-2">
-              <div className="flex items-center gap-4">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="radio" checked={publishNow} onChange={() => setPublishNow(true)} className="accent-cyan-500" />
-                  Publish now
-                </label>
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="radio" checked={!publishNow} onChange={() => setPublishNow(false)} className="accent-cyan-500" />
-                  <Calendar className="h-4 w-4" /> Schedule for later
-                </label>
+            <div className="space-y-3">
+              {/* Publishing mode — Now / Schedule / Queue / Draft (Zernio-style) */}
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-border p-1 sm:grid-cols-4">
+                {([
+                  { m: "now", label: "Now", icon: Send },
+                  { m: "schedule", label: "Schedule", icon: Calendar },
+                  { m: "queue", label: "Queue", icon: Clock },
+                  { m: "draft", label: "Draft", icon: FileText },
+                ] as const).map(({ m, label, icon: Icon }) => (
+                  <button
+                    key={m}
+                    onClick={() => setMode(m)}
+                    className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
+                      mode === m ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Icon className="h-3.5 w-3.5" /> {label}
+                  </button>
+                ))}
               </div>
-              {!publishNow && (
+
+              {mode === "schedule" && (
                 <div>
-                  <Input
-                    type="datetime-local"
-                    value={scheduleAt}
-                    min={defaultScheduleAt()}
-                    onChange={(e) => setScheduleAt(e.target.value)}
-                    className="w-full sm:w-64"
-                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input type="datetime-local" value={scheduleAt} min={defaultScheduleAt()} onChange={(e) => setScheduleAt(e.target.value)} className="w-full sm:w-64" />
+                    <span className="text-xs text-muted-foreground">{localTz}</span>
+                  </div>
                   {scheduleInvalid ? (
                     <p className="mt-1 text-xs text-amber-500">Pick a date and time in the future.</p>
                   ) : (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Goes out {new Date(scheduleAt).toLocaleString()} · appears under <span className="text-foreground">Scheduled</span>.
-                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground">Goes out {new Date(scheduleAt).toLocaleString()} · appears under <span className="text-foreground">Scheduled</span>.</p>
                   )}
                 </div>
               )}
+
+              {mode === "queue" && (
+                queues.length === 0 ? (
+                  <p className="text-xs text-amber-500">No queues yet — create one under <span className="text-foreground">Queues</span> first.</p>
+                ) : (
+                  <div>
+                    <select value={queueId} onChange={(e) => setQueueId(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
+                      <option value="">Select a queue…</option>
+                      {queues.map((q) => <option key={q.id} value={q.id}>{q.name}{q.next_slot ? ` — next ${new Date(q.next_slot).toLocaleString()}` : ""}</option>)}
+                    </select>
+                    <p className="mt-1 text-xs text-muted-foreground">Drops into the queue&apos;s next open slot.</p>
+                  </div>
+                )
+              )}
+
+              {mode === "draft" && <p className="text-xs text-muted-foreground">Saved as a draft — publish or schedule it later.</p>}
+              {notice && <p className="text-xs text-emerald-500">{notice}</p>}
             </div>
             <div className="flex gap-2">
-              <Button onClick={handlePublish} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid}>
-                <Send className="mr-2 h-4 w-4" /> {publishNow ? "Publish" : "Schedule"}
+              <Button onClick={handlePublish} disabled={!canSubmit}>
+                <Send className="mr-2 h-4 w-4" /> {submitLabel}
               </Button>
-              <Button variant="outline" onClick={handleCrossPost} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid}>
+              <Button variant="outline" onClick={handleCrossPost} disabled={!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid || mode === "queue" || mode === "draft"}>
                 <Copy className="mr-2 h-4 w-4" /> Cross-Post
               </Button>
             </div>

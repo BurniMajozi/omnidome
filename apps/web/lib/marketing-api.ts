@@ -446,6 +446,39 @@ export const crossPost = (data: CrossPostInput) =>
 export const getSocialPostAnalytics = (id: string) =>
   fetchMarketing<Record<string, unknown>>(`/social/posts/${id}/analytics`)
 
+// ── Posting queues (recurring slots) ─────────────────────────────────────
+
+export interface QueueSlot { day: number; time: string }
+
+export interface MarketingQueue {
+  id: string
+  name: string
+  description?: string | null
+  status: string
+  timezone: string
+  slots: QueueSlot[]
+  next_slot: string | null
+  created_at?: string | null
+}
+
+export const listQueues = () =>
+  fetchMarketing<{ queues: MarketingQueue[] }>("/social/queues")
+
+export const createQueue = (body: { name: string; description?: string; timezone: string; status?: string; slots: QueueSlot[] }) =>
+  fetchMarketing<MarketingQueue>("/social/queues", { method: "POST", body: JSON.stringify(body) })
+
+export const updateQueue = (id: string, body: Partial<{ name: string; description: string; timezone: string; status: string; slots: QueueSlot[] }>) =>
+  fetchMarketing<{ id: string; updated: boolean }>(`/social/queues/${id}`, { method: "PATCH", body: JSON.stringify(body) })
+
+export const deleteQueue = (id: string) =>
+  fetchMarketing<{ status: string }>(`/social/queues/${id}`, { method: "DELETE" })
+
+export const enqueuePost = (queueId: string, body: SocialPostCreate) =>
+  fetchMarketing<{ id: string; status: string; scheduled_for: string; queue_id: string }>(`/social/queues/${queueId}/enqueue`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
 // ── Social Inbox ─────────────────────────────────────────────────────
 
 export const listInboxMessages = (params?: { status?: string; platform?: string; message_type?: string; account_id?: string }) => {
