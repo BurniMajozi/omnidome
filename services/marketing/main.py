@@ -3141,6 +3141,13 @@ async def zernio_connectors(tenant_id: uuid.UUID = Depends(get_current_tenant_id
 # ═══════════════════════════════════════════════════════════════════════════
 # DB-BACKED ANALYTICS  — dashboards read here; the sync worker fills the tables.
 # These endpoints NEVER call Zernio (per the profile-per-customer model).
+#
+# The sync worker is a SIBLING service, not part of this package: it lives at
+# services/analytics_worker/ (image `omnidome-analytics_worker`, docker-compose
+# service `analytics_worker`). It runs APScheduler and periodically calls Zernio's
+# analytics endpoints to populate marketing_post_analytics / marketing_daily_metrics
+# / marketing_follower_stats / marketing_analytics_sync_state. It is intentionally
+# out-of-process so a slow analytics pull can't block the request path here.
 # ═══════════════════════════════════════════════════════════════════════════
 
 _METRIC_COLS = ["impressions", "reach", "likes", "comments", "shares", "saves", "clicks", "views"]
