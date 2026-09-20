@@ -262,6 +262,32 @@ class ZernioClient:
         result = await self._request("POST", "/posts", json_data=payload)
         return result.get("data", result) if isinstance(result, dict) else result
 
+    async def publish_content(
+        self,
+        content: str,
+        platforms: List[Dict[str, str]],  # [{platform, accountId}]
+        publish_now: bool = True,
+        schedule_date: Optional[str] = None,  # ISO8601; used when publish_now is False
+        media_urls: Optional[List[str]] = None,
+        title: Optional[str] = None,
+    ) -> Dict:
+        """POST /v1/posts in the real spec shape: platforms is a list of
+        {platform, accountId} for the customer's connected accounts. Returns the
+        created post ({_id, status, platforms:[{platform, accountId, status}]})."""
+        payload: Dict[str, Any] = {"content": content, "platforms": platforms}
+        if publish_now:
+            payload["publishNow"] = True
+        elif schedule_date:
+            payload["scheduleDate"] = schedule_date
+        if media_urls:
+            payload["mediaUrls"] = media_urls
+        if title:
+            payload["title"] = title
+        result = await self._request("POST", "/posts", json_data=payload)
+        if isinstance(result, dict):
+            return result.get("post", result.get("data", result))
+        return result
+
     async def list_posts(
         self,
         status: Optional[str] = None,
@@ -273,6 +299,73 @@ class ZernioClient:
             params["status"] = status
         result = await self._request("GET", "/posts", params=params)
         return result.get("data", result) if isinstance(result, dict) else result
+
+    # ── Broadcasts (WhatsApp / SMS / social) ──────────────────────────
+
+    async def create_broadcast(
+        self,
+        *,
+        profile_id: str,
+        account_id: str,
+        platform: str,
+        name: str,
+        description: Optional[str] = None,
+        template: Optional[Dict[str, Any]] = None,
+        message: Optional[Dict[str, Any]] = None,
+        segment_filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict:
+        """Create a broadcast draft. WhatsApp requires a `template` (Meta-approved).
+
+        POST /v1/broadcasts → { success, broadcast: { id, status, ... } }
+        """
+        payload: Dict[str, Any] = {
+            "profileId": profile_id,
+            "accountId": account_id,
+            "platform": platform,
+            "name": name,
+        }
+        if description:
+            payload["description"] = description
+        if template:
+            payload["template"] = template
+        if message:
+            payload["message"] = message
+        if segment_filters:
+            payload["segmentFilters"] = segment_filters
+        result = await self._request("POST", "/broadcasts", json_data=payload)
+        if isinstance(result, dict):
+            return result.get("broadcast", result.get("data", result))
+        return result
+
+    async def add_broadcast_recipients(
+        self,
+        broadcast_id: str,
+        *,
+        phones: Optional[List[str]] = None,
+        contact_ids: Optional[List[str]] = None,
+        use_segment: bool = False,
+    ) -> Dict:
+        """Add recipients to a broadcast draft.
+
+        POST /v1/broadcasts/{id}/recipients → { success, added, skipped }
+        """
+        payload: Dict[str, Any] = {}
+        if phones:
+            payload["phones"] = phones
+        if contact_ids:
+            payload["contactIds"] = contact_ids
+        if use_segment:
+            payload["useSegment"] = True
+        return await self._request(
+            "POST", f"/broadcasts/{broadcast_id}/recipients", json_data=payload
+        )
+
+    async def send_broadcast(self, broadcast_id: str) -> Dict:
+        """Immediately send a draft broadcast.
+
+        POST /v1/broadcasts/{id}/send → { success, status, sent, failed, recipientCount }
+        """
+        return await self._request("POST", f"/broadcasts/{broadcast_id}/send", json_data={})
 
     # ── Webhook Verification ──────────────────────────────────────────
 

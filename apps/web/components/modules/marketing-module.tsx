@@ -1023,9 +1023,17 @@ function EmailComposeTab() {
         from_name: fromName || undefined,
         from_email: fromEmail || undefined,
       })
-      setResult(`Queued ${res?.sent ?? recipients.length} email(s).`)
+      if (!res.ok) {
+        setError(res.error || "Failed to send email")
+      } else if (res.data?.status === "failed") {
+        setError(`Delivery failed for all ${recipients.length} recipient(s). Check the provider configuration.`)
+      } else if (res.data?.status === "partial") {
+        setResult(`Sent with some failures — ${recipients.length} recipient(s) attempted. See batch report.`)
+      } else {
+        setResult(`Sent ${recipients.length} email(s).`)
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to queue email")
+      setError(e instanceof Error ? e.message : "Failed to send email")
     } finally {
       setSending(false)
     }
@@ -1041,8 +1049,8 @@ function EmailComposeTab() {
       <div className="flex items-start gap-2 rounded-lg border border-border bg-card/40 p-3">
         <Bell className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
         <p className="text-xs text-muted-foreground">
-          Sends are queued and tracked (delivered / opened / clicked via the email webhook). Actual delivery
-          requires an email provider worker to be wired to the queue.
+          Emails are delivered through the configured provider (SendGrid or SMTP) and tracked
+          (delivered / opened / clicked via the email webhook). If no provider is configured the send is rejected.
         </p>
       </div>
 
@@ -2703,15 +2711,22 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
     setNotice(null)
     try {
       const base = { account_id: accounts[0]?.id, content, platforms: selectedPlatforms }
+      let res: any = null
       if (mode === "now") {
-        await createSocialPost({ ...base, status: "published" })
+        res = await createSocialPost({ ...base, status: "published" })
       } else if (mode === "schedule") {
-        await createSocialPost({ ...base, status: "scheduled", scheduled_for: scheduledFor() })
+        res = await createSocialPost({ ...base, status: "scheduled", scheduled_for: scheduledFor() })
       } else if (mode === "draft") {
         await createSocialPost({ ...base, status: "draft" })
       } else if (mode === "queue") {
-        const res = await enqueuePost(queueId, { ...base, status: "scheduled" })
+        res = await enqueuePost(queueId, { ...base, status: "scheduled" })
         if (res?.scheduled_for) setNotice(`Queued for ${new Date(res.scheduled_for).toLocaleString()}`)
+      }
+      // Real publish/schedule can fail (e.g. no connected account) — surface it.
+      if (res?.publish_error) {
+        setNotice(`Saved, but publishing failed: ${res.publish_error}`)
+        loadData()
+        return
       }
       setContent("")
       setSelectedPlatforms([])
@@ -4478,6 +4493,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
   // Broadcasts create state
   const [showCreateBroadcast, setShowCreateBroadcast] = useState(false)
   const [newBroadcast, setNewBroadcast] = useState({ name: "", content: "", template_name: "" })
+  const [sendNotice, setSendNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
 
   useEffect(() => {
     loadAll()
@@ -4638,11 +4654,23 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
   }
 
   const handleSendBroadcast = async (id: string) => {
+    setSendNotice(null)
     try {
-      await sendWhatsAppBroadcast(id)
+      const res = await sendWhatsAppBroadcast(id)
+      if (!res.ok) {
+        setSendNotice({ kind: "error", text: res.error || "Failed to send broadcast" })
+      } else if (res.data?.status === "FAILED") {
+        setSendNotice({ kind: "error", text: "Broadcast failed for all recipients — check the WhatsApp connection and template." })
+      } else if (res.data?.status === "PARTIAL") {
+        setSendNotice({ kind: "error", text: "Broadcast sent with some failures. See recipient statuses." })
+      } else if (res.data?.status === "SENDING") {
+        setSendNotice({ kind: "ok", text: "Broadcast submitted to WhatsApp — delivery is tracked per recipient." })
+      } else {
+        setSendNotice({ kind: "ok", text: "Broadcast sent." })
+      }
       loadAll()
     } catch (e) {
-      console.error(e)
+      setSendNotice({ kind: "error", text: e instanceof Error ? e.message : "Failed to send broadcast" })
     }
   }
 
@@ -4909,6 +4937,11 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
       {/* 4. BROADCASTS VIEW */}
       {view === "broadcasts" && (
         <div className="space-y-4">
+          {sendNotice && (
+            <div className={`rounded-lg border p-3 text-sm ${sendNotice.kind === "ok" ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-600" : "border-red-500/40 bg-red-500/10 text-red-600"}`}>
+              {sendNotice.text}
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">{broadcasts.length} broadcasts</p>
             <Button size="sm" onClick={() => setShowCreateBroadcast(!showCreateBroadcast)}>

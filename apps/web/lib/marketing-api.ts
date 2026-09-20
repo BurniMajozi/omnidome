@@ -40,6 +40,36 @@ async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | 
   }
 }
 
+// Like fetchMarketing but preserves the outcome so callers can surface the real
+// error detail (e.g. a 503 "provider not configured") instead of a silent null.
+export interface MarketingResult<T> {
+  ok: boolean
+  status: number
+  data: T | null
+  error: string | null
+}
+
+async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promise<MarketingResult<T>> {
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
+      headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
+      ...init,
+    })
+    let body: unknown = null
+    try { body = await res.json() } catch { /* no body */ }
+    if (!res.ok) {
+      const detail = (body && typeof body === "object" && "detail" in body)
+        ? String((body as { detail: unknown }).detail)
+        : `Request failed (${res.status})`
+      return { ok: false, status: res.status, data: null, error: detail }
+    }
+    return { ok: true, status: res.status, data: body as T, error: null }
+  } catch (error) {
+    return { ok: false, status: 0, data: null, error: error instanceof Error ? error.message : "Network error" }
+  }
+}
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 export interface Campaign {
@@ -640,7 +670,7 @@ export const createWhatsAppBroadcast = (data: WhatsAppBroadcastCreate) =>
   })
 
 export const sendWhatsAppBroadcast = (id: string) =>
-  fetchMarketing<{ status: string }>(`/whatsapp/broadcasts/${id}/send`, {
+  fetchMarketingResult<{ status: string; recipient_count: number }>(`/whatsapp/broadcasts/${id}/send`, {
     method: "POST",
   })
 
@@ -746,7 +776,7 @@ export const deleteCommentAutomation = (id: string) =>
 // ── Email ────────────────────────────────────────────────────────────
 
 export const sendEmailBatch = (data: EmailBatchSendInput) =>
-  fetchMarketing<{ status: string; sent: number }>("/email/send", {
+  fetchMarketingResult<{ status: string; total_queued: number; batch_id: string }>("/email/send", {
     method: "POST",
     body: JSON.stringify(data),
   })

@@ -9,8 +9,11 @@ Port: 8014
 
 from datetime import datetime, timedelta, date, timezone
 from decimal import Decimal
+import asyncio
+import json
 import logging
 import os
+import httpx
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 import uuid
@@ -896,16 +899,78 @@ async def delete_campaign(
 # ─────────────────────── Email Delivery ───────────────────────
 
 
+_AGENTMAIL_BASE_URL = os.getenv("AGENTMAIL_BASE_URL", "https://api.agentmail.to/v0")
+
+
+def _email_provider_configured() -> bool:
+    """AgentMail is the configured ESP for OmniDome (api.agentmail.to)."""
+    return bool(os.getenv("AGENTMAIL_API_KEY"))
+
+
+def _agentmail_inbox() -> str:
+    return os.getenv("AGENTMAIL_INBOX") or os.getenv("AGENTMAIL_INBOX_ID") or "omnidome@agentmail.to"
+
+
+async def _send_one_email(
+    *,
+    to_email: str,
+    subject: str,
+    body_html: str,
+    from_name: Optional[str],
+    from_email: Optional[str],
+    reply_to: Optional[str],
+) -> str:
+    """Send one email via AgentMail. Returns the provider message id. Raises on failure.
+
+    AgentMail sends from the inbox itself, so `from_email`/`from_name` are advisory
+    (used only as an optional reply-to hint) — the visible sender is the inbox address.
+    """
+    from urllib.parse import quote
+
+    api_key = os.getenv("AGENTMAIL_API_KEY")
+    if not api_key:
+        raise HTTPException(503, "Email provider not configured — set AGENTMAIL_API_KEY")
+    inbox = _agentmail_inbox()
+    payload: Dict[str, Any] = {
+        "to": [to_email],
+        "subject": subject,
+        "html": body_html or "",
+    }
+    if reply_to:
+        payload["reply_to"] = [reply_to]
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            f"{_AGENTMAIL_BASE_URL}/inboxes/{quote(inbox, safe='')}/messages/send",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+    if resp.status_code >= 400:
+        raise RuntimeError(f"AgentMail {resp.status_code}: {resp.text[:300]}")
+    try:
+        data = resp.json()
+    except Exception:
+        data = {}
+    return data.get("message_id") or data.get("id") or ""
+
+
 @app.post("/email/send", response_model=EmailSendResponse, status_code=202)
 async def send_email_batch(
     body: EmailSendRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Queue a batch of emails for delivery (transactional or bulk)."""
+    """Actually deliver a batch of emails via AgentMail (api.agentmail.to)."""
+    if not _email_provider_configured():
+        raise HTTPException(503, "Email provider not configured — set AGENTMAIL_API_KEY")
+    from_email = body.from_email
+
     engine = get_engine()
     _ensure_marketing_tables(engine)
     batch_id = uuid.uuid4()
     total = len(body.recipients)
+
     with engine.begin() as conn:
         # Verify campaign exists
         camp = conn.execute(
@@ -919,7 +984,7 @@ async def send_email_batch(
             text("""
                 INSERT INTO marketing_email_batches
                     (id, tenant_id, campaign_id, subject, from_name, from_email, total_queued, status)
-                VALUES (:bid, :tid, :cid, :subj, :fn, :fe, :tq, 'queued')
+                VALUES (:bid, :tid, :cid, :subj, :fn, :fe, :tq, 'sending')
             """),
             {
                 "bid": str(batch_id),
@@ -927,22 +992,67 @@ async def send_email_batch(
                 "cid": str(body.campaign_id),
                 "subj": body.subject,
                 "fn": body.from_name,
-                "fe": body.from_email,
+                "fe": from_email,
                 "tq": total,
             },
         )
 
-        # Update campaign counters
+    # Deliver each recipient; record a per-recipient event and tally results.
+    sent = 0
+    failed = 0
+    for to_email in body.recipients:
+        try:
+            await _send_one_email(
+                to_email=to_email,
+                subject=body.subject,
+                body_html=body.body_html,
+                from_name=body.from_name,
+                from_email=from_email,
+                reply_to=body.reply_to,
+            )
+            sent += 1
+            event_type, event_data = "sent", "{}"
+        except Exception as e:  # noqa: BLE001 - record the failure, continue the batch
+            failed += 1
+            event_type = "failed"
+            event_data = json.dumps({"error": str(e)[:500]})
+            logger.warning("email send failed to %s: %s", to_email, e)
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO marketing_email_events
+                        (tenant_id, batch_id, recipient_email, event_type, event_data)
+                    VALUES (:tid, :bid, :email, :etype, CAST(:edata AS jsonb))
+                """),
+                {
+                    "tid": str(tenant_id),
+                    "bid": str(batch_id),
+                    "email": to_email,
+                    "etype": event_type,
+                    "edata": event_data,
+                },
+            )
+
+    final_status = "sent" if failed == 0 else ("failed" if sent == 0 else "partial")
+    with engine.begin() as conn:
+        conn.execute(
+            text("""
+                UPDATE marketing_email_batches
+                   SET total_sent = :sent, total_bounced = :failed, status = :st
+                 WHERE id = :bid
+            """),
+            {"sent": sent, "failed": failed, "st": final_status, "bid": str(batch_id)},
+        )
         conn.execute(
             text("UPDATE marketing_campaigns SET total_sent = total_sent + :cnt, updated_at = now() WHERE id = :cid"),
-            {"cnt": total, "cid": str(body.campaign_id)},
+            {"cnt": sent, "cid": str(body.campaign_id)},
         )
 
     return EmailSendResponse(
         batch_id=batch_id,
         campaign_id=body.campaign_id,
         total_queued=total,
-        status="queued",
+        status=final_status,
     )
 
 
@@ -1566,12 +1676,56 @@ async def list_social_posts(
     ]
 
 
+async def _publish_via_zernio(post, tenant_id: uuid.UUID) -> None:
+    """Publish (or schedule) a SocialPost to the customer's connected Zernio
+    accounts. Mutates `post` (status, published_at, platform_post_ids). Raises
+    HTTPException on hard failures. Real publishing — no fake platform ids."""
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT account_id, platform FROM marketing_connected_accounts WHERE tenant_id = :tid AND status <> 'disconnected'"),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    by_platform: Dict[str, str] = {}
+    for r in rows:
+        by_platform.setdefault(str(r["platform"] or "").lower(), r["account_id"])
+    wanted = [str(p).lower() for p in (post.platforms or [])]
+    zplatforms = [{"platform": p, "accountId": by_platform[p]} for p in wanted if p in by_platform]
+    if not zplatforms:
+        raise HTTPException(
+            status_code=400,
+            detail="No connected accounts for the selected platform(s) — connect them under Connections first",
+        )
+    publish_now = post.status == "published"
+    schedule_iso = post.scheduled_for.isoformat() if (not publish_now and post.scheduled_for) else None
+    try:
+        zpost = await client.publish_content(
+            content=post.content or "", platforms=zplatforms,
+            publish_now=publish_now, schedule_date=schedule_iso,
+            media_urls=post.media_urls or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Zernio publish failed: {e}")
+    post.platform_post_ids = {"zernio_post_id": (zpost or {}).get("_id"), "platforms": (zpost or {}).get("platforms")}
+    if publish_now:
+        post.status = "published"
+        post.published_at = datetime.now(timezone.utc)
+
+
 @app.post("/social/posts", status_code=201, response_model=Dict[str, Any])
 async def create_social_post(
     body: SocialPostCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Create a social media post (draft, schedule, or publish)."""
+    """Create a social media post. When status is 'published' or 'scheduled' the
+    post is actually published/scheduled to the customer's connected Zernio
+    accounts; a publish failure is reported (status 'failed' + publish_error)
+    rather than silently faking success."""
     async with get_session() as session:
         post = SocialPost(
             tenant_id=tenant_id,
@@ -1585,6 +1739,16 @@ async def create_social_post(
         )
         session.add(post)
         await session.flush()
+
+        publish_error: Optional[str] = None
+        if body.status in ("published", "scheduled"):
+            try:
+                await _publish_via_zernio(post, tenant_id)
+            except HTTPException as e:
+                publish_error = str(e.detail)
+                post.status = "failed"
+
+        await session.flush()
         await session.refresh(post)
         return {
             "id": post.id,
@@ -1597,6 +1761,8 @@ async def create_social_post(
             "status": post.status,
             "scheduled_for": post.scheduled_for,
             "published_at": post.published_at,
+            "platform_post_ids": post.platform_post_ids,
+            "publish_error": publish_error,
             "created_at": post.created_at,
             "updated_at": post.updated_at,
         }
@@ -1711,13 +1877,12 @@ async def publish_post(
         post = result.scalar_one_or_none()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
-        if post.status == "PUBLISHED":
+        if post.status in ("PUBLISHED", "published"):
             raise HTTPException(status_code=400, detail="Post is already published")
 
-        # In production, this would call the platform's publishing API
-        post.status = "PUBLISHED"
-        post.published_at = datetime.utcnow()
-        post.platform_post_ids = {"platform": f"ext_{uuid.uuid4().hex[:12]}"}
+        # Publish for real to the customer's connected Zernio accounts.
+        post.status = "published"
+        await _publish_via_zernio(post, tenant_id)
         await session.flush()
         await session.refresh(post)
         return {
@@ -2389,7 +2554,42 @@ async def send_whatsapp_broadcast(
     broadcast_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Send a WhatsApp broadcast to all recipients."""
+    """Send a WhatsApp broadcast via Zernio's WhatsApp Business API.
+
+    Real flow (no stub): resolve the tenant's Zernio profile + connected WhatsApp
+    account, create a Zernio broadcast draft with the Meta-approved template, add
+    the local recipients' phone numbers, then trigger the send. Zernio requires a
+    connected WhatsApp Business Account (WABA) and an approved template.
+    """
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(503, "Zernio not configured (ZERNIO_API_KEY missing)")
+
+    profile_id = _get_tenant_profile(tenant_id)
+    if not profile_id:
+        raise HTTPException(
+            400,
+            "No Zernio profile for this tenant — connect a WhatsApp account under Connections first",
+        )
+
+    # Resolve the tenant's connected WhatsApp account.
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT account_id FROM marketing_connected_accounts "
+                "WHERE tenant_id = :tid AND lower(platform) = 'whatsapp' AND status <> 'disconnected' "
+                "LIMIT 1"
+            ),
+            {"tid": str(tenant_id)},
+        ).first()
+    if not row:
+        raise HTTPException(
+            400,
+            "No connected WhatsApp account — connect a WhatsApp Business number under Connections first",
+        )
+    account_id = row[0]
+
     async with get_session() as session:
         stmt = select(WhatsAppBroadcast).where(
             WhatsAppBroadcast.id == broadcast_id,
@@ -2401,23 +2601,73 @@ async def send_whatsapp_broadcast(
             raise HTTPException(status_code=404, detail="Broadcast not found")
         if broadcast.status not in ("DRAFT", "QUEUED"):
             raise HTTPException(status_code=400, detail=f"Cannot send broadcast with status: {broadcast.status}")
+        if not broadcast.template_name:
+            raise HTTPException(
+                400,
+                "WhatsApp broadcasts require a Meta-approved template — set template_name on the broadcast",
+            )
 
-        # In production, this would queue messages via WhatsApp Business API
-        broadcast.status = "SENDING"
-        broadcast.sent_at = datetime.utcnow()
-
-        # Update recipient statuses
         recipient_stmt = select(WhatsAppBroadcastRecipient).where(
             WhatsAppBroadcastRecipient.broadcast_id == broadcast_id,
         )
         recipient_result = await session.execute(recipient_stmt)
         recipients = recipient_result.scalars().all()
+        phones = [r.phone_number for r in recipients if r.phone_number]
+        if not phones:
+            raise HTTPException(400, "Broadcast has no recipients")
+
+        template = {
+            "name": broadcast.template_name,
+            "language": os.getenv("ZERNIO_WHATSAPP_TEMPLATE_LANG", "en_US"),
+        }
+
+        broadcast.status = "SENDING"
+        broadcast.sent_at = datetime.utcnow()
+        await session.flush()
+
+        try:
+            zbroadcast = await client.create_broadcast(
+                profile_id=profile_id,
+                account_id=account_id,
+                platform="whatsapp",
+                name=broadcast.name or f"Broadcast {broadcast.id}",
+                description=None,
+                template=template,
+            )
+            zbid = (zbroadcast or {}).get("id") or (zbroadcast or {}).get("_id")
+            if not zbid:
+                raise RuntimeError(f"Zernio did not return a broadcast id: {zbroadcast}")
+            add_resp = await client.add_broadcast_recipients(zbid, phones=phones)
+            send_resp = await client.send_broadcast(zbid)
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001
+            broadcast.status = "FAILED"
+            for r in recipients:
+                r.status = "FAILED"
+                r.error_message = str(e)[:1000]
+            broadcast.failed_count = len(recipients)
+            await session.flush()
+            raise HTTPException(502, f"Zernio WhatsApp broadcast failed: {e}")
+
+        added = int((add_resp or {}).get("added") or 0)
+        skipped = int((add_resp or {}).get("skipped") or 0)
+        sent = int((send_resp or {}).get("sent") or 0) or added or len(phones)
+        failed = int((send_resp or {}).get("failed") or 0) or skipped
+        zstatus = str((send_resp or {}).get("status") or "sending").lower()
+
+        # Recipients were submitted to Zernio; final delivery/read arrive via webhook.
         for r in recipients:
             r.status = "SENT"
             r.sent_at = datetime.utcnow()
+            r.error_message = None
 
-        broadcast.sent_count = len(recipients)
-        broadcast.status = "SENT"
+        broadcast.sent_count = sent
+        broadcast.failed_count = failed
+        if zstatus in ("sending", "queued", "scheduled"):
+            broadcast.status = "SENDING"
+        else:
+            broadcast.status = "SENT" if failed == 0 else ("FAILED" if sent == 0 else "PARTIAL")
         await session.flush()
         return BroadcastSendResponse(
             broadcast_id=broadcast.id,

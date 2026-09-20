@@ -60,6 +60,10 @@ services:
       - ZERNIO_API_KEY=${ZERNIO_API_KEY:-}
       - ZERNIO_WEBHOOK_SECRET=${ZERNIO_WEBHOOK_SECRET:-}
       - ZERNIO_PROFILE_ID=${ZERNIO_PROFILE_ID:-}
+      # AgentMail (outbound email via api.agentmail.to). Key from the gitignored
+      # root .env / host env; empty = /email/send returns 503 (no silent stub).
+      - AGENTMAIL_API_KEY=${AGENTMAIL_API_KEY:-}
+      - AGENTMAIL_INBOX=${AGENTMAIL_INBOX:-omnidome@agentmail.to}
       - SUPPORT_SERVICE_URL=
       - SOCIAL_TICKET_CUSTOMER_ID=
       - AUTH_ALLOW_ANONYMOUS=true
