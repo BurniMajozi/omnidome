@@ -14,3 +14,14 @@ __pycache__
 *.pyc
 .hermes
 hermes_data
+# Mobile app build artifacts (Gradle/Android outputs, ~9GB) — not part of any
+# Docker image (only apps/web is containerized). Regenerable; keep out of context.
+**/android/.gradle
+**/android/build
+**/android/app/build
+**/android/.cxx
+**/android/.kotlin
+**/.cxx
+**/*.apk
+.gradle
+
