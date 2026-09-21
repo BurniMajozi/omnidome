@@ -1,0 +1,45 @@
+# Local always-on overlay.
+#
+# This machine's native-WSL Docker flaps periodically (daemon/distro hiccups),
+# which stops containers. Give every core service `restart: unless-stopped` so the
+# stack self-heals after a flap or a reboot instead of leaving services down.
+#
+# Use it (auto-loads docker-compose.yaml + docker-compose.override.yml too):
+#   export COMPOSE_FILE=docker-compose.yaml:docker-compose.override.yml:docker-compose.local.yml
+#   docker compose up -d --no-deps <services>
+# or pass -f for each explicitly.
+services:
+  db:
+    restart: unless-stopped
+  crm:
+    restart: unless-stopped
+  sales:
+    restart: unless-stopped
+  billing:
+    restart: unless-stopped
+  finance:
+    restart: unless-stopped
+  rica:
+    restart: unless-stopped
+  network:
+    restart: unless-stopped
+  call_center:
+    restart: unless-stopped
+  retention:
+    restart: unless-stopped
+  marketing:
+    restart: unless-stopped
+  admin:
+    restart: unless-stopped
+  gateway:
+    restart: unless-stopped
+  journey_engine:
+    restart: unless-stopped
+  web_analytics:
+    restart: unless-stopped
+  lifecycle:
+    restart: unless-stopped
+  web:
+    restart: unless-stopped
+  portal:
+    restart: unless-stopped
