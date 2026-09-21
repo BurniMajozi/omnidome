@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.iot.database import init_tables
@@ -51,7 +52,10 @@ configure_production(app)
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     guard.ensure_startup()
-    await init_tables()
+    # Retry while Postgres (or its DNS) comes up — otherwise a boot-time race with
+    # the db container crashes the worker (exit 3) and it stays down. Matches the
+    # rest of the stack's startup handling.
+    await run_with_db_retry(init_tables, logger=logger)
     logger.info("IoT service started — tables initialized")
     yield
     logger.info("IoT service shutting down")

@@ -23,6 +23,8 @@ services:
     restart: unless-stopped
   network:
     restart: unless-stopped
+  iot:
+    restart: unless-stopped
   call_center:
     restart: unless-stopped
   retention:
