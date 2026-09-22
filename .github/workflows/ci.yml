@@ -56,7 +56,7 @@ jobs:
       - name: Validate docker-compose.yaml
         run: |
           pip install pyyaml
-          python -c "import yaml; yaml.safe_load(open('docker-compose.yaml')); echo '✅ Valid YAML'"
+          python -c "import yaml; yaml.safe_load(open('docker-compose.yaml')); print('✅ Valid YAML')"
 
       - name: Check all service Dockerfiles exist
         run: |
@@ -162,7 +162,7 @@ jobs:
           import ast, sys
           with open('scripts/seed_demo_data.py') as f:
               tree = ast.parse(f.read())
-          funcs = [n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+          funcs = [n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
           required = ['seed_sales_contacts_and_leads', 'seed_support_tickets', 'seed_hr_employees',
                       'seed_call_center_agents', 'seed_rica_verifications', 'seed_finance_records',
                       'seed_inventory_stock', 'seed_iot_devices', 'main']
