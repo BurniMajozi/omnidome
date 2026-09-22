@@ -19,6 +19,19 @@ services:
     ports:
       - "5432:5432"
 
+  # Local web build needs the NEXT_PUBLIC_* baked in at build time. The Dockerfile
+  # takes them as build args (Railway passes service vars as --build-arg); locally
+  # we source them from the gitignored root .env so `docker compose build web` works
+  # without them, next build fail-fasts in lib/supabase/client while prerendering.
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+        NEXT_PUBLIC_GATEWAY_URL: ${NEXT_PUBLIC_GATEWAY_URL:-http://localhost:8000}
+
   sales:
     build:
       context: .

@@ -1,47 +1,60 @@
 # Local always-on overlay.
 #
-# This machine's native-WSL Docker flaps periodically (daemon/distro hiccups),
-# which stops containers. Give every core service `restart: unless-stopped` so the
-# stack self-heals after a flap or a reboot instead of leaving services down.
+# HARDWARE CONSTRAINT (found 2026-09-22): this host's CPU is an Intel N150 —
+# 4 logical processors total, 3 given to WSL. Starting many Python/FastAPI
+# containers + Next.js + Postgres AT ONCE saturates all 3 vCPUs instantly.
+# Under that starvation WSL2's VM heartbeat times out and Windows resets the
+# VM/dockerd — which then restarts every `restart: unless-stopped` container
+# simultaneously again, recreating the same burst. That was a self-reinforcing
+# crash loop, not a random flake.
 #
-# Use it (auto-loads docker-compose.yaml + docker-compose.override.yml too):
+# Fix: restart: unless-stopped stays ONLY on `db` (cheap, others need it ready
+# first). Every other service is `restart: "no"` here — after a dockerd/VM
+# restart they do NOT all slam back on at once. Instead `scripts/start-local.sh`
+# (wired to run automatically via a systemd unit, PartOf=docker.service) brings
+# them up ONE AT A TIME with a delay between each, spreading the CPU burst out
+# instead of stacking it. See scripts/start-local.sh and
+# /etc/systemd/system/omnidome-stagger.service inside the WSL distro.
+#
+# Manual use (auto-loads docker-compose.yaml + docker-compose.override.yml too):
 #   export COMPOSE_FILE=docker-compose.yaml:docker-compose.override.yml:docker-compose.local.yml
-#   docker compose up -d --no-deps <services>
-# or pass -f for each explicitly.
+#   bash scripts/start-local.sh          # staggered (preferred)
+#   docker compose up -d --no-deps <services>   # parallel (only for 1-2 services)
 services:
   db:
     restart: unless-stopped
   crm:
-    restart: unless-stopped
+    restart: "no"
   sales:
-    restart: unless-stopped
+    restart: "no"
   billing:
-    restart: unless-stopped
+    restart: "no"
   finance:
-    restart: unless-stopped
+    restart: "no"
   rica:
-    restart: unless-stopped
+    restart: "no"
   network:
-    restart: unless-stopped
+    restart: "no"
   iot:
-    restart: unless-stopped
+    restart: "no"
   call_center:
-    restart: unless-stopped
+    restart: "no"
   retention:
-    restart: unless-stopped
+    restart: "no"
   marketing:
-    restart: unless-stopped
+    restart: "no"
   admin:
-    restart: unless-stopped
+    restart: "no"
   gateway:
-    restart: unless-stopped
+    restart: "no"
+    command: sh -c "uvicorn services.gateway.main:app --host 0.0.0.0 --port 8000 --workers 1"
   journey_engine:
-    restart: unless-stopped
+    restart: "no"
   web_analytics:
-    restart: unless-stopped
+    restart: "no"
   lifecycle:
-    restart: unless-stopped
+    restart: "no"
   web:
-    restart: unless-stopped
+    restart: "no"
   portal:
-    restart: unless-stopped
+    restart: "no"

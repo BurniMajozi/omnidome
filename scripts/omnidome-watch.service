@@ -1,0 +1,13 @@
+[Unit]
+Description=OmniDome self-healing staggered startup watchdog (user unit, no root needed)
+After=default.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5
+WorkingDirectory=%h/omnidome
+ExecStart=/bin/bash %h/omnidome/scripts/watch-and-start.sh
+
+[Install]
+WantedBy=default.target
