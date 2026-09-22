@@ -24,4 +24,8 @@ hermes_data
 **/.cxx
 **/*.apk
 .gradle
+# Local self-hosted Supabase runtime data (Postgres dir owned by another UID —
+# unreadable, breaks build-context stat; not part of any image).
+supabase/volumes
+supabase/volumes/db/data
 

@@ -16,6 +16,18 @@ function flagEnabled(value: string | undefined): boolean {
 }
 
 /**
+ * Disable the Supabase login gate (LOCAL/self-hosted use only).
+ *
+ * When on: the dashboard skips the "no session -> /auth" redirect, and the
+ * server-side proxy routes fall back to the dev tenant/user instead of 401ing.
+ * Intended for running OmniDome locally without a reachable Supabase auth
+ * project. Off by default — NEVER enable on a public/shared deployment, as it
+ * removes authentication entirely. Readable on both client and server since it
+ * is a NEXT_PUBLIC_* var inlined at build time.
+ */
+export const AUTH_DISABLED = flagEnabled(process.env.NEXT_PUBLIC_DISABLE_AUTH)
+
+/**
  * Mock "Journals & Trial Balance" panel in the Finance module. Superseded by
  * LiveJournalEntries (real backend). Off by default; enable to show the legacy
  * mock panel alongside the live one. (Decision 2026-07-24: feature-flag off.)

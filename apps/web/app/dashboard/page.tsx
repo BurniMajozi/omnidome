@@ -27,6 +27,7 @@ import { IoTModule } from "@/components/modules/iot-module"
 import { AdminModule } from "@/components/modules/admin-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
+import { AUTH_DISABLED } from "@/lib/flags"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -77,6 +78,14 @@ export default function Dashboard() {
 
   useEffect(() => {
     let mounted = true
+
+    // Local auth-disabled mode: skip the Supabase session gate entirely.
+    if (AUTH_DISABLED) {
+      setAuthChecked(true)
+      return () => {
+        mounted = false
+      }
+    }
 
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return

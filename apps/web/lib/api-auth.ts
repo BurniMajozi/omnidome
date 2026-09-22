@@ -17,6 +17,17 @@ import { getSupabaseServer } from "@/lib/supabase/server"
 const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY || ""
 
+// LOCAL auth-disabled mode (see lib/flags AUTH_DISABLED). When on, proxy routes
+// fall back to the dev tenant/user instead of 401ing, so the app works without a
+// reachable Supabase auth project. NEVER enable on a public deployment.
+const AUTH_DISABLED = ["true", "1", "yes", "on"].includes(
+  (process.env.NEXT_PUBLIC_DISABLE_AUTH || "").trim().toLowerCase(),
+)
+const DEV_IDENTITY: Identity = {
+  userId: "00000000-0000-0000-0000-000000000001",
+  tenantId: "00000000-0000-0000-0000-000000000001",
+}
+
 export interface Identity {
   userId: string
   tenantId: string
@@ -69,10 +80,15 @@ export async function identityHeaders(
   const token = bearerFrom(request)
   if (token) {
     identity = await resolveIdentity(token)
-    if (identity) {
-      headers.set("x-user-id", identity.userId)
-      headers.set("x-tenant-id", identity.tenantId)
-    }
+  }
+  // Local auth-disabled fallback: no valid session -> act as the dev tenant/user
+  // so proxy routes don't 401. Gated behind AUTH_DISABLED (local only).
+  if (!identity && AUTH_DISABLED) {
+    identity = DEV_IDENTITY
+  }
+  if (identity) {
+    headers.set("x-user-id", identity.userId)
+    headers.set("x-tenant-id", identity.tenantId)
   }
   return { headers, identity }
 }
