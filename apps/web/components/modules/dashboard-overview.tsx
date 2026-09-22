@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { StatCard } from "@/components/dashboard/stat-card"
 import { ModuleCard } from "@/components/dashboard/module-card"
 import { ActivityFeed } from "@/components/dashboard/activity-feed"
@@ -218,7 +219,25 @@ export function DashboardOverview() {
     modules: defaultModuleCards,
   })
 
-  const statsWithIcons = data.stats.map((stat) => ({
+  // Headline KPI stats come from the real backend (sales + crm), not the
+  // Supabase module_data blob above -- see app/api/dashboard-stats. Falls
+  // back to the blob/defaults if the live fetch fails, same resilience
+  // pattern as useModuleData itself.
+  const [liveStats, setLiveStats] = useState<typeof defaultDashboardStats | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/dashboard-stats", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload?.stats) setLiveStats(payload.stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const statsWithIcons = (liveStats ?? data.stats).map((stat) => ({
     ...stat,
     icon: dashboardStatIconMap[stat.iconKey as keyof typeof dashboardStatIconMap] ?? TrendingUp,
   }))
