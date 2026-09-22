@@ -179,9 +179,12 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
 
     # Create quotes for deals
     for deal in result["deals"]:
-        deal_id = deal.get("id") or deal.get("deal_id") or deal.get("contact_id")
+        deal_id = deal.get("id") or deal.get("deal_id")
+        customer_id = deal.get("customer_id")
+        if not deal_id or not customer_id:
+            continue  # deal has no real id/customer (e.g. a failed create) -- skip
         r = await client.post(f"{GATEWAY_URL}/api/sales/quotes", json={
-            "customer_id": str(uuid.uuid4()),
+            "customer_id": customer_id,
             "deal_id": deal_id,
             "items": [
                 {"name": "FTTH 100Mbps", "monthly": 799, "once_off": 0, "quantity": 1},
