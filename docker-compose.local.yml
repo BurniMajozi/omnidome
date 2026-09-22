@@ -58,3 +58,5 @@ services:
     restart: "no"
   portal:
     restart: "no"
+  agent-orchestrator:
+    restart: "no"

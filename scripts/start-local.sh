@@ -41,7 +41,7 @@ else
 fi
 
 # The rest of the lean set, one at a time -- only the ones not already up.
-SERVICES="gateway crm sales marketing iot web"
+SERVICES="gateway crm sales marketing iot web agent-orchestrator"
 
 for s in $SERVICES; do
   if is_up "$s"; then
@@ -52,6 +52,15 @@ for s in $SERVICES; do
   docker compose up -d --no-deps "$s"
   sleep "$STAGGER_SECONDS"
 done
+
+# agent-orchestrator's "assistant" agent routes through Hermes at the DNS name
+# "hermes" -- hermes-agent is a standalone container (not compose-managed), so
+# connect it to this project's network under that alias. Idempotent (harmless
+# if already connected).
+if docker ps --format '{{.Names}}' | grep -q '^hermes-agent$'; then
+  NET="$(basename "$(pwd)")_default"
+  docker network connect --alias hermes "$NET" hermes-agent 2>/dev/null || true
+fi
 
 echo "[start-local] done. Status:"
 docker ps --format '{{.Names}}\t{{.Status}}' | sort
