@@ -400,6 +400,30 @@ export function SalesModule() {
     tableColumns: defaultTableColumns,
   })
 
+  // Revenue/pipeline/KPI/deals-table widgets come from the real sales
+  // backend, not the Supabase module_data blob above -- see
+  // app/api/sales-stats. topProducts/activities/issues/tasks/
+  // aiRecommendations have no real backend locally, so they stay on the
+  // blob/defaults rather than being fabricated. Falls back to the blob on
+  // any fetch failure, same resilience pattern as useModuleData itself.
+  const [liveSales, setLiveSales] = useState<Partial<typeof data> | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/sales-stats", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((payload) => {
+        if (!cancelled && payload?.available) {
+          const { available: _available, ...live } = payload
+          setLiveSales(live)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const merged = { ...data, ...liveSales }
   const {
     salesData,
     pipelineData,
@@ -412,7 +436,7 @@ export function SalesModule() {
     aiRecommendations,
     tableData,
     tableColumns,
-  } = data
+  } = merged
 
   const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
     ...kpi,
