@@ -22,10 +22,17 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return { "x-tenant-id": tenantId, "x-user-id": userId }
 }
 
+// Without a timeout, a stuck/unreachable backend (e.g. a transient local WSL
+// blip) leaves fetch() pending forever, which showed up as widgets stuck on
+// "Loading…" permanently instead of a clear error. 15s is generous enough for
+// calls that reach a third-party API (e.g. Zernio health checks).
+const FETCH_TIMEOUT_MS = 15000
+
 async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
       ...init,
     })
@@ -53,6 +60,7 @@ async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promis
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
       ...init,
     })

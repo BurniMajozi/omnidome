@@ -433,7 +433,13 @@ export function SalesPipelineBoard({
         return {
           ...s,
           deal_count: ov?.deal_count ?? stageDeals.length,
-          total_value_zar: ov?.total_value_zar ?? stageDeals.reduce((sum, d) => sum + Number(d.value_zar || 0), 0),
+          // ov.total_value_zar comes back as a JSON string (Postgres NUMERIC
+          // serialized as text) -- Number() it, or `sum + total_value_zar`
+          // below does string concatenation ("R040382.0000000") instead of
+          // addition once a string first hits the reduce's accumulator.
+          total_value_zar: ov?.total_value_zar != null
+            ? Number(ov.total_value_zar)
+            : stageDeals.reduce((sum, d) => sum + Number(d.value_zar || 0), 0),
         }
       })
 

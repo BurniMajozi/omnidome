@@ -27,6 +27,11 @@ async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
 
   const res = await fetch(`${SALES_API}${path}`, {
     cache: "no-store",
+    // Without a timeout, a stuck/unreachable sales service leaves this
+    // pending forever -- the pipeline board's individual .catch(() => [])
+    // calls never fire, so loading never clears ("Loading pipeline..."
+    // stuck permanently instead of degrading to an empty/error state).
+    signal: AbortSignal.timeout(15000),
     headers: {
       ...headers,
       ...init?.headers,
