@@ -126,7 +126,7 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
     for i in range(10):
         first, last, phone, email = SA_NAMES[i]
         province, city = pickProvinceCity()
-        r = await client.post(f"{GATEWAY_URL}/sales/contacts", json={
+        r = await client.post(f"{GATEWAY_URL}/api/sales/contacts", json={
             "first_name": first,
             "last_name": last,
             "email": email,
@@ -143,7 +143,7 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
     for i in range(8):
         first, last, phone, email = SA_NAMES[10 + i] if 10 + i < len(SA_NAMES) else SA_NAMES[i]
         source = random.choice(SOURCES)
-        r = await client.post(f"{GATEWAY_URL}/sales/leads", json={
+        r = await client.post(f"{GATEWAY_URL}/api/sales/leads", json={
             "first_name": first,
             "last_name": last,
             "email": email,
@@ -159,7 +159,7 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
     # Convert 3 leads to deals
     for lead in result["leads"][:3]:
         lead_id = lead.get("id") or lead.get("lead_id")
-        r = await client.post(f"{GATEWAY_URL}/sales/leads/{lead_id}/convert", json={
+        r = await client.post(f"{GATEWAY_URL}/api/sales/leads/{lead_id}/convert", json={
             "name": random.choice(DEAL_NAMES),
             "value_zar": str(random.choice([499, 799, 999, 1499, 1999, 2499, 4999])),
         }, headers=_h())
@@ -169,7 +169,7 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
     # Also create 3 more standalone deals from contacts
     for contact in result["contacts"][:3]:
         contact_id = contact.get("id") or contact.get("contact_id")
-        r = await client.post(f"{GATEWAY_URL}/sales/deals", json={
+        r = await client.post(f"{GATEWAY_URL}/api/sales/deals", json={
             "name": random.choice(DEAL_NAMES),
             "customer_id": contact_id,
             "value_zar": str(random.choice([799, 999, 1499, 1999])),
@@ -180,7 +180,7 @@ async def seed_sales_contacts_and_leads(client: httpx.AsyncClient) -> dict:
     # Create quotes for deals
     for deal in result["deals"]:
         deal_id = deal.get("id") or deal.get("deal_id") or deal.get("contact_id")
-        r = await client.post(f"{GATEWAY_URL}/sales/quotes", json={
+        r = await client.post(f"{GATEWAY_URL}/api/sales/quotes", json={
             "customer_id": str(uuid.uuid4()),
             "deal_id": deal_id,
             "items": [
@@ -207,7 +207,7 @@ async def seed_support_tickets(client: httpx.AsyncClient, contacts: list):
         contact = contacts[i % len(contacts)]
         contact_id = contact.get("id") or contact.get("contact_id")
 
-        r = await client.post(f"{GATEWAY_URL}/support/tickets", json={
+        r = await client.post(f"{GATEWAY_URL}/api/support/tickets", json={
             "customer_id": contact_id or str(uuid.uuid4()),
             "subject": subject,
             "description": desc,
@@ -227,7 +227,7 @@ async def seed_billing_data(client: httpx.AsyncClient, contacts: list):
     for i, contact in enumerate(contacts[:5]):
         contact_id = contact.get("id") or contact.get("contact_id")
         amount = random.choice([499, 799, 999, 1499, 1999])
-        r = await client.post(f"{GATEWAY_URL}/admin/billing/placeholder", json={
+        r = await client.post(f"{GATEWAY_URL}/api/admin/billing/placeholder", json={
             "customer_id": contact_id,
             "amount_zar": str(amount),
             "description": f"Monthly subscription - {random.choice(['100Mbps', '200Mbps', '50Mbps'])}",
@@ -254,7 +254,7 @@ async def seed_inventory_stock(client: httpx.AsyncClient):
     ]
 
     for p in product_data:
-        r = await client.post(f"{GATEWAY_URL}/inventory/products", json=p, headers=_h())
+        r = await client.post(f"{GATEWAY_URL}/api/inventory/products", json=p, headers=_h())
         if r.status_code < 400:
             products.append(r.json())
 
@@ -278,7 +278,7 @@ async def seed_iot_devices(client: httpx.AsyncClient, contacts: list):
         if i < len(contacts):
             contact_id = contacts[i].get("id") or contacts[i].get("contact_id")
             d["contact_id"] = contact_id
-        r = await client.post(f"{GATEWAY_URL}/iot/devices", json=d, headers=_h())
+        r = await client.post(f"{GATEWAY_URL}/api/iot/devices", json=d, headers=_h())
         if r.status_code < 400:
             devices.append(r.json())
 
@@ -293,7 +293,7 @@ async def seed_network_radius(client: httpx.AsyncClient, contacts: list):
     for contact in contacts[:3]:
         contact_id = contact.get("id") or contact.get("contact_id")
         r = await client.get(
-            f"{GATEWAY_URL}/network/radius-accounts",
+            f"{GATEWAY_URL}/api/network/radius-accounts",
             params={"contact_id": contact_id},
             headers=_h()
         )
@@ -320,7 +320,7 @@ async def seed_hr_employees(client: httpx.AsyncClient):
          "department": "Call Center", "email": "sipho@demo.local", "phone": "0731112233"},
     ]
     for emp in hr_data:
-        r = await client.post(f"{GATEWAY_URL}/hr/employees", json=emp, headers=_h())
+        r = await client.post(f"{GATEWAY_URL}/api/hr/employees", json=emp, headers=_h())
         if r.status_code < 400:
             employees.append(r.json())
     print(f"  HR: {len(employees)} employees created")
@@ -336,7 +336,7 @@ async def seed_call_center_agents(client: httpx.AsyncClient):
         {"name": "Thabo Molefe", "extension": "1010", "status": "ON_CALL"},
     ]
     for agent in agent_data:
-        r = await client.post(f"{GATEWAY_URL}/call_center/agents", json=agent, headers=_h())
+        r = await client.post(f"{GATEWAY_URL}/api/call-center/agents", json=agent, headers=_h())
         if r.status_code < 400:
             agents.append(r.json())
     print(f"  Call Center: {len(agents)} agents created")
@@ -348,7 +348,7 @@ async def seed_rica_verifications(client: httpx.AsyncClient, contacts: list):
     verifications = []
     for contact in contacts[:3]:
         contact_id = contact.get("id") or contact.get("contact_id")
-        r = await client.post(f"{GATEWAY_URL}/rica/sessions", json={
+        r = await client.post(f"{GATEWAY_URL}/api/rica/sessions", json={
             "contact_id": contact_id,
             "verification_type": "DOCUMENT_VERIFICATION",
         }, headers=_h())
@@ -412,12 +412,12 @@ async def seed_finance_records(client: httpx.AsyncClient):
         },
     ]
     for entry in journal_data:
-        r = await client.post(f"{GATEWAY_URL}/finance/journal-entries", json=entry, headers=_h())
+        r = await client.post(f"{GATEWAY_URL}/api/finance/journal-entries", json=entry, headers=_h())
         if r.status_code < 400:
             entries.append(r.json())
             # Post the entry
             entry_id = r.json().get("id")
-            await client.post(f"{GATEWAY_URL}/finance/journal-entries/{entry_id}/post", headers=_h())
+            await client.post(f"{GATEWAY_URL}/api/finance/journal-entries/{entry_id}/post", headers=_h())
     print(f"  Finance: {len(entries)} journal entries created")
     return entries
 
