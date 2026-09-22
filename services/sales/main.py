@@ -564,7 +564,7 @@ async def _get_closed_stage_id(
 
 async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Decimal:
     """Tenant-configured tier wins; default 5/7/10% thresholds otherwise."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     period_start = date(now.year, now.month, 1)
     next_m = period_start + timedelta(days=32)
     period_end = date(next_m.year, next_m.month, 1)
@@ -845,7 +845,7 @@ async def create_deal(
 ):
     stage_id = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
     deal_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Auto-create/resolve contact so deals_contact_id_fkey never fails.
     contact_id = await _ensure_contact(db, tenant_id, payload.customer_id, payload.notes, now)
@@ -947,7 +947,7 @@ async def update_deal(
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     if payload.name is not None:
         deal.name = payload.name
     if payload.value_zar is not None:
@@ -982,7 +982,7 @@ async def move_deal_stage(
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     stage_id = payload.stage_id
     if not stage_id and payload.stage_name:
         stage_id = await _resolve_stage_id(db, tenant_id, None, payload.stage_name)
@@ -1021,7 +1021,7 @@ async def close_deal_won(
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Won")
     deal.status = "WON"
     deal.closed_at = now
@@ -1067,7 +1067,7 @@ async def close_deal_lost(
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Lost")
     deal.status = "LOST"
     deal.closed_at = now
@@ -1093,7 +1093,7 @@ async def create_quote(
     db: AsyncSession = Depends(get_db),
 ):
     quote_id = uuid.uuid4()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     if payload.items:
         totals = calculate_quote_totals(payload.items)
@@ -1194,7 +1194,7 @@ async def send_quote(
     if not quote or quote.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Quote not found")
     quote.status = "SENT"
-    quote.sent_at = datetime.now(timezone.utc)
+    quote.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
     return QuoteResponse(
         id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
@@ -1218,7 +1218,7 @@ async def accept_quote(
     if not quote or quote.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Quote not found")
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     quote.status = "ACCEPTED"
     quote.accepted_at = now
 
@@ -1461,7 +1461,7 @@ async def create_lead(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     lead = Lead(
         id=uuid.uuid4(), tenant_id=tenant_id,
         first_name=payload.first_name, last_name=payload.last_name,
@@ -1496,7 +1496,7 @@ async def update_lead(
         update_data["status"] = update_data["status"].upper()
     for key, value in update_data.items():
         setattr(lead, key, value)
-    lead.updated_at = datetime.now(timezone.utc)
+    lead.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
     return LeadResponse(
         id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
@@ -1517,7 +1517,7 @@ async def convert_lead(
     lead = await db.get(Lead, lead_id)
     if not lead or lead.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Lead not found")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
 
     # Create contact from lead details when none linked yet.
     contact_id = lead.contact_id
@@ -1615,7 +1615,7 @@ async def create_contact(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     contact = Contact(
         id=uuid.uuid4(), tenant_id=tenant_id,
         first_name=payload.first_name, last_name=payload.last_name,
@@ -1651,7 +1651,7 @@ async def update_contact(
     update_data = payload.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(contact, key, value)
-    contact.updated_at = datetime.now(timezone.utc)
+    contact.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
     return ContactResponse(
         id=contact.id, tenant_id=contact.tenant_id, first_name=contact.first_name,
