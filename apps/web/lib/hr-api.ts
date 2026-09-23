@@ -6,13 +6,13 @@
  * Proxies through the Next.js API routes to the HR service (port 8009).
  */
 
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 
 const API_BASE = "/svc/hr"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 async function getTenantId(): Promise<string> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   return (
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??

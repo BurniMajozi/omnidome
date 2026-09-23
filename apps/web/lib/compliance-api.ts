@@ -5,7 +5,7 @@
  * Proxies through Next.js API routes to the Compliance service (port 8019).
  */
 
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 
 // Route handler at app/svc/compliance/[...path]/route.ts strips "/svc/compliance/"
 // and forwards the rest to the backend. All backend routes live under /api/v1/.
@@ -13,7 +13,7 @@ const API_BASE = "/svc/compliance/api/v1"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 async function getTenantId(): Promise<string> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   return (
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??

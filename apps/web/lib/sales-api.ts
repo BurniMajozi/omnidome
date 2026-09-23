@@ -14,12 +14,10 @@ async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
 
   // Attempt to attach Supabase session token if available
   try {
-    const { supabase } = await import("@/lib/supabase/client")
-    if (supabase) {
-      const { data } = await supabase.auth.getSession()
-      if (data.session?.access_token) {
-        headers["Authorization"] = `Bearer ${data.session.access_token}`
-      }
+    const { getSessionSafe } = await import("@/lib/supabase/client")
+    const { data } = await getSessionSafe()
+    if (data.session?.access_token) {
+      headers["Authorization"] = `Bearer ${data.session.access_token}`
     }
   } catch {
     // Supabase browser client optional

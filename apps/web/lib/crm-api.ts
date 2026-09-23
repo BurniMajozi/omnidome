@@ -1,6 +1,6 @@
 "use client"
 
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 
 /**
  * CRM API client — customers, leads, dashboard summary, activities,
@@ -13,7 +13,7 @@ const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   const tenantId =
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??

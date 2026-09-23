@@ -7,14 +7,14 @@
  * so the demo page is correct and independent.
  */
 
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 
 const API_BASE = "/svc/marketing"
 const FALLBACK_TENANT = "00000000-0000-0000-0000-000000000001"
 const FALLBACK_USER = "00000000-0000-0000-0000-000000000001"
 
 async function headers(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   const tenant =
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??
