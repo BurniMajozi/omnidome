@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect, useMemo } from "react"
+import { useState, useCallback, useEffect, useMemo, useRef } from "react"
 import {
   DollarSign,
   GripVertical,
@@ -426,6 +426,11 @@ export function SalesPipelineBoard({
   const [dealNotes, setDealNotes] = useState("")
   const [savingDeal, setSavingDeal] = useState(false)
 
+  // Kept in a ref so loadData's identity never depends on the parent's
+  // callback -- otherwise an inline onDataLoaded re-fires the load effect.
+  const onDataLoadedRef = useRef(onDataLoaded)
+  onDataLoadedRef.current = onDataLoaded
+
   const loadData = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -450,16 +455,19 @@ export function SalesPipelineBoard({
 
       setStageDefs(sortedStages)
       setDeals(dealsData)
-      if (sortedStages.length > 0 && !dealStageId) {
-        setDealStageId(sortedStages[0].id)
+      // Functional update: depending on dealStageId here made the first load
+      // change loadData's identity, re-firing the effect for a second full
+      // reload (and spinner flash) on every mount.
+      if (sortedStages.length > 0) {
+        setDealStageId((prev) => prev || sortedStages[0].id)
       }
-      onDataLoaded?.(dealsData, deriveStageStats(sortedStages, dealsData))
+      onDataLoadedRef.current?.(dealsData, deriveStageStats(sortedStages, dealsData))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load pipeline")
     } finally {
       setLoading(false)
     }
-  }, [dealStageId, onDataLoaded])
+  }, [])
 
   useEffect(() => {
     loadData()
@@ -548,7 +556,7 @@ export function SalesPipelineBoard({
     } catch (err) {
       console.error("Failed to close deal as lost:", err)
     }
-  }, [loadData])
+  }, [])
 
   const handleCreateManualDeal = async (e: React.FormEvent) => {
     e.preventDefault()
