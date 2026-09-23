@@ -1,5 +1,6 @@
 """Database session management for Journey Engine service."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -72,7 +73,58 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-def init_tables() -> None:
+async def init_tables() -> None:
     from services.journey_engine.models import JourneyBase
     engine = get_engine()
+
+    # CancellationWorkflow has real FK constraints to network_services.id and
+    # fno_orders.id (services.network.models, a *different* declarative Base,
+    # which itself has network_services.product_id -> inventory_products.id,
+    # a THIRD service/Base) -- JourneyBase.metadata.create_all() can't
+    # resolve any of this unless those tables already exist first. Found
+    # 2026-09-23: startup crashed with NoReferencedTableError in any
+    # environment where network/inventory hadn't already created their own
+    # tables first (this environment doesn't run either by default). All
+    # three services share one physical DB (see docker-compose.yaml), so
+    # calling their own init_tables() here is safe and idempotent -- same
+    # engine factory (network's), same target database throughout.
+    # inventory's init_tables() is async; network's and this one are sync,
+    # which is why this function is now async too (see main.py's startup()).
+    try:
+        from services.inventory.database import init_tables as _init_inventory_tables
+        await _init_inventory_tables()
+    except Exception:
+        logging.getLogger("journey_engine").exception(
+            "Failed to ensure services.inventory tables exist before creating "
+            "network tables -- network_services.product_id's FK may fail."
+        )
+
+    try:
+        from services.network.database import init_tables as _init_network_tables
+        _init_network_tables()
+    except Exception:
+        logging.getLogger("journey_engine").exception(
+            "Failed to ensure services.network tables exist before creating "
+            "journey_engine tables -- CancellationWorkflow's FKs may fail."
+        )
+
+    # Creating network's tables above makes them exist in the DATABASE, but
+    # ForeignKey("network_services.id")/("fno_orders.id") are string
+    # references SQLAlchemy can only resolve against a Table object already
+    # registered in *this same* MetaData -- JourneyBase.metadata has never
+    # heard of network's tables, since they belong to a different
+    # declarative Base entirely. Reflect the real (now-existing) tables into
+    # JourneyBase's own metadata so create_all() can resolve the FKs;
+    # create_all()'s default checkfirst=True then skips re-creating them
+    # since they already exist.
+    from sqlalchemy import Table
+    for table_name in ("network_services", "fno_orders"):
+        if table_name not in JourneyBase.metadata.tables:
+            try:
+                Table(table_name, JourneyBase.metadata, autoload_with=engine)
+            except Exception:
+                logging.getLogger("journey_engine").exception(
+                    "Failed to reflect %s -- CancellationWorkflow's FK to it may fail", table_name
+                )
+
     JourneyBase.metadata.create_all(bind=engine)

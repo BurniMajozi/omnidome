@@ -23,7 +23,16 @@ COPY services/common/ ./services/common/
 # background cancellation task. Found 2026-09-23 while auditing the
 # BackgroundTasks-silently-never-runs bug across the fleet. Same pattern as
 # services/crm/Dockerfile and services/fno_intelligence/Dockerfile.
+#
+# services/inventory/ is also needed: network_services.product_id has its
+# own FK to inventory_products.id, so journey_engine/database.py's
+# init_tables() calls services.inventory.database.init_tables() first to
+# make that table exist before network's (and then this service's own)
+# tables can be created. inventory's requirements.txt-only extra (alembic)
+# is not needed here -- only database.py's own imports matter, and it
+# doesn't import alembic (that's confined to services/inventory/migrations/).
 COPY services/network/ ./services/network/
+COPY services/inventory/ ./services/inventory/
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1

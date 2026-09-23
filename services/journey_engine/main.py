@@ -102,7 +102,7 @@ app.include_router(ab_testing_router)
 
 @app.on_event("startup")
 async def startup():
-    init_tables()
+    await init_tables()
 
 
 # ---------------------------------------------------------------------------
@@ -679,6 +679,11 @@ async def respond_to_offer(
 from services.journey_engine.models import CancellationWorkflow
 
 
+class CancelWorkflowCreate(BaseModel):
+    cancel_event_id: str
+    reason: Optional[str] = None
+
+
 @app.post("/cancellation-workflows")
 async def create_cancellation_workflow(
     data: CancelWorkflowCreate,
@@ -746,11 +751,6 @@ async def create_cancellation_workflow(
         "status": "pending",
         "router_return_required": router_device is not None,
     }
-
-
-class CancelWorkflowCreate(BaseModel):
-    cancel_event_id: str
-    reason: Optional[str] = None
 
 
 async def _execute_fno_cancellation(workflow_id: uuid.UUID, service_id: uuid.UUID, tenant_id: uuid.UUID):

@@ -41,8 +41,41 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def init_tables() -> None:
-    """Create all Network tables if they don't exist (dev convenience)."""
+    """Create all Network tables if they don't exist (dev convenience).
+
+    Several columns here have real FKs into OTHER services' declarative
+    Bases -- NetworkService.product_id -> inventory_products.id
+    (services.inventory.models), FNOSessionRecording.session_id/job_id ->
+    fno_portal_sessions.id/fno_automation_jobs.id (services.fno_intelligence.
+    models). Base.metadata.create_all() can't resolve any of these unless
+    the referenced tables already exist AND are registered in *this*
+    metadata -- creating them in the database via their owning service's own
+    init_tables() isn't enough by itself; SQLAlchemy resolves a string
+    ForeignKey("some_table.id") against this module's own Base.metadata.
+    tables, which has never heard of a table belonging to another Base.
+    Found 2026-09-23 debugging journey_engine, which imports this function
+    as part of a longer cross-service FK chain (journey_engine -> network ->
+    inventory / fno_intelligence). All services share one physical Postgres
+    DB (see docker-compose.yaml), so reflecting the real, already-existing
+    tables here is safe; create_all()'s default checkfirst=True then skips
+    re-creating them.
+    """
+    import logging
+    from sqlalchemy import Table
+
     engine = get_engine()
+
+    for table_name in ("inventory_products", "fno_portal_sessions", "fno_automation_jobs"):
+        if table_name not in Base.metadata.tables:
+            try:
+                Table(table_name, Base.metadata, autoload_with=engine)
+            except Exception:
+                logging.getLogger("network").exception(
+                    "Failed to reflect %s -- a network FK to it may fail "
+                    "(it must already exist in the database, created by its owning service).",
+                    table_name,
+                )
+
     Base.metadata.create_all(bind=engine)
 
 
