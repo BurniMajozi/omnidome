@@ -14,6 +14,9 @@ Owns tables:
   - fno_leads: leads generated from FNO portal data
   - fno_reports: automated report generation
   - fno_operational_tasks: operational automation tasks (cancel, ticket, migrate, pause)
+  - fno_kml_imports: KML/KMZ coverage polygon bulk imports
+  - fno_passed_home_imports: FNO "homes passed" file upload audit (CSV/XLSX)
+  - fno_passed_homes: normalized/deduped addresses from passed-home imports
 
 Port: 8024
 """
@@ -752,7 +755,122 @@ class FNOKMLImport(Base):
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 7. FAULT REPORTING
+# 7. PASSED-HOMES IMPORT (sales prospecting pipeline)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Distinct from FNOKMLImport (polygon coverage areas): this tracks row-level
+# address lists from FNO "homes passed" exports (CSV/XLSX), used to seed the
+# sales prospecting pipeline. Deliberately NOT enum-shared with KML imports
+# (own PASSED_HOME_IMPORT_STATUS) since the two imports have unrelated
+# lifecycles and this ticket's scope is narrower (no polygon/coverage data).
+#
+# Scope: import + normalize + dedupe only. Geocoding, customer-suppression
+# (fuzzy match against sales.contacts), scoring, and the sales.leads bridge
+# are explicit follow-up tickets -- see routes.py's passed-homes section.
+
+PASSED_HOME_IMPORT_STATUS = SAEnum(
+    "uploaded", "parsing", "imported", "failed", "partial",
+    name="passed_home_import_status", create_type=False,
+)
+
+PASSED_HOME_STATUS = SAEnum(
+    "raw", "normalized", "duplicate", "invalid", "suppressed_customer",
+    name="passed_home_status", create_type=False,
+)
+
+PASSED_HOME_DWELLING = SAEnum(
+    "unknown", "sdu", "mdu_unit", "complex", "business", "estate",
+    name="passed_home_dwelling", create_type=False,
+)
+
+
+class FNOPassedHomeImport(Base):
+    """Tracks FNO 'homes passed' file uploads (CSV/XLSX) for bulk prospect
+    import. File-level audit record; see FNOPassedHome for the row-level data.
+    """
+
+    __tablename__ = "fno_passed_home_imports"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+
+    # File info
+    file_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
+    column_map: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)  # actual header -> canonical field, audit
+
+    # Processing
+    status: Mapped[str] = mapped_column(PASSED_HOME_IMPORT_STATUS, nullable=False, default="uploaded")
+    total_rows: Mapped[int] = mapped_column(Integer, default=0)
+    inserted_rows: Mapped[int] = mapped_column(Integer, default=0)
+    duplicate_rows: Mapped[int] = mapped_column(Integer, default=0)
+    invalid_rows: Mapped[int] = mapped_column(Integer, default=0)
+    suppressed_rows: Mapped[int] = mapped_column(Integer, default=0)  # reserved for follow-up ticket T3
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    processed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_fno_passed_home_import_tenant_status", "tenant_id", "status"),
+        Index("ix_fno_passed_home_import_tenant_fno", "tenant_id", "fno_name"),
+    )
+
+
+class FNOPassedHome(Base):
+    """A single address from an FNO 'homes passed' file -- a raw prospecting
+    candidate before geocoding/scoring/sales-bridge (see follow-up tickets).
+    """
+
+    __tablename__ = "fno_passed_homes"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    import_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("fno_passed_home_imports.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # Denormalized from the parent import so filtering doesn't require a join.
+    fno_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    fno_portal: Mapped[str] = mapped_column(FNO_PORTAL, nullable=False)
+
+    address_raw: Mapped[str] = mapped_column(Text, nullable=False)  # verbatim source value, never mutated
+    address_line1: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    suburb: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    province: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+
+    dwelling_type: Mapped[str] = mapped_column(PASSED_HOME_DWELLING, nullable=False, default="unknown")
+    unit_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    date_passed: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    status: Mapped[str] = mapped_column(PASSED_HOME_STATUS, nullable=False, default="raw")
+    # lower(address_line1)|lower(suburb)|postal_code -- uniqueness checked in
+    # Python per (tenant_id, fno_name, dedup_key), not a DB unique constraint,
+    # so re-importing the same file is auditable rather than silently rejected.
+    dedup_key: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    raw_row: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)  # full source row, verbatim
+    reject_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_fno_passed_home_tenant_status", "tenant_id", "status"),
+        Index("ix_fno_passed_home_dedup", "tenant_id", "fno_name", "dedup_key"),
+        Index("ix_fno_passed_home_location", "tenant_id", "city", "suburb"),
+        Index("ix_fno_passed_home_import", "import_id"),
+        Index("ix_fno_passed_home_postal", "postal_code"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 8. FAULT REPORTING
 # ════════════════════════════════════════════════════════════════════════
 
 FAULT_STATUS = SAEnum(

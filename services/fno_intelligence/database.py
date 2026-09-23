@@ -1,6 +1,8 @@
 """FNO Intelligence service — database setup."""
 
 import os
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
@@ -49,8 +51,44 @@ def get_session_factory():
 
 
 async def get_session() -> AsyncSession:
+    """FastAPI dependency yielding a transactional async session.
+
+    Found 2026-09-23 while testing the passed-homes import feature: this
+    previously just yielded the session with no commit, so EVERY write
+    endpoint in this service (jobs, KML imports, leads, operational tasks,
+    templates, ...) silently rolled back on request end -- data never
+    persisted past the request, though endpoints returned as if it had.
+    Matches the working pattern already used by services/sales/database.py
+    and services/iot/database.py.
+    """
     async with get_session_factory()() as session:
-        yield session
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+
+
+@asynccontextmanager
+async def get_background_session() -> AsyncGenerator[AsyncSession, None]:
+    """Same transactional session as get_session(), but usable as
+    ``async with get_background_session() as session:`` for background tasks
+    (get_session() is a plain FastAPI-dependency generator, not a context
+    manager -- calling ``async with get_session()`` raises TypeError).
+
+    Also fixes a real pre-existing bug found alongside the commit gap above:
+    the KML import background task already did ``async with get_session()``
+    and was throwing this exact TypeError on every run, silently (a
+    BackgroundTask's exception is only logged, never surfaced to the caller).
+    """
+    async with get_session_factory()() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
 
 
 async def init_tables():

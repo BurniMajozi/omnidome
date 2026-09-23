@@ -7,8 +7,13 @@ Covers:
  4. Lead generation from FNO data
  5. Operational automation (cancel, ticket, migration, pause, reports)
  6. Template management
+ 7. KML coverage import
+ 8. Web intelligence (Firecrawl-backed research/monitoring)
+ 9. Passed-homes import (sales prospecting pipeline: upload/normalize/dedupe)
 """
 
+import asyncio
+import logging
 import uuid
 from datetime import date, datetime
 from typing import Optional
@@ -40,6 +45,34 @@ from services.common.firecrawl import FirecrawlError, FirecrawlUnavailable
 from services.fno_intelligence import web_intel
 
 router = APIRouter(tags=["FNO Intelligence"])
+
+# Scheduled via asyncio.create_task() rather than FastAPI's BackgroundTasks
+# (background_tasks.add_task): this service's RequestLoggingMiddleware
+# (BaseHTTPMiddleware) runs call_next() in a separate task and relays the
+# response through an internal streaming wrapper that drops response.background
+# in the Starlette version installed here -- add_task()'d work was silently
+# never invoked (no exception, status stuck at "uploaded"/whatever pending
+# state forever). asyncio.create_task() schedules straight onto the running
+# event loop and doesn't go through the response object at all. Tasks are kept
+# in a module-level set with a discard callback so they aren't garbage
+# collected mid-run. Found 2026-09-23 debugging the passed-homes import.
+_BACKGROUND_TASKS: set = set()
+
+
+def _schedule_background(coro):
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+
+    def _on_done(t: "asyncio.Task"):
+        _BACKGROUND_TASKS.discard(t)
+        exc = t.exception() if not t.cancelled() else None
+        if exc is not None:
+            logging.getLogger("fno_intelligence").error(
+                "Background task %r crashed: %r", coro, exc, exc_info=exc
+            )
+
+    task.add_done_callback(_on_done)
+    return task
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -444,7 +477,7 @@ async def list_reports(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db
 # 8. KML COVERAGE IMPORT
 # ════════════════════════════════════════════════════════════════════════
 
-from fastapi import UploadFile, File, Form, BackgroundTasks
+from fastapi import UploadFile, File, Form
 from services.fno_intelligence.models import (
     FNOKMLImport,
     NetworkFaultReport,
@@ -463,7 +496,6 @@ class KMLImportResponse(BaseModel):
 
 @router.post("/kml-imports", response_model=KMLImportResponse)
 async def upload_kml(
-    background_tasks: BackgroundTasks,
     fno_name: str = Form(...),
     fno_portal: str = Form(...),
     file: UploadFile = File(...),
@@ -494,10 +526,15 @@ async def upload_kml(
         status="uploaded",
     )
     db.add(kml_import)
-    await db.flush()
+    await db.commit()
 
-    # Process in background
-    background_tasks.add_task(_process_kml_import, kml_import.id)
+    # Process in background. Must be committed (not just flushed) first --
+    # the background task reads this row through its own separate DB session,
+    # which can't see an uncommitted row from this request's session. Under
+    # concurrent requests, a flush-only commit lost that race intermittently:
+    # the background task's session.get() found nothing and silently returned,
+    # leaving the import stuck at "uploaded" forever with no error logged.
+    _schedule_background(_process_kml_import(kml_import.id))
 
     return KMLImportResponse(
         id=str(kml_import.id),
@@ -509,7 +546,7 @@ async def upload_kml(
 
 async def _process_kml_import(import_id: uuid.UUID):
     """Background task to parse KML and import coverage areas."""
-    from services.fno_intelligence.database import get_session as _get_session
+    from services.fno_intelligence.database import get_background_session as _get_session
     from services.fno_intelligence.models import FNONetworkCoverage
 
     async with _get_session() as session:
@@ -701,7 +738,6 @@ class FaultReportUpdate(BaseModel):
 @router.post("/faults")
 async def create_fault_report(
     payload: FaultReportCreate,
-    background_tasks: BackgroundTasks,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_session),
 ):
@@ -725,25 +761,23 @@ async def create_fault_report(
         fault_started_at=payload.fault_started_at,
     )
     db.add(fault)
-    await db.flush()
+    await db.commit()
 
-    # Auto-create support ticket for high/critical severity
+    # Process in background -- must be committed (not just flushed) first, see
+    # the note in upload_kml() above: a separate DB session backs each task and
+    # can't see an uncommitted row from this request's session.
     if payload.severity in ("high", "critical"):
-        background_tasks.add_task(
-            _auto_create_support_ticket, fault.id, tenant_id
-        )
+        _schedule_background(_auto_create_support_ticket(fault.id, tenant_id))
 
     # Notify affected customers in the same area
-    background_tasks.add_task(
-        _notify_affected_customers, fault.id, tenant_id
-    )
+    _schedule_background(_notify_affected_customers(fault.id, tenant_id))
 
     return {"id": str(fault.id), "status": fault.status, "severity": fault.severity}
 
 
 async def _auto_create_support_ticket(fault_id: uuid.UUID, tenant_id: uuid.UUID):
     """Auto-create a support ticket for high-severity faults."""
-    from services.fno_intelligence.database import get_session as _get_session
+    from services.fno_intelligence.database import get_background_session as _get_session
     import httpx
 
     async with _get_session() as session:
@@ -777,7 +811,7 @@ async def _auto_create_support_ticket(fault_id: uuid.UUID, tenant_id: uuid.UUID)
 
 async def _notify_affected_customers(fault_id: uuid.UUID, tenant_id: uuid.UUID):
     """Notify customers in the affected area about a fault."""
-    from services.fno_intelligence.database import get_session as _get_session
+    from services.fno_intelligence.database import get_background_session as _get_session
     from services.network.models import NetworkService
 
     async with _get_session() as session:
@@ -1080,3 +1114,336 @@ async def web_intel_capabilities():
             "/web-intel/competitor-analysis",
         ],
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 10. PASSED-HOMES IMPORT (sales prospecting pipeline)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Ticket 1 scope: upload -> normalize -> dedupe -> queryable prospect pool.
+# NOT in scope here (explicit follow-up tickets): geocoding, Firecrawl
+# enrichment (businesses/complexes only -- NOT per-house lookups, which have
+# no useful web footprint and risk POPIA exposure scraping personal contact
+# info), scoring, the sales.leads bridge, and a web upload UI.
+
+from fastapi import UploadFile as _PH_UploadFile, File as _PH_File, Form as _PH_Form
+from services.common.auth import get_current_user_id as _ph_get_current_user_id
+from services.fno_intelligence.models import (
+    FNOPassedHomeImport,
+    FNOPassedHome,
+)
+from services.fno_intelligence.passed_homes import map_columns as _ph_map_columns, normalize_row as _ph_normalize_row
+
+_PASSED_HOME_MAX_BYTES = 25 * 1024 * 1024
+_PASSED_HOME_EXTENSIONS = {"csv", "xlsx", "xls"}
+_VALID_FNO_PORTALS = {
+    "vumatel_active", "vumatel_passive", "openserve", "frogfoot",
+    "octotel", "metrofibre", "liquid", "other",
+}
+
+
+class PassedHomeImportResponse(BaseModel):
+    id: str
+    fno_name: str
+    file_name: str
+    status: str
+    total_rows: int = 0
+
+
+def _parse_passed_home_upload(content: bytes, ext: str):
+    """Parse CSV/XLSX bytes into (rows, headers). dtype=str + no NaN-as-float
+    coercion (pandas would otherwise turn e.g. postal code "7500" into 7500.0,
+    and NaN isn't valid JSON for the raw_row JSONB column)."""
+    import io
+    import pandas as pd
+
+    if ext == "csv":
+        try:
+            df = pd.read_csv(io.BytesIO(content), encoding="utf-8-sig", dtype=str, keep_default_na=False)
+        except UnicodeDecodeError:
+            df = pd.read_csv(io.BytesIO(content), encoding="latin-1", dtype=str, keep_default_na=False)
+    else:
+        df = pd.read_excel(io.BytesIO(content), dtype=str, keep_default_na=False)
+
+    headers = [str(c) for c in df.columns.tolist()]
+    rows = df.to_dict(orient="records")
+    return rows, headers
+
+
+@router.post("/passed-home-imports", response_model=PassedHomeImportResponse, status_code=202)
+async def upload_passed_homes(
+    fno_name: str = _PH_Form(...),
+    fno_portal: str = _PH_Form(...),
+    file: _PH_UploadFile = _PH_File(...),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    user_id: uuid.UUID = Depends(_ph_get_current_user_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Upload an FNO 'homes passed' file (CSV/XLSX) for bulk prospect import.
+
+    Structural validation (portal, extension, size, parseable, has an address
+    column) happens synchronously so bad uploads fail fast with a clear 400.
+    The potentially-slow per-row normalize/dedupe/insert work happens in the
+    background so a 10k-row file doesn't block the request.
+    """
+    import os
+    import aiofiles
+
+    if fno_portal not in _VALID_FNO_PORTALS:
+        raise HTTPException(400, f"fno_portal must be one of: {', '.join(sorted(_VALID_FNO_PORTALS))}")
+
+    filename = file.filename or "upload"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in _PASSED_HOME_EXTENSIONS:
+        raise HTTPException(400, "File must be .csv, .xlsx, or .xls")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(400, "File is empty")
+    if len(content) > _PASSED_HOME_MAX_BYTES:
+        raise HTTPException(400, "File exceeds 25MB limit")
+
+    try:
+        rows, headers = _parse_passed_home_upload(content, ext)
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse file: {e}")
+
+    if not rows:
+        raise HTTPException(400, "File has no data rows")
+
+    column_map = _ph_map_columns(headers)
+    if "address" not in column_map:
+        raise HTTPException(400, "No recognizable address column found in file headers")
+
+    safe_name = os.path.basename(filename).replace("..", "")
+    upload_dir = f"/opt/data/uploads/passed-homes/{tenant_id}"
+    os.makedirs(upload_dir, exist_ok=True)
+
+    import_record = FNOPassedHomeImport(
+        tenant_id=tenant_id,
+        fno_name=fno_name,
+        fno_portal=fno_portal,
+        file_name=filename,
+        file_size_bytes=len(content),
+        file_path="",  # filled in once we know the generated id, below
+        column_map=column_map,
+        status="uploaded",
+        total_rows=len(rows),
+        uploaded_by=user_id,
+    )
+    db.add(import_record)
+    await db.flush()
+
+    file_path = f"{upload_dir}/{import_record.id}_{safe_name}"
+    async with aiofiles.open(file_path, "wb") as f:
+        await f.write(content)
+    import_record.file_path = file_path
+    await db.commit()
+
+    # Must be committed (not just flushed) before scheduling -- see the note
+    # in upload_kml() above: the background task's separate DB session can't
+    # see an uncommitted row from this request's session.
+    _schedule_background(_process_passed_home_import(import_record.id, rows, column_map))
+
+    return PassedHomeImportResponse(
+        id=str(import_record.id),
+        fno_name=fno_name,
+        file_name=filename,
+        status="uploaded",
+        total_rows=len(rows),
+    )
+
+
+async def _process_passed_home_import(import_id: uuid.UUID, rows: list, column_map: dict):
+    """Background task: normalize, dedupe, and insert passed-home rows.
+
+    Dedup is a single prefetch of existing dedup_keys for this tenant+fno
+    into a Python set, then in-memory membership checks per row -- not one
+    SELECT per row, which the 10k-row/<60s acceptance target rules out.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from services.fno_intelligence.database import get_background_session as _get_bg_session
+
+    async with _get_bg_session() as session:
+        import_record = await session.get(FNOPassedHomeImport, import_id)
+        if not import_record:
+            return
+
+        import_record.status = "parsing"
+        await session.flush()
+
+        try:
+            existing_result = await session.execute(
+                select(FNOPassedHome.dedup_key).where(
+                    FNOPassedHome.tenant_id == import_record.tenant_id,
+                    FNOPassedHome.fno_name == import_record.fno_name,
+                )
+            )
+            existing_keys = {row[0] for row in existing_result.all()}
+            seen_this_file: set = set()
+
+            inserted = duplicate = invalid = 0
+            address_header = column_map.get("address", "")
+
+            for i, raw_row in enumerate(rows):
+                normalized = _ph_normalize_row(raw_row, column_map)
+
+                if not normalized["valid"]:
+                    row_status = "invalid"
+                    reject_reason = normalized["reject_reason"]
+                    invalid += 1
+                elif normalized["dedup_key"] in existing_keys or normalized["dedup_key"] in seen_this_file:
+                    row_status = "duplicate"
+                    reject_reason = "duplicate_in_db" if normalized["dedup_key"] in existing_keys else "duplicate_in_file"
+                    duplicate += 1
+                else:
+                    row_status = "normalized"
+                    reject_reason = None
+                    seen_this_file.add(normalized["dedup_key"])
+                    inserted += 1
+
+                date_passed = None
+                if normalized.get("date_passed_raw"):
+                    for fmt in (None, "%Y/%m/%d", "%d/%m/%Y"):
+                        try:
+                            date_passed = (
+                                _dt.fromisoformat(normalized["date_passed_raw"]).date()
+                                if fmt is None
+                                else _dt.strptime(normalized["date_passed_raw"], fmt).date()
+                            )
+                            break
+                        except Exception:
+                            continue
+
+                unit_count = None
+                if normalized.get("unit_count_raw"):
+                    try:
+                        unit_count = int(float(normalized["unit_count_raw"]))
+                    except Exception:
+                        unit_count = None
+
+                session.add(FNOPassedHome(
+                    tenant_id=import_record.tenant_id,
+                    import_id=import_record.id,
+                    fno_name=import_record.fno_name,
+                    fno_portal=import_record.fno_portal,
+                    address_raw=str(raw_row.get(address_header, "")),
+                    address_line1=normalized["address_line1"],
+                    suburb=normalized["suburb"],
+                    city=normalized["city"],
+                    province=normalized["province"],
+                    postal_code=normalized["postal_code"],
+                    dwelling_type=normalized["dwelling_type"],
+                    unit_count=unit_count,
+                    date_passed=date_passed,
+                    status=row_status,
+                    dedup_key=normalized["dedup_key"] or "",
+                    raw_row=raw_row,
+                    reject_reason=reject_reason,
+                ))
+
+                if (i + 1) % 500 == 0:
+                    await session.flush()
+
+            await session.flush()
+
+            import_record.inserted_rows = inserted
+            import_record.duplicate_rows = duplicate
+            import_record.invalid_rows = invalid
+            import_record.suppressed_rows = 0
+            import_record.status = "imported" if inserted > 0 else "partial"
+            import_record.processed_at = _dt.now(_tz.utc)
+
+        except Exception as e:
+            import_record.status = "failed"
+            import_record.error_message = str(e)[:2000]
+
+        await session.flush()
+
+
+@router.get("/passed-home-imports")
+async def list_passed_home_imports(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    fno_name: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """List passed-home import history."""
+    query = select(FNOPassedHomeImport).where(FNOPassedHomeImport.tenant_id == tenant_id)
+    if fno_name:
+        query = query.where(FNOPassedHomeImport.fno_name == fno_name)
+    if status:
+        query = query.where(FNOPassedHomeImport.status == status)
+    result = await db.execute(query.order_by(desc(FNOPassedHomeImport.created_at)).limit(limit).offset(offset))
+    imports = result.scalars().all()
+    return [{
+        "id": str(i.id), "fno_name": i.fno_name, "file_name": i.file_name, "status": i.status,
+        "total_rows": i.total_rows, "inserted_rows": i.inserted_rows,
+        "duplicate_rows": i.duplicate_rows, "invalid_rows": i.invalid_rows,
+        "suppressed_rows": i.suppressed_rows, "created_at": i.created_at.isoformat(),
+    } for i in imports]
+
+
+@router.get("/passed-home-imports/{import_id}")
+async def get_passed_home_import(
+    import_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Get passed-home import details, including the audit column_map."""
+    record = await db.get(FNOPassedHomeImport, import_id)
+    if not record or record.tenant_id != tenant_id:
+        raise HTTPException(404, "Import not found")
+    return {
+        "id": str(record.id), "fno_name": record.fno_name, "fno_portal": record.fno_portal,
+        "file_name": record.file_name, "file_size_bytes": record.file_size_bytes,
+        "column_map": record.column_map, "status": record.status,
+        "total_rows": record.total_rows, "inserted_rows": record.inserted_rows,
+        "duplicate_rows": record.duplicate_rows, "invalid_rows": record.invalid_rows,
+        "suppressed_rows": record.suppressed_rows, "error_message": record.error_message,
+        "created_at": record.created_at.isoformat(),
+        "processed_at": record.processed_at.isoformat() if record.processed_at else None,
+    }
+
+
+@router.get("/passed-homes")
+async def list_passed_homes(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    import_id: Optional[uuid.UUID] = None,
+    fno_name: Optional[str] = None,
+    city: Optional[str] = None,
+    suburb: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = Query(50, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """Filterable passed-home row list. search = ilike on address_line1/suburb."""
+    query = select(FNOPassedHome).where(FNOPassedHome.tenant_id == tenant_id)
+    if import_id:
+        query = query.where(FNOPassedHome.import_id == import_id)
+    if fno_name:
+        query = query.where(FNOPassedHome.fno_name == fno_name)
+    if city:
+        query = query.where(FNOPassedHome.city == city)
+    if suburb:
+        query = query.where(FNOPassedHome.suburb == suburb)
+    if status:
+        query = query.where(FNOPassedHome.status == status)
+    if search:
+        like = f"%{search}%"
+        query = query.where(
+            (FNOPassedHome.address_line1.ilike(like)) | (FNOPassedHome.suburb.ilike(like))
+        )
+    result = await db.execute(query.order_by(desc(FNOPassedHome.created_at)).limit(limit).offset(offset))
+    homes = result.scalars().all()
+    return [{
+        "id": str(h.id), "import_id": str(h.import_id), "fno_name": h.fno_name,
+        "address_line1": h.address_line1, "suburb": h.suburb, "city": h.city,
+        "postal_code": h.postal_code, "dwelling_type": h.dwelling_type,
+        "date_passed": h.date_passed.isoformat() if h.date_passed else None,
+        "status": h.status,
+    } for h in homes]
