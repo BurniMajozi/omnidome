@@ -764,10 +764,12 @@ class FNOKMLImport(Base):
 # (own PASSED_HOME_IMPORT_STATUS) since the two imports have unrelated
 # lifecycles and this ticket's scope is narrower (no polygon/coverage data).
 #
-# Scope: import + normalize + dedupe (Ticket 1), plus geocoding of normalized
-# rows (Ticket 2, gps_lat/gps_lng/geocode_status below). Customer-suppression
-# (fuzzy match against sales.contacts), scoring, and the sales.leads bridge
-# remain explicit follow-up tickets -- see routes.py's passed-homes section.
+# Scope: import + normalize + dedupe (Ticket 1), geocoding of normalized rows
+# (Ticket 2, gps_lat/gps_lng/geocode_status below), and customer-suppression
+# against sales.contacts + active network_services (Ticket 3, status=
+# "suppressed_customer" below, see suppression.py). Scoring and the
+# sales.leads bridge remain explicit follow-up tickets (T4/T5) -- see
+# routes.py's passed-homes section.
 
 PASSED_HOME_IMPORT_STATUS = SAEnum(
     "uploaded", "parsing", "imported", "failed", "partial",
@@ -817,7 +819,7 @@ class FNOPassedHomeImport(Base):
     inserted_rows: Mapped[int] = mapped_column(Integer, default=0)
     duplicate_rows: Mapped[int] = mapped_column(Integer, default=0)
     invalid_rows: Mapped[int] = mapped_column(Integer, default=0)
-    suppressed_rows: Mapped[int] = mapped_column(Integer, default=0)  # reserved for follow-up ticket T3
+    suppressed_rows: Mapped[int] = mapped_column(Integer, default=0)  # rows matched to an existing contact/active service (Ticket 3)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
@@ -833,7 +835,7 @@ class FNOPassedHomeImport(Base):
 
 class FNOPassedHome(Base):
     """A single address from an FNO 'homes passed' file -- a raw prospecting
-    candidate before scoring/sales-bridge (see follow-up tickets T3/T4).
+    candidate before scoring/sales-bridge (see follow-up tickets T4/T5).
     """
 
     __tablename__ = "fno_passed_homes"

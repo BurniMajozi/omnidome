@@ -1255,14 +1255,20 @@ async def upload_passed_homes(
 
 
 async def _process_passed_home_import(import_id: uuid.UUID, rows: list, column_map: dict):
-    """Background task: normalize, dedupe, and insert passed-home rows.
+    """Background task: normalize, dedupe, suppress, and insert passed-home rows.
 
     Dedup is a single prefetch of existing dedup_keys for this tenant+fno
     into a Python set, then in-memory membership checks per row -- not one
     SELECT per row, which the 10k-row/<60s acceptance target rules out.
+    Customer-suppression (Ticket 3) follows the same batching precedent:
+    SuppressionCandidates.load() prefetches the tenant's contacts + active
+    network services ONCE, then matches in-memory per row (see
+    suppression.py) -- not a pg_trgm query per row, which at up to 2 extra
+    DB round-trips per non-duplicate row would risk the same target.
     """
     from datetime import datetime as _dt, timezone as _tz
     from services.fno_intelligence.database import get_background_session as _get_bg_session
+    from services.fno_intelligence.suppression import SuppressionCandidates
 
     async with _get_bg_session() as session:
         import_record = await session.get(FNOPassedHomeImport, import_id)
@@ -1281,8 +1287,9 @@ async def _process_passed_home_import(import_id: uuid.UUID, rows: list, column_m
             )
             existing_keys = {row[0] for row in existing_result.all()}
             seen_this_file: set = set()
+            suppression = await SuppressionCandidates.load(session, import_record.tenant_id)
 
-            inserted = duplicate = invalid = 0
+            inserted = duplicate = invalid = suppressed = 0
             address_header = column_map.get("address", "")
 
             for i, raw_row in enumerate(rows):
@@ -1297,10 +1304,22 @@ async def _process_passed_home_import(import_id: uuid.UUID, rows: list, column_m
                     reject_reason = "duplicate_in_db" if normalized["dedup_key"] in existing_keys else "duplicate_in_file"
                     duplicate += 1
                 else:
-                    row_status = "normalized"
-                    reject_reason = None
+                    suppress_reason = suppression.check(
+                        address_line1=normalized["address_line1"], postal_code=normalized["postal_code"],
+                    )
+                    if suppress_reason:
+                        row_status = "suppressed_customer"
+                        reject_reason = suppress_reason
+                        suppressed += 1
+                    else:
+                        row_status = "normalized"
+                        reject_reason = None
+                        inserted += 1
+                    # Counted toward in-file dedup either way -- a second
+                    # occurrence of a suppressed address in the same file
+                    # should also land as "duplicate", not repeat the
+                    # (already-decided) suppression outcome.
                     seen_this_file.add(normalized["dedup_key"])
-                    inserted += 1
 
                 date_passed = None
                 if normalized.get("date_passed_raw"):
@@ -1350,7 +1369,7 @@ async def _process_passed_home_import(import_id: uuid.UUID, rows: list, column_m
             import_record.inserted_rows = inserted
             import_record.duplicate_rows = duplicate
             import_record.invalid_rows = invalid
-            import_record.suppressed_rows = 0
+            import_record.suppressed_rows = suppressed
             import_record.status = "imported" if inserted > 0 else "partial"
             import_record.processed_at = _dt.now(_tz.utc)
 
@@ -1450,6 +1469,7 @@ async def list_passed_homes(
         "gps_lng": float(h.gps_lng) if h.gps_lng is not None else None,
         "geocode_status": h.geocode_status,
         "geocode_precision": h.geocode_precision,
+        "reject_reason": h.reject_reason,
     } for h in homes]
 
 
