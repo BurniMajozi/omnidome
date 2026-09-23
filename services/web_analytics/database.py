@@ -32,7 +32,13 @@ def _async_database_url() -> str:
     url = make_url(_database_url())
     if url.drivername.startswith("postgresql") and "+asyncpg" not in url.drivername:
         url = url.set(drivername="postgresql+asyncpg")
-    return str(url)
+    # str(url) masks the password as "***" (SQLAlchemy's default repr/logging
+    # safety behavior) -- every async connection this module makes would
+    # literally authenticate with the 3-character string "***" instead of
+    # the real password. Found 2026-09-23 in the identical copy-pasted bug in
+    # services/journey_engine/database.py. services/common/db.py's equivalent
+    # function already does this correctly.
+    return url.render_as_string(hide_password=False)
 
 
 def get_async_engine():

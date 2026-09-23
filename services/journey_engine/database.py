@@ -32,7 +32,14 @@ def _async_database_url() -> str:
     url = make_url(_database_url())
     if url.drivername.startswith("postgresql") and "+asyncpg" not in url.drivername:
         url = url.set(drivername="postgresql+asyncpg")
-    return str(url)
+    # str(url) masks the password as "***" (SQLAlchemy's default repr/logging
+    # safety behavior) -- every async connection this module makes was
+    # literally authenticating with the 3-character string "***" instead of
+    # the real password, failing with InvalidPasswordError. Found 2026-09-23
+    # verifying the entitlements fix: this breaks get_db() (every request)
+    # and _execute_fno_cancellation's own session equally. services/common/
+    # db.py's equivalent function already does this correctly.
+    return url.render_as_string(hide_password=False)
 
 
 def get_async_engine():
