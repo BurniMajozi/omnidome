@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useMemo } from "react"
 import {
   DollarSign,
   GripVertical,
@@ -89,6 +89,24 @@ function getStageColors(name: string) {
 
 function formatCurrency(value: number) {
   return `R ${value.toLocaleString("en-ZA")}`
+}
+
+// Derives per-stage deal_count/total_value_zar from the already-loaded
+// `deals` array instead of a separate /pipeline overview fetch. Safe and
+// exact: services/sales/main.py's GET /deals has no pagination, so `deals`
+// is always the complete set for the tenant -- this matches the backend's
+// own aggregate byte-for-byte, without an extra network round trip. This is
+// what lets stage moves/won/lost update the board instantly (see
+// SalesPipelineBoard's action handlers) instead of re-fetching everything.
+function deriveStageStats(stageDefs: PipelineStage[], deals: Deal[]): PipelineOverviewStage[] {
+  return stageDefs.map((s) => {
+    const stageDeals = deals.filter((d) => d.stage_id === s.id)
+    return {
+      ...s,
+      deal_count: stageDeals.length,
+      total_value_zar: stageDeals.reduce((sum, d) => sum + Number(d.value_zar || 0), 0),
+    }
+  })
 }
 
 // ── Deal Card ─────────────────────────────────────────────────────────
@@ -386,7 +404,11 @@ export function SalesPipelineBoard({
   onOpenCreateModal,
   refreshTrigger,
 }: SalesPipelineBoardProps) {
-  const [stages, setStages] = useState<PipelineOverviewStage[]>([])
+  // Raw stage metadata (id/name/probability/sort_order) only -- deal_count
+  // and total_value_zar are derived below via useMemo from `deals` instead
+  // of being fetched, so a deal move/won/lost only needs to update `deals`
+  // locally to keep every column's totals correct, with no extra API call.
+  const [stageDefs, setStageDefs] = useState<PipelineStage[]>([])
   const [deals, setDeals] = useState<Deal[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -408,8 +430,7 @@ export function SalesPipelineBoard({
     setLoading(true)
     setError(null)
     try {
-      const [overviewData, dealsData, stagesData] = await Promise.all([
-        salesApi.getPipelineOverview().catch(() => []),
+      const [dealsData, stagesData] = await Promise.all([
         salesApi.listDeals().catch(() => []),
         salesApi.getPipelineStages().catch(() => []),
       ])
@@ -426,29 +447,13 @@ export function SalesPipelineBoard({
 
       // Sort stages by sort_order
       const sortedStages = [...effectiveStages].sort((a, b) => a.sort_order - b.sort_order)
-      // Merge overview stats into stages
-      const stagesWithStats = sortedStages.map((s) => {
-        const ov = overviewData.find((o) => o.id === s.id)
-        const stageDeals = dealsData.filter((d) => d.stage_id === s.id)
-        return {
-          ...s,
-          deal_count: ov?.deal_count ?? stageDeals.length,
-          // ov.total_value_zar comes back as a JSON string (Postgres NUMERIC
-          // serialized as text) -- Number() it, or `sum + total_value_zar`
-          // below does string concatenation ("R040382.0000000") instead of
-          // addition once a string first hits the reduce's accumulator.
-          total_value_zar: ov?.total_value_zar != null
-            ? Number(ov.total_value_zar)
-            : stageDeals.reduce((sum, d) => sum + Number(d.value_zar || 0), 0),
-        }
-      })
 
-      setStages(stagesWithStats)
+      setStageDefs(sortedStages)
       setDeals(dealsData)
       if (sortedStages.length > 0 && !dealStageId) {
         setDealStageId(sortedStages[0].id)
       }
-      onDataLoaded?.(dealsData, stagesWithStats)
+      onDataLoaded?.(dealsData, deriveStageStats(sortedStages, dealsData))
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load pipeline")
     } finally {
@@ -460,19 +465,31 @@ export function SalesPipelineBoard({
     loadData()
   }, [loadData, refreshTrigger])
 
+  // Stage list with deal_count/total_value_zar re-derived from `deals` on
+  // every change -- keeps column headers and the summary bar correct after
+  // a local optimistic update without any extra fetch.
+  const stages = useMemo(() => deriveStageStats(stageDefs, deals), [stageDefs, deals])
+
   // Group deals by stage
-  const dealsByStage = stages.reduce<Record<string, Deal[]>>((acc, stage) => {
-    acc[stage.id] = deals.filter((d) => d.stage_id === stage.id)
-    return acc
-  }, {})
+  const dealsByStage = useMemo(() => {
+    return stages.reduce<Record<string, Deal[]>>((acc, stage) => {
+      acc[stage.id] = deals.filter((d) => d.stage_id === stage.id)
+      return acc
+    }, {})
+  }, [stages, deals])
 
   // ── Actions ───────────────────────────────────────────────────────
 
   const handleStageChange = useCallback(async (dealId: string, targetStageId: string) => {
     const deal = deals.find((d) => d.id === dealId)
     if (!deal || deal.stage_id === targetStageId) return
+    const previousStageId = deal.stage_id
 
-    // Optimistic update
+    // Optimistic update. Stage totals re-derive automatically from `deals`
+    // (see the `stages` useMemo above), so this alone is enough to keep the
+    // whole board correct -- no follow-up loadData() needed on success,
+    // which previously re-fetched everything (3 API calls) and flashed the
+    // full-page "Loading pipeline..." spinner after every single move.
     setDeals((prev) =>
       prev.map((d) => (d.id === dealId ? { ...d, stage_id: targetStageId } : d))
     )
@@ -480,12 +497,14 @@ export function SalesPipelineBoard({
     try {
       const updated = await salesApi.moveDealStage(dealId, { stage_id: targetStageId })
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      loadData()
     } catch (err) {
       console.error("Failed to move deal:", err)
-      loadData() // Revert
+      // Revert locally instead of a full reload.
+      setDeals((prev) =>
+        prev.map((d) => (d.id === dealId ? { ...d, stage_id: previousStageId } : d))
+      )
     }
-  }, [deals, loadData])
+  }, [deals])
 
   const handleDrop = useCallback(async (dealId: string, targetStageId: string) => {
     handleStageChange(dealId, targetStageId)
@@ -512,12 +531,13 @@ export function SalesPipelineBoard({
   const handleWon = useCallback(async (dealId: string) => {
     try {
       const updated = await salesApi.closeDealWon(dealId)
+      // `updated` already carries the new stage_id/status from the server;
+      // stage totals re-derive automatically, no reload needed.
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      loadData()
     } catch (err) {
       console.error("Failed to close deal as won:", err)
     }
-  }, [loadData])
+  }, [])
 
   const handleLost = useCallback(async (dealId: string) => {
     const reason = prompt("Reason for losing this deal?")
@@ -525,7 +545,6 @@ export function SalesPipelineBoard({
     try {
       const updated = await salesApi.closeDealLost(dealId, reason)
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      loadData()
     } catch (err) {
       console.error("Failed to close deal as lost:", err)
     }
