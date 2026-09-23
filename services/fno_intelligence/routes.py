@@ -1446,4 +1446,114 @@ async def list_passed_homes(
         "postal_code": h.postal_code, "dwelling_type": h.dwelling_type,
         "date_passed": h.date_passed.isoformat() if h.date_passed else None,
         "status": h.status,
+        "gps_lat": float(h.gps_lat) if h.gps_lat is not None else None,
+        "gps_lng": float(h.gps_lng) if h.gps_lng is not None else None,
+        "geocode_status": h.geocode_status,
+        "geocode_precision": h.geocode_precision,
     } for h in homes]
+
+
+# ── Ticket 2: geocode worker ────────────────────────────────────────────
+#
+# Explicit trigger rather than auto-chained onto the import: Nominatim's free
+# tier is rate-limited to ~1 req/sec (see geocoding.py), so even a few hundred
+# rows takes minutes -- auto-chaining would break the "returns immediately"
+# contract POST /passed-home-imports already provides. Call the trigger
+# endpoint again to continue past `limit` on a large import.
+
+class GeocodeTriggerResponse(BaseModel):
+    queued: int
+    status: str
+
+
+@router.post("/passed-homes/geocode", response_model=GeocodeTriggerResponse, status_code=202)
+async def trigger_passed_homes_geocode(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    import_id: Optional[uuid.UUID] = None,
+    limit: int = Query(500, le=5000),
+):
+    """Queue up to `limit` normalized, not-yet-geocoded rows for geocoding."""
+    query = select(FNOPassedHome.id).where(
+        FNOPassedHome.tenant_id == tenant_id,
+        FNOPassedHome.status == "normalized",
+        FNOPassedHome.geocode_status == "pending",
+    )
+    if import_id:
+        query = query.where(FNOPassedHome.import_id == import_id)
+    result = await db.execute(query.limit(limit))
+    home_ids = [row[0] for row in result.all()]
+
+    if home_ids:
+        _schedule_background(_process_geocode_batch(home_ids))
+
+    return GeocodeTriggerResponse(
+        queued=len(home_ids), status="queued" if home_ids else "nothing_to_geocode",
+    )
+
+
+async def _process_geocode_batch(home_ids: list):
+    """Background task: geocode each row one at a time via Nominatim.
+
+    Re-checks geocode_status="pending" per row before calling out (cheap
+    safety net if two trigger calls overlapped and picked the same rows --
+    the loop's cost is dominated by the 1 req/sec pacing, not this check).
+    A failed/not-found address doesn't abort the batch; it's marked "failed"
+    and the loop continues, matching _process_passed_home_import's per-row
+    isolation.
+    """
+    from datetime import datetime as _dt, timezone as _tz
+    from services.fno_intelligence.database import get_background_session as _get_bg_session
+    from services.fno_intelligence.geocoding import nominatim, GeocodeNotFound, GeocodeError
+
+    async with _get_bg_session() as session:
+        for i, home_id in enumerate(home_ids):
+            home = await session.get(FNOPassedHome, home_id)
+            if not home or home.geocode_status != "pending":
+                continue
+
+            try:
+                lat, lng, precision = await nominatim.geocode(
+                    address_line1=home.address_line1, suburb=home.suburb,
+                    city=home.city, postal_code=home.postal_code,
+                )
+                home.gps_lat = lat
+                home.gps_lng = lng
+                home.geocode_precision = precision
+                home.geocode_status = "geocoded"
+            except (GeocodeNotFound, GeocodeError) as e:
+                home.geocode_status = "failed"
+                logging.getLogger("fno_intelligence").info(
+                    "Geocode failed for passed-home %s: %s", home_id, e
+                )
+            home.geocode_provider = "nominatim"
+            home.geocoded_at = _dt.now(_tz.utc)  # last-attempt time, success or failure
+
+            if (i + 1) % 25 == 0:
+                await session.flush()
+
+        await session.flush()
+
+
+@router.get("/passed-homes/geocode-status")
+async def get_passed_homes_geocode_status(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+    import_id: Optional[uuid.UUID] = None,
+):
+    """Pending/geocoded/failed counts among normalized (usable) rows -- rows
+    that are invalid/duplicate are never geocoded and excluded here."""
+    query = (
+        select(FNOPassedHome.geocode_status, func.count())
+        .where(FNOPassedHome.tenant_id == tenant_id, FNOPassedHome.status == "normalized")
+        .group_by(FNOPassedHome.geocode_status)
+    )
+    if import_id:
+        query = query.where(FNOPassedHome.import_id == import_id)
+    result = await db.execute(query)
+    counts = {status: count for status, count in result.all()}
+    return {
+        "pending": counts.get("pending", 0),
+        "geocoded": counts.get("geocoded", 0),
+        "failed": counts.get("failed", 0),
+    }

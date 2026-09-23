@@ -764,9 +764,10 @@ class FNOKMLImport(Base):
 # (own PASSED_HOME_IMPORT_STATUS) since the two imports have unrelated
 # lifecycles and this ticket's scope is narrower (no polygon/coverage data).
 #
-# Scope: import + normalize + dedupe only. Geocoding, customer-suppression
+# Scope: import + normalize + dedupe (Ticket 1), plus geocoding of normalized
+# rows (Ticket 2, gps_lat/gps_lng/geocode_status below). Customer-suppression
 # (fuzzy match against sales.contacts), scoring, and the sales.leads bridge
-# are explicit follow-up tickets -- see routes.py's passed-homes section.
+# remain explicit follow-up tickets -- see routes.py's passed-homes section.
 
 PASSED_HOME_IMPORT_STATUS = SAEnum(
     "uploaded", "parsing", "imported", "failed", "partial",
@@ -781,6 +782,14 @@ PASSED_HOME_STATUS = SAEnum(
 PASSED_HOME_DWELLING = SAEnum(
     "unknown", "sdu", "mdu_unit", "complex", "business", "estate",
     name="passed_home_dwelling", create_type=False,
+)
+
+# Ticket 2: geocode worker filling gps_lat/gps_lng on normalized rows before
+# the (future) sales.leads bridge -- see FNOPassedHome.geocode_status below
+# and services/fno_intelligence/geocoding.py.
+PASSED_HOME_GEOCODE_STATUS = SAEnum(
+    "pending", "geocoded", "failed",
+    name="passed_home_geocode_status", create_type=False,
 )
 
 
@@ -824,7 +833,7 @@ class FNOPassedHomeImport(Base):
 
 class FNOPassedHome(Base):
     """A single address from an FNO 'homes passed' file -- a raw prospecting
-    candidate before geocoding/scoring/sales-bridge (see follow-up tickets).
+    candidate before scoring/sales-bridge (see follow-up tickets T3/T4).
     """
 
     __tablename__ = "fno_passed_homes"
@@ -858,6 +867,21 @@ class FNOPassedHome(Base):
     raw_row: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)  # full source row, verbatim
     reject_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
 
+    # Ticket 2: filled by the geocode worker for status="normalized" rows only
+    # (invalid/duplicate rows are never geocoded). Same Numeric precision as
+    # FNOLead.gps_lat/gps_lng above so a future sales.leads bridge (T4) can
+    # copy these straight across without re-geocoding.
+    gps_lat: Mapped[Optional[Decimal]] = mapped_column(Numeric(10, 8), nullable=True)
+    gps_lng: Mapped[Optional[Decimal]] = mapped_column(Numeric(11, 8), nullable=True)
+    geocode_status: Mapped[str] = mapped_column(PASSED_HOME_GEOCODE_STATUS, nullable=False, default="pending")
+    geocode_provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # "street" (full address matched) or "suburb" (fell back to a suburb-level
+    # centroid -- OSM has sparse SA residential street coverage; see
+    # geocoding.py's module docstring). Plain string, not an enum: low
+    # cardinality but likely to grow (e.g. "postal_code") as providers change.
+    geocode_precision: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    geocoded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -866,6 +890,8 @@ class FNOPassedHome(Base):
         Index("ix_fno_passed_home_location", "tenant_id", "city", "suburb"),
         Index("ix_fno_passed_home_import", "import_id"),
         Index("ix_fno_passed_home_postal", "postal_code"),
+        # The geocode worker's selection query: normalized rows still pending.
+        Index("ix_fno_passed_home_geocode", "tenant_id", "status", "geocode_status"),
     )
 
 
