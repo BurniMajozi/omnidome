@@ -14,13 +14,14 @@ import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from services.common.auth import get_current_tenant_id
+from services.common.background_tasks import schedule_background
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 
@@ -350,7 +351,6 @@ async def list_voices(
 
 @app.post("/voices/clone", status_code=status.HTTP_201_CREATED)
 async def clone_voice(
-    background_tasks: BackgroundTasks,
     name: str = Form(...),
     description: Optional[str] = Form(None),
     language: str = Form("en"),
@@ -370,14 +370,16 @@ async def clone_voice(
         voice_type="cloned", engine=engine, status="pending",
     )
     db.add(profile)
-    await db.flush()
+    # Must be committed (not just flushed) before scheduling -- the
+    # background task reads this row through its own separate DB session,
+    # which can't see an uncommitted row from this request's session.
+    await db.commit()
     await db.refresh(profile)
 
-    background_tasks.add_task(
-        _do_clone_voice,
+    schedule_background(_do_clone_voice(
         profile.id, tenant_id, name, description, language, engine,
         reference_text, sample_bytes, filename,
-    )
+    ))
     return _profile_to_dict(profile)
 
 
@@ -391,7 +393,6 @@ class PresetVoiceCreate(BaseModel):
 
 @app.post("/voices/preset", status_code=status.HTTP_201_CREATED)
 async def create_preset_voice(
-    background_tasks: BackgroundTasks,
     body: PresetVoiceCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
@@ -403,14 +404,15 @@ async def create_preset_voice(
         voice_type="preset", engine=body.preset_engine, status="pending",
     )
     db.add(profile)
-    await db.flush()
+    # Must be committed (not just flushed) before scheduling -- see the note
+    # in clone_voice() above.
+    await db.commit()
     await db.refresh(profile)
 
-    background_tasks.add_task(
-        _do_create_preset,
+    schedule_background(_do_create_preset(
         profile.id, tenant_id, body.name, body.description, body.language,
         body.preset_engine, body.preset_voice_id,
-    )
+    ))
     return _profile_to_dict(profile)
 
 

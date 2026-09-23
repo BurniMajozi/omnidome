@@ -10,11 +10,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.background_tasks import schedule_background
 from services.network.adapters.factory import FNOFactory
 from services.network.database import get_session
 from services.network.models import AutomationJob, FNOOrder, NetworkService
@@ -77,7 +78,6 @@ def _get_adapter(fno_provider: str):
 @router.post("/orders", response_model=FNOOrderRead, status_code=status.HTTP_201_CREATED)
 async def create_fno_order(
     payload: FNOOrderCreate,
-    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(get_auth_context),
 ):
     """Create and submit an order to an FNO (new install, migration, speed change, cancel)."""
@@ -110,10 +110,13 @@ async def create_fno_order(
 
         logger.info("Created FNO order %s [%s/%s] for service %s", order_id, fno, order_type, payload.service_id)
 
-        # Dispatch async FNO call
-        background_tasks.add_task(
-            _execute_fno_order, order_id, fno, order_type, payload.request_payload or {}, auth.tenant_id,
-        )
+        # Dispatch async FNO call. No `await` anywhere in this function, so
+        # it runs to completion -- including this `with` block's own
+        # commit-on-exit -- before the event loop ever gets a chance to
+        # start the task scheduled here.
+        schedule_background(_execute_fno_order(
+            order_id, fno, order_type, payload.request_payload or {}, auth.tenant_id,
+        ))
         return FNOOrderRead.model_validate(order)
 
 
@@ -245,7 +248,6 @@ async def update_fno_order(
 @router.post("/automation/jobs", response_model=AutomationJobRead, status_code=status.HTTP_202_ACCEPTED)
 async def start_automation_job(
     payload: AutomationJobCreate,
-    background_tasks: BackgroundTasks,
     auth: AuthContext = Depends(get_auth_context),
 ):
     """Trigger a generic FNO automation job (coverage check, provisioning, etc.)."""
@@ -265,7 +267,10 @@ async def start_automation_job(
         session.refresh(job)
         job_id = job.id
 
-    background_tasks.add_task(_run_automation_job, job_id, payload.fno_provider, payload.job_type, payload.request_payload or {})
+    # The `with get_session()` block above has already exited (and
+    # committed) by this point, so job_id is already durably visible to the
+    # background task's own separate session -- no race here.
+    schedule_background(_run_automation_job(job_id, payload.fno_provider, payload.job_type, payload.request_payload or {}))
     logger.info("Dispatched automation job %s [%s/%s] via %s", job_id, payload.fno_provider, payload.job_type, adapter_type)
 
     with get_session() as session:

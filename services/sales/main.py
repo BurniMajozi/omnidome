@@ -30,12 +30,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import Integer, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
+from services.common.background_tasks import schedule_background
 from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
@@ -671,6 +672,14 @@ async def _dispatch_provisioning_bg(payload: Dict[str, Any]) -> None:
     if NETWORK_WEBHOOK_URL:
         urls.append(NETWORK_WEBHOOK_URL)
     urls.extend(PROVISIONING_WEBHOOKS)
+    # This background task previously never ran at all (BackgroundTasks bug,
+    # see services/common/background_tasks.py) with nothing logged either
+    # way -- log unconditionally, even with zero configured webhooks, so a
+    # future silent regression here is actually observable next time.
+    logger.info(
+        "Dispatching deal.closed_won provisioning webhooks: deal_id=%s urls=%d",
+        payload.get("deal_id"), len(urls),
+    )
     for url in urls:
         _emit_webhook(url, payload)
 
@@ -1013,7 +1022,6 @@ async def move_deal_stage(
 @app.post("/deals/{deal_id}/close-won", response_model=DealResponse)
 async def close_deal_won(
     deal_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1044,13 +1052,13 @@ async def close_deal_won(
     # Bridges — non-blocking, never fail the sale.
     await _notify_lifecycle_won(deal, tenant_id)
     await _notify_finance_won(deal, tenant_id, now)
-    background_tasks.add_task(_dispatch_provisioning_bg, {
+    schedule_background(_dispatch_provisioning_bg({
         "event": "deal.closed_won", "deal_id": str(deal_id),
         "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
         "agent_id": str(deal.agent_id) if deal.agent_id else None,
         "package_id": str(deal.package_id) if deal.package_id else None,
         "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
-    })
+    }))
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
     return _deal_to_response(deal, stage.name if stage else "Closed Won")

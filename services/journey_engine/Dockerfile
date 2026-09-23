@@ -16,6 +16,15 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY services/journey_engine/ ./services/journey_engine/
 COPY services/common/ ./services/common/
 
+# journey_engine/main.py directly imports services.network.models
+# (NetworkService, NetworkDevice, FNOOrder) for the cancellation-workflow
+# endpoint -- this Dockerfile never copied services/network/, so that
+# endpoint 500ed on every request (ModuleNotFoundError), not just its
+# background cancellation task. Found 2026-09-23 while auditing the
+# BackgroundTasks-silently-never-runs bug across the fleet. Same pattern as
+# services/crm/Dockerfile and services/fno_intelligence/Dockerfile.
+COPY services/network/ ./services/network/
+
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

@@ -13,11 +13,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.background_tasks import schedule_background
 from services.network.database import get_session
 from services.network.models import (
     BandwidthUsage,
@@ -756,7 +757,6 @@ async def list_config_templates(
 @router.post("/config/push", response_model=ConfigPushRead, status_code=status.HTTP_202_ACCEPTED)
 async def push_device_config(
     body: ConfigPushCreate,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Push configuration to a device (TR-069, MikroTik API, SSH)."""
@@ -774,7 +774,10 @@ async def push_device_config(
         session.flush()
         session.refresh(push)
 
-        background_tasks.add_task(_execute_config_push, push.id)
+        # No `await` anywhere in this function, so it runs to completion --
+        # including this `with` block's own commit-on-exit -- before the
+        # event loop ever gets a chance to start the task scheduled here.
+        schedule_background(_execute_config_push(push.id))
 
         return ConfigPushRead.model_validate(push)
 
@@ -783,14 +786,19 @@ async def _execute_config_push(push_id: uuid.UUID):
     """Background task to push config to device."""
     from services.network.database import get_session as _get_session
 
-    async with _get_session() as session:
-        push = await session.get(DeviceConfigPush, push_id)
+    # get_session() is a synchronous SQLAlchemy Session (see database.py),
+    # not AsyncSession -- this previously used `async with`/`await` on it,
+    # which would raise immediately (a sync context manager/Session doesn't
+    # support either), independent of the BackgroundTasks bug this was found
+    # alongside. Never caught because add_task() never actually ran it.
+    with _get_session() as session:
+        push = session.get(DeviceConfigPush, push_id)
         if not push:
             return
 
         push.status = "in_progress"
         push.pushed_at = datetime.now(timezone.utc)
-        await session.flush()
+        session.flush()
 
         try:
             if push.config_protocol == "tr069":
@@ -814,7 +822,7 @@ async def _execute_config_push(push_id: uuid.UUID):
             push.completed_at = datetime.now(timezone.utc)
             logger.error(f"Config push failed: {e}")
 
-        await session.flush()
+        session.flush()
 
 
 @router.get("/config/pushes", response_model=list[ConfigPushRead])
@@ -840,7 +848,6 @@ async def list_config_pushes(
 @router.post("/config/pushes/{push_id}/rollback")
 async def rollback_config_push(
     push_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Rollback a config push (restores previous config snapshot)."""
@@ -855,17 +862,18 @@ async def rollback_config_push(
         session.flush()
 
         # TODO: Restore device config from snapshot
-        background_tasks.add_task(_execute_config_rollback, push_id)
+        schedule_background(_execute_config_rollback(push_id))
 
         return {"id": str(push.id), "status": "rolled_back"}
 
 
 async def _execute_config_rollback(push_id: uuid.UUID):
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
-        push = await session.get(DeviceConfigPush, push_id)
+    # See _execute_config_push's comment above -- get_session() is sync.
+    with _get_session() as session:
+        push = session.get(DeviceConfigPush, push_id)
         if not push:
             return
         logger.info(f"Rolling back config for device {push.device_id}")
         # TODO: Restore from device config_snapshot
-        await session.flush()
+        session.flush()

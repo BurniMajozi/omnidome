@@ -11,11 +11,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.background_tasks import schedule_background
 from services.network.database import get_session
 from services.network.models import NetworkNotification, NetworkService
 
@@ -115,7 +116,6 @@ async def create_notification(
 @router.post("/dispatch", status_code=status.HTTP_202_ACCEPTED)
 async def dispatch_notification(
     body: NotificationDispatch,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Dispatch a notification to one or more recipients via background task."""
@@ -157,9 +157,12 @@ async def dispatch_notification(
 
         session.flush()
 
-        # Dispatch in background
+        # Dispatch in background. No `await` anywhere in this function, so
+        # it runs to completion -- including this `with` block's own
+        # commit-on-exit -- before the event loop ever gets a chance to
+        # start any task scheduled here.
         for n in notifications:
-            background_tasks.add_task(_send_notification, n.id)
+            schedule_background(_send_notification(n.id))
 
         return {
             "dispatched": len(notifications),
@@ -238,7 +241,6 @@ async def get_notification(
 @router.post("/{notification_id}/retry")
 async def retry_notification(
     notification_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Retry sending a failed notification."""
@@ -261,7 +263,7 @@ async def retry_notification(
         notification.error_message = None
         session.flush()
 
-        background_tasks.add_task(_send_notification, notification.id)
+        schedule_background(_send_notification(notification.id))
         return {"id": str(notification.id), "retry_count": notification.retry_count}
 
 
@@ -300,7 +302,11 @@ async def _send_notification(notification_id: uuid.UUID):
     # - In-app: store for the user's inbox
 
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
+    # get_session() is a synchronous SQLAlchemy Session (see database.py),
+    # not AsyncSession -- this previously used `async with` on it, which
+    # would raise immediately, independent of the BackgroundTasks bug this
+    # was found alongside. Never caught because add_task() never ran it.
+    with _get_session() as session:
         notification = session.execute(
             select(NetworkNotification).where(NetworkNotification.id == notification_id)
         ).scalar_one_or_none()
@@ -342,7 +348,10 @@ async def notify_fno_outage(tenant_id: uuid.UUID, fno_name: str, affected_areas:
                              severity: str, title: str, message: str):
     """Create notifications for all services affected by an FNO outage."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
+    # get_session() is a synchronous SQLAlchemy Session, not AsyncSession --
+    # this and the two functions below previously used `async with` on it,
+    # which raises immediately on every call regardless of who calls them.
+    with _get_session() as session:
         # Find all active services for this FNO
         services = session.execute(
             select(NetworkService).where(
@@ -374,7 +383,7 @@ async def notify_sla_breach(tenant_id: uuid.UUID, service_id: uuid.UUID,
                              severity: str, title: str, message: str):
     """Create notification for an SLA breach."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
+    with _get_session() as session:
         notification = NetworkNotification(
             tenant_id=tenant_id,
             service_id=service_id,
@@ -395,7 +404,7 @@ async def notify_billing_event(tenant_id: uuid.UUID, service_id: uuid.UUID,
                                 title: str, message: str):
     """Create notification for billing-related network events (suspend/reinstate)."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
+    with _get_session() as session:
         notification = NetworkNotification(
             tenant_id=tenant_id,
             service_id=service_id,

@@ -5,11 +5,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.background_tasks import schedule_background
 from services.network.database import get_session
 from services.network.models import (
     FNOSessionRecording,
@@ -107,7 +108,6 @@ async def list_property_links(
 @router.post("/property-links/auto-match")
 async def auto_match_properties(
     ctx: AuthContext = Depends(get_auth_context),
-    background_tasks: BackgroundTasks = None,
 ):
     """Auto-match CRM properties to network typography by postal code / GPS.
 
@@ -330,7 +330,6 @@ async def list_ont_provisioning(
 @router.post("/ont-provisioning/{profile_id}/provision")
 async def provision_ont(
     profile_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Trigger ONT provisioning (calls OLT API / FNO adapter)."""
@@ -341,15 +340,22 @@ async def provision_ont(
         profile.provisioning_status = "provisioning"
         session.flush()
 
-        background_tasks.add_task(_execute_ont_provisioning, profile_id)
+        # No `await` anywhere in this function, so it runs to completion --
+        # including this `with` block's own commit-on-exit -- before the
+        # event loop ever gets a chance to start the task scheduled here.
+        schedule_background(_execute_ont_provisioning(profile_id))
         return {"id": str(profile.id), "status": "provisioning"}
 
 
 async def _execute_ont_provisioning(profile_id: uuid.UUID):
     """Background task: provision ONT on OLT."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
-        profile = await session.get(ONTProvisioningProfile, profile_id)
+    # get_session() is a synchronous SQLAlchemy Session (see database.py),
+    # not AsyncSession -- this previously used `async with`/`await` on it,
+    # which would raise immediately, independent of the BackgroundTasks bug
+    # this was found alongside. Never caught because add_task() never ran it.
+    with _get_session() as session:
+        profile = session.get(ONTProvisioningProfile, profile_id)
         if not profile:
             return
         try:
@@ -361,7 +367,7 @@ async def _execute_ont_provisioning(profile_id: uuid.UUID):
         except Exception as e:
             profile.provisioning_status = "failed"
             logger.error(f"ONT provisioning failed: {e}")
-        await session.flush()
+        session.flush()
 
 
 # ===========================================================================
@@ -434,7 +440,6 @@ async def create_wifi_config(
 @router.post("/wifi-config/{config_id}/push")
 async def push_wifi_config(
     config_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Push Wi-Fi configuration to device via TR-069."""
@@ -446,15 +451,16 @@ async def push_wifi_config(
         config.last_pushed_at = datetime.now(timezone.utc)
         session.flush()
 
-        background_tasks.add_task(_push_wifi_to_device, config_id)
+        schedule_background(_push_wifi_to_device(config_id))
         return {"id": str(config.id), "push_status": "pushed"}
 
 
 async def _push_wifi_to_device(config_id: uuid.UUID):
     """Background task: push Wi-Fi config via TR-069."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
-        config = await session.get(WiFiConfigProfile, config_id)
+    # See _execute_ont_provisioning's comment above -- get_session() is sync.
+    with _get_session() as session:
+        config = session.get(WiFiConfigProfile, config_id)
         if not config:
             return
         try:
@@ -464,7 +470,7 @@ async def _push_wifi_to_device(config_id: uuid.UUID):
         except Exception as e:
             config.push_status = "failed"
             logger.error(f"Wi-Fi push failed: {e}")
-        await session.flush()
+        session.flush()
 
 
 # ===========================================================================
@@ -538,7 +544,6 @@ async def list_session_recordings(
 @router.post("/session-recordings/{recording_id}/analyze")
 async def analyze_recording(
     recording_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Analyze a session recording to extract automation steps and generate template."""
@@ -549,15 +554,16 @@ async def analyze_recording(
         recording.status = "processing"
         session.flush()
 
-        background_tasks.add_task(_analyze_session_recording, recording_id)
+        schedule_background(_analyze_session_recording(recording_id))
         return {"id": str(recording.id), "status": "processing"}
 
 
 async def _analyze_session_recording(recording_id: uuid.UUID):
     """Background task: analyze recording and extract automation steps."""
     from services.network.database import get_session as _get_session
-    async with _get_session() as session:
-        recording = await session.get(FNOSessionRecording, recording_id)
+    # See _execute_ont_provisioning's comment above -- get_session() is sync.
+    with _get_session() as session:
+        recording = session.get(FNOSessionRecording, recording_id)
         if not recording:
             return
         try:
@@ -571,7 +577,7 @@ async def _analyze_session_recording(recording_id: uuid.UUID):
         except Exception as e:
             recording.status = "failed"
             logger.error(f"Recording analysis failed: {e}")
-        await session.flush()
+        session.flush()
 
 
 # ===========================================================================
@@ -669,7 +675,6 @@ async def list_network_leads(
 @router.post("/leads/generate-from-coverage-gaps")
 async def generate_leads_from_coverage_gaps(
     ctx: AuthContext = Depends(get_auth_context),
-    background_tasks: BackgroundTasks = None,
 ):
     """Auto-generate leads from FNO coverage gap analysis.
 

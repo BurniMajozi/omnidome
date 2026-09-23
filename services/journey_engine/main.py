@@ -44,6 +44,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from services.common.background_tasks import schedule_background
 from services.journey_engine.database import get_db, init_tables
 from services.journey_engine.journey_manager import (
     compute_outcome_result,
@@ -681,7 +682,6 @@ from services.journey_engine.models import CancellationWorkflow
 @app.post("/cancellation-workflows")
 async def create_cancellation_workflow(
     data: CancelWorkflowCreate,
-    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
 ):
     """Create a cancellation workflow to terminate a service after retention failure."""
@@ -727,15 +727,17 @@ async def create_cancellation_workflow(
         cancellation_reason=cancel_event.cancel_reason_detail or cancel_event.cancel_reason,
     )
     session.add(workflow)
-    await session.flush()
+    # Must be committed (not just flushed) before scheduling -- the
+    # background task reads this row through its own separate DB session,
+    # which can't see an uncommitted row from this request's session.
+    await session.commit()
 
     # 5. Trigger FNO cancellation in background
-    background_tasks.add_task(
-        _execute_fno_cancellation,
+    schedule_background(_execute_fno_cancellation(
         workflow.id,
         service.id,
         cancel_event.tenant_id,
-    )
+    ))
 
     return {
         "workflow_id": str(workflow.id),

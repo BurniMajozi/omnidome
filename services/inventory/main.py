@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, status
 from pydantic import BaseModel, Field, validator
 from typing import List, Optional, Dict, Any
 import uuid
@@ -9,6 +9,7 @@ from decimal import Decimal
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id
+from services.common.background_tasks import schedule_background
 from services.inventory.database import get_session, init_tables, Product, Warehouse, InventoryLevel, StockMovement
 from services.inventory.routes.purchasing import router as purchasing_router
 
@@ -579,9 +580,9 @@ async def startup_event():
     logging.info("Inventory Service Started. Auto-Replenishment engine active.")
 
 @app.post("/stock/monitor", status_code=status.HTTP_200_OK)
-async def trigger_manual_scan(background_tasks: BackgroundTasks):
+async def trigger_manual_scan():
     """Manually trigger a threshold check"""
-    background_tasks.add_task(check_low_stock_thresholds)
+    schedule_background(check_low_stock_thresholds())
     return {"message": "Replenishment scan initiated"}
 
 
