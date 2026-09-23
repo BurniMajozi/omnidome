@@ -139,8 +139,22 @@ class NetworkService(Base):
 
 
 class RadiusAccount(Base):
-    """RADIUS credentials and profile mapping for a service."""
-    __tablename__ = "radius_accounts"
+    """RADIUS credentials and profile mapping for a service.
+
+    Table is named network_radius_accounts (not radius_accounts) to avoid
+    a real, discovered-in-production table-name collision: config/
+    master_schema.sql already defines its own, unrelated radius_accounts
+    table (device_id/contact_id/subscription_id-based, with a live FK
+    dependent in radius_accounting) predating this service-centric design.
+    Every other table this service owns is already network_-prefixed
+    (network_services, network_devices, network_notifications, ...) -- this
+    one had simply missed that convention. Found 2026-09-23: whichever of
+    the two same-named tables was created first silently "won" under
+    create_all()'s checkfirst=True, so this service's actual intended
+    schema for RADIUS accounts had never successfully existed in any DB
+    that also ran master_schema.sql first.
+    """
+    __tablename__ = "network_radius_accounts"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
@@ -173,8 +187,8 @@ class RadiusAccount(Base):
     service: Mapped["NetworkService"] = relationship(back_populates="radius_account")
 
     __table_args__ = (
-        Index("ix_radius_accounts_tenant", "tenant_id"),
-        Index("ix_radius_accounts_username", "tenant_id", "username", unique=True),
+        Index("ix_network_radius_accounts_tenant", "tenant_id"),
+        Index("ix_network_radius_accounts_username", "tenant_id", "username", unique=True),
     )
 
 
@@ -543,7 +557,7 @@ class RadiusAccounting(Base):
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     radius_account_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("radius_accounts.id", ondelete="CASCADE"), nullable=False,
+        UUID(as_uuid=True), ForeignKey("network_radius_accounts.id", ondelete="CASCADE"), nullable=False,
     )
 
     session_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)

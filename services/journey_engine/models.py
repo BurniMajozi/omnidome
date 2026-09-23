@@ -621,9 +621,18 @@ CANCELLATION_WORKFLOW_STATUS = SAEnum(
     name="cancellation_workflow_status", create_type=True,
 )
 
+# Named journey_router_return_status (not router_return_status) to avoid a
+# real, discovered-in-production enum-name collision: services/billing/
+# models.py already defines its own, unrelated router_return_status type
+# (courier_booked/in_transit/inspected/refund_issued -- a hardware RMA/
+# logistics workflow) with completely different values. Whichever service's
+# create_type=True ran first silently "won" the shared type name -- this
+# service's own enum values had never actually applied in any DB that also
+# ran billing's migration first. The column name (router_return_status)
+# stays the same; only the underlying Postgres type name changes.
 ROUTER_RETURN_STATUS = SAEnum(
     "not_required", "pending", "scheduled", "collected", "returned", "lost", "written_off",
-    name="router_return_status", create_type=True,
+    name="journey_router_return_status", create_type=True,
 )
 
 

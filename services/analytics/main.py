@@ -519,7 +519,9 @@ async def network_analytics(
     except Exception:
         fno_stats = []
 
-    # RADIUS session summary
+    # RADIUS session summary. network_radius_accounts, not radius_accounts --
+    # that name belongs to an unrelated, pre-existing table in
+    # config/master_schema.sql; see services/network/models.py:RadiusAccount.
     try:
         radius_result = await db.execute(
             text(
@@ -527,7 +529,7 @@ async def network_analytics(
                 select
                     count(*) as total_accounts,
                     count(case when status = 'active' then 1 end) as active_accounts
-                from radius_accounts
+                from network_radius_accounts
                 where tenant_id = :tid
                 """
             ),
@@ -923,7 +925,7 @@ async def _populate_widget_data(
             session_q = await db.execute(
                 text(
                     """
-                    select count(*) from radius_accounts
+                    select count(*) from network_radius_accounts
                     where tenant_id = :tid and status = 'active'
                     """
                 ),
