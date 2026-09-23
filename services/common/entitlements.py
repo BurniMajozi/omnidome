@@ -54,6 +54,48 @@ class EntitlementGuard:
         if not self.enforce_modules or not self.module_name:
             return EntitlementState(enabled=True)
 
+        # Primary path: the real schema (config/master_schema.sql:47-56)
+        # tenant_modules(tenant_id, module_id, status) joined to
+        # modules(id, key). Tried first so a correctly-provisioned DB never
+        # pays for an exception + retry per request.
+        try:
+            async with session_scope() as session:
+                result = await session.execute(
+                    text(
+                        """
+                        select tm.status
+                        from tenant_modules tm
+                        join modules m on m.id = tm.module_id
+                        where tm.tenant_id = :tenant_id
+                          and m.key = :module_key
+                        """
+                    ),
+                    {"tenant_id": tenant_id, "module_key": self.module_name},
+                )
+                row = result.fetchone()
+                if not row:
+                    logger.warning(
+                        "entitlements: tenant %s has no row for module '%s' (join path)",
+                        tenant_id, self.module_name,
+                    )
+                    return EntitlementState(enabled=False, reason="module_not_enabled")
+                status_value = str(row[0]).upper()
+                enabled = status_value in {"ENABLED", "TRIAL"}
+                if not enabled:
+                    logger.warning(
+                        "entitlements: tenant %s module '%s' status=%s",
+                        tenant_id, self.module_name, row[0],
+                    )
+                return EntitlementState(enabled=enabled)
+        except SQLAlchemyError:
+            logger.info(
+                "entitlements: join-path query failed for tenant %s module '%s'; "
+                "falling back to legacy direct-column query",
+                tenant_id, self.module_name,
+            )
+
+        # Legacy fallback: tenant_modules carrying its own module_name/enabled
+        # columns (older/alternate schema variant).
         try:
             async with session_scope() as session:
                 result = await session.execute(
@@ -69,32 +111,21 @@ class EntitlementGuard:
                 )
                 row = result.mappings().one_or_none()
                 if row is None:
+                    logger.warning(
+                        "entitlements: tenant %s has no row for module '%s' (legacy path)",
+                        tenant_id, self.module_name,
+                    )
                     return EntitlementState(enabled=False, reason="module_not_enabled")
                 if "enabled" in row:
                     return EntitlementState(enabled=bool(row["enabled"]))
                 if "status" in row and row["status"]:
                     return EntitlementState(enabled=str(row["status"]).upper() in {"ENABLED", "TRIAL"})
         except SQLAlchemyError:
-            logger.info("module_name column not found; falling back to module join")
-
-        async with session_scope() as session:
-            result = await session.execute(
-                text(
-                    """
-                    select tm.status
-                    from tenant_modules tm
-                    join modules m on m.id = tm.module_id
-                    where tm.tenant_id = :tenant_id
-                      and m.key = :module_key
-                    """
-                ),
-                {"tenant_id": tenant_id, "module_key": self.module_name},
+            logger.exception(
+                "entitlements: both schema paths failed for tenant %s module '%s'",
+                tenant_id, self.module_name,
             )
-            row = result.fetchone()
-            if not row:
-                return EntitlementState(enabled=False, reason="module_not_enabled")
-            status_value = str(row[0]).upper()
-            return EntitlementState(enabled=status_value in {"ENABLED", "TRIAL"})
+        return EntitlementState(enabled=False, reason="module_not_enabled")
 
     def is_licensed(self) -> bool:
         return self.license.is_module_enabled(self.module_name)

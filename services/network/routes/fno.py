@@ -44,11 +44,8 @@ def _load_fno_configs() -> Dict[str, Dict[str, Any]]:
             "base_url": os.getenv("FNO_VUMATEL_BASE_URL", "https://api.vumatel.co.za/v1"),
         },
         "openserve": {
-            "portal_url": os.getenv("FNO_OPENSERVE_PORTAL_URL", "https://connect.openserve.co.za"),
-            "credentials": {
-                "user": os.getenv("FNO_OPENSERVE_USER", ""),
-                "pass": os.getenv("FNO_OPENSERVE_PASS", ""),
-            },
+            "api_key": os.getenv("FNO_OPENSERVE_API_KEY", os.getenv("OPENSERVE_API_KEY", "")),
+            "base_url": os.getenv("FNO_OPENSERVE_BASE_URL", os.getenv("OPENSERVE_API_URL", "https://api.openserve.co.za/v1")),
         },
         "metrofibre": {
             "api_key": os.getenv("FNO_METROFIBRE_API_KEY", ""),

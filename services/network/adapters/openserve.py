@@ -224,16 +224,28 @@ class OpenserveAPI:
 
     async def place_order(
         self,
-        customer_id: str,
-        product_code: str,
-        address: str,
+        customer_id_or_data: str | dict,
+        product_code_or_plan: str = "",
+        address: str = "",
     ) -> dict:
         """Place a new order via the Openserve LAY workflow.
+
+        Accepts both calling conventions:
+          - Direct adapter routes: place_order(customer_id=..., product_code=..., address=...)
+          - FNOAdapter interface (background tasks): place_order(customer_data_dict, plan_id)
 
         Returns a dict with:
             order_id (str), status (str), estimated_install_date (str|None),
             lay_reference (str|None)
         """
+        if isinstance(customer_id_or_data, dict):
+            customer_data = customer_id_or_data
+            customer_id = str(customer_data.get("customer_id", customer_data.get("id", "")))
+            address = address or str(customer_data.get("address", customer_data.get("service_address", "")))
+            product_code = product_code_or_plan or str(customer_data.get("product_code", ""))
+        else:
+            customer_id = customer_id_or_data
+            product_code = product_code_or_plan
         logger.info(
             "Openserve place_order: customer=%s product=%s address=%s",
             customer_id,
@@ -363,3 +375,32 @@ class OpenserveAPI:
                 success=False,
                 raw={"error": str(exc)},
             ).model_dump(exclude_none=True)
+
+    # -- FNOAdapter interface compatibility ----------------------------------
+    # The generic background tasks (routes/fno.py) call these methods on
+    # every adapter. Openserve's LAY API has no endpoint for them, so they
+    # return an explicit FAILED result instead of raising AttributeError.
+
+    async def cancel_order(self, order_id: str) -> dict:
+        logger.warning("Openserve cancel_order not supported by LAY API: %s", order_id)
+        return {"status": "FAILED", "error": "cancel_order not supported by Openserve LAY API"}
+
+    async def check_coverage(self, latitude: str, longitude: str) -> dict:
+        logger.warning("Openserve check_coverage not supported (use check_availability): %s,%s", latitude, longitude)
+        return {"fno": "openserve", "available": False, "error": "GPS coverage check not supported; use check_availability with street address"}
+
+    async def change_speed(self, fno_account_id: str, new_profile: str) -> dict:
+        logger.warning("Openserve change_speed not supported by LAY API: %s", fno_account_id)
+        return {"status": "FAILED", "error": "change_speed not supported by Openserve LAY API"}
+
+    async def suspend_service(self, fno_account_id: str) -> dict:
+        logger.warning("Openserve suspend_service not supported by LAY API: %s", fno_account_id)
+        return {"status": "FAILED", "error": "suspend_service not supported by Openserve LAY API"}
+
+    async def resume_service(self, fno_account_id: str) -> dict:
+        logger.warning("Openserve resume_service not supported by LAY API: %s", fno_account_id)
+        return {"status": "FAILED", "error": "resume_service not supported by Openserve LAY API"}
+
+    async def report_fault(self, fno_account_id: str, description: str) -> dict:
+        logger.warning("Openserve report_fault not supported by LAY API: %s", fno_account_id)
+        return {"status": "FAILED", "error": "report_fault not supported by Openserve LAY API"}

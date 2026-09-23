@@ -46,6 +46,15 @@ class FNOFactory:
 
         if fno_key in _FNO_REGISTRY:
             adapter_cls = _FNO_REGISTRY[fno_key]
+            if adapter_cls in (VumatelAdapter, OpenserveAdapter):
+                # Standalone API clients (NOT APIFNOAdapter subclasses):
+                # __init__(api_key, base_url, timeout). An issubclass check
+                # against APIFNOAdapter misroutes these into the browser
+                # branch (portal_url=...) and raises TypeError.
+                return adapter_cls(
+                    api_key=config.get("api_key", ""),
+                    base_url=config.get("base_url", "") or None,
+                )
             if issubclass(adapter_cls, APIFNOAdapter):
                 return adapter_cls(
                     api_key=config.get("api_key", ""),
