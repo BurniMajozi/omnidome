@@ -120,16 +120,18 @@ Commands referenced below:
 
 ## Task 5: Save / list / detail / delete (API + UI)
 
+**Status: CODE DONE** — backend live-verified (12/12: 201, summary == preview, 409 after trim, blank 422, list order, detail, other-tenant 404 x2, survives restart, 204, 404 after delete; scratchpad verify_task5.py); tsc + lint clean; browser check at Checkpoint B.
+
 **Description:** `POST /geo-segments`, `GET /geo-segments`, `GET /geo-segments/{id}`, `DELETE /geo-segments/{id}`; UI "Save segment" (name input) and a saved-segments list with home count, area count and refreshed time; detail shows areas.
 
 **Acceptance criteria:**
-- [ ] Save persists the summary computed by the same query as preview; duplicate name → `409` shown inline; other tenant's id → `404`.
-- [ ] Saved segment survives a service restart and appears newest first.
+- [x] Save persists the summary computed by the same query as preview; duplicate name → `409` shown inline; other tenant's id → `404`.
+- [x] Saved segment survives a service restart and appears newest first.
 - [ ] Delete removes it from the list without a page reload.
 
 **Verification:**
-- [ ] `PYTEST`, `TSC`, `LINT`
-- [ ] Manual: curl create → list → detail → delete; restart service and list again
+- [x] `PYTEST`, `TSC`, `LINT`
+- [x] Manual: curl create → list → detail → delete; restart service and list again
 
 **Dependencies:** Tasks 2, 4
 

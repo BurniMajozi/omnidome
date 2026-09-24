@@ -128,6 +128,18 @@ export interface PassedHomeImport {
   created_at: string
 }
 
+export interface GeoSegment {
+  id: string
+  name: string
+  filters: GeoSegmentFilters
+  home_count: number
+  area_count: number
+  excluded: ExclusionCounts
+  created_at: string | null
+  refreshed_at: string | null
+  areas?: GeoArea[]
+}
+
 // ── API ───────────────────────────────────────────────────────────────
 
 export const fnoApi = {
@@ -141,4 +153,16 @@ export const fnoApi = {
       body: JSON.stringify(filters),
       signal,
     }),
+
+  listGeoSegments: () => fetchFno<GeoSegment[]>("/geo-segments"),
+
+  getGeoSegment: (id: string) => fetchFno<GeoSegment>(`/geo-segments/${id}`),
+
+  createGeoSegment: (name: string, filters: GeoSegmentFilters) =>
+    fetchFno<GeoSegment>("/geo-segments", {
+      method: "POST",
+      body: JSON.stringify({ name, filters }),
+    }),
+
+  deleteGeoSegment: (id: string) => fetchFno<void>(`/geo-segments/${id}`, { method: "DELETE" }),
 }

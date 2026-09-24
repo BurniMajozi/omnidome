@@ -1,13 +1,16 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { FileSpreadsheet, Loader2, MapPin, Target } from "lucide-react"
+import { ChevronDown, ChevronRight, FileSpreadsheet, Layers, Loader2, MapPin, Target, Trash2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   DWELLING_LABELS,
   EMPTY_FILTERS,
   fnoApi,
   type DwellingType,
+  type GeoArea,
+  type GeoSegment,
   type GeoSegmentFilterOptions,
   type GeoSegmentFilters,
   type GeoSegmentPreview,
@@ -20,6 +23,12 @@ const EXCLUSION_LABELS: Record<keyof GeoSegmentPreview["excluded"], string> = {
   invalid: "invalid",
   raw: "not processed",
   not_geocoded: "not on the map yet",
+}
+
+function omitKey<V>(record: Record<string, V>, key: string): Record<string, V> {
+  const next = { ...record }
+  delete next[key]
+  return next
 }
 
 function toggle<T>(list: T[], value: T): T[] {
@@ -47,6 +56,39 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   )
 }
 
+function AreaTable({ areas }: { areas: GeoArea[] }) {
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="border-b border-border text-left text-muted-foreground">
+          <th className="py-1.5 pr-2 font-medium">Area</th>
+          <th className="py-1.5 pr-2 text-right font-medium">Homes</th>
+          <th className="py-1.5 text-right font-medium">Ad radius</th>
+        </tr>
+      </thead>
+      <tbody>
+        {areas.map((a) => (
+          <tr key={`${a.suburb}|${a.city}|${a.postal_code}`} className="border-b border-border/40">
+            <td className="py-1.5 pr-2">
+              <div className="flex items-center gap-1 text-foreground">
+                <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+                {a.suburb ?? "Unknown suburb"}
+              </div>
+              <div className="pl-4 text-[10px] text-muted-foreground">
+                {[a.city, a.postal_code].filter(Boolean).join(" · ")}
+              </div>
+            </td>
+            <td className="py-1.5 pr-2 text-right">{a.homes}</td>
+            <td className="py-1.5 text-right text-muted-foreground">
+              {a.centroid_lat === null ? "No location" : `${a.suggested_radius_km} km`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
@@ -67,14 +109,68 @@ export function SalesLeadSources() {
   const [previewError, setPreviewError] = useState<string | null>(null)
   const previewAbort = useRef<AbortController | null>(null)
 
+  const [segments, setSegments] = useState<GeoSegment[] | null>(null)
+  const [segmentName, setSegmentName] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<Record<string, GeoArea[] | "loading">>({})
+  const [rowError, setRowError] = useState<Record<string, string>>({})
+
   useEffect(() => {
-    Promise.all([fnoApi.listPassedHomeImports(), fnoApi.getGeoSegmentFilterOptions()])
-      .then(([imp, opts]) => {
+    Promise.all([fnoApi.listPassedHomeImports(), fnoApi.getGeoSegmentFilterOptions(), fnoApi.listGeoSegments()])
+      .then(([imp, opts, segs]) => {
         setImports(imp)
         setOptions(opts)
+        setSegments(segs)
       })
       .catch((err) => setLoadError(err instanceof Error ? err.message : "Couldn't load passed homes"))
   }, [])
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const name = segmentName.trim()
+    if (!name) {
+      setSaveError("Enter a segment name")
+      return
+    }
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const created = await fnoApi.createGeoSegment(name, filters)
+      setSegments((prev) => [created, ...(prev ?? [])])
+      setExpanded((prev) => ({ ...prev, [created.id]: created.areas ?? [] }))
+      setSegmentName("")
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Couldn't save the segment")
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleAreas = async (seg: GeoSegment) => {
+    if (expanded[seg.id]) {
+      setExpanded((prev) => omitKey(prev, seg.id))
+      return
+    }
+    setExpanded((prev) => ({ ...prev, [seg.id]: "loading" }))
+    try {
+      const detail = await fnoApi.getGeoSegment(seg.id)
+      setExpanded((prev) => ({ ...prev, [seg.id]: detail.areas ?? [] }))
+    } catch (err) {
+      setExpanded((prev) => omitKey(prev, seg.id))
+      setRowError((prev) => ({ ...prev, [seg.id]: err instanceof Error ? err.message : "Couldn't load areas" }))
+    }
+  }
+
+  const handleDelete = async (seg: GeoSegment) => {
+    if (!window.confirm(`Delete the segment "${seg.name}"? The homes themselves aren't affected.`)) return
+    try {
+      await fnoApi.deleteGeoSegment(seg.id)
+      setSegments((prev) => (prev ?? []).filter((s) => s.id !== seg.id))
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [seg.id]: err instanceof Error ? err.message : "Couldn't delete" }))
+    }
+  }
 
   // Debounced live count. The previous result stays on screen while the next
   // one loads, so the builder never flashes back to a spinner.
@@ -120,7 +216,7 @@ export function SalesLeadSources() {
     )
   }
 
-  if (!imports || !options) {
+  if (!imports || !options || !segments) {
     return (
       <div className="surface-card flex items-center gap-2 p-5 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading FNO passed homes…
@@ -318,34 +414,7 @@ export function SalesLeadSources() {
                   </p>
                 ) : (
                   <div className="max-h-64 overflow-y-auto">
-                    <table className="w-full text-xs">
-                      <thead>
-                        <tr className="border-b border-border text-left text-muted-foreground">
-                          <th className="py-1.5 pr-2 font-medium">Area</th>
-                          <th className="py-1.5 pr-2 text-right font-medium">Homes</th>
-                          <th className="py-1.5 text-right font-medium">Ad radius</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {preview.areas.map((a) => (
-                          <tr key={`${a.suburb}|${a.city}|${a.postal_code}`} className="border-b border-border/40">
-                            <td className="py-1.5 pr-2">
-                              <div className="flex items-center gap-1 text-foreground">
-                                <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
-                                {a.suburb ?? "Unknown suburb"}
-                              </div>
-                              <div className="pl-4 text-[10px] text-muted-foreground">
-                                {[a.city, a.postal_code].filter(Boolean).join(" · ")}
-                              </div>
-                            </td>
-                            <td className="py-1.5 pr-2 text-right">{a.homes}</td>
-                            <td className="py-1.5 text-right text-muted-foreground">
-                              {a.centroid_lat === null ? "No location" : `${a.suggested_radius_km} km`}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                    <AreaTable areas={preview.areas} />
                   </div>
                 )}
               </>
@@ -354,8 +423,102 @@ export function SalesLeadSources() {
                 <Loader2 className="h-3.5 w-3.5 animate-spin" /> Counting homes…
               </div>
             )}
+
+            <form onSubmit={handleSave} className="space-y-1.5 border-t border-border pt-3">
+              <label htmlFor="segment-name" className="text-[11px] font-semibold text-muted-foreground">
+                Save this segment
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="segment-name"
+                  type="text"
+                  maxLength={120}
+                  placeholder="Brackenfell fibre launch"
+                  value={segmentName}
+                  onChange={(e) => {
+                    setSegmentName(e.target.value)
+                    setSaveError(null)
+                  }}
+                  className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <Button type="submit" size="sm" className="h-8 text-xs" disabled={saving}>
+                  {saving ? "Saving…" : "Save segment"}
+                </Button>
+              </div>
+              {saveError && <p className="text-[11px] text-red-400">{saveError}</p>}
+            </form>
           </div>
         </div>
+      </div>
+
+      {/* Saved segments */}
+      <div className="surface-card p-5 space-y-4">
+        <div>
+          <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <Layers className="h-4 w-4 text-emerald-400" />
+            Saved segments
+          </h4>
+          <p className="text-xs text-muted-foreground">
+            Counts are a snapshot from when the segment was saved or last refreshed
+          </p>
+        </div>
+        {segments.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
+            No saved segments yet. Build one above and save it to reuse it for campaigns and field sales.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {segments.map((s) => {
+              const areas = expanded[s.id]
+              return (
+                <li key={s.id} className="p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleAreas(s)}
+                      aria-expanded={Boolean(areas)}
+                      className="flex items-center gap-1.5 text-left"
+                    >
+                      {areas ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      <span className="text-sm font-semibold text-foreground">{s.name}</span>
+                    </button>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                      <span>
+                        <span className="font-semibold text-foreground">{s.home_count.toLocaleString("en-ZA")}</span> homes
+                        {" · "}
+                        {s.area_count} {s.area_count === 1 ? "area" : "areas"}
+                      </span>
+                      <span>Updated {formatDate(s.refreshed_at)}</span>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-muted-foreground hover:text-red-400"
+                        onClick={() => handleDelete(s)}
+                        aria-label={`Delete ${s.name}`}
+                        title="Delete segment"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                  {rowError[s.id] && <p className="text-[11px] text-red-400">{rowError[s.id]}</p>}
+                  {areas === "loading" && (
+                    <div className="flex items-center gap-2 pl-5 text-xs text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading areas…
+                    </div>
+                  )}
+                  {Array.isArray(areas) && (
+                    <div className="pl-5">
+                      {areas.length ? <AreaTable areas={areas} /> : (
+                        <p className="text-xs text-muted-foreground">No homes in this segment.</p>
+                      )}
+                    </div>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
     </div>
   )

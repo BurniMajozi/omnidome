@@ -1697,3 +1697,100 @@ async def preview_geo_segment(
     """Live count for the segment builder. Read-only."""
     summary = await _gs_compute(db, tenant_id, filters)
     return {"home_count": summary["home_count"], "excluded": summary["excluded"], "areas": summary["areas"]}
+
+
+from fastapi import Response as _GSResponse
+from sqlalchemy.exc import IntegrityError as _GSIntegrityError
+from services.fno_intelligence.models import FNOGeoSegment
+
+
+class GeoSegmentCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    filters: GeoSegmentFilters = Field(default_factory=GeoSegmentFilters)
+
+
+def _gs_segment_dict(seg: FNOGeoSegment, *, include_areas: bool) -> dict:
+    data = {
+        "id": str(seg.id),
+        "name": seg.name,
+        "filters": seg.filters,
+        "home_count": seg.home_count,
+        "area_count": seg.area_count,
+        "excluded": seg.excluded,
+        "created_at": seg.created_at.isoformat() if seg.created_at else None,
+        "refreshed_at": seg.refreshed_at.isoformat() if seg.refreshed_at else None,
+    }
+    if include_areas:
+        data["areas"] = seg.areas
+    return data
+
+
+async def _gs_get_owned(db: AsyncSession, tenant_id: uuid.UUID, segment_id: uuid.UUID) -> FNOGeoSegment:
+    seg = (await db.execute(
+        select(FNOGeoSegment).where(FNOGeoSegment.id == segment_id, FNOGeoSegment.tenant_id == tenant_id)
+    )).scalar_one_or_none()
+    if seg is None:
+        raise HTTPException(status_code=404, detail="Segment not found")
+    return seg
+
+
+@router.post("/geo-segments", status_code=201)
+async def create_geo_segment(
+    body: GeoSegmentCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    user_id: uuid.UUID = Depends(_ph_get_current_user_id),
+    db: AsyncSession = Depends(get_session),
+):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Segment name can't be blank")
+    summary = await _gs_compute(db, tenant_id, body.filters)
+    seg = FNOGeoSegment(
+        tenant_id=tenant_id,
+        name=name,
+        filters=body.filters.model_dump(mode="json"),
+        home_count=summary["home_count"],
+        area_count=summary["area_count"],
+        excluded=summary["excluded"],
+        areas=summary["areas"],
+        created_by=user_id,
+    )
+    db.add(seg)
+    # get_session commits after the handler returns, so flush here to turn a
+    # name clash into a clean 409 instead of a post-response 500.
+    try:
+        await db.flush()
+    except _GSIntegrityError:
+        raise HTTPException(status_code=409, detail=f'A segment called "{name}" already exists')
+    await db.refresh(seg)
+    return _gs_segment_dict(seg, include_areas=True)
+
+
+@router.get("/geo-segments")
+async def list_geo_segments(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    result = await db.execute(
+        select(FNOGeoSegment).where(FNOGeoSegment.tenant_id == tenant_id).order_by(desc(FNOGeoSegment.created_at))
+    )
+    return [_gs_segment_dict(s, include_areas=False) for s in result.scalars().all()]
+
+
+@router.get("/geo-segments/{segment_id}")
+async def get_geo_segment(
+    segment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    return _gs_segment_dict(await _gs_get_owned(db, tenant_id, segment_id), include_areas=True)
+
+
+@router.delete("/geo-segments/{segment_id}", status_code=204)
+async def delete_geo_segment(
+    segment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    await db.delete(await _gs_get_owned(db, tenant_id, segment_id))
+    return _GSResponse(status_code=204)
