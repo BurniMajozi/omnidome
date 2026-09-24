@@ -18,7 +18,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text, select, insert, update, delete, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -144,10 +145,17 @@ class LeadScoreUpdate(BaseModel):
     reason: str
 
 
+_SEGMENT_TYPES = {"homes", "businesses", "custom"}
+_SEGMENT_PLATFORMS = {"google_ads", "meta", "linkedin", "custom"}
+
+
 class AudienceSegmentCreate(BaseModel):
-    name: str
+    """rules: {type, source, source_id, source_name, platform, areas | businesses | regions}
+    (SPEC-marketing-audiences.md). Homes audiences carry areas only, never addresses."""
+    name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
-    rules: Dict[str, Any] = Field(default_factory=dict, description="JSON filter rules")
+    rules: Dict[str, Any] = Field(default_factory=dict, description="JSON audience definition")
+    member_count: Optional[int] = Field(None, ge=0)
 
 
 class AutomationCreate(BaseModel):
@@ -781,6 +789,7 @@ def _ensure_marketing_tables(engine) -> None:
     CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_tenant ON marketing_connected_accounts(tenant_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_conn_accounts_profile ON marketing_connected_accounts(profile_id);
     CREATE INDEX IF NOT EXISTS idx_mkt_queues_tenant ON marketing_post_queues(tenant_id);
+    ALTER TABLE marketing_audience_segments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
@@ -1158,18 +1167,29 @@ async def create_template(
 # ──────────────────── Audience Segments ────────────────────────
 
 
+def _segment_row(row) -> Dict[str, Any]:
+    data = dict(row)
+    rules = data.get("rules") or {}
+    data["type"] = rules.get("type", "custom")
+    data["platform"] = rules.get("platform", "custom")
+    return data
+
+
 @app.get("/segments")
 async def list_segments(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    type: Optional[str] = Query(None, description="homes | businesses | custom"),
 ):
     engine = get_engine()
     _ensure_marketing_tables(engine)
+    sql = "SELECT * FROM marketing_audience_segments WHERE tenant_id = :tid"
+    params: Dict[str, Any] = {"tid": str(tenant_id)}
+    if type:
+        sql += " AND COALESCE(rules->>'type', 'custom') = :type"
+        params["type"] = type
     with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT * FROM marketing_audience_segments WHERE tenant_id = :tid ORDER BY created_at DESC"),
-            {"tid": str(tenant_id)},
-        ).mappings().all()
-    return [dict(r) for r in rows]
+        rows = conn.execute(text(sql + " ORDER BY COALESCE(updated_at, created_at) DESC"), params).mappings().all()
+    return [_segment_row(r) for r in rows]
 
 
 @app.post("/segments", status_code=201)
@@ -1177,29 +1197,88 @@ async def create_segment(
     body: AudienceSegmentCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
+    """Create an audience. Pushing the same source again (same rules.source +
+    rules.source_id) updates that audience instead of duplicating it."""
+    rules = dict(body.rules or {})
+    rules.setdefault("type", "custom")
+    rules.setdefault("platform", "custom")
+    if rules["type"] not in _SEGMENT_TYPES:
+        raise HTTPException(422, f"rules.type must be one of {sorted(_SEGMENT_TYPES)}")
+    if rules["platform"] not in _SEGMENT_PLATFORMS:
+        raise HTTPException(422, f"rules.platform must be one of {sorted(_SEGMENT_PLATFORMS)}")
+    if rules["type"] == "homes":
+        # Areas only: never let individual addresses into an ad audience.
+        rules.pop("addresses", None)
+    member_count = body.member_count
+    if member_count is None:
+        member_count = sum(int(a.get("homes") or 0) for a in rules.get("areas") or []) if rules["type"] == "homes"             else len(rules.get("businesses") or [])
+
     engine = get_engine()
     _ensure_marketing_tables(engine)
-    sid = uuid.uuid4()
-    import json
-
+    params = {
+        "tid": str(tenant_id), "name": body.name.strip(), "desc": body.description,
+        "rules": json.dumps(rules), "count": member_count,
+    }
     with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO marketing_audience_segments (id, tenant_id, name, description, rules)
-                VALUES (:id, :tid, :name, :desc, :rules::jsonb)
-            """),
-            {
-                "id": str(sid),
-                "tid": str(tenant_id),
-                "name": body.name,
-                "desc": body.description,
-                "rules": json.dumps(body.rules),
-            },
-        )
+        existing = None
+        if rules.get("source") and rules.get("source_id"):
+            existing = conn.execute(text(
+                "SELECT id FROM marketing_audience_segments WHERE tenant_id = :tid "
+                "AND rules->>'source' = :src AND rules->>'source_id' = :sid"
+            ), {"tid": str(tenant_id), "src": str(rules["source"]), "sid": str(rules["source_id"])}).first()
+        if existing:
+            conn.execute(text("""
+                UPDATE marketing_audience_segments
+                   SET name = :name, description = :desc, rules = CAST(:rules AS jsonb),
+                       member_count = :count, updated_at = now()
+                 WHERE id = :id
+            """), {**params, "id": str(existing[0])})
+            sid = existing[0]
+        else:
+            sid = uuid.uuid4()
+            conn.execute(text("""
+                INSERT INTO marketing_audience_segments (id, tenant_id, name, description, rules, member_count, updated_at)
+                VALUES (:id, :tid, :name, :desc, CAST(:rules AS jsonb), :count, now())
+            """), {**params, "id": str(sid)})
         row = conn.execute(
             text("SELECT * FROM marketing_audience_segments WHERE id = :id"), {"id": str(sid)}
         ).mappings().first()
-    return dict(row)
+    data = {**_segment_row(row), "updated": bool(existing)}
+    if existing:
+        return JSONResponse(status_code=200, content=json.loads(json.dumps(data, default=str)))
+    return data
+
+
+@app.get("/segments/{segment_id}")
+async def get_segment(
+    segment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        row = conn.execute(text(
+            "SELECT * FROM marketing_audience_segments WHERE id = :id AND tenant_id = :tid"
+        ), {"id": str(segment_id), "tid": str(tenant_id)}).mappings().first()
+    if row is None:
+        raise HTTPException(404, "Audience not found")
+    return _segment_row(row)
+
+
+@app.delete("/segments/{segment_id}", status_code=204)
+async def delete_segment(
+    segment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        deleted = conn.execute(text(
+            "DELETE FROM marketing_audience_segments WHERE id = :id AND tenant_id = :tid"
+        ), {"id": str(segment_id), "tid": str(tenant_id)}).rowcount
+    if not deleted:
+        raise HTTPException(404, "Audience not found")
+    return Response(status_code=204)
 
 
 # ──────────────────── Lead Scoring ─────────────────────────────
