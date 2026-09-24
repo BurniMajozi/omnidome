@@ -438,3 +438,73 @@ def resolve_url(base_url: str, href: Optional[str]) -> Optional[str]:
     if absolute.split("#")[0].rstrip("/") == base_url.split("#")[0].rstrip("/"):
         return None
     return absolute
+
+
+# ── Nominatim fallback (public Overpass instances often answer 504) ───────
+
+# Nominatim finds named places by "special phrase" inside a bounding box. Only
+# specific phrases work ("restaurant", "lawyer"); generic ones ("office",
+# "shop") return nothing, hence these per-category lists.
+NOMINATIM_KEYWORDS: dict[str, list[str]] = {
+    "all": ["restaurant", "cafe", "hotel", "bank", "pharmacy", "clinic", "school", "supermarket", "lawyer", "estate agent"],
+    "offices": ["lawyer", "accountant", "estate agent", "insurance", "company", "architect", "consulting"],
+    "retail": ["supermarket", "convenience store", "clothes shop", "bakery", "butcher", "hardware store",
+               "electronics shop", "furniture shop", "shopping centre"],
+    "hospitality": ["restaurant", "cafe", "fast food", "bar", "pub", "hotel", "guest house", "motel", "hostel"],
+    "healthcare": ["clinic", "doctor", "dentist", "pharmacy", "hospital", "veterinary"],
+    "education": ["school", "college", "university", "kindergarten"],
+    "finance": ["bank", "bureau de change", "accountant", "insurance"],
+    "industrial": ["works", "warehouse", "factory", "car repair", "industrial"],
+    "property": ["estate agent", "apartments", "residential estate"],
+}
+
+
+def viewbox_around(lat: float, lng: float, radius_km: float) -> str:
+    """Nominatim viewbox "left,top,right,bottom" (lon/lat) enclosing the radius."""
+    dlat = radius_km / 111.0
+    dlng = radius_km / (111.0 * max(math.cos(math.radians(lat)), 0.01))
+    return f"{lng - dlng:.6f},{lat + dlat:.6f},{lng + dlng:.6f},{lat - dlat:.6f}"
+
+
+def parse_nominatim_places(results: list[dict], center: tuple[float, float], radius_km: float,
+                           limit: int = MAX_COMPANIES) -> list[dict]:
+    """Nominatim search results (addressdetails + extratags) -> company dicts
+    shaped like parse_overpass_elements' output, within the radius, nearest first."""
+    seen: set[tuple[str, int]] = set()
+    companies = []
+    for r in results:
+        name = (r.get("name") or "").strip()
+        if not name or r.get("lat") is None or r.get("lon") is None:
+            continue
+        key = (r.get("osm_type", "node"), int(r.get("osm_id", 0)))
+        if key in seen:
+            continue
+        lat, lng = float(r["lat"]), float(r["lon"])
+        distance = haversine_km(center, (lat, lng))
+        if distance > radius_km:
+            continue
+        seen.add(key)
+        addr = r.get("address") or {}
+        tags = r.get("extratags") or {}
+        street = " ".join(p for p in (addr.get("house_number"), addr.get("road")) if p)
+        label = (r.get("type") or r.get("category") or "").replace("_", " ")
+        companies.append({
+            "osm_type": key[0],
+            "osm_id": key[1],
+            "name": name,
+            "category_label": label[:1].upper() + label[1:] if label and label != "yes" else None,
+            "address_line": street or None,
+            # SA addresses often put the municipal ward in "suburb" ("Cape Town Ward 54").
+            "suburb": next((v for v in (addr.get("suburb"), addr.get("neighbourhood"), addr.get("quarter"))
+                            if v and not re.search(r"(?i)\bward\b", v)), None),
+            "city": addr.get("city") or addr.get("town") or addr.get("village"),
+            "postal_code": addr.get("postcode"),
+            "phone": _first(tags, "phone", "contact:phone", "contact:mobile"),
+            "email": _first(tags, "email", "contact:email"),
+            "website": _first(tags, "website", "contact:website", "url"),
+            "lat": lat,
+            "lng": lng,
+            "distance_km": round(distance, 2),
+        })
+    companies.sort(key=lambda c: (c["distance_km"], c["name"].lower()))
+    return companies[:limit]

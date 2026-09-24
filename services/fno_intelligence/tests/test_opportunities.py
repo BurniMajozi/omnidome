@@ -340,3 +340,49 @@ def test_relative_days_are_counted_from_now():
 
 def test_relative_days_need_a_reference_time():
     assert parse_sa_datetime("in 34 days") is None
+
+
+# ── Nominatim fallback when Overpass is down ──────────────────────────────
+
+from opportunities import NOMINATIM_KEYWORDS, parse_nominatim_places, viewbox_around  # noqa: E402
+
+
+def test_every_category_has_fallback_keywords():
+    assert set(NOMINATIM_KEYWORDS) == set(CATEGORIES)
+    assert all(NOMINATIM_KEYWORDS[c] for c in CATEGORIES)
+
+
+def test_viewbox_is_lon_lat_corners_around_the_centre():
+    left, top, right, bottom = (float(v) for v in viewbox_around(-33.917, 18.386, 1).split(","))
+    assert left < 18.386 < right and bottom < -33.917 < top
+    assert (top - bottom) == pytest.approx(2 / 111.0, rel=0.01)
+
+
+def _place(i, name, lat, lon, category="amenity", typ="restaurant", **extra):
+    return {"osm_type": "node", "osm_id": i, "name": name, "lat": str(lat), "lon": str(lon),
+            "category": category, "type": typ,
+            "address": {"house_number": "12", "road": "Main Road", "suburb": "Sea Point", "city": "Cape Town", "postcode": "8005"},
+            "extratags": extra}
+
+
+def test_nominatim_place_becomes_company():
+    [c] = parse_nominatim_places([_place(1, "Harbour House", -33.917, 18.386, phone="+27 21 555 0000", website="hh.example")],
+                                 (-33.917, 18.386), 1)
+    assert (c["name"], c["category_label"], c["address_line"], c["suburb"]) == ("Harbour House", "Restaurant", "12 Main Road", "Sea Point")
+    assert (c["phone"], c["website"], c["osm_type"], c["osm_id"]) == ("+27 21 555 0000", "hh.example", "node", 1)
+
+
+def test_places_outside_the_radius_or_unnamed_are_dropped_and_duplicates_merged():
+    centre = (-33.917, 18.386)
+    inside = _place(1, "In", -33.917, 18.386)
+    corner = _place(2, "Corner", -33.917 + 0.0085, 18.386 + 0.0102)  # inside the box, ~1.4 km away
+    unnamed = _place(3, "", -33.917, 18.386)
+    out = parse_nominatim_places([inside, corner, unnamed, inside], centre, 1)
+    assert [c["name"] for c in out] == ["In"]
+
+
+def test_ward_is_not_shown_as_the_suburb():
+    place = _place(9, "Glen Hotel", -33.917, 18.386)
+    place["address"] = {"road": "The Glen Road", "suburb": "Cape Town Ward 54", "neighbourhood": "Sea Point", "city": "Cape Town"}
+    [c] = parse_nominatim_places([place], (-33.917, 18.386), 1)
+    assert c["suburb"] == "Sea Point"

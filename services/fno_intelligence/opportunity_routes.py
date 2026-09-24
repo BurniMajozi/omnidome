@@ -35,12 +35,11 @@ router = APIRouter(prefix="/opportunities", tags=["Opportunity finder"])
 
 _USER_AGENT = os.getenv("GEOCODE_USER_AGENT", "OmniDome-FNO-Intelligence/1.0 (local dev)")
 _NOMINATIM = os.getenv("NOMINATIM_BASE_URL", "https://nominatim.openstreetmap.org").rstrip("/")
+# Public Overpass instances are often overloaded (504s, timeouts), and the
+# mirrors tested were slower still, so try the main instance once and fall back
+# to Nominatim's category search (fast and reliable, a little less complete).
 _OVERPASS_ENDPOINTS = [
-    u.strip() for u in os.getenv(
-        "OVERPASS_ENDPOINTS",
-        "https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter,"
-        "https://overpass.private.coffee/api/interpreter",
-    ).split(",") if u.strip()
+    u.strip() for u in os.getenv("OVERPASS_ENDPOINTS", "https://overpass-api.de/api/interpreter").split(",") if u.strip()
 ]
 
 
@@ -96,16 +95,10 @@ async def _geocode_area(area: str) -> Optional[dict]:
 
 
 async def _overpass(query: str) -> list[dict]:
-    """Try each Overpass endpoint in turn; public instances are often busy."""
     last_error = "no Overpass endpoint configured"
-    # The main instance is fast but allows only 2 concurrent queries per client,
-    # so give it a second try after a short pause before using slower mirrors.
-    attempts = _OVERPASS_ENDPOINTS[:1] * 2 + _OVERPASS_ENDPOINTS[1:]
-    for i, url in enumerate(attempts):
-        if i == 1:
-            await asyncio.sleep(5)
+    for url in _OVERPASS_ENDPOINTS:
         try:
-            async with httpx.AsyncClient(timeout=60) as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(url, data={"data": query}, headers={"User-Agent": _USER_AGENT})
             if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("application/json"):
                 return resp.json().get("elements", [])
@@ -113,7 +106,28 @@ async def _overpass(query: str) -> list[dict]:
         except httpx.HTTPError as exc:
             last_error = f"{url.split('/')[2]}: {type(exc).__name__}"
         logger.warning("[opportunities] Overpass attempt failed: %s", last_error)
-    raise RuntimeError(f"OpenStreetMap search is busy right now ({last_error}). Try again in a minute.")
+    raise RuntimeError(last_error)
+
+
+async def _nominatim_businesses(search: OppCompanySearch) -> list[dict]:
+    """Fallback: Nominatim category search inside the radius, one phrase per
+    request at ~1 request/second (Nominatim's usage policy)."""
+    viewbox = opp.viewbox_around(search.center_lat, search.center_lng, search.radius_km)
+    results: list[dict] = []
+    async with httpx.AsyncClient(timeout=20) as client:
+        for i, phrase in enumerate(opp.NOMINATIM_KEYWORDS[search.category]):
+            if i:
+                await asyncio.sleep(1.1)
+            try:
+                resp = await client.get(f"{_NOMINATIM}/search", headers={"User-Agent": _USER_AGENT}, params={
+                    "q": phrase, "format": "jsonv2", "limit": 50, "viewbox": viewbox, "bounded": 1,
+                    "extratags": 1, "addressdetails": 1, "countrycodes": "za",
+                })
+                if resp.status_code == 200:
+                    results.extend(resp.json())
+            except httpx.HTTPError:
+                logger.warning("[opportunities] Nominatim fallback query %r failed", phrase)
+    return opp.parse_nominatim_places(results, (search.center_lat, search.center_lng), search.radius_km)
 
 
 async def _run_company_search(search_id: uuid.UUID) -> None:
@@ -125,7 +139,13 @@ async def _run_company_search(search_id: uuid.UUID) -> None:
         await session.commit()
         try:
             query = opp.build_overpass_query(search.center_lat, search.center_lng, search.radius_km, search.category)
-            companies = opp.parse_overpass_elements(await _overpass(query), (search.center_lat, search.center_lng))
+            try:
+                companies = opp.parse_overpass_elements(await _overpass(query), (search.center_lat, search.center_lng))
+            except RuntimeError as overpass_error:
+                logger.warning("[opportunities] Overpass unavailable (%s); using Nominatim fallback", overpass_error)
+                companies = await _nominatim_businesses(search)
+                if not companies and "HTTP" in str(overpass_error):
+                    raise RuntimeError("OpenStreetMap search is busy right now. Try again in a minute.")
             for c in companies:
                 session.add(OppCompany(tenant_id=search.tenant_id, search_id=search.id, **c))
             search.result_count = len(companies)
@@ -672,7 +692,7 @@ async def patch_tender(
         tender.sales_lead_id = body.sales_lead_id
     tender.updated_at = _now()
     await db.flush()
-    return _tender_dict(tender)
+    return _tender_dict(tender, await db.get(OppSource, tender.source_id))
 
 
 @router.get("/snapshots/{snapshot_id}/screenshot")
