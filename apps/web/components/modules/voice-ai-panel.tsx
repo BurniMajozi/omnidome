@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useCallback, useEffect } from "react"
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 import { listVoices, speak as voiceboxSpeak, type VoiceProfile } from "@/lib/voicebox-api"
 import { toWavWithStats, SILENCE_RMS_THRESHOLD } from "@/lib/audio-utils"
 import {
@@ -58,7 +58,7 @@ const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 const FALLBACK_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 async function getTenantId(): Promise<string> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   return (
     data.session?.user?.user_metadata?.tenant_id ??
     data.session?.user?.app_metadata?.tenant_id ??
@@ -67,7 +67,7 @@ async function getTenantId(): Promise<string> {
 }
 
 async function getUserId(): Promise<string> {
-  const { data } = await supabase.auth.getSession()
+  const { data } = await getSessionSafe()
   return data.session?.user?.id ?? FALLBACK_USER_ID
 }
 

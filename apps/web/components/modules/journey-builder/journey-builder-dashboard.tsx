@@ -23,7 +23,7 @@ import type {
   Journey, JourneyRule, Offer, FunnelData, ROIEntry,
   AttributeDef, OperatorDef, OfferTypeDef,
 } from "@/lib/journey-api"
-import { supabase } from "@/lib/supabase/client"
+import { supabase, getSessionSafe } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899"]
 
@@ -585,7 +585,7 @@ export function JourneyBuilderDashboard() {
         FALLBACK_TENANT_ID
       )
     }
-    supabase.auth.getSession().then(({ data }) => resolve(data.session))
+    getSessionSafe().then(({ data }) => resolve(data.session))
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => resolve(session))
     return () => listener.subscription.unsubscribe()
   }, [])

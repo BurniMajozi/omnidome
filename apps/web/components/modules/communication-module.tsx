@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
-import { supabase } from "@/lib/supabase/client"
+import { supabase, getSessionSafe } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { AgentArtifactChat } from "@/components/chat/agent-artifact-chat"
 import { invokeAgentAGUI, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
@@ -616,7 +616,7 @@ export function CommunicationModule() {
   const typingClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    getSessionSafe().then(({ data }) => {
       setWsToken(data.session?.access_token ?? null)
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {

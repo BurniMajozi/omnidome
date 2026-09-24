@@ -18,7 +18,7 @@ import { lifecycleApi } from "@/lib/lifecycle-api"
 import type {
   DashboardData, CustomerLifecycle, LifecycleEvent, LifecycleStage, FunnelData,
 } from "@/lib/lifecycle-api"
-import { supabase } from "@/lib/supabase/client"
+import { supabase, getSessionSafe } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899", "#8b5cf6"]
 
@@ -85,7 +85,7 @@ export function LifecycleDashboard() {
         FALLBACK_TENANT_ID
       )
     }
-    supabase.auth.getSession().then(({ data }) => resolve(data.session))
+    getSessionSafe().then(({ data }) => resolve(data.session))
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => resolve(session))
     return () => listener.subscription.unsubscribe()
   }, [])

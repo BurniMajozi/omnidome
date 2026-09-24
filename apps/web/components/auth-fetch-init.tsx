@@ -11,7 +11,7 @@
  * that verified token (see lib/api-auth.ts).
  */
 import { useEffect } from "react"
-import { supabase } from "@/lib/supabase/client"
+import { getSessionSafe } from "@/lib/supabase/client"
 
 export function AuthFetchInit() {
   useEffect(() => {
@@ -36,7 +36,7 @@ export function AuthFetchInit() {
         if (isApi && !(input instanceof Request)) {
           const existing = new Headers(init?.headers)
           if (!existing.has("authorization")) {
-            const { data } = await supabase.auth.getSession()
+            const { data } = await getSessionSafe()
             const token = data.session?.access_token
             if (token) {
               existing.set("Authorization", `Bearer ${token}`)
