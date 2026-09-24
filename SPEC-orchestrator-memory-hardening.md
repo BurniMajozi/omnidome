@@ -228,6 +228,22 @@ Stable ids. A = agent hardening, M = memory management.
   configurable; a dry-run endpoint shows what would change.
 - Acceptance: seeded old entries end up summarised + archived; dry run matches.
 
+## Agent Manager and agent flow (Workflows) — each stage shows up there
+
+Requested by the user ("don't forget our agent flow and agent manager").
+Today: **Agent Manager** (`/dashboard/admin/agents`) lists each agent's type,
+description, model and tool names (`GET /api/agents` → `AgentInfo`).
+**Workflows** (`/dashboard/admin/workflows`, the agent flow) creates/edits
+workflows, sets a cron schedule and runs them; it does not show event triggers
+(added in the lead-automations work) or any run history, although
+`GET /api/workflows/{id}/runs` and `/runs/{run_id}` exist.
+
+| Stage | Agent Manager | Workflows (agent flow) |
+|---|---|---|
+| 1 hardening | Per tool: reads / changes data / needs approval, timeout, output cap (A6). Per agent, last 7 days: calls, tokens, failures, average latency, models used incl. fallbacks, turns stopped by a loop guard (A2, A7). `AgentInfo` gains `tool_policies` and `usage`. | Event trigger shown in the list and editable in the editor (`trigger_event`, with the known event types offered). Run history per workflow: status, trigger (manual/cron/event), duration, tokens (A7), and each step's output or error. |
+| 2 memory | Memory tab: search recalled memories and summaries per module, archive an entry; OKF skills tab: list, register, hand to another agent, deactivate (M1, M2, M3); housekeeping dry-run and last run (M5); conversation compaction count (M4). | Runs show what they wrote to memory (M3). |
+| 3 approvals + SQL | Pending approvals per agent with approve/reject (A8, same data as the Executive Approval Queue); the SQL tool's table allowlist for InsightBot/MetricBot (A9). | A run waiting on an approval shows "awaiting approval #ref"; it continues when approved. |
+
 ## Out of scope (noted)
 - Semantic (vector) recall with pgvector — next step after M1 if keyword recall
   proves too narrow.

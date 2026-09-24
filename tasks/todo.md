@@ -9,6 +9,7 @@
 - [ ] A4 model-limiter
 - [ ] A7 usage-tracing
 - [ ] Delete dead agents/base.py
+- [ ] UI stage 1: Agent Manager tool policies + usage; Workflows event trigger + run history
 - [ ] Checkpoint 1 (tests, rebuild, live workflow + MCP specialist, push, CI)
 
 ## Stage 2 — memory
@@ -17,9 +18,11 @@
 - [ ] M3 memory-capture
 - [ ] M4 conversation-compaction
 - [ ] M5 memory-housekeeping
+- [ ] UI stage 2: Agent Manager memory + OKF skills tabs; runs show memory writes
 - [ ] Checkpoint 2
 
 ## Stage 3 — approvals + safe SQL
 - [ ] A8 approval-gate (incl. refunds + campaign posting)
 - [ ] A9 safe-sql (sqlglot; allowlist proposed first)
+- [ ] UI stage 3: approvals in Agent Manager; runs awaiting approval in Workflows
 - [ ] Checkpoint 3
