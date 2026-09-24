@@ -1,7 +1,7 @@
 # Todo: Sales lead lifecycle, event bus, automations
 
-- [ ] T1 event-bus pure helpers + unit tests
-- [ ] T2 event-bus migration, publish/notify/EventConsumer, live verification
+- [x] T1 event-bus pure helpers + unit tests
+- [x] T2 event-bus migration, publish/notify/EventConsumer, live verification — live: 11/11 (rollback, fan-out, back-off, dead+notify, idempotency, 2 workers × 60 events no dupes)
 - [ ] T3 notifications + deliveries API (orchestrator), header bell
 - [ ] Checkpoint A
 - [ ] T4 lead_stages rules + unit tests
