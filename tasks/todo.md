@@ -36,16 +36,18 @@ Commands referenced below:
 
 ## Task 2: `fno_geo_segments` model + migration
 
+**Status: DONE** — migration applied twice (idempotent), unique constraint present, service boots healthy with the model.
+
 **Description:** Add the `FNOGeoSegment` model (id, tenant_id, name, filters JSONB, home_count, area_count, excluded JSONB, areas JSONB, created_by, created_at, refreshed_at; unique `(tenant_id, name)`) and the matching migration SQL, applied to the dev DB.
 
 **Acceptance criteria:**
-- [ ] Migration applies cleanly to `coreconnect` and is idempotent (`IF NOT EXISTS`).
-- [ ] Service boots with the new model (create_all doesn't conflict with the migration).
-- [ ] No existing passed-homes table or enum is altered.
+- [x] Migration applies cleanly to `coreconnect` and is idempotent (`IF NOT EXISTS`).
+- [x] Service boots with the new model (create_all doesn't conflict with the migration).
+- [x] No existing passed-homes table or enum is altered.
 
 **Verification:**
-- [ ] `\d fno_geo_segments` shows the columns and the unique constraint
-- [ ] Service `/health` 200 after rebuild
+- [x] `\d fno_geo_segments` shows the columns and the unique constraint
+- [x] Service `/health` 200 after rebuild
 
 **Dependencies:** None
 
@@ -59,16 +61,18 @@ Commands referenced below:
 
 ## Task 3: Preview + filter-options endpoints
 
+**Status: DONE** — live-verified vs SQL on 4 filter combos + 422s + tenant isolation (scratchpad verify_task3.py). Web path resolves to the dev tenant, which has only 2 homes; review data handled before Checkpoint B.
+
 **Description:** Add the shared filter → query compiler and `POST /geo-segments/preview` and `GET /geo-segments/filter-options`, tenant-scoped. Confirm which tenant the web path resolves to versus the imported data's tenant.
 
 **Acceptance criteria:**
-- [ ] Preview `home_count` and each `excluded` reason equal direct SQL counts for at least 3 different filter combinations.
-- [ ] Filter-options lists only values that have eligible homes, with counts.
-- [ ] Invalid filters return `422`.
+- [x] Preview `home_count` and each `excluded` reason equal direct SQL counts for at least 3 different filter combinations.
+- [x] Filter-options lists only values that have eligible homes, with counts.
+- [x] Invalid filters return `422`.
 
 **Verification:**
-- [ ] Tests pass: `PYTEST`
-- [ ] Manual: curl both endpoints inside WSL; compare with `psql` counts
+- [x] Tests pass: `PYTEST`
+- [x] Manual: curl both endpoints inside WSL; compare with `psql` counts
 
 **Dependencies:** Task 1
 
@@ -81,10 +85,10 @@ Commands referenced below:
 ---
 
 ## Checkpoint A: Foundation
-- [ ] `PYTEST` green
-- [ ] Service rebuilt and healthy; migration applied
-- [ ] Preview matches SQL; tenant question from Task 3 answered
-- [ ] Review with human before UI work
+- [x] `PYTEST` green
+- [x] Service rebuilt and healthy; migration applied
+- [x] Preview matches SQL; tenant question from Task 3 answered
+- [x] Review with human before UI work
 
 ---
 

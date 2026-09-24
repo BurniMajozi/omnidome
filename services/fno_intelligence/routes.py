@@ -1577,3 +1577,123 @@ async def get_passed_homes_geocode_status(
         "geocoded": counts.get("geocoded", 0),
         "failed": counts.get("failed", 0),
     }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# GEO SEGMENTS (SPEC-geo-segments.md)
+# ════════════════════════════════════════════════════════════════════════
+#
+# Saved filters over passed homes, summarised as target areas for
+# location-based marketing and field sales. Areas only -- no endpoint here
+# returns an individual address. Pure logic lives in geo_segments.py.
+# Route order matters: the literal /geo-segments/filter-options must be
+# declared before /geo-segments/{segment_id}.
+
+from services.fno_intelligence.geo_segments import (
+    EXCLUSION_REASONS as _GS_EXCLUSION_REASONS,
+    GeoSegmentFilters,
+    HomePoint as _GSHomePoint,
+    exclusion_reason as _gs_exclusion_reason,
+    summarize_areas as _gs_summarize_areas,
+)
+
+
+def _gs_filtered_homes(tenant_id: uuid.UUID, filters: GeoSegmentFilters):
+    """One query shared by preview, save and refresh so their counts can't
+    drift. Selects every status in scope (not just eligible rows) so the
+    exclusion counts are computed over the same filtered population."""
+    query = select(
+        FNOPassedHome.status,
+        FNOPassedHome.geocode_status,
+        FNOPassedHome.gps_lat,
+        FNOPassedHome.gps_lng,
+        FNOPassedHome.suburb,
+        FNOPassedHome.city,
+        FNOPassedHome.postal_code,
+    ).where(FNOPassedHome.tenant_id == tenant_id)
+    if filters.fno_names:
+        query = query.where(FNOPassedHome.fno_name.in_(filters.fno_names))
+    if filters.import_ids:
+        query = query.where(FNOPassedHome.import_id.in_(filters.import_ids))
+    if filters.cities:
+        query = query.where(FNOPassedHome.city.in_(filters.cities))
+    if filters.suburbs:
+        query = query.where(FNOPassedHome.suburb.in_(filters.suburbs))
+    if filters.postal_codes:
+        query = query.where(FNOPassedHome.postal_code.in_(filters.postal_codes))
+    if filters.dwelling_types:
+        query = query.where(FNOPassedHome.dwelling_type.in_(filters.dwelling_types))
+    if filters.date_passed_from:
+        query = query.where(FNOPassedHome.date_passed >= filters.date_passed_from)
+    if filters.date_passed_to:
+        query = query.where(FNOPassedHome.date_passed <= filters.date_passed_to)
+    return query
+
+
+async def _gs_compute(db: AsyncSession, tenant_id: uuid.UUID, filters: GeoSegmentFilters) -> dict:
+    result = await db.execute(_gs_filtered_homes(tenant_id, filters))
+    excluded = {reason: 0 for reason in _GS_EXCLUSION_REASONS}
+    eligible: list[_GSHomePoint] = []
+    for status, geocode_status, lat, lng, suburb, city, postal_code in result.all():
+        lat = float(lat) if lat is not None else None
+        lng = float(lng) if lng is not None else None
+        reason = _gs_exclusion_reason(status, geocode_status, lat, lng, geocoded_only=filters.geocoded_only)
+        if reason:
+            excluded[reason] += 1
+        else:
+            eligible.append(_GSHomePoint(suburb=suburb, city=city, postal_code=postal_code, lat=lat, lng=lng))
+    areas = _gs_summarize_areas(eligible)
+    return {"home_count": len(eligible), "area_count": len(areas), "excluded": excluded, "areas": areas}
+
+
+@router.get("/geo-segments/filter-options")
+async def get_geo_segment_filter_options(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Dropdown values that actually have eligible (normalized) homes."""
+    eligible = and_(FNOPassedHome.tenant_id == tenant_id, FNOPassedHome.status == "normalized")
+
+    async def distinct(column):
+        rows = await db.execute(select(column).where(eligible, column.is_not(None)).distinct().order_by(column))
+        return [value for (value,) in rows.all()]
+
+    suburb_rows = await db.execute(
+        select(FNOPassedHome.suburb, FNOPassedHome.city, func.count())
+        .where(eligible, FNOPassedHome.suburb.is_not(None))
+        .group_by(FNOPassedHome.suburb, FNOPassedHome.city)
+        .order_by(FNOPassedHome.suburb)
+    )
+    import_rows = await db.execute(
+        select(FNOPassedHomeImport)
+        .where(
+            FNOPassedHomeImport.tenant_id == tenant_id,
+            FNOPassedHomeImport.id.in_(select(FNOPassedHome.import_id).where(eligible)),
+        )
+        .order_by(desc(FNOPassedHomeImport.created_at))
+    )
+    return {
+        "fno_names": await distinct(FNOPassedHome.fno_name),
+        "cities": await distinct(FNOPassedHome.city),
+        "suburbs": [{"suburb": s, "city": c, "homes": n} for s, c, n in suburb_rows.all()],
+        "postal_codes": await distinct(FNOPassedHome.postal_code),
+        "dwelling_types": await distinct(FNOPassedHome.dwelling_type),
+        "imports": [
+            {
+                "id": str(i.id), "file_name": i.file_name, "fno_name": i.fno_name,
+                "created_at": i.created_at.isoformat() if i.created_at else None,
+            }
+            for i in import_rows.scalars().all()
+        ],
+    }
+
+
+@router.post("/geo-segments/preview")
+async def preview_geo_segment(
+    filters: GeoSegmentFilters,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Live count for the segment builder. Read-only."""
+    summary = await _gs_compute(db, tenant_id, filters)
+    return {"home_count": summary["home_count"], "excluded": summary["excluded"], "areas": summary["areas"]}

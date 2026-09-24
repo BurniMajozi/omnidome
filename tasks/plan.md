@@ -44,11 +44,11 @@ FNOGeoSegment model + migration ──┼── preview / filter-options endpoin
 
 ### Phase 1: Foundation
 - [x] Task 1: Pure logic module with unit tests
-- [ ] Task 2: `fno_geo_segments` model + migration
-- [ ] Task 3: Preview + filter-options endpoints (live-verified against SQL)
+- [x] Task 2: `fno_geo_segments` model + migration
+- [x] Task 3: Preview + filter-options endpoints (live-verified against SQL)
 
 ### Checkpoint A: Foundation
-- [ ] pytest green; service rebuilt; preview count matches direct SQL count
+- [x] pytest green; service rebuilt; preview count matches direct SQL count
 
 ### Phase 2: Core flow
 - [ ] Task 4: Segment builder UI with live count; fake panels deleted
