@@ -4,7 +4,7 @@
 - [x] T2 event-bus migration, publish/notify/EventConsumer, live verification — live: 11/11 (rollback, fan-out, back-off, dead+notify, idempotency, 2 workers × 60 events no dupes)
 - [x] T3 notifications + deliveries API (orchestrator), header bell — API live (feed, unread, read, tenant isolation, proxy 200); bell verified in browser at Checkpoint B
 - [ ] Checkpoint A
-- [ ] T4 lead_stages rules + unit tests
+- [x] T4 lead_stages rules + unit tests — 23 tests; sales suite 39 passing (run with PYTHONPATH=../.. from services/sales)
 - [ ] T5 lead migration + models (ref_no, owner, priority, closed, activities, tasks)
 - [ ] T6 sales API: pipeline on create, stage endpoint, detail, owners, board→lead sync, events
 - [ ] T7 web: lead table, Lead sources → board, linked create modal, board card ref/owner
