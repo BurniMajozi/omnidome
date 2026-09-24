@@ -9,6 +9,7 @@
  * the board (and vice versa).
  */
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { ChevronRight, Filter, Layers, Loader2, Mail, Phone, Plus, RefreshCw, User, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -127,7 +128,7 @@ function StageChangeDialog({
         : target === CLOSED_LOST ? `Close ${name} as lost`
           : `Disqualify ${name}`
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" role="dialog" aria-modal="true" aria-label={title}>
       <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl space-y-4">
         <div className="flex items-start justify-between gap-3">
@@ -179,7 +180,8 @@ function StageChangeDialog({
           </Button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -192,6 +194,7 @@ export function SalesLeadsTab({
   onLeadUpdated,
   renderActions,
   onOpenLead,
+  onRowContextMenu,
 }: {
   leads: SalesLead[]
   loading: boolean
@@ -200,6 +203,8 @@ export function SalesLeadsTab({
   /** Row action menu (lead-actions). */
   renderActions?: (lead: SalesLead) => ReactNode
   onOpenLead?: (lead: SalesLead) => void
+  /** Right-click on a row opens the same action menu (like Communication). */
+  onRowContextMenu?: (lead: SalesLead) => void
 }) {
   const [stages, setStages] = useState<PipelineStage[]>([])
   const [channel, setChannel] = useState("ALL")
@@ -347,7 +352,15 @@ export function SalesLeadsTab({
                 const ch = SALES_CHANNELS.find((c) => c.id === lead.source) ?? { label: lead.source?.replace(/_/g, " "), color: "#9ca3af" }
                 const dealClosed = lead.deal_status === "WON" || lead.deal_status === "LOST"
                 return (
-                  <tr key={lead.id} className="hover:bg-muted/30 transition-colors align-top">
+                  <tr
+                    key={lead.id}
+                    className="hover:bg-muted/30 transition-colors align-top"
+                    onContextMenu={onRowContextMenu ? (e) => {
+                      if ((e.target as HTMLElement).closest("select, input, textarea")) return
+                      e.preventDefault()
+                      onRowContextMenu(lead)
+                    } : undefined}
+                  >
                     <td className="py-3 px-3.5 min-w-[220px]">
                       <div className="flex items-center gap-1.5 text-[10px] font-mono text-muted-foreground">
                         {lead.reference ?? "—"}

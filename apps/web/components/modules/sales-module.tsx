@@ -60,6 +60,7 @@ import {
 import { SalesPipelineBoard } from "./sales-pipeline-board"
 import { SalesLeadSources } from "./sales-lead-sources"
 import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales-leads-tab"
+import { LeadActionsMenu, LeadPanel, type LeadPanelMode } from "./sales-lead-actions"
 
 const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
@@ -481,6 +482,19 @@ export function SalesModule() {
     return () => window.removeEventListener(SALES_CHANGED_EVENT, onChange)
   }, [])
 
+  // Lead action menu + record panel (SPEC-lead-actions.md); the bell opens
+  // records through the "omnidome:open-lead" event.
+  const [menuLeadId, setMenuLeadId] = useState<string | null>(null)
+  const [leadPanel, setLeadPanel] = useState<{ id: string; mode: LeadPanelMode } | null>(null)
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ id?: string }>).detail?.id
+      if (id) setLeadPanel({ id, mode: "record" })
+    }
+    window.addEventListener("omnidome:open-lead", onOpen)
+    return () => window.removeEventListener("omnidome:open-lead", onOpen)
+  }, [])
+
   const switchTab = (tab: "pipeline" | "channels" | "leads" | "ai-engine") => {
     if (tab === "leads" && staleRef.current.leads) {
       staleRef.current.leads = false
@@ -814,6 +828,28 @@ export function SalesModule() {
           loading={loadingLeads}
           onReload={() => void loadLeads()}
           onLeadUpdated={updateLeadInList}
+          onOpenLead={(lead) => setLeadPanel({ id: lead.id, mode: "record" })}
+          onRowContextMenu={(lead) => setMenuLeadId(lead.id)}
+          renderActions={(lead) => (
+            <LeadActionsMenu
+              lead={lead}
+              open={menuLeadId === lead.id}
+              onOpenChange={(open) => setMenuLeadId(open ? lead.id : null)}
+              onAction={(mode) => {
+                setMenuLeadId(null)
+                setLeadPanel({ id: lead.id, mode })
+              }}
+            />
+          )}
+        />
+      )}
+      {leadPanel && (
+        <LeadPanel
+          key={`${leadPanel.id}:${leadPanel.mode}`}
+          leadId={leadPanel.id}
+          initialMode={leadPanel.mode}
+          onClose={() => setLeadPanel(null)}
+          onUpdated={updateLeadInList}
         />
       )}
 

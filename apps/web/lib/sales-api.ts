@@ -385,4 +385,31 @@ export const salesApi = {
     }),
 
   listOwners: () => fetchSales<LeadOwner[]>("/owners"),
+
+  // Lead actions (SPEC-lead-actions.md). Email and campaign return at once;
+  // the sales service delivers them through the event bus.
+  assignLead: (leadId: string, data: { owner_id?: string | null; owner_name?: string | null }) =>
+    fetchSales<SalesLead>(`/leads/${leadId}/assign`, { method: "POST", body: JSON.stringify(data) }),
+
+  addLeadNote: (leadId: string, data: { body: string; kind?: "note" | "call" }) =>
+    fetchSales<LeadActivity>(`/leads/${leadId}/notes`, { method: "POST", body: JSON.stringify(data) }),
+
+  emailLead: (leadId: string, data: { subject: string; body: string }) =>
+    fetchSales<LeadActivity>(`/leads/${leadId}/email`, { method: "POST", body: JSON.stringify(data) }),
+
+  createLeadTask: (leadId: string, data: {
+    title: string; due_at?: string; assignee_id?: string; assignee_name?: string; kind?: "task" | "call"
+  }) => fetchSales<LeadTask>(`/leads/${leadId}/tasks`, { method: "POST", body: JSON.stringify(data) }),
+
+  updateLeadTask: (taskId: string, data: { status: "open" | "done" }) =>
+    fetchSales<LeadTask>(`/lead-tasks/${taskId}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  escalateLead: (leadId: string, data: { reason: string }) =>
+    fetchSales<SalesLead>(`/leads/${leadId}/escalate`, { method: "POST", body: JSON.stringify(data) }),
+
+  sendLeadToOutbound: (leadId: string, data: { notes?: string }) =>
+    fetchSales<LeadTask>(`/leads/${leadId}/outbound`, { method: "POST", body: JSON.stringify(data) }),
+
+  sendLeadToCampaign: (leadId: string, data: { campaign_id: string; campaign_name: string }) =>
+    fetchSales<LeadActivity>(`/leads/${leadId}/campaign`, { method: "POST", body: JSON.stringify(data) }),
 }
