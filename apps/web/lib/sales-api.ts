@@ -38,9 +38,29 @@ async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    throw new Error(`Sales API error ${res.status}: ${body}`)
+    throw new SalesApiError(res.status, body)
   }
   return res.json()
+}
+
+/** Error carrying the service's own message (FastAPI `detail`), for the UI. */
+export class SalesApiError extends Error {
+  status: number
+  constructor(status: number, body: string) {
+    let detail = body
+    try {
+      const parsed = JSON.parse(body)
+      if (typeof parsed?.detail === "string") detail = parsed.detail
+    } catch {
+      /* not JSON */
+    }
+    super(detail || `Sales API error ${status}`)
+    this.status = status
+  }
+}
+
+export function salesErrorMessage(err: unknown, fallback = "Something went wrong"): string {
+  return err instanceof Error && err.message ? err.message : fallback
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -121,6 +141,8 @@ export interface Deal {
   notes?: string
   created_at: string
   updated_at?: string
+  lead_reference?: string | null
+  owner_name?: string | null
 }
 
 export interface DealCreate {
@@ -154,11 +176,93 @@ export interface SalesLead {
   address?: string | null
   source: string // Maps to channel e.g. INBOUND_EMAIL, WALK_IN, PORTAL_WEBSITE
   interest_level: number
-  status: string // "NEW" | "CONTACTED" | "QUALIFIED" | "PROPOSAL" | "NEGOTIATION" | "CONVERTED" | "LOST"
+  /** Lead phase: NEW | CONTACTED | QUALIFIED | DISQUALIFIED. With a deal it mirrors
+   *  the deal: CONVERTED (open, "In pipeline") | WON | LOST. SPEC-lead-lifecycle.md */
+  status: string
   notes?: string | null
   converted_at?: string | null
   created_at: string
   updated_at?: string | null
+  reference?: string | null
+  owner_name?: string | null
+  priority?: LeadPriority
+  closed_at?: string | null
+  close_reason?: string | null
+  escalated_at?: string | null
+  deal_id?: string | null
+  deal_stage?: string | null
+  deal_status?: string | null
+  deal_value_zar?: number | null
+  open_tasks?: number
+}
+
+export type LeadPriority = "low" | "normal" | "high" | "urgent"
+
+export const LEAD_PHASE_STAGES = [
+  { id: "NEW", label: "New" },
+  { id: "CONTACTED", label: "Contacted" },
+  { id: "QUALIFIED", label: "Qualified" },
+  { id: "DISQUALIFIED", label: "Disqualified" },
+] as const
+
+export const LEAD_STATUS_LABELS: Record<string, string> = {
+  NEW: "New",
+  CONTACTED: "Contacted",
+  QUALIFIED: "Qualified",
+  DISQUALIFIED: "Disqualified",
+  CONVERTED: "In pipeline",
+  WON: "Won",
+  LOST: "Lost",
+}
+
+export interface PipelinePlacement {
+  stage_name?: string
+  value_zar?: number
+  deal_name?: string
+}
+
+export interface LeadStageChange {
+  status?: string
+  stage_name?: string
+  value_zar?: number
+  deal_name?: string
+  reason?: string
+}
+
+export interface LeadActivity {
+  id: string
+  kind: string
+  summary: string
+  details: Record<string, unknown>
+  actor_id?: string | null
+  actor_name?: string | null
+  created_at: string
+}
+
+export interface LeadTask {
+  id: string
+  lead_id: string
+  title: string
+  kind: string
+  due_at?: string | null
+  assignee_id?: string | null
+  assignee_name?: string | null
+  status: "open" | "done" | string
+  created_at: string
+  completed_at?: string | null
+}
+
+export interface SalesLeadDetail extends SalesLead {
+  activities: LeadActivity[]
+  tasks: LeadTask[]
+}
+
+export interface LeadOwner {
+  id: string
+  name: string
+  department?: string | null
+  job_title?: string | null
+  email?: string | null
 }
 
 export interface SalesLeadCreate {
@@ -171,6 +275,10 @@ export interface SalesLeadCreate {
   interest_level?: number
   notes?: string
   agent_id?: string
+  owner_name?: string
+  priority?: LeadPriority
+  /** Put the lead straight onto the pipeline board. */
+  pipeline?: PipelinePlacement
 }
 
 export interface SalesLeadUpdate {
@@ -264,4 +372,15 @@ export const salesApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  getLead: (leadId: string) => fetchSales<SalesLeadDetail>(`/leads/${leadId}`),
+
+  /** One stage model with the board: a lead-phase `status` or a board `stage_name`. */
+  changeLeadStage: (leadId: string, data: LeadStageChange) =>
+    fetchSales<SalesLead>(`/leads/${leadId}/stage`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  listOwners: () => fetchSales<LeadOwner[]>("/owners"),
 }

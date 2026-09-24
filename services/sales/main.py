@@ -200,6 +200,9 @@ class DealResponse(BaseModel):
     notes: Optional[str]
     created_at: datetime
     updated_at: Optional[datetime]
+    # From the linked lead, for board cards (SPEC-lead-lifecycle.md)
+    lead_reference: Optional[str] = None
+    owner_name: Optional[str] = None
 
 
 class QuoteItem(BaseModel):
@@ -729,8 +732,10 @@ async def _ensure_contact(
     return contact_id
 
 
-def _deal_to_response(deal: Deal, stage_name: Optional[str]) -> DealResponse:
+def _deal_to_response(deal: Deal, stage_name: Optional[str], lead: Optional[Lead] = None) -> DealResponse:
     return DealResponse(
+        lead_reference=lead_service.format_reference(lead.ref_no) if lead else None,
+        owner_name=lead.owner_name if lead else None,
         id=deal.id, tenant_id=deal.tenant_id, name=deal.name,
         customer_id=deal.contact_id,
         lead_id=deal.lead_id, agent_id=deal.agent_id, stage_id=deal.stage_id,
@@ -1049,8 +1054,9 @@ async def list_deals(
     db: AsyncSession = Depends(get_db),
 ):
     q = (
-        select(Deal, DealStage.name.label("stage_name"))
+        select(Deal, DealStage.name.label("stage_name"), Lead)
         .outerjoin(DealStage, DealStage.id == Deal.stage_id)
+        .outerjoin(Lead, Lead.id == Deal.lead_id)
         .where(Deal.tenant_id == tenant_id)
     )
     if stage_id:
@@ -1073,7 +1079,7 @@ async def list_deals(
 
     result = await db.execute(q)
     return [
-        _deal_to_response(row.Deal, row.stage_name)
+        _deal_to_response(row.Deal, row.stage_name, row.Lead)
         for row in result.all()
     ]
 
@@ -1085,14 +1091,15 @@ async def get_deal(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Deal, DealStage.name.label("stage_name"))
+        select(Deal, DealStage.name.label("stage_name"), Lead)
         .outerjoin(DealStage, Deal.stage_id == DealStage.id)
+        .outerjoin(Lead, Lead.id == Deal.lead_id)
         .where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
     )
     row = result.first()
     if not row:
         raise HTTPException(status_code=404, detail="Deal not found")
-    return _deal_to_response(row.Deal, row.stage_name)
+    return _deal_to_response(row.Deal, row.stage_name, row.Lead)
 
 
 @app.delete("/deals/{deal_id}", status_code=status.HTTP_204_NO_CONTENT)

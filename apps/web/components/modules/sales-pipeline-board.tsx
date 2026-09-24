@@ -19,10 +19,12 @@ import {
   Sparkles,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { announceSalesChange } from "./sales-leads-tab"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   salesApi,
+  salesErrorMessage,
   PRODUCT_CATALOG,
   SALES_CHANNELS,
   type Deal,
@@ -150,6 +152,14 @@ function DealCard({
       <div className="absolute right-2 top-2 opacity-0 group-hover:opacity-40 transition-opacity">
         <GripVertical className="h-4 w-4 text-muted-foreground" />
       </div>
+
+      {/* Lead reference + owner (SPEC-lead-lifecycle.md) */}
+      {(deal.lead_reference || deal.owner_name) && (
+        <div className="mb-0.5 flex items-center gap-1.5 pr-6 text-[10px] text-muted-foreground">
+          {deal.lead_reference && <span className="font-mono">{deal.lead_reference}</span>}
+          {deal.owner_name && <span className="truncate">· {deal.owner_name}</span>}
+        </div>
+      )}
 
       {/* Deal name */}
       <h4 className="text-sm font-medium text-foreground pr-6 truncate" title={deal.name}>
@@ -488,9 +498,20 @@ export function SalesPipelineBoard({
 
   // ── Actions ───────────────────────────────────────────────────────
 
+  const handleWonRef = useRef<(dealId: string) => Promise<void>>(async () => undefined)
+  const handleLostRef = useRef<(dealId: string) => Promise<void>>(async () => undefined)
+
   const handleStageChange = useCallback(async (dealId: string, targetStageId: string) => {
     const deal = deals.find((d) => d.id === dealId)
     if (!deal || deal.stage_id === targetStageId) return
+    if (deal.status === "WON" || deal.status === "LOST") {
+      alert(`This deal is already closed (${deal.status.toLowerCase()}).`)
+      return
+    }
+    // Closing columns run the real close paths (commission / reason), not a plain move.
+    const targetName = stages.find((s) => s.id === targetStageId)?.name?.toLowerCase()
+    if (targetName === "closed won") return void handleWonRef.current(dealId)
+    if (targetName === "closed lost") return void handleLostRef.current(dealId)
     const previousStageId = deal.stage_id
 
     // Optimistic update. Stage totals re-derive automatically from `deals`
@@ -505,6 +526,7 @@ export function SalesPipelineBoard({
     try {
       const updated = await salesApi.moveDealStage(dealId, { stage_id: targetStageId })
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
+      announceSalesChange()
     } catch (err) {
       console.error("Failed to move deal:", err)
       // Revert locally instead of a full reload.
@@ -512,7 +534,7 @@ export function SalesPipelineBoard({
         prev.map((d) => (d.id === dealId ? { ...d, stage_id: previousStageId } : d))
       )
     }
-  }, [deals])
+  }, [deals, stages])
 
   const handleDrop = useCallback(async (dealId: string, targetStageId: string) => {
     handleStageChange(dealId, targetStageId)
@@ -542,8 +564,9 @@ export function SalesPipelineBoard({
       // `updated` already carries the new stage_id/status from the server;
       // stage totals re-derive automatically, no reload needed.
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
+      announceSalesChange()
     } catch (err) {
-      console.error("Failed to close deal as won:", err)
+      alert(salesErrorMessage(err, "Could not close the deal as won"))
     }
   }, [])
 
@@ -553,10 +576,16 @@ export function SalesPipelineBoard({
     try {
       const updated = await salesApi.closeDealLost(dealId, reason)
       setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
+      announceSalesChange()
     } catch (err) {
-      console.error("Failed to close deal as lost:", err)
+      alert(salesErrorMessage(err, "Could not close the deal as lost"))
     }
   }, [])
+
+  useEffect(() => {
+    handleWonRef.current = handleWon
+    handleLostRef.current = handleLost
+  }, [handleWon, handleLost])
 
   const handleCreateManualDeal = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -573,30 +602,30 @@ export function SalesPipelineBoard({
         ? crypto.randomUUID()
         : "00000000-0000-0000-0000-000000000001"
 
-      await salesApi.createDeal({
-        name: dealName.trim(),
-        customer_id: contactUuid,
-        stage_id: stage?.id,
-        stage_name: stage?.name,
-        value_zar: Number(dealValue) || 0,
-        notes: combinedNotes,
-      })
-
-      // Also create a lead entry so leads and pipeline stay perfectly synced
       if (dealContactName.trim()) {
+        // A person is known: one lead with its deal, linked (SPEC-lead-lifecycle.md).
         const [firstName, ...lastRest] = dealContactName.trim().split(" ")
-        await salesApi
-          .createLead({
-            first_name: firstName || "Walk-in",
-            last_name: lastRest.join(" ") || "Lead",
-            email: dealContactEmail.trim() || undefined,
-            phone: dealContactPhone.trim() || undefined,
-            source: dealChannel,
-            interest_level: 5,
-            notes: `Deal created: ${dealName.trim()} · Product: ${dealProduct}`,
-          })
-          .catch(() => null)
+        await salesApi.createLead({
+          first_name: firstName || "Walk-in",
+          last_name: lastRest.join(" "),
+          email: dealContactEmail.trim() || undefined,
+          phone: dealContactPhone.trim() || undefined,
+          source: dealChannel,
+          interest_level: 5,
+          notes: combinedNotes,
+          pipeline: { stage_name: stage?.name, value_zar: Number(dealValue) || 0, deal_name: dealName.trim() },
+        })
+      } else {
+        await salesApi.createDeal({
+          name: dealName.trim(),
+          customer_id: contactUuid,
+          stage_id: stage?.id,
+          stage_name: stage?.name,
+          value_zar: Number(dealValue) || 0,
+          notes: combinedNotes,
+        })
       }
+      announceSalesChange()
 
       setNewDealOpen(false)
       setDealName("")

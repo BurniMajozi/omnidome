@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import type { JSX } from "react"
 import { ModuleLayout } from "./module-layout"
 import {
@@ -33,8 +33,6 @@ import {
   Store,
   Plus,
   ArrowRight,
-  Filter,
-  CheckCircle2,
   RefreshCw,
   Sparkles,
   Bot,
@@ -44,8 +42,6 @@ import {
   Package,
   Building2,
   Phone,
-  Layers,
-  ChevronRight,
 } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { Button } from "@/components/ui/button"
@@ -63,6 +59,7 @@ import {
 } from "@/lib/sales-api"
 import { SalesPipelineBoard } from "./sales-pipeline-board"
 import { SalesLeadSources } from "./sales-lead-sources"
+import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales-leads-tab"
 
 const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
@@ -97,16 +94,6 @@ const defaultChannelSales = [
   { channel: "Field Sales Team", source: "FIELD_SALES", deals: 24, revenue: 1640000, color: "#f87171", fill: "#f87171" },
   { channel: "Inbound Email", source: "INBOUND_EMAIL", deals: 19, revenue: 980000, color: "#60a5fa", fill: "#60a5fa" },
   { channel: "Call Center Outbound", source: "CALL_CENTER_OUTBOUND", deals: 15, revenue: 720000, color: "#fbbf24", fill: "#fbbf24" },
-]
-
-const LEAD_STAGES = [
-  { id: "NEW", label: "New Lead", badge: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
-  { id: "CONTACTED", label: "Contacted", badge: "bg-cyan-500/20 text-cyan-400 border-cyan-500/30" },
-  { id: "QUALIFIED", label: "Qualified", badge: "bg-amber-500/20 text-amber-400 border-amber-500/30" },
-  { id: "PROPOSAL", label: "Proposal Sent", badge: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
-  { id: "NEGOTIATION", label: "Negotiation", badge: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
-  { id: "CONVERTED", label: "Converted to Deal", badge: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" },
-  { id: "LOST", label: "Lost / Disqualified", badge: "bg-red-500/20 text-red-400 border-red-500/30" },
 ]
 
 const defaultFlashcardKPIs = [
@@ -443,7 +430,6 @@ export function SalesModule() {
   // ── Lead Management & Channel Sales State ─────────────────────────
   const [leads, setLeads] = useState<SalesLead[]>([])
   const [loadingLeads, setLoadingLeads] = useState(false)
-  const [selectedChannel, setSelectedChannel] = useState<string>("ALL")
   const [activeTab, setActiveTab] = useState<"pipeline" | "channels" | "leads" | "ai-engine">("pipeline")
   const [pipelineRefreshCounter, setPipelineRefreshCounter] = useState(0)
 
@@ -463,144 +449,53 @@ export function SalesModule() {
   const [dealInterest, setDealInterest] = useState<number>(4)
   const [savingDeal, setSavingDeal] = useState(false)
 
-  // Load real leads from the sales API
+  // Real leads from the sales API. No placeholder leads: an empty list shows
+  // the empty state (SPEC-lead-lifecycle.md).
   const loadLeads = useCallback(async () => {
     setLoadingLeads(true)
     try {
-      const fetched = await salesApi.listLeads({ limit: 100 })
-      if (Array.isArray(fetched) && fetched.length > 0) {
-        setLeads(fetched)
-      } else {
-        // Initial omnichannel realistic seeds
-        setLeads([
-          {
-            id: "lead-1",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Thabo",
-            last_name: "Mokoena",
-            email: "thabo.m@acme.co.za",
-            phone: "+27 82 123 4567",
-            address: "Sandton City, Johannesburg",
-            source: "WALK_IN",
-            interest_level: 5,
-            status: "QUALIFIED",
-            notes: "Walked into Rosebank branch inquiring on 500Mbps Business Fiber.",
-            created_at: new Date(Date.now() - 3600000 * 4).toISOString(),
-          },
-          {
-            id: "lead-2",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Annelize",
-            last_name: "van der Merwe",
-            email: "annelize@capevines.co.za",
-            phone: "+27 71 987 6543",
-            address: "Stellenbosch Central, Western Cape",
-            source: "PORTAL_WEBSITE",
-            interest_level: 4,
-            status: "CONTACTED",
-            notes: "Online abandoned basket (Business Fiber 200Mbps). AI warming sequence initiated.",
-            created_at: new Date(Date.now() - 3600000 * 8).toISOString(),
-          },
-          {
-            id: "lead-3",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Sipho",
-            last_name: "Dlamini",
-            email: "sipho@durbanfreight.co.za",
-            phone: "+27 83 555 8899",
-            address: "Umhlanga Ridge, Durban",
-            source: "CALL_CENTER_INBOUND",
-            interest_level: 4,
-            status: "NEGOTIATION",
-            notes: "Called inbound support hotline asking for quote on multi-site SD-WAN.",
-            created_at: new Date(Date.now() - 3600000 * 24).toISOString(),
-          },
-          {
-            id: "lead-4",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Kavitha",
-            last_name: "Naidoo",
-            email: "kavitha@solarsolutions.co.za",
-            phone: "+27 84 333 2211",
-            address: "Midrand Corporate Park, Gauteng",
-            source: "FIELD_SALES",
-            interest_level: 5,
-            status: "CONTACTED",
-            notes: "On-site visit by field sales rep John Smith. Quote requested.",
-            created_at: new Date(Date.now() - 3600000 * 30).toISOString(),
-          },
-          {
-            id: "lead-5",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Pieter",
-            last_name: "Botha",
-            email: "pbotha@apexlogistics.co.za",
-            phone: "+27 82 777 4411",
-            address: "Bellville, Cape Town",
-            source: "INBOUND_EMAIL",
-            interest_level: 3,
-            status: "PROPOSAL",
-            notes: "Inbound quote request submitted online for Hosted PBX 10-Seat.",
-            created_at: new Date(Date.now() - 3600000 * 48).toISOString(),
-          },
-          {
-            id: "lead-6",
-            tenant_id: "00000000-0000-0000-0000-000000000001",
-            first_name: "Zanele",
-            last_name: "Khumalo",
-            email: "zanele@cresthotel.co.za",
-            phone: "+27 81 222 9900",
-            address: "Centurion, Pretoria",
-            source: "CALL_CENTER_OUTBOUND",
-            interest_level: 4,
-            status: "QUALIFIED",
-            notes: "Contacted during Q3 enterprise telesales campaign.",
-            created_at: new Date(Date.now() - 3600000 * 72).toISOString(),
-          },
-        ])
-      }
+      const fetched = await salesApi.listLeads({ limit: 200 })
+      setLeads(Array.isArray(fetched) ? fetched : [])
     } catch {
-      // Keep existing leads state
+      // Keep the current list; the tab shows its own error on actions.
     } finally {
       setLoadingLeads(false)
     }
   }, [])
 
+  const updateLeadInList = useCallback((updated: SalesLead) => {
+    setLeads((prev) => {
+      const exists = prev.some((l) => l.id === updated.id)
+      return exists ? prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)) : [updated, ...prev]
+    })
+  }, [])
+
+  // Lead table, Lead sources and the board announce changes; refresh the view
+  // that is stale when the user switches to it (no polling, no double loads).
+  const staleRef = useRef({ leads: false, board: false })
   useEffect(() => {
-    loadLeads()
-  }, [loadLeads])
-
-  // Handle manual lead status adjustment
-  const handleLeadStageChange = async (leadId: string, newStatus: string) => {
-    setLeads((prev) =>
-      prev.map((l) => (l.id === leadId ? { ...l, status: newStatus } : l))
-    )
-    try {
-      await salesApi.updateLead(leadId, { status: newStatus })
-    } catch (err) {
-      console.error("Failed to update lead status:", err)
-      loadLeads()
+    const onChange = () => {
+      staleRef.current = { leads: true, board: true }
     }
-  }
+    window.addEventListener(SALES_CHANGED_EVENT, onChange)
+    return () => window.removeEventListener(SALES_CHANGED_EVENT, onChange)
+  }, [])
 
-  // Handle lead conversion to pipeline deal
-  const handleConvertLead = async (lead: SalesLead) => {
-    const value = prompt(`Enter deal value in ZAR for ${lead.first_name} ${lead.last_name}:`, "75000")
-    if (!value || isNaN(Number(value))) return
-    try {
-      await salesApi.convertLead(lead.id, {
-        name: `${lead.first_name} ${lead.last_name} - ${lead.source}`,
-        value_zar: Number(value),
-      })
-      setLeads((prev) =>
-        prev.map((l) => (l.id === lead.id ? { ...l, status: "CONVERTED" } : l))
-      )
+  const switchTab = (tab: "pipeline" | "channels" | "leads" | "ai-engine") => {
+    if (tab === "leads" && staleRef.current.leads) {
+      staleRef.current.leads = false
+      void loadLeads()
+    }
+    if (tab === "pipeline" && staleRef.current.board) {
+      staleRef.current.board = false
       setPipelineRefreshCounter((c) => c + 1)
-      alert(`Lead ${lead.first_name} ${lead.last_name} converted to Deal! Check the Pipeline Board.`)
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Conversion failed")
     }
+    setActiveTab(tab)
   }
+
+  useEffect(() => {
+    void loadLeads()
+  }, [loadLeads])
 
   // Handle Unified Deal & Lead Submission (Captures Contact Details & Product)
   const handleCreateUnifiedDealAndLead = async (e: React.FormEvent) => {
@@ -620,60 +515,21 @@ export function SalesModule() {
         dealNotes.trim() ? `\n${dealNotes.trim()}` : ""
       }`
 
-      // 1. Create Deal in pipeline board
-      let createdDeal: any = null
-      const contactUuid = typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : "00000000-0000-0000-0000-000000000001"
-
-      try {
-        createdDeal = await salesApi.createDeal({
-          name: dealTitle,
-          customer_id: contactUuid,
-          stage_name: dealStage,
-          value_zar: Number(dealValue) || 0,
-          notes: metaNotes,
-        })
-      } catch (dealErr) {
-        console.error("Pipeline deal creation error:", dealErr)
-        throw dealErr
-      }
-
-      // 2. Create Lead in leads table (if backend leads endpoint is supported)
-      try {
-        const createdLead = await salesApi.createLead({
-          first_name: dealFirstName.trim(),
-          last_name: dealLastName.trim(),
-          email: dealEmail.trim() || undefined,
-          phone: dealPhone.trim() || undefined,
-          address: dealAddress.trim() || undefined,
-          source: dealSource,
-          interest_level: dealInterest,
-          notes: metaNotes,
-        })
-        if (createdLead) {
-          setLeads((prev) => [createdLead, ...prev])
-        }
-      } catch (leadErr) {
-        console.warn("Backend lead recording optional warning:", leadErr)
-        // Synthesize lead entry locally so UI lead directory reflects the new prospect immediately
-        const localLead: SalesLead = {
-          id: createdDeal?.id || `lead-${Date.now()}`,
-          tenant_id: "00000000-0000-0000-0000-000000000001",
-          first_name: dealFirstName.trim(),
-          last_name: dealLastName.trim(),
-          email: dealEmail.trim() || null,
-          phone: dealPhone.trim() || null,
-          address: dealAddress.trim() || null,
-          source: dealSource,
-          interest_level: dealInterest,
-          status: dealStage.toUpperCase(),
-          notes: metaNotes,
-          created_at: new Date().toISOString(),
-        }
-        setLeads((prev) => [localLead, ...prev])
-      }
-
+      // One lead + its deal on the board, linked, in one request
+      // (it used to create an unrelated deal and lead).
+      const created = await salesApi.createLead({
+        first_name: dealFirstName.trim(),
+        last_name: dealLastName.trim(),
+        email: dealEmail.trim() || undefined,
+        phone: dealPhone.trim() || undefined,
+        address: dealAddress.trim() || undefined,
+        source: dealSource,
+        interest_level: dealInterest,
+        notes: metaNotes,
+        pipeline: { stage_name: dealStage, value_zar: Number(dealValue) || 0, deal_name: dealTitle },
+      })
+      updateLeadInList(created)
+      announceSalesChange()
       setPipelineRefreshCounter((c) => c + 1)
       setDealModalOpen(false)
 
@@ -685,7 +541,7 @@ export function SalesModule() {
       setDealPhone("")
       setDealAddress("")
       setDealNotes("")
-      alert(`Deal & Lead "${dealTitle}" successfully created! Both Pipeline Board and Lead Directory are updated.`)
+      alert(`${created.reference ?? "Lead"} "${dealTitle}" is on the Pipeline Board (${created.deal_stage ?? dealStage}).`)
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to record deal")
     } finally {
@@ -693,11 +549,6 @@ export function SalesModule() {
     }
   }
 
-  // Filter leads by channel
-  const filteredLeads = useMemo(() => {
-    if (selectedChannel === "ALL") return leads
-    return leads.filter((l) => l.source === selectedChannel)
-  }, [leads, selectedChannel])
 
   // Aggregate sales by channel (combines deal metrics + channel metadata)
   const channelMetrics = useMemo(() => {
@@ -762,7 +613,7 @@ export function SalesModule() {
     >
       {/* ── Section Navigation Tabs ── */}
       <div className="flex items-center justify-between gap-4 border-b border-border pb-3">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+        <Tabs value={activeTab} onValueChange={(v) => switchTab(v as typeof activeTab)} className="w-full">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <TabsList className="bg-muted/60 p-1">
               <TabsTrigger value="pipeline" className="text-xs font-semibold gap-1.5">
@@ -956,187 +807,14 @@ export function SalesModule() {
         </div>
       )}
 
-      {/* ── TAB 3: Lead Stage Management (Manual Adjustments & Visual Stepper) ── */}
+      {/* ── TAB 3: Lead Stage Management (SPEC-lead-lifecycle.md) ── */}
       {activeTab === "leads" && (
-        <div className="surface-card p-5 space-y-5">
-          {/* Stage Progression Stepper Bar */}
-          <div className="rounded-xl border border-border bg-card/60 p-4 space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                <Layers className="h-4 w-4 text-primary" />
-                Manual Lead Stage Progression Stepper
-              </span>
-              <span className="text-[11px] text-muted-foreground">
-                Select any stage below or use the table dropdown to manually adjust lead progression
-              </span>
-            </div>
-            <div className="flex items-center gap-1 overflow-x-auto py-2 text-xs">
-              {LEAD_STAGES.map((st, i) => (
-                <div key={st.id} className="flex items-center gap-1 shrink-0">
-                  <div className={`px-2.5 py-1 rounded-md border text-[11px] font-semibold ${st.badge}`}>
-                    {i + 1}. {st.label}
-                  </div>
-                  {i < LEAD_STAGES.length - 1 && (
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-bold text-foreground">Customer Leads & Acquisition Channels</h3>
-              <p className="text-xs text-muted-foreground">
-                Filter by capture source, manually adjust lead stages, or convert prospective leads into pipeline deals
-              </p>
-            </div>
-
-            {/* Filter by Channel */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
-                <Filter className="h-3 w-3" /> Channel:
-              </span>
-              <select
-                value={selectedChannel}
-                onChange={(e) => setSelectedChannel(e.target.value)}
-                className="h-8 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              >
-                <option value="ALL">All Acquisition Channels</option>
-                {SALES_CHANNELS.map((ch) => (
-                  <option key={ch.id} value={ch.id}>
-                    {ch.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Leads Table with Adjustable Stages */}
-          <div className="rounded-xl border border-border overflow-hidden bg-card">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="border-b border-border bg-muted/40 font-medium text-muted-foreground">
-                  <tr>
-                    <th className="py-2.5 px-3.5">Customer & Contact Person</th>
-                    <th className="py-2.5 px-3.5">Acquisition Channel</th>
-                    <th className="py-2.5 px-3.5">Interest Level</th>
-                    <th className="py-2.5 px-3.5">Adjust Lead Stage</th>
-                    <th className="py-2.5 px-3.5">Notes & Context</th>
-                    <th className="py-2.5 px-3.5 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/60">
-                  {filteredLeads.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-muted-foreground">
-                        No leads found for this channel. Click "+ Create Deal / Lead" to record a walk-in or manual lead.
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredLeads.map((lead) => {
-                      const channelInfo = SALES_CHANNELS.find((c) => c.id === lead.source) || {
-                        label: lead.source,
-                        color: "#9ca3af",
-                      }
-                      return (
-                        <tr key={lead.id} className="hover:bg-muted/30 transition-colors">
-                          <td className="py-3 px-3.5">
-                            <div className="font-semibold text-foreground flex items-center gap-1.5">
-                              <User className="h-3.5 w-3.5 text-primary shrink-0" />
-                              <span>
-                                {lead.first_name} {lead.last_name}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground flex items-center gap-2 mt-0.5">
-                              {lead.email && (
-                                <span className="flex items-center gap-1">
-                                  <Mail className="h-2.5 w-2.5" />
-                                  {lead.email}
-                                </span>
-                              )}
-                              {lead.phone && (
-                                <span className="flex items-center gap-1">
-                                  <Phone className="h-2.5 w-2.5" />
-                                  {lead.phone}
-                                </span>
-                              )}
-                            </div>
-                            {lead.address && (
-                              <div className="text-[10px] text-muted-foreground/70 truncate max-w-xs mt-0.5">
-                                📍 {lead.address}
-                              </div>
-                            )}
-                          </td>
-
-                          <td className="py-3 px-3.5">
-                            <span
-                              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-medium border"
-                              style={{
-                                borderColor: `${channelInfo.color}40`,
-                                backgroundColor: `${channelInfo.color}15`,
-                                color: channelInfo.color,
-                              }}
-                            >
-                              <div
-                                className="h-1.5 w-1.5 rounded-full"
-                                style={{ backgroundColor: channelInfo.color }}
-                              />
-                              {channelInfo.label}
-                            </span>
-                          </td>
-
-                          <td className="py-3 px-3.5">
-                            <span className="font-mono text-amber-400 font-semibold text-xs">
-                              {"★".repeat(lead.interest_level || 3)}
-                            </span>
-                          </td>
-
-                          {/* Adjustable Lead Stage Dropdown */}
-                          <td className="py-3 px-3.5">
-                            <select
-                              value={lead.status}
-                              onChange={(e) => handleLeadStageChange(lead.id, e.target.value)}
-                              className="h-7 rounded-md border border-border bg-background px-2 text-xs font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-primary shadow-sm"
-                            >
-                              {LEAD_STAGES.map((st) => (
-                                <option key={st.id} value={st.id}>
-                                  {st.label}
-                                </option>
-                              ))}
-                            </select>
-                          </td>
-
-                          <td className="py-3 px-3.5 max-w-xs truncate text-muted-foreground">
-                            {lead.notes || "—"}
-                          </td>
-
-                          <td className="py-3 px-3.5 text-right">
-                            {lead.status !== "CONVERTED" ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs gap-1 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10"
-                                onClick={() => handleConvertLead(lead)}
-                              >
-                                <CheckCircle2 className="h-3 w-3" />
-                                Convert to Deal
-                              </Button>
-                            ) : (
-                              <Badge className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px]">
-                                Converted Deal
-                              </Badge>
-                            )}
-                          </td>
-                        </tr>
-                      )
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <SalesLeadsTab
+          leads={leads}
+          loading={loadingLeads}
+          onReload={() => void loadLeads()}
+          onLeadUpdated={updateLeadInList}
+        />
       )}
 
       {/* ── TAB 4: AI Lead Warming & Digital Channel Automation ── */}

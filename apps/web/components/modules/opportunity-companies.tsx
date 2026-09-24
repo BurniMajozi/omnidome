@@ -12,6 +12,7 @@ import {
   type CompanySearch,
   type OppCompany,
 } from "@/lib/fno-api"
+import { announceSalesChange } from "./sales-leads-tab"
 import { salesApi } from "@/lib/sales-api"
 import { pushCompanySearchAudience } from "@/lib/audiences"
 import { listAudienceSegments, type AudienceSegment } from "@/lib/marketing-api"
@@ -175,8 +176,12 @@ export function OpportunityCompanies({
           c.website ? `Website: ${c.website}` : null,
           "Source: OpenStreetMap.",
         ].filter(Boolean).join(" "),
+        // Straight onto the Pipeline Board (SPEC-lead-lifecycle.md).
+        pipeline: { stage_name: "Prospecting", deal_name: `${c.name} - Company search` },
       })
       updateCompany(await opportunityApi.patchCompany(c.id, { status: "lead_created", sales_lead_id: lead.id }))
+      setRowNote((p) => ({ ...p, [c.id]: { text: `${lead.reference ?? "Lead"} is on the Pipeline Board (${lead.deal_stage ?? "Prospecting"})` } }))
+      announceSalesChange()
     })
 
   const setDismissed = (c: OppCompany, dismissed: boolean) =>

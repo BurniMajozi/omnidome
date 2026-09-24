@@ -76,11 +76,13 @@ export function NotificationsBell() {
 
   useEffect(() => {
     let cancelled = false
-    const tick = () => {
+    // First load always; repeat polls only while the tab is visible.
+    const first = setTimeout(() => {
+      if (!cancelled) void load()
+    }, 0)
+    const timer = setInterval(() => {
       if (!cancelled && document.visibilityState === "visible") void load()
-    }
-    const first = setTimeout(tick, 0)
-    const timer = setInterval(tick, POLL_MS)
+    }, POLL_MS)
     return () => {
       cancelled = true
       clearTimeout(first)

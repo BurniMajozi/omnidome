@@ -8,6 +8,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { opportunityApi, type Tender, type TenderSource, type TenderStatus } from "@/lib/fno-api"
+import { announceSalesChange } from "./sales-leads-tab"
 import { salesApi } from "@/lib/sales-api"
 
 const INTERVALS: { hours: 12 | 24 | 168; label: string }[] = [
@@ -208,7 +209,10 @@ export function OpportunityTenders() {
           t.required_documents.length ? `Required documents: ${t.required_documents.join("; ")}.` : null,
           t.detail_url ? `Details: ${t.detail_url}` : null,
         ].filter(Boolean).join(" "),
+        // Straight onto the Pipeline Board (SPEC-lead-lifecycle.md).
+        pipeline: { stage_name: "Prospecting", deal_name: `${t.reference ? `${t.reference}: ` : ""}${t.title}`.slice(0, 480) },
       })
+      announceSalesChange()
       updateTender(await opportunityApi.patchTender(t.id, {
         sales_lead_id: lead.id, status: t.status === "new" ? "reviewing" : t.status,
       }))
