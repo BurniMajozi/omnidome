@@ -6,7 +6,7 @@
 - [x] A3 tool-output-budget — tool_budget.py (fair split, head/tail), loop sends trimmed text, log keeps full; 7 tests
 - [x] A6 tool-policy — TOOL_POLICIES for all 35 tools + name rule for refunds/campaign posting/provisioning/customer sends; fixed hard-coded 10 s tool HTTP timeout; 7 tests
 - [x] A5 parallel-reads — plan_batches; consecutive reads via asyncio.gather, writes/unknown alone; 3 tests
-- [ ] A4 model-limiter
+- [x] A4 model-limiter — per-model semaphore (OPENROUTER_MAX_CONCURRENCY=2) + 60 s cool-down on 429/overloaded, chat + stream; 5 tests
 - [ ] A7 usage-tracing
 - [ ] Delete dead agents/base.py
 - [ ] UI stage 1: Agent Manager tool policies + usage; Workflows event trigger + run history

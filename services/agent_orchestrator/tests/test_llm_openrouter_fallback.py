@@ -16,6 +16,17 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.p
 sys.path.insert(0, REPO_ROOT)
 
 from services.agent_orchestrator import llm  # noqa: E402
+from services.common import openrouter  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_model_limits():
+    # Cool-downs are process-wide (spec A4); keep tests independent.
+    openrouter.reset_limits()
+    yield
+    openrouter.reset_limits()
 
 
 def _sse(*chunks):

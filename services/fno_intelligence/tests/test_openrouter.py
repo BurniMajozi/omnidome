@@ -104,3 +104,87 @@ def test_chat_completion_without_key_skips_network(monkeypatch):
     transport, tried = _fake_transport({})
     assert asyncio.run(chat_completion({"messages": []}, transport=transport)) is None
     assert tried == []
+
+
+# ── A4 model-limiter (SPEC-orchestrator-memory-hardening.md) ────────────────
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_limits():
+    openrouter.reset_limits()
+    yield
+    openrouter.reset_limits()
+
+
+def _env(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k")
+    monkeypatch.setenv("OPENROUTER_MODEL", "qwen/a:free")
+    monkeypatch.setenv("OPENROUTER_FALLBACK_MODELS", "google/b:free")
+
+
+def test_rate_limited_model_is_skipped_during_its_cool_down(monkeypatch):
+    _env(monkeypatch)
+    clock = [1000.0]
+    monkeypatch.setattr(openrouter, "_now", lambda: clock[0])
+    transport, tried = _fake_transport({
+        "qwen/a:free": (429, {"error": {"message": "rate-limited upstream"}}),
+        "google/b:free": (200, {"choices": [{"message": {"content": "OK"}}]}),
+    })
+    asyncio.run(chat_completion({"messages": []}, transport=transport))
+    assert tried == ["qwen/a:free", "google/b:free"]
+    tried.clear()
+    asyncio.run(chat_completion({"messages": []}, transport=transport))
+    assert tried == ["google/b:free"]                       # a is cooling down
+    clock[0] += openrouter.COOLDOWN_S + 1
+    tried.clear()
+    asyncio.run(chat_completion({"messages": []}, transport=transport))
+    assert tried[0] == "qwen/a:free"                        # back after the cool-down
+
+
+def test_overloaded_inside_a_200_also_cools_the_model_down(monkeypatch):
+    _env(monkeypatch)
+    transport, tried = _fake_transport({
+        "qwen/a:free": (200, {"error": {"message": "Upstream error: Service temporarily overloaded"}}),
+        "google/b:free": (200, {"choices": [{"message": {"content": "OK"}}]}),
+    })
+    asyncio.run(chat_completion({"messages": []}, transport=transport))
+    assert openrouter.in_cooldown("qwen/a:free")
+
+
+def test_other_errors_do_not_cool_a_model_down(monkeypatch):
+    _env(monkeypatch)
+    transport, _ = _fake_transport({
+        "qwen/a:free": (400, {"error": {"message": "bad request"}}),
+        "google/b:free": (200, {"choices": [{"message": {"content": "OK"}}]}),
+    })
+    asyncio.run(chat_completion({"messages": []}, transport=transport))
+    assert not openrouter.in_cooldown("qwen/a:free")
+
+
+def test_when_every_model_is_cooling_down_they_are_still_tried(monkeypatch):
+    _env(monkeypatch)
+    openrouter.mark_cooldown("qwen/a:free")
+    openrouter.mark_cooldown("google/b:free")
+    assert openrouter.available_models() == ["qwen/a:free", "google/b:free"]
+
+
+def test_concurrent_calls_to_one_model_are_capped(monkeypatch):
+    _env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_MAX_CONCURRENCY", "1")
+    in_flight, peak = [0], [0]
+
+    async def handler(request):
+        in_flight[0] += 1
+        peak[0] = max(peak[0], in_flight[0])
+        await asyncio.sleep(0.05)
+        in_flight[0] -= 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    async def main():
+        transport = httpx.MockTransport(handler)
+        await asyncio.gather(*(chat_completion({"messages": []}, transport=transport) for _ in range(3)))
+
+    asyncio.run(main())
+    assert peak[0] == 1

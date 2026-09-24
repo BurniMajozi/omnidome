@@ -356,12 +356,14 @@ class LLMClient:
             payload["tools"] = self._format_tools(tools)
         last_error = "no OpenRouter model answered"
         async with httpx.AsyncClient(timeout=60.0) as client:
-            for candidate in openrouter.model_chain(model):
+            for candidate in openrouter.available_models(model):
                 produced = False
                 try:
                     async with client.stream("POST", **openrouter.stream_request(candidate, payload)) as resp:
                         if resp.status_code != 200:
                             last_error = f"{candidate}: HTTP {resp.status_code}"
+                            if openrouter.is_rate_limited(resp.status_code, None):
+                                openrouter.mark_cooldown(candidate)
                             logger.warning("OpenRouter stream %s", last_error)
                             continue
                         async for line in resp.aiter_lines():
@@ -376,6 +378,8 @@ class LLMClient:
                                 continue
                             if chunk.get("error") and not produced:
                                 last_error = f"{candidate}: {str(chunk['error'])[:200]}"
+                                if openrouter.is_rate_limited(200, str(chunk["error"])):
+                                    openrouter.mark_cooldown(candidate)
                                 logger.warning("OpenRouter stream %s", last_error)
                                 break
                             try:

@@ -9,10 +9,18 @@ an HTTP 200 body. Callers therefore walk a chain of models:
     OPENROUTER_FALLBACK_MODELS       comma-separated, tried in order
 
 and take the first real answer.
+
+Model limiter (spec A4, SPEC-orchestrator-memory-hardening.md): at most
+OPENROUTER_MAX_CONCURRENCY requests per model at once in this process, and a
+model that answers 429 / rate-limited / overloaded is skipped for COOLDOWN_S so
+later calls go straight to the next fallback instead of queueing on it.
 """
 
+import asyncio
 import logging
 import os
+import re
+import time
 from typing import Any, Optional
 
 import httpx
@@ -41,6 +49,49 @@ def model_chain(primary: Optional[str] = None) -> list[str]:
         if model and model not in chain:
             chain.append(model)
     return chain or [DEFAULT_MODEL]
+
+
+# ── Model limiter (A4) ─────────────────────────────────────────────────────
+
+COOLDOWN_S = float(os.getenv("OPENROUTER_COOLDOWN_S", "60"))
+_RATE_LIMITED = re.compile(r"rate.?limit|overloaded|too many requests|capacity", re.IGNORECASE)
+_now = time.monotonic
+_cooldown_until: dict[str, float] = {}
+_semaphores: dict[tuple[int, str], asyncio.Semaphore] = {}
+
+
+def reset_limits() -> None:
+    _cooldown_until.clear()
+    _semaphores.clear()
+
+
+def mark_cooldown(model: str) -> None:
+    _cooldown_until[model] = _now() + COOLDOWN_S
+
+
+def in_cooldown(model: str) -> bool:
+    return _cooldown_until.get(model, 0.0) > _now()
+
+
+def is_rate_limited(status: int, problem: Optional[str]) -> bool:
+    return status == 429 or bool(problem and _RATE_LIMITED.search(problem))
+
+
+def available_models(primary: Optional[str] = None) -> list[str]:
+    """The chain without models cooling down; the whole chain if all are
+    (better to try a busy model than to give up without asking)."""
+    chain = model_chain(primary)
+    ready = [m for m in chain if not in_cooldown(m)]
+    return ready or chain
+
+
+def _semaphore(model: str) -> asyncio.Semaphore:
+    """Per event loop and model (asyncio primitives belong to one loop)."""
+    key = (id(asyncio.get_running_loop()), model)
+    if key not in _semaphores:
+        limit = max(1, int(os.getenv("OPENROUTER_MAX_CONCURRENCY", "2")))
+        _semaphores[key] = asyncio.Semaphore(limit)
+    return _semaphores[key]
 
 
 def completion_error(status: int, body: Any) -> Optional[str]:
@@ -73,13 +124,14 @@ async def chat_completion(
         logger.warning("[openrouter] no OPENROUTER_API_KEY configured")
         return None
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
-        for model in model_chain(primary):
+        for model in available_models(primary):
             try:
-                resp = await client.post(
-                    f"{base_url()}/chat/completions",
-                    json={**payload, "model": model},
-                    headers=_headers(),
-                )
+                async with _semaphore(model):
+                    resp = await client.post(
+                        f"{base_url()}/chat/completions",
+                        json={**payload, "model": model},
+                        headers=_headers(),
+                    )
                 try:
                     body = resp.json()
                 except ValueError:
@@ -90,6 +142,8 @@ async def chat_completion(
             problem = completion_error(resp.status_code, body)
             if problem is None:
                 return body, model
+            if is_rate_limited(resp.status_code, problem):
+                mark_cooldown(model)
             logger.warning("[openrouter] %s unusable, trying next: %s", model, problem[:200])
     return None
 
