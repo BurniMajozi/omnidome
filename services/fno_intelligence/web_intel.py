@@ -26,11 +26,9 @@ into clean HTTP responses.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Optional
 
-import httpx
-
+from services.common.openrouter import api_key as openrouter_api_key, chat_completion
 from services.common.firecrawl import (
     CAPABILITY_MODELS,
     FirecrawlError,
@@ -40,20 +38,14 @@ from services.common.firecrawl import (
 
 logger = logging.getLogger(__name__)
 
-_OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/")
-_OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-
 
 async def _reason(markdown: str, instruction: str, model: str) -> Optional[str]:
     """Send extracted markdown to Open Router and return the structured analysis.
 
-    Mirrors the Open Router call pattern used in agent_orchestrator/llm.py but is
-    self-contained so this module has no cross-service import. Returns None if no
-    key is configured or the call fails, so the route still returns raw extraction.
+    Walks the OpenRouter model chain (services/common/openrouter.py), starting
+    with `model`. Returns None if no key is configured or every model fails, so
+    the route still returns the raw extraction.
     """
-    if not _OPENROUTER_API_KEY:
-        logger.warning("[web_intel] no OPENROUTER_API_KEY — skipping LLM reasoning")
-        return None
     # Cap the source so we stay within the model's context window (Firecrawl can
     # return very large concatenated markdown from many search results).
     MAX_SOURCE_CHARS = 12000
@@ -71,25 +63,16 @@ async def _reason(markdown: str, instruction: str, model: str) -> Optional[str]:
         },
         {"role": "user", "content": f"{instruction}\n\n--- SOURCE WEB CONTENT ---\n{markdown}"},
     ]
-    payload = {"model": model, "messages": messages, "temperature": 0.1, "max_tokens": 4000}
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                f"{_OPENROUTER_BASE_URL}/chat/completions",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {_OPENROUTER_API_KEY}",
-                    "HTTP-Referer": "https://omnidome.local",
-                },
-            )
-        if resp.status_code != 200:
-            logger.warning("[web_intel] Open Router %s: %s", resp.status_code, resp.text[:200])
-            return None
-        data = resp.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    except Exception as exc:  # network / timeout — degrade gracefully
-        logger.error("[web_intel] Open Router reasoning failed: %s", exc)
+    result = await chat_completion(
+        {"messages": messages, "temperature": 0.1, "max_tokens": 4000},
+        primary=model or None,
+        timeout=45.0,
+    )
+    if result is None:
+        logger.warning("[web_intel] no OpenRouter model answered; returning raw extraction only")
         return None
+    data, _model_used = result
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
 def _results_list(raw: dict) -> list:
@@ -178,7 +161,7 @@ async def cancellation_processing(fno_name: str, *, portal_url: Optional[str] = 
     markdown = firecrawl.markdown_from(raw)
     model = CAPABILITY_MODELS["cancellation_processing"].get("reasoning") or CAPABILITY_MODELS["product_research"]["reasoning"]
     steps = None
-    if _OPENROUTER_API_KEY:
+    if openrouter_api_key():
         steps = await _reason(
             markdown,
             f"Extract the cancellation/termination procedure for {fno_name}. Return a "

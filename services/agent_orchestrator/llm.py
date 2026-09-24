@@ -7,11 +7,12 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from services.common import openrouter
+
 logger = logging.getLogger(__name__)
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # OpenRouter model used for all agents when Ollama is unavailable (i.e. on
 # Railway, where there is no local Ollama). Env-driven so it can be swapped
@@ -233,7 +234,6 @@ class LLMClient:
             cached_messages.append(msg)
 
         payload: Dict[str, Any] = {
-            "model": model,
             "messages": cached_messages,
             "temperature": 0.1,
             "max_tokens": 2048,
@@ -247,42 +247,39 @@ class LLMClient:
             payload["tools"] = formatted_tools
             payload["tool_choice"] = "auto"
 
+        # Walk OPENROUTER_MODEL -> OPENROUTER_FALLBACK_MODELS: free models share
+        # a pool across all OpenRouter users and 429 at random.
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE_URL}/chat/completions",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                        "HTTP-Referer": "https://omnidome.local",
-                    },
-                )
-                if resp.status_code != 200:
-                    logger.warning("OpenRouter returned %s: %s", resp.status_code, resp.text[:200])
-                    return None
-                data = resp.json()
-                choice = data.get("choices", [{}])[0]
-                msg = choice.get("message", {})
-                result = {
-                    "content": msg.get("content", ""),
-                    "tool_calls": [],
-                }
-                raw_tool_calls = msg.get("tool_calls", [])
-                for tc in raw_tool_calls:
-                    if "function" in tc:
-                        import json
-                        args = tc["function"].get("arguments", "{}")
-                        if isinstance(args, str):
-                            try:
-                                args = json.loads(args)
-                            except json.JSONDecodeError:
-                                args = {}
-                        result["tool_calls"].append({
-                            "id": tc.get("id", ""),
-                            "name": tc["function"]["name"],
-                            "arguments": args,
-                        })
-                return result
+            result_or_none = await openrouter.chat_completion(
+                payload,
+                primary=model,
+                timeout=30.0,
+            )
+            if result_or_none is None:
+                return None
+            data, _model_used = result_or_none
+            choice = data.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+            result = {
+                "content": msg.get("content", ""),
+                "tool_calls": [],
+            }
+            raw_tool_calls = msg.get("tool_calls", [])
+            for tc in raw_tool_calls:
+                if "function" in tc:
+                    import json
+                    args = tc["function"].get("arguments", "{}")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {}
+                    result["tool_calls"].append({
+                        "id": tc.get("id", ""),
+                        "name": tc["function"]["name"],
+                        "arguments": args,
+                    })
+            return result
         except httpx.TimeoutException:
             logger.warning("OpenRouter request timed out")
             return None
@@ -344,38 +341,48 @@ class LLMClient:
             yield f"[Error: {e}]"
 
     async def _openrouter_stream(self, model, messages, tools):
-        """Stream from OpenRouter SSE."""
-        payload = {
-            "model": model,
-            "messages": messages,
-            "temperature": 0.1,
-            "stream": True,
-        }
+        """Stream from OpenRouter SSE, moving down the model chain when a model
+        fails before producing any token (429, overloaded, error chunk)."""
+        payload = {"messages": messages, "temperature": 0.1}
         if tools:
             payload["tools"] = self._format_tools(tools)
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream(
-                    "POST",
-                    f"{OPENROUTER_BASE_URL}/chat/completions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}"},
-                ) as resp:
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data: "):
+        last_error = "no OpenRouter model answered"
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for candidate in openrouter.model_chain(model):
+                produced = False
+                try:
+                    async with client.stream("POST", **openrouter.stream_request(candidate, payload)) as resp:
+                        if resp.status_code != 200:
+                            last_error = f"{candidate}: HTTP {resp.status_code}"
+                            logger.warning("OpenRouter stream %s", last_error)
+                            continue
+                        async for line in resp.aiter_lines():
+                            if not line.startswith("data: "):
+                                continue
                             data = line[6:]
                             if data == "[DONE]":
                                 break
                             try:
                                 chunk = json.loads(data)
-                                token = chunk["choices"][0].get("delta", {}).get("content", "")
-                                if token:
-                                    yield token
-                            except (json.JSONDecodeError, KeyError, IndexError):
+                            except json.JSONDecodeError:
                                 continue
-        except Exception as e:
-            logger.error("OpenRouter stream error: %s", e)
-            yield f"[Error: {e}]"
+                            if chunk.get("error") and not produced:
+                                last_error = f"{candidate}: {str(chunk['error'])[:200]}"
+                                logger.warning("OpenRouter stream %s", last_error)
+                                break
+                            try:
+                                token = chunk["choices"][0].get("delta", {}).get("content", "")
+                            except (KeyError, IndexError):
+                                continue
+                            if token:
+                                produced = True
+                                yield token
+                except Exception as e:
+                    last_error = f"{candidate}: {e}"
+                    logger.error("OpenRouter stream error: %s", last_error)
+                if produced:
+                    return
+        yield f"[Error: {last_error}]"
 
 
 # Singleton

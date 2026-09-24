@@ -28,7 +28,7 @@ export async function POST(request: Request) {
     : (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434")
 
   const defaultModel = isOpenRouter
-    ? (process.env.OPENROUTER_MODEL || "owal-alpha")
+    ? (process.env.OPENROUTER_MODEL || "anthropic/claude-haiku-4.5")
     : (process.env.OLLAMA_MODEL || "qwen2.5-coder:14b")
 
   const model = body.model || defaultModel
@@ -55,42 +55,56 @@ export async function POST(request: Request) {
   }
 
   const fetchUrl = isOpenRouter ? `${baseUrl}/chat/completions` : `${baseUrl}/api/chat`
-  const fetchBody = isOpenRouter
-    ? {
-        model,
-        messages,
-        temperature,
-      }
-    : {
-        model,
-        messages,
-        stream: false,
-        options: { temperature },
-      }
 
-  let response: Response
-  try {
-    response = await fetch(fetchUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(fetchBody),
-    })
-  } catch (err) {
-    return NextResponse.json(
-      { error: `Failed to reach ${isOpenRouter ? "OpenRouter" : "Ollama"} server`, details: String(err) },
-      { status: 502 },
-    )
+  // Free OpenRouter models share one pool across all OpenRouter users and 429
+  // (or report "overloaded" inside a 200) at random, so walk the model chain:
+  // requested/primary model, then OPENROUTER_FALLBACK_MODELS in order.
+  const models = isOpenRouter
+    ? [...new Set([model, ...(process.env.OPENROUTER_FALLBACK_MODELS || "").split(",")]
+        .map((m) => m.trim())
+        .filter(Boolean))]
+    : [model]
+
+  let lastError = { error: "No model answered", details: "", status: 502 }
+  for (const candidate of models) {
+    const fetchBody = isOpenRouter
+      ? { model: candidate, messages, temperature }
+      : { model: candidate, messages, stream: false, options: { temperature } }
+
+    let response: Response
+    try {
+      response = await fetch(fetchUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(fetchBody),
+      })
+    } catch (err) {
+      lastError = {
+        error: `Failed to reach ${isOpenRouter ? "OpenRouter" : "Ollama"} server`,
+        details: String(err),
+        status: 502,
+      }
+      continue
+    }
+
+    if (!response.ok) {
+      lastError = {
+        error: `${isOpenRouter ? "OpenRouter" : "Ollama"} error (${response.status})`,
+        details: await response.text(),
+        status: 502,
+      }
+      continue
+    }
+
+    const data = await response.json()
+    if (data?.error) {
+      lastError = { error: `${candidate} unavailable`, details: JSON.stringify(data.error), status: 502 }
+      continue
+    }
+    const message = data?.choices?.[0]?.message?.content ?? data?.message?.content ?? data?.response ?? ""
+    return NextResponse.json({ message, model: candidate })
   }
 
-  if (!response.ok) {
-    const details = await response.text()
-    return NextResponse.json(
-      { error: `${isOpenRouter ? "OpenRouter" : "Ollama"} error (${response.status})`, details },
-      { status: 502 },
-    )
-  }
-
-  const data = await response.json()
-  const message = data?.choices?.[0]?.message?.content ?? data?.message?.content ?? data?.response ?? ""
-  return NextResponse.json({ message })
+  const { status, ...errorBody } = lastError
+  return NextResponse.json(errorBody, { status })
 }

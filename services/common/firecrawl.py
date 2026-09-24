@@ -46,7 +46,7 @@ _API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
 # project-wide Open Router model so the service stays consistent with the
 # rest of the agent stack.
 REASONING_MODEL = os.getenv("FIRECRAWL_REASONING_MODEL") or os.getenv(
-    "OPENROUTER_MODEL", "Owal Alpha"
+    "OPENROUTER_MODEL", "anthropic/claude-haiku-4.5"
 )
 
 # Which capability needs an LLM to *interpret* the extracted web data, and
