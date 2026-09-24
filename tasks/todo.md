@@ -8,7 +8,7 @@
 - [x] A5 parallel-reads — plan_batches; consecutive reads via asyncio.gather, writes/unknown alone; 3 tests
 - [x] A4 model-limiter — per-model semaphore (OPENROUTER_MAX_CONCURRENCY=2) + 60 s cool-down on 429/overloaded, chat + stream; 5 tests
 - [x] A7 usage-tracing — llm_calls + agent_turns (background writes), /api/usage/llm; 4 tests, live at checkpoint
-- [ ] Delete dead agents/base.py
+- [x] Delete dead agents/base.py (shadowed by agents.py; no references)
 - [ ] UI stage 1: Agent Manager tool policies + usage; Workflows event trigger + run history
 - [ ] Checkpoint 1 (tests, rebuild, live workflow + MCP specialist, push, CI)
 
