@@ -52,7 +52,7 @@ committed on its own.
 - [ ] fno + web rebuilt; a CSV imported via the UI end-to-end; API upload still works
 
 ### Part B — opportunity-finder
-- [ ] B1: `opportunities.py` pure logic + tests
+- [x] B1: `opportunities.py` pure logic + tests
 - [ ] B2: Models + migration (5 tables)
 - [ ] B3: Company search API (background Overpass job, enrich, patch)
 - [ ] B4: Tender sources / scan / tenders / screenshot API + scheduler

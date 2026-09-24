@@ -37,11 +37,12 @@ Commands:
 ---
 
 ## B1: `opportunities.py` pure logic + tests
+**Status: DONE** — 44 new tests (141 total).
 **Acceptance:**
-- [ ] Categories → Overpass query (around centre, radius m, named features, `out center tags`).
-- [ ] Overpass elements → companies (address from `addr:*`, contact from plain/`contact:*`, distance, dedupe, sort, cap 300).
-- [ ] Source URL validation (http/https, no localhost/private IPs, normalised).
-- [ ] LLM tender JSON parsing (code fences / surrounding text tolerated), SA date parsing, dedupe key.
+- [x] Categories → Overpass query (around centre, radius m, named features, `out center tags`).
+- [x] Overpass elements → companies (address from `addr:*`, contact from plain/`contact:*`, distance, dedupe, sort, cap 300).
+- [x] Source URL validation (http/https, no localhost/private IPs, normalised).
+- [x] LLM tender JSON parsing (code fences / surrounding text tolerated), SA date parsing, dedupe key.
 **Verify:** PYTEST. **Files:** `opportunities.py`, `tests/test_opportunities.py`. **Scope:** M
 
 ## B2: Models + migration (5 tables)
