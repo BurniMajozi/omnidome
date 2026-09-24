@@ -217,6 +217,11 @@ subset. Set a **usage limit / budget alert** in Railway before deploying.
 
 ## Phase 2 checklist (later)
 - Add the deferred services the same way (GitHub service + Dockerfile path + `--host ::`).
+- fno_intelligence: attach a **Railway Volume** mounted at `/opt/data/uploads`.
+  Uploaded passed-homes CSV/XLSX and KML files are written there and referenced by
+  `fno_passed_home_imports.file_path` / `fno_kml_imports.file_path`; without a volume
+  every redeploy wipes them (compose uses the `fno_uploads` named volume for the same
+  reason). The image runs as root, so the root-owned volume mount is writable as-is.
 - Decide voicebox-engine (heavy PyTorch, needs GPU — likely stays off Railway).
 - Migrate eCommerce/Medusa per `eCommerce/docs/railway-readiness.md` (Supabase `medusa`
   schema + Railway Redis).

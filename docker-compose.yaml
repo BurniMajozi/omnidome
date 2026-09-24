@@ -665,6 +665,12 @@ services:
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
       - "8024:8024"
+    volumes:
+      # Uploaded passed-homes CSV/XLSX and KML/KMZ files (routes.py writes them
+      # under /opt/data/uploads/{passed-homes,kml}/<tenant_id>/). Without this,
+      # every rebuild + recreate wipes them while fno_passed_home_imports.file_path
+      # and fno_kml_imports rows still point at them.
+      - fno_uploads:/opt/data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -675,3 +681,4 @@ volumes:
   ollama_data:
   voicebox_models:
   voicebox_data:
+  fno_uploads:

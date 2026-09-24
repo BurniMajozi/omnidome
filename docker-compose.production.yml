@@ -614,6 +614,9 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+    volumes:
+      # Uploaded passed-homes / KML files; see the note in docker-compose.yaml.
+      - fno_uploads:/opt/data/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -649,3 +652,4 @@ services:
 
 volumes:
   postgres_data:
+  fno_uploads:
