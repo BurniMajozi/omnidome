@@ -1,81 +1,55 @@
-# Implementation Plan: import flow → opportunity-finder → marketing-audiences
+# Implementation Plan: Sales lead lifecycle, event bus, automations
 
-Specs: [SPEC-geo-segments.md](../SPEC-geo-segments.md) (v2 amendment),
-[SPEC-opportunity-finder.md](../SPEC-opportunity-finder.md),
-[SPEC-marketing-audiences.md](../SPEC-marketing-audiences.md) ·
-Map: [CAPABILITY-MAP.md](../CAPABILITY-MAP.md) · Tasks: [todo.md](todo.md)
-
-Previously completed: **geo-segments v1** (Tasks 1–7, commits c67980bf..496ba8e1,
-all spec criteria met — see git history and SPEC-geo-segments.md).
-
-## Overview
-
-Three parts, in the order the user set: (A) a manual import flow on top of the
-existing passed-homes upload API; (B) opportunity-finder — OpenStreetMap
-company search and URL-driven tender/RFQ tracking with screenshots; (C)
-marketing-audiences — real Marketing → Audiences fed by both home and business
-segments. The user authorised building all three end-to-end without stopping
-between tasks; each task is still verified against its acceptance criteria and
-committed on its own.
+Specs: `SPEC-event-bus.md`, `SPEC-lead-lifecycle.md`, `SPEC-lead-actions.md`,
+`SPEC-lead-automations.md`. Map: `CAPABILITY-MAP-sales-lifecycle.md`.
+Previous plan archived in `tasks/archive/`.
 
 ## Architecture decisions
 
-- **Import UI reuses the existing API unchanged**; progress comes from polling
-  the import detail and geocode-status endpoints. Two small backend additions:
-  `address_raw` in the passed-homes list and a startup sweep for stuck imports.
-- **Opportunity-finder lives in `fno_intelligence`** (no new container), in a
-  new `opportunity_routes.py` router (routes.py is already ~1,800 lines) and a
-  pure `opportunities.py` module.
-- **Slow external calls run as background jobs** (`schedule_background`):
-  Overpass company searches (~20 s) and tender scans (Firecrawl + LLM).
-  The UI polls job status; requests never hang.
-- **Overpass fallbacks**: main instance first, then mirrors; 60 s timeouts.
-- **Tender extraction = Firecrawl markdown + screenshot → OpenRouter JSON**,
-  reusing `web_intel._reason`. Screenshots are downloaded and stored as bytes
-  in Postgres (durable, no volume dependency), served by an endpoint.
-- **Scheduler**: a startup loop per worker every 10 min; a Postgres advisory
-  lock per source prevents the two uvicorn workers from double-scanning.
-- **Leads are created from the browser** through the existing Sales API, then
-  the company/tender is patched with the lead id (no service-to-service write).
-- **Audiences**: the marketing service's existing table + `rules` JSONB carry
-  both segment kinds; the `:rules::jsonb` bind bug is fixed with `CAST(:rules AS jsonb)`.
-- **UI**: segmented control (Homes passed / Companies / Tenders & RFQs) in the
-  lead-sources area; every form sits directly above the table it feeds.
-- **Web rebuilt at checkpoints only** (~10–15 min per build on this machine).
+- Broker = Postgres outbox + per-consumer deliveries (`services/common/event_bus.py`);
+  no new container. Notifications live beside it; the orchestrator serves the API.
+- Once a lead has a deal, the deal stage is the single source of truth; the lead
+  table and the board call the same server rules (`services/sales/lead_stages.py`).
+- Actions that touch other services publish events; sales and orchestrator run consumers.
+- Automations are ordinary orchestrator workflows with a `trigger_event`.
+- Schema changes are idempotent SQL migrations in `config/migrations/` (create_all never ALTERs).
+- Commit per task; push at the end after live verification (the user asked to push).
 
-## Task list
+## Tasks
 
-### Part A — import flow
-- [x] A1: Backend: `address_raw` in passed-homes list + stuck-import sweep
-- [x] A2: Import panel, progress, auto-geocode, statuses, view issues, template
-### Checkpoint A
-- [x] fno + web rebuilt; a CSV imported via the UI end-to-end; API upload still works
+### Phase 1 — event-bus
+- T1 Pure helpers + tests (pattern match, back-off, exhaustion) — `services/common/event_bus.py`, fno tests.
+- T2 Migration + publish/notify/EventConsumer; live test (rollback, retry, dead, concurrency).
+- T3 Orchestrator notifications + deliveries API; header bell wired.
 
-### Part B — opportunity-finder
-- [x] B1: `opportunities.py` pure logic + tests
-- [x] B2: Models + migration (5 tables)
-- [x] B3: Company search API (background Overpass job, enrich, patch)
-- [x] B4: Tender sources / scan / tenders / screenshot API + scheduler
-- [x] B5: UI: segmented control + Companies view (+ Add as lead)
-- [x] B6: UI: Tenders & RFQs view (+ Add to pipeline)
-### Checkpoint B
-- [x] Real area search and a real tender page work in the browser
+### Checkpoint A: bus delivers, bell shows notifications.
 
-### Part C — marketing-audiences
-- [x] C1: Marketing API: fix jsonb bug, upsert per source, detail, delete, type filter
-- [x] C2: Sales: "Add to audience" for geo segments and company searches
-- [x] C3: Marketing → Audiences real cards, detail/export/delete, aligned New Audience modal
-### Checkpoint: Complete
-- [x] Every task checked against its acceptance criteria; all spec success criteria verified; pushed
+### Phase 2 — lead-lifecycle
+- T4 `lead_stages.py` rules + tests.
+- T5 Migration (lead columns, ref_no backfill, activities, tasks, status migration) + models.
+- T6 Sales API: create-with-pipeline, stage endpoint, detail, owners, board→lead sync, events.
+- T7 Web: lead table (reference/owner/dates, grouped stage dropdown), Lead sources → board, unified modal linked, board card ref/owner.
 
-## Risks and mitigations
+### Checkpoint B: add company → board; board ↔ table agree; build + tests green.
+
+### Phase 3 — lead-actions
+- T8 Sales action endpoints + sales consumer (email via AgentMail, campaign audience).
+- T9 Web: ⋯ menu + right-click, record slide-over (details, timeline, tasks), action forms.
+
+### Checkpoint C: every action on the timeline; email to own inbox; marketing-down retry.
+
+### Phase 4 — lead-automations
+- T10 Orchestrator: trigger_event, intake endpoint, orchestrator consumer, engine templating/service calls, templates endpoint; sales automation endpoint.
+- T11 Web: real rule cards (install, runs, send test event).
+
+### Checkpoint D: three test events run end-to-end; push; CI green.
+
+## Risks
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Overpass is slow / 504s | Med | Background job, mirrors, clear failed state with retry |
-| OSM contact coverage is thin (~9%) | Med | On-demand Firecrawl contact lookup |
-| Tender pages vary wildly / JS-rendered | High | Firecrawl renders JS; strict-JSON LLM extraction; raw snapshot + screenshot kept; tested on real portals |
-| LLM returns malformed JSON | Med | Tolerant parser (code fences, trailing text) with unit tests; scan marked failed with reason, nothing deleted |
-| Two uvicorn workers double-scan | Med | Advisory lock per source |
-| Concurrent sessions editing fno_intelligence (upload volume, geocoder fix) | Med | New code in new files where possible; check git state before commits; re-verify endpoints after their merges |
-| Web rebuild time | Low | Rebuild at checkpoints only |
+| Free LLMs rate-limited | AI draft step fails | fallback chain; workflow records the failure; stage move still happens first |
+| Email to real businesses during testing | High | only send to own AgentMail inbox |
+| Two uvicorn workers × consumers | Double delivery | SKIP LOCKED claim + unique (event, consumer) |
+| Lead status migration | Medium | idempotent SQL; only PROPOSAL/NEGOTIATION without deal change |
+| Docker/WSL instability | Delays | rebuild one service at a time |
