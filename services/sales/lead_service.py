@@ -96,7 +96,7 @@ def lead_dict(lead: Lead, deal: Optional[Deal] = None, deal_stage: Optional[str]
         "email": lead.email, "phone": lead.phone, "address": lead.address, "source": lead.source,
         "interest_level": lead.interest_level, "status": lead.status, "notes": lead.notes,
         "converted_at": lead.converted_at, "created_at": lead.created_at, "updated_at": lead.updated_at,
-        "reference": format_reference(lead.ref_no), "owner_name": lead.owner_name,
+        "reference": format_reference(lead.ref_no), "owner_id": lead.owner_id, "owner_name": lead.owner_name,
         "priority": lead.priority or "normal", "closed_at": lead.closed_at,
         "close_reason": lead.close_reason, "escalated_at": lead.escalated_at,
         "deal_id": deal.id if deal else None, "deal_stage": deal_stage if deal else None,

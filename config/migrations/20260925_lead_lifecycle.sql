@@ -3,6 +3,7 @@
 -- Also applied at sales startup by services/sales/schema.ensure_lead_schema()
 -- (keep the two identical).
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS ref_no INTEGER;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS owner_id UUID;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS owner_name VARCHAR(200);
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS priority VARCHAR(10) NOT NULL DEFAULT 'normal';
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;

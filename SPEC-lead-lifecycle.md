@@ -43,7 +43,8 @@ Pure module `services/sales/lead_stages.py` decides the transition
 
 New `leads` columns (idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`):
 `ref_no` (per-tenant sequence, shown as `LD-000042`, unique per tenant, backfilled
-by created date), `owner_name` (owner id stays in `agent_id`), `priority`
+by created date), `owner_id` + `owner_name` (an HR employee; `agent_id` has a foreign key to
+login `users` and stays the logged-in sales agent), `priority`
 (low/normal/high/urgent, default normal), `closed_at`, `close_reason`,
 `escalated_at`.
 

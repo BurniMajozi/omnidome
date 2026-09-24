@@ -191,7 +191,10 @@ class Lead(Base):
     updated_at = Column(DateTime)
     # Lead record (SPEC-lead-lifecycle.md; columns added by schema.ensure_lead_schema).
     ref_no = Column(Integer)              # shown as LD-000042, unique per tenant
-    owner_name = Column(String(200))      # owner id lives in agent_id
+    # Owner = an HR employee (no FK: employees are not login users; agent_id
+    # references users and stays the logged-in sales agent).
+    owner_id = Column(UUID(as_uuid=True))
+    owner_name = Column(String(200))
     priority = Column(String(10), nullable=False, default="normal")
     closed_at = Column(DateTime(timezone=True))
     close_reason = Column(Text)

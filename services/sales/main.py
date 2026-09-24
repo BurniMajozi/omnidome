@@ -39,10 +39,10 @@ from services.common.auth import AuthContext, get_auth_context, get_current_tena
 from services.common.background_tasks import schedule_background
 from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
-from services.common.event_bus import ensure_schema as ensure_bus_schema
+from services.common.event_bus import ensure_schema as ensure_bus_schema, notify
 from services.common.middleware import configure_production
 from services.sales.database import get_db, get_session, init_tables
-from services.sales import lead_service
+from services.sales import lead_actions, lead_service
 from services.sales.lead_service import Actor
 from services.sales.lead_stages import StageChangeError
 from services.sales.models import (
@@ -89,6 +89,8 @@ async def lifespan(app: FastAPI):
             await ensure_lead_schema(session)
 
     await run_with_db_retry(_lead_schema, logger=logger)
+    # Event consumer: lead emails (AgentMail) and campaign audiences (Marketing).
+    lead_actions.consumer.start()
     logger.info("Sales service started — tables initialized")
     yield
     logger.info("Sales service shutting down")
@@ -335,6 +337,7 @@ class LeadCreate(BaseModel):
     interest_level: int = Field(default=3, ge=1, le=5)
     notes: Optional[str] = None
     agent_id: Optional[uuid.UUID] = None
+    owner_id: Optional[uuid.UUID] = None
     owner_name: Optional[str] = None
     priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
     pipeline: Optional[PipelinePlacement] = None
@@ -351,6 +354,7 @@ class LeadUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     agent_id: Optional[uuid.UUID] = None
+    owner_id: Optional[uuid.UUID] = None
     owner_name: Optional[str] = None
     priority: Optional[str] = Field(None, pattern="^(low|normal|high|urgent)$")
 
@@ -374,6 +378,7 @@ class LeadResponse(BaseModel):
     updated_at: Optional[datetime] = None
     # Lead record + its place on the board (SPEC-lead-lifecycle.md)
     reference: Optional[str] = None
+    owner_id: Optional[uuid.UUID] = None
     owner_name: Optional[str] = None
     priority: str = "normal"
     closed_at: Optional[datetime] = None
@@ -428,6 +433,46 @@ class LeadTaskResponse(BaseModel):
 class LeadDetailResponse(LeadResponse):
     activities: List[LeadActivityResponse] = []
     tasks: List[LeadTaskResponse] = []
+
+
+class LeadAssign(BaseModel):
+    owner_id: Optional[uuid.UUID] = None
+    owner_name: Optional[str] = Field(None, max_length=200)
+
+
+class LeadNote(BaseModel):
+    body: str = Field(..., min_length=1, max_length=4000)
+    kind: str = Field("note", pattern="^(note|call)$")
+
+
+class LeadEmail(BaseModel):
+    subject: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1, max_length=20000)
+
+
+class LeadTaskCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    due_at: Optional[datetime] = None
+    assignee_id: Optional[uuid.UUID] = None
+    assignee_name: Optional[str] = Field(None, max_length=200)
+    kind: str = Field("task", pattern="^(task|call)$")
+
+
+class LeadTaskUpdate(BaseModel):
+    status: str = Field(..., pattern="^(open|done)$")
+
+
+class LeadEscalate(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=1000)
+
+
+class LeadOutbound(BaseModel):
+    notes: Optional[str] = Field(None, max_length=2000)
+
+
+class LeadCampaign(BaseModel):
+    campaign_id: str = Field(..., min_length=1, max_length=100)
+    campaign_name: str = Field(..., min_length=1, max_length=200)
 
 
 class OwnerResponse(BaseModel):
@@ -1645,7 +1690,7 @@ async def create_lead(
         first_name=payload.first_name, last_name=payload.last_name,
         email=payload.email, phone=payload.phone, address=payload.address,
         source=payload.source, interest_level=payload.interest_level,
-        notes=payload.notes, agent_id=payload.agent_id, owner_name=payload.owner_name,
+        notes=payload.notes, agent_id=payload.agent_id, owner_id=payload.owner_id, owner_name=payload.owner_name,
         priority=payload.priority, ref_no=await lead_service.next_ref_no(db, tenant_id),
         status="NEW", created_at=now, updated_at=now,
     )
@@ -1777,6 +1822,194 @@ async def list_owners(
     except Exception:  # noqa: BLE001 - a missing HR table locally is not an error
         return []
     return [OwnerResponse(id=r[0], name=r[1], department=r[2], job_title=r[3], email=r[4]) for r in rows]
+
+
+# ── Lead actions (SPEC-lead-actions.md) ─────────────────────────────────────
+# Each action writes the lead timeline in the request's transaction. Anything
+# that talks to another service is published on the event bus and done by the
+# sales consumer (services/sales/lead_actions.py), so it never blocks the
+# request and is retried if the other side is down.
+
+def _ref(lead: Lead) -> str:
+    return lead_service.format_reference(lead.ref_no) or "Lead"
+
+
+async def _touch(db: AsyncSession, lead: Lead) -> None:
+    lead.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await db.flush()
+
+
+@app.post("/leads/{lead_id}/assign", response_model=LeadResponse)
+async def assign_lead(lead_id: uuid.UUID, payload: LeadAssign,
+                      tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                      db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    lead.owner_id = payload.owner_id
+    lead.owner_name = payload.owner_name
+    await _touch(db, lead)
+    who = payload.owner_name or "nobody"
+    await lead_service.record_activity(db, tenant_id, lead.id, "assigned", f"Assigned to {who}",
+                                       {"owner_id": str(payload.owner_id) if payload.owner_id else None}, _actor(ctx))
+    if payload.owner_name:
+        await notify(db, tenant_id, f"{_ref(lead)} assigned to {payload.owner_name}",
+                     body=lead_service.full_name(lead), category="sales", source="sales",
+                     subject=("lead", lead.id))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.assigned")
+    return LeadResponse(**await lead_service.lead_with_deal(db, lead))
+
+
+@app.post("/leads/{lead_id}/notes", response_model=LeadActivityResponse, status_code=201)
+async def add_lead_note(lead_id: uuid.UUID, payload: LeadNote,
+                        tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                        db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    await _touch(db, lead)
+    kind = "call_logged" if payload.kind == "call" else "note"
+    summary = ("Call: " if kind == "call_logged" else "") + payload.body.strip().splitlines()[0][:280]
+    a = await lead_service.record_activity(db, tenant_id, lead.id, kind, summary, {"body": payload.body}, _actor(ctx))
+    await db.flush()
+    return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
+                                actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
+
+
+@app.post("/leads/{lead_id}/email", response_model=LeadActivityResponse, status_code=202)
+async def email_lead(lead_id: uuid.UUID, payload: LeadEmail,
+                     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                     db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    """Queue an email to the lead. Sent by the sales consumer via AgentMail; the
+    timeline shows queued → sent (or failed after retries)."""
+    lead = await _get_lead(db, tenant_id, lead_id)
+    if not lead.email:
+        raise HTTPException(status_code=400, detail="This lead has no email address")
+    await _touch(db, lead)
+    a = await lead_service.record_activity(db, tenant_id, lead.id, "email_queued", f"Email queued: {payload.subject}",
+                                           {"to": lead.email, "subject": payload.subject, "body": payload.body},
+                                           _actor(ctx))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.email_requested",
+                                          to=lead.email, subject=payload.subject, body=payload.body)
+    await db.flush()
+    return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
+                                actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
+
+
+@app.get("/leads/{lead_id}/tasks", response_model=List[LeadTaskResponse])
+async def list_lead_tasks(lead_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                          db: AsyncSession = Depends(get_db)):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    rows = (await db.execute(
+        select(LeadTask).where(LeadTask.lead_id == lead.id)
+        .order_by(LeadTask.status, LeadTask.due_at.asc().nulls_last(), LeadTask.created_at.desc())
+    )).scalars().all()
+    return [_task_response(t) for t in rows]
+
+
+async def _create_task(db: AsyncSession, tenant_id: uuid.UUID, lead: Lead, *, title: str, kind: str,
+                       due_at: Optional[datetime], assignee_id: Optional[uuid.UUID],
+                       assignee_name: Optional[str], ctx: Optional[AuthContext]) -> LeadTask:
+    task = LeadTask(id=uuid.uuid4(), tenant_id=tenant_id, lead_id=lead.id, title=title, kind=kind,
+                    due_at=due_at, assignee_id=assignee_id, assignee_name=assignee_name, status="open",
+                    created_by=ctx.user_id if ctx else None, created_at=datetime.now(timezone.utc))
+    db.add(task)
+    await _touch(db, lead)
+    when = f" (due {due_at:%d %b %Y %H:%M})" if due_at else ""
+    await lead_service.record_activity(db, tenant_id, lead.id, "task_created",
+                                       f"Task: {title}{when}" + (f" · {assignee_name}" if assignee_name else ""),
+                                       {"task_id": str(task.id), "kind": kind}, _actor(ctx))
+    return task
+
+
+@app.post("/leads/{lead_id}/tasks", response_model=LeadTaskResponse, status_code=201)
+async def create_lead_task(lead_id: uuid.UUID, payload: LeadTaskCreate,
+                           tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                           db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    task = await _create_task(db, tenant_id, lead, title=payload.title, kind=payload.kind, due_at=payload.due_at,
+                              assignee_id=payload.assignee_id, assignee_name=payload.assignee_name, ctx=ctx)
+    if payload.assignee_name:
+        await notify(db, tenant_id, f"New task for {payload.assignee_name}: {payload.title}",
+                     body=f"{_ref(lead)} · {lead_service.full_name(lead)}", category="sales", source="sales",
+                     subject=("lead", lead.id))
+    await db.flush()
+    return _task_response(task)
+
+
+@app.patch("/lead-tasks/{task_id}", response_model=LeadTaskResponse)
+async def update_lead_task(task_id: uuid.UUID, payload: LeadTaskUpdate,
+                           tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                           db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    task = await db.get(LeadTask, task_id)
+    if not task or task.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != payload.status:
+        task.status = payload.status
+        task.completed_at = datetime.now(timezone.utc) if payload.status == "done" else None
+        lead = await db.get(Lead, task.lead_id)
+        if lead is not None:
+            await _touch(db, lead)
+        await lead_service.record_activity(
+            db, tenant_id, task.lead_id, "task_done" if payload.status == "done" else "task_reopened",
+            f"{'Done' if payload.status == 'done' else 'Reopened'}: {task.title}", {"task_id": str(task.id)},
+            _actor(ctx))
+    await db.flush()
+    return _task_response(task)
+
+
+@app.post("/leads/{lead_id}/escalate", response_model=LeadResponse)
+async def escalate_lead(lead_id: uuid.UUID, payload: LeadEscalate,
+                        tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                        db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    lead.priority = "urgent"
+    lead.escalated_at = datetime.now(timezone.utc)
+    await _touch(db, lead)
+    await lead_service.record_activity(db, tenant_id, lead.id, "escalated", f"Escalated: {payload.reason[:250]}",
+                                       {"reason": payload.reason}, _actor(ctx))
+    await notify(db, tenant_id, f"Escalated: {_ref(lead)} {lead_service.full_name(lead)}", body=payload.reason,
+                 category="sales", severity="critical", source="sales", subject=("lead", lead.id))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.escalated", reason=payload.reason)
+    return LeadResponse(**await lead_service.lead_with_deal(db, lead))
+
+
+@app.post("/leads/{lead_id}/outbound", response_model=LeadTaskResponse, status_code=201)
+async def send_lead_to_outbound(lead_id: uuid.UUID, payload: LeadOutbound,
+                                tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    """Queue the lead for an outbound call: a call task in the Outbound queue, and
+    sales.lead.outbound_requested for any orchestrator workflow (e.g. an AI voice agent)."""
+    lead = await _get_lead(db, tenant_id, lead_id)
+    if not lead.phone:
+        raise HTTPException(status_code=400, detail="This lead has no phone number")
+    task = await _create_task(db, tenant_id, lead, title=f"Call {lead_service.full_name(lead)} ({lead.phone})",
+                              kind="call", due_at=datetime.now(timezone.utc), assignee_id=None,
+                              assignee_name=lead_actions.OUTBOUND_QUEUE, ctx=ctx)
+    await lead_service.record_activity(db, tenant_id, lead.id, "sent_to_outbound", "Sent to the outbound call queue",
+                                       {"task_id": str(task.id), "notes": payload.notes}, _actor(ctx))
+    await notify(db, tenant_id, f"{_ref(lead)} queued for an outbound call", body=payload.notes or lead.phone,
+                 category="call_center", source="sales", subject=("lead", lead.id))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.outbound_requested", task_id=str(task.id),
+                                          notes=payload.notes)
+    await db.flush()
+    return _task_response(task)
+
+
+@app.post("/leads/{lead_id}/campaign", response_model=LeadActivityResponse, status_code=202)
+async def send_lead_to_campaign(lead_id: uuid.UUID, payload: LeadCampaign,
+                                tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
+    """Add the lead to a Marketing campaign's audience. Returns at once; the sales
+    consumer updates the "Sales leads · <campaign>" audience in Marketing."""
+    lead = await _get_lead(db, tenant_id, lead_id)
+    await _touch(db, lead)
+    a = await lead_service.record_activity(db, tenant_id, lead.id, "campaign_requested",
+                                           f"Sent to marketing campaign '{payload.campaign_name}'",
+                                           {"campaign_id": payload.campaign_id,
+                                            "campaign_name": payload.campaign_name}, _actor(ctx))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.campaign_requested",
+                                          campaign_id=payload.campaign_id, campaign_name=payload.campaign_name)
+    await db.flush()
+    return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
+                                actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
+
 
 
 # ── Contacts ─────────────────────────────────────────────────────────────

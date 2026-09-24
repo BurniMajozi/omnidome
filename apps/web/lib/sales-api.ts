@@ -184,6 +184,7 @@ export interface SalesLead {
   created_at: string
   updated_at?: string | null
   reference?: string | null
+  owner_id?: string | null
   owner_name?: string | null
   priority?: LeadPriority
   closed_at?: string | null
@@ -275,6 +276,7 @@ export interface SalesLeadCreate {
   interest_level?: number
   notes?: string
   agent_id?: string
+  owner_id?: string
   owner_name?: string
   priority?: LeadPriority
   /** Put the lead straight onto the pipeline board. */
