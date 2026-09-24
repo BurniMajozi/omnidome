@@ -32,15 +32,19 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 from services.common.background_tasks import schedule_background
 from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
+from services.common.event_bus import ensure_schema as ensure_bus_schema
 from services.common.middleware import configure_production
-from services.sales.database import get_db, init_tables
+from services.sales.database import get_db, get_session, init_tables
+from services.sales import lead_service
+from services.sales.lead_service import Actor
+from services.sales.lead_stages import StageChangeError
 from services.sales.models import (
     Commission,
     CommissionTier,
@@ -48,10 +52,13 @@ from services.sales.models import (
     Deal,
     DealStage,
     Lead,
+    LeadActivity,
+    LeadTask,
     Pipeline,
     Quote,
     Target,
 )
+from services.sales.schema import ensure_lead_schema
 
 logger = logging.getLogger("sales")
 
@@ -75,6 +82,13 @@ async def entitlement_middleware(request, call_next):
 async def lifespan(app: FastAPI):
     guard.ensure_startup()
     await run_with_db_retry(init_tables, logger=logger)
+
+    async def _lead_schema() -> None:
+        async with get_session() as session:
+            await ensure_bus_schema(session)  # sales publishes lead/deal events
+            await ensure_lead_schema(session)
+
+    await run_with_db_retry(_lead_schema, logger=logger)
     logger.info("Sales service started — tables initialized")
     yield
     logger.info("Sales service shutting down")
@@ -301,6 +315,13 @@ class TargetPerformanceEntry(BaseModel):
     variance_zar: Decimal
 
 
+class PipelinePlacement(BaseModel):
+    """Put a new lead straight onto the pipeline board (SPEC-lead-lifecycle.md)."""
+    stage_name: str = "Prospecting"
+    value_zar: Decimal = Field(default=Decimal("0"), ge=0)
+    deal_name: Optional[str] = None
+
+
 class LeadCreate(BaseModel):
     first_name: str
     last_name: str
@@ -311,6 +332,9 @@ class LeadCreate(BaseModel):
     interest_level: int = Field(default=3, ge=1, le=5)
     notes: Optional[str] = None
     agent_id: Optional[uuid.UUID] = None
+    owner_name: Optional[str] = None
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    pipeline: Optional[PipelinePlacement] = None
 
 
 class LeadUpdate(BaseModel):
@@ -324,6 +348,8 @@ class LeadUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     agent_id: Optional[uuid.UUID] = None
+    owner_name: Optional[str] = None
+    priority: Optional[str] = Field(None, pattern="^(low|normal|high|urgent)$")
 
 
 class LeadResponse(BaseModel):
@@ -343,12 +369,70 @@ class LeadResponse(BaseModel):
     converted_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Lead record + its place on the board (SPEC-lead-lifecycle.md)
+    reference: Optional[str] = None
+    owner_name: Optional[str] = None
+    priority: str = "normal"
+    closed_at: Optional[datetime] = None
+    close_reason: Optional[str] = None
+    escalated_at: Optional[datetime] = None
+    deal_id: Optional[uuid.UUID] = None
+    deal_stage: Optional[str] = None
+    deal_status: Optional[str] = None
+    deal_value_zar: Optional[Decimal] = None
+    open_tasks: int = 0
 
 
 class LeadConvert(BaseModel):
     name: Optional[str] = Field(None, description="Deal name (defaults to lead name)")
     value_zar: Decimal = Field(default=Decimal("0"), ge=0)
     agent_id: Optional[uuid.UUID] = None
+    stage_name: Optional[str] = Field(None, description="Board stage for the new deal (default: first stage)")
+
+
+class LeadStageChange(BaseModel):
+    """Either a lead-phase `status` or a board `stage_name` (SPEC-lead-lifecycle.md)."""
+    status: Optional[str] = None
+    stage_name: Optional[str] = None
+    value_zar: Optional[Decimal] = Field(None, ge=0)
+    deal_name: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class LeadActivityResponse(BaseModel):
+    id: uuid.UUID
+    kind: str
+    summary: str
+    details: Dict[str, Any] = {}
+    actor_id: Optional[uuid.UUID] = None
+    actor_name: Optional[str] = None
+    created_at: datetime
+
+
+class LeadTaskResponse(BaseModel):
+    id: uuid.UUID
+    lead_id: uuid.UUID
+    title: str
+    kind: str
+    due_at: Optional[datetime] = None
+    assignee_id: Optional[uuid.UUID] = None
+    assignee_name: Optional[str] = None
+    status: str
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class LeadDetailResponse(LeadResponse):
+    activities: List[LeadActivityResponse] = []
+    tasks: List[LeadTaskResponse] = []
+
+
+class OwnerResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    department: Optional[str] = None
+    job_title: Optional[str] = None
+    email: Optional[str] = None
 
 
 class ContactCreate(BaseModel):
@@ -766,6 +850,84 @@ async def _notify_finance_won(deal: Deal, tenant_id: uuid.UUID, now: datetime) -
         pass  # Don't fail the sale if finance is down
 
 
+def _actor(ctx: Optional[AuthContext]) -> Actor:
+    return Actor(id=ctx.user_id if ctx else None)
+
+
+async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None:
+    """Close a deal as won: Closed Won stage, commission, finance + lifecycle
+    bridges, provisioning webhooks. Shared by the board and the lead table."""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Won")
+    deal.status = "WON"
+    deal.closed_at = now
+    deal.updated_at = now
+    if closed_stage_id:
+        deal.stage_id = closed_stage_id
+
+    # Commission per agent tier.
+    if deal.agent_id:
+        rate = await _commission_rate(db, tenant_id, deal.agent_id)
+        amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
+        db.add(Commission(
+            id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal.id,
+            agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
+            status="PENDING", created_at=now, updated_at=now,
+        ))
+
+    await db.flush()
+
+    # Bridges — non-blocking, never fail the sale.
+    await _notify_lifecycle_won(deal, tenant_id)
+    await _notify_finance_won(deal, tenant_id, now)
+    schedule_background(_dispatch_provisioning_bg({
+        "event": "deal.closed_won", "deal_id": str(deal.id),
+        "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
+        "agent_id": str(deal.agent_id) if deal.agent_id else None,
+        "package_id": str(deal.package_id) if deal.package_id else None,
+        "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
+    }))
+
+
+async def _close_lost(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, reason: str) -> None:
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Lost")
+    deal.status = "LOST"
+    deal.closed_at = now
+    deal.close_reason = reason
+    deal.updated_at = now
+    if closed_stage_id:
+        deal.stage_id = closed_stage_id
+    await db.flush()
+
+    # Lifecycle bridge — non-blocking.
+    await _notify_lifecycle_lost(deal, tenant_id, reason)
+
+async def _set_deal_stage(
+    db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, stage_id: uuid.UUID, ctx: Optional[AuthContext],
+) -> Optional[DealStage]:
+    """Board move. Closed Won runs the full close-won path; Closed Lost needs the
+    close-lost route (reason); closed deals don't move. Mirrors onto the lead."""
+    stage = await db.get(DealStage, stage_id)
+    if stage is None:
+        raise HTTPException(status_code=400, detail="Unknown stage")
+    if deal.status in ("WON", "LOST"):
+        raise HTTPException(status_code=409, detail=f"Deal is already closed ({deal.status.lower()})")
+    if stage.name.lower() == "closed lost":
+        raise HTTPException(status_code=400, detail="Use close-lost with a reason to close a deal as lost")
+    if stage.name.lower() == "closed won":
+        await _close_won(db, tenant_id, deal)
+    else:
+        deal.stage_id = stage_id
+        deal.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        await db.flush()
+    await lead_service.sync_lead_from_deal(db, deal, stage.name, _actor(ctx))
+    await lead_service.publish_deal_event(db, deal, stage.name)
+    return stage
+
+
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -942,7 +1104,18 @@ async def delete_deal(
     deal = await db.get(Deal, deal_id)
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
+    lead = await db.get(Lead, deal.lead_id) if deal.lead_id else None
     await db.delete(deal)
+    await db.flush()
+    if lead is not None and lead.tenant_id == tenant_id and lead.status == "CONVERTED":
+        remaining = (await lead_service.deals_by_lead(db, [lead.id])).get(lead.id)
+        if remaining is None:
+            lead.status = "QUALIFIED"
+            lead.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await lead_service.record_activity(
+                db, tenant_id, lead.id, "stage_changed",
+                "Deal deleted from the pipeline board; lead back to Qualified",
+                {"deal_id": str(deal_id)})
 
 
 @app.put("/deals/{deal_id}", response_model=DealResponse)
@@ -951,6 +1124,7 @@ async def update_deal(
     payload: DealUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     deal = await db.get(Deal, deal_id)
     if not deal or deal.tenant_id != tenant_id:
@@ -970,10 +1144,11 @@ async def update_deal(
         deal.close_date = payload.close_date
     if payload.notes is not None:
         deal.notes = payload.notes
-    if payload.stage_id or payload.stage_name:
-        deal.stage_id = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
-
     deal.updated_at = now
+    if (payload.stage_id or payload.stage_name):
+        target = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
+        if target != deal.stage_id:
+            await _set_deal_stage(db, tenant_id, deal, target, ctx)
     await db.flush()
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
@@ -986,6 +1161,7 @@ async def move_deal_stage(
     payload: DealStageUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     deal = await db.get(Deal, deal_id)
     if not deal or deal.tenant_id != tenant_id:
@@ -1011,11 +1187,7 @@ async def move_deal_stage(
     if not stage_id:
         raise HTTPException(status_code=400, detail="No stage specified")
 
-    deal.stage_id = stage_id
-    deal.updated_at = now
-    await db.flush()
-
-    stage = await db.get(DealStage, stage_id)
+    stage = await _set_deal_stage(db, tenant_id, deal, stage_id, ctx)
     return _deal_to_response(deal, stage.name if stage else None)
 
 
@@ -1024,41 +1196,15 @@ async def close_deal_won(
     deal_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     deal = await db.get(Deal, deal_id)
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Won")
-    deal.status = "WON"
-    deal.closed_at = now
-    deal.updated_at = now
-    if closed_stage_id:
-        deal.stage_id = closed_stage_id
-
-    # Commission per agent tier.
-    if deal.agent_id:
-        rate = await _commission_rate(db, tenant_id, deal.agent_id)
-        amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
-        db.add(Commission(
-            id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal_id,
-            agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
-            status="PENDING", created_at=now, updated_at=now,
-        ))
-
-    await db.flush()
-
-    # Bridges — non-blocking, never fail the sale.
-    await _notify_lifecycle_won(deal, tenant_id)
-    await _notify_finance_won(deal, tenant_id, now)
-    schedule_background(_dispatch_provisioning_bg({
-        "event": "deal.closed_won", "deal_id": str(deal_id),
-        "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
-        "agent_id": str(deal.agent_id) if deal.agent_id else None,
-        "package_id": str(deal.package_id) if deal.package_id else None,
-        "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
-    }))
+    await _close_won(db, tenant_id, deal)
+    await lead_service.sync_lead_from_deal(db, deal, "Closed Won", _actor(ctx))
+    await lead_service.publish_deal_event(db, deal, "Closed Won")
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
     return _deal_to_response(deal, stage.name if stage else "Closed Won")
@@ -1070,23 +1216,15 @@ async def close_deal_lost(
     reason: str = Query(..., min_length=3),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     deal = await db.get(Deal, deal_id)
     if not deal or deal.tenant_id != tenant_id:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Lost")
-    deal.status = "LOST"
-    deal.closed_at = now
-    deal.close_reason = reason
-    deal.updated_at = now
-    if closed_stage_id:
-        deal.stage_id = closed_stage_id
-    await db.flush()
-
-    # Lifecycle bridge — non-blocking.
-    await _notify_lifecycle_lost(deal, tenant_id, reason)
+    await _close_lost(db, tenant_id, deal, reason)
+    await lead_service.sync_lead_from_deal(db, deal, "Closed Lost", _actor(ctx))
+    await lead_service.publish_deal_event(db, deal, "Closed Lost")
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
     return _deal_to_response(deal, stage.name if stage else "Closed Lost")
@@ -1429,7 +1567,33 @@ async def target_performance(
     return results
 
 
-# ── Leads ────────────────────────────────────────────────────────────────
+# ── Leads (SPEC-lead-lifecycle.md) ────────────────────────────────────────
+
+def _stage_http_error(exc: StageChangeError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=str(exc))
+
+
+async def _get_lead(db: AsyncSession, tenant_id: uuid.UUID, lead_id: uuid.UUID) -> Lead:
+    lead = await db.get(Lead, lead_id)
+    if not lead or lead.tenant_id != tenant_id:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return lead
+
+
+async def _change_stage(
+    db: AsyncSession, tenant_id: uuid.UUID, lead: Lead, ctx: Optional[AuthContext], **kw: Any,
+) -> tuple[Lead, Optional[Deal]]:
+    await _ensure_default_pipeline(db, tenant_id)
+    try:
+        return await lead_service.apply_stage_change(
+            db, lead, close_won=_close_won, close_lost=_close_lost, actor=_actor(ctx), **kw)
+    except StageChangeError as exc:
+        raise _stage_http_error(exc) from exc
+
+
+def _source_label(source: Optional[str]) -> str:
+    return (source or "manual entry").replace("_", " ").title()
+
 
 @app.get("/leads", response_model=List[LeadResponse])
 async def list_leads(
@@ -1451,15 +1615,13 @@ async def list_leads(
     if min_interest:
         q = q.where(Lead.interest_level >= min_interest)
     q = q.order_by(Lead.created_at.desc()).limit(limit)
-    result = await db.execute(q)
+    leads = list((await db.execute(q)).scalars().all())
+    ids = [lead.id for lead in leads]
+    deals = await lead_service.deals_by_lead(db, ids)
+    tasks = await lead_service.open_task_counts(db, ids)
     return [
-        LeadResponse(
-            id=l.id, tenant_id=l.tenant_id, contact_id=l.contact_id,
-            agent_id=l.agent_id, first_name=l.first_name, last_name=l.last_name,
-            email=l.email, phone=l.phone, address=l.address, source=l.source,
-            interest_level=l.interest_level, status=l.status, notes=l.notes,
-            converted_at=l.converted_at, created_at=l.created_at, updated_at=l.updated_at,
-        ) for l in result.scalars().all()
+        LeadResponse(**lead_service.lead_dict(lead, *deals.get(lead.id, (None, None)), tasks.get(lead.id, 0)))
+        for lead in leads
     ]
 
 
@@ -1468,6 +1630,7 @@ async def create_lead(
     payload: LeadCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     lead = Lead(
@@ -1475,18 +1638,51 @@ async def create_lead(
         first_name=payload.first_name, last_name=payload.last_name,
         email=payload.email, phone=payload.phone, address=payload.address,
         source=payload.source, interest_level=payload.interest_level,
-        notes=payload.notes, agent_id=payload.agent_id,
+        notes=payload.notes, agent_id=payload.agent_id, owner_name=payload.owner_name,
+        priority=payload.priority, ref_no=await lead_service.next_ref_no(db, tenant_id),
         status="NEW", created_at=now, updated_at=now,
     )
     db.add(lead)
     await db.flush()
-    return LeadResponse(
-        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
-        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
-        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
-        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
-        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
+    await lead_service.record_activity(
+        db, tenant_id, lead.id, "created", f"Lead created from {_source_label(payload.source)}",
+        {"source": payload.source}, _actor(ctx))
+    await lead_service.publish_lead_event(db, lead, "sales.lead.created")
+    if payload.pipeline:
+        await _change_stage(db, tenant_id, lead, ctx, target_stage=payload.pipeline.stage_name,
+                            value_zar=payload.pipeline.value_zar, deal_name=payload.pipeline.deal_name)
+    return LeadResponse(**await lead_service.lead_with_deal(db, lead))
+
+
+@app.get("/leads/{lead_id}", response_model=LeadDetailResponse)
+async def get_lead(
+    lead_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    lead = await _get_lead(db, tenant_id, lead_id)
+    activities = (await db.execute(
+        select(LeadActivity).where(LeadActivity.lead_id == lead.id)
+        .order_by(LeadActivity.created_at.desc()).limit(200)
+    )).scalars().all()
+    tasks = (await db.execute(
+        select(LeadTask).where(LeadTask.lead_id == lead.id)
+        .order_by(LeadTask.status, LeadTask.due_at.asc().nulls_last(), LeadTask.created_at.desc())
+    )).scalars().all()
+    return LeadDetailResponse(
+        **await lead_service.lead_with_deal(db, lead),
+        activities=[LeadActivityResponse(
+            id=a.id, kind=a.kind, summary=a.summary, details=a.details or {},
+            actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at) for a in activities],
+        tasks=[_task_response(t) for t in tasks],
     )
+
+
+def _task_response(t: LeadTask) -> LeadTaskResponse:
+    return LeadTaskResponse(
+        id=t.id, lead_id=t.lead_id, title=t.title, kind=t.kind, due_at=t.due_at,
+        assignee_id=t.assignee_id, assignee_name=t.assignee_name, status=t.status,
+        created_at=t.created_at, completed_at=t.completed_at)
 
 
 @app.put("/leads/{lead_id}", response_model=LeadResponse)
@@ -1495,24 +1691,41 @@ async def update_lead(
     payload: LeadUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
-    lead = await db.get(Lead, lead_id)
-    if not lead or lead.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Lead not found")
+    lead = await _get_lead(db, tenant_id, lead_id)
     update_data = payload.model_dump(exclude_unset=True)
-    if "status" in update_data and update_data["status"]:
-        update_data["status"] = update_data["status"].upper()
+    new_status = update_data.pop("status", None)
+    changed = [k for k, v in update_data.items() if getattr(lead, k) != v]
     for key, value in update_data.items():
         setattr(lead, key, value)
     lead.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
     await db.flush()
-    return LeadResponse(
-        id=lead.id, tenant_id=lead.tenant_id, contact_id=lead.contact_id,
-        agent_id=lead.agent_id, first_name=lead.first_name, last_name=lead.last_name,
-        email=lead.email, phone=lead.phone, address=lead.address, source=lead.source,
-        interest_level=lead.interest_level, status=lead.status, notes=lead.notes,
-        converted_at=lead.converted_at, created_at=lead.created_at, updated_at=lead.updated_at,
-    )
+    if changed:
+        await lead_service.record_activity(
+            db, tenant_id, lead.id, "updated", "Updated " + ", ".join(k.replace("_", " ") for k in changed),
+            {"fields": changed}, _actor(ctx))
+    # A status goes through the one stage model (legacy values map onto it).
+    if new_status and new_status.upper() != (lead.status or ""):
+        await _change_stage(db, tenant_id, lead, ctx, target_status=new_status)
+    return LeadResponse(**await lead_service.lead_with_deal(db, lead))
+
+
+@app.post("/leads/{lead_id}/stage", response_model=LeadResponse)
+async def change_lead_stage(
+    lead_id: uuid.UUID,
+    payload: LeadStageChange,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Move a lead in the lead phase (status) or on the pipeline board (stage_name).
+    Same rules as the board, so the lead table and the board never disagree."""
+    lead = await _get_lead(db, tenant_id, lead_id)
+    await _change_stage(db, tenant_id, lead, ctx, target_status=payload.status,
+                        target_stage=payload.stage_name, value_zar=payload.value_zar,
+                        deal_name=payload.deal_name, reason=payload.reason)
+    return LeadResponse(**await lead_service.lead_with_deal(db, lead))
 
 
 @app.post("/leads/{lead_id}/convert", response_model=dict)
@@ -1521,45 +1734,42 @@ async def convert_lead(
     payload: LeadConvert,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
-    lead = await db.get(Lead, lead_id)
-    if not lead or lead.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    """Put the lead on the pipeline board (field-sales app contract unchanged).
+    Converting a lead that already has a deal returns that deal, never a second one."""
+    lead = await _get_lead(db, tenant_id, lead_id)
+    if payload.agent_id:
+        lead.agent_id = payload.agent_id
+    existing = (await lead_service.deals_by_lead(db, [lead.id])).get(lead.id)
+    if existing:
+        deal = existing[0]
+    else:
+        await _ensure_default_pipeline(db, tenant_id)
+        names = await lead_service.stage_names(db, tenant_id)
+        stage = payload.stage_name or (names[0] if names else "Prospecting")
+        _, deal = await _change_stage(db, tenant_id, lead, ctx, target_stage=stage,
+                                      value_zar=payload.value_zar, deal_name=payload.name)
+    return {"deal_id": str(deal.id), "contact_id": str(lead.contact_id), "message": "Lead converted"}
 
-    # Create contact from lead details when none linked yet.
-    contact_id = lead.contact_id
-    if not contact_id:
-        contact = Contact(
-            id=uuid.uuid4(), tenant_id=tenant_id,
-            first_name=lead.first_name, last_name=lead.last_name,
-            email=lead.email, phone=lead.phone,
-            physical_address=lead.address,
-            status="ACTIVE", lifecycle_stage="QUALIFIED",
-            created_at=now, updated_at=now,
-        )
-        db.add(contact)
-        await db.flush()
-        contact_id = contact.id
-        lead.contact_id = contact_id
 
-    deal_name = payload.name or f"{lead.first_name} {lead.last_name} - New Deal"
-    agent_id = payload.agent_id or lead.agent_id
-    stage_id = await _resolve_stage_id(db, tenant_id, None, "Prospecting")
-    deal = Deal(
-        id=uuid.uuid4(), tenant_id=tenant_id, contact_id=contact_id,
-        lead_id=lead.id, agent_id=agent_id, stage_id=stage_id,
-        name=deal_name, amount=payload.value_zar, value_zar=payload.value_zar,
-        status="OPEN", created_at=now, updated_at=now,
-    )
-    db.add(deal)
-
-    lead.status = "CONVERTED"
-    lead.converted_at = now
-    lead.updated_at = now
-    await db.flush()
-
-    return {"deal_id": str(deal.id), "contact_id": str(contact_id), "message": "Lead converted"}
+@app.get("/owners", response_model=List[OwnerResponse])
+async def list_owners(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """People a lead can be assigned to: active HR employees of the tenant.
+    Reads the shared `employees` table (HR owns it); empty when HR is not installed."""
+    try:
+        async with db.begin_nested():
+            rows = (await db.execute(text("""
+                SELECT id, full_name, department, job_title, email FROM employees
+                 WHERE tenant_id = :t AND coalesce(upper(status), 'ACTIVE') = 'ACTIVE'
+                 ORDER BY full_name
+            """), {"t": str(tenant_id)})).all()
+    except Exception:  # noqa: BLE001 - a missing HR table locally is not an error
+        return []
+    return [OwnerResponse(id=r[0], name=r[1], department=r[2], job_title=r[3], email=r[4]) for r in rows]
 
 
 # ── Contacts ─────────────────────────────────────────────────────────────

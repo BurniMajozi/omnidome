@@ -1,7 +1,8 @@
 """SQLAlchemy async models for the Sales service.
 
 Tables (authoritative DDL: config/master_schema.sql): pipelines, deal_stages,
-deals, quotes, commissions, commission_tiers, sales_targets, leads.
+deals, quotes, commissions, commission_tiers, sales_targets, leads; plus
+lead_activities and lead_tasks (services/sales/schema.py).
 
 NOTE: contacts live in master_schema too, but the sales service reads/writes
 them via its own Contact model (CRM also owns the same table). No cross-service
@@ -188,5 +189,47 @@ class Lead(Base):
     converted_at = Column(DateTime)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime)
+    # Lead record (SPEC-lead-lifecycle.md; columns added by schema.ensure_lead_schema).
+    ref_no = Column(Integer)              # shown as LD-000042, unique per tenant
+    owner_name = Column(String(200))      # owner id lives in agent_id
+    priority = Column(String(10), nullable=False, default="normal")
+    closed_at = Column(DateTime(timezone=True))
+    close_reason = Column(Text)
+    escalated_at = Column(DateTime(timezone=True))
 
     contact = relationship("Contact")
+
+
+class LeadActivity(Base):
+    """Timeline entry on a lead: stage changes, notes, emails, tasks, escalations."""
+
+    __tablename__ = "lead_activities"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
+    kind = Column(String(40), nullable=False)
+    summary = Column(String(300), nullable=False)
+    details = Column(JSONB, nullable=False, default=dict)
+    actor_id = Column(UUID(as_uuid=True))
+    actor_name = Column(String(200))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+
+class LeadTask(Base):
+    """Follow-up on a lead; kind "call" + assignee "Outbound queue" = outbound call."""
+
+    __tablename__ = "lead_tasks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    lead_id = Column(UUID(as_uuid=True), ForeignKey("leads.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(200), nullable=False)
+    kind = Column(String(20), nullable=False, default="task")
+    due_at = Column(DateTime(timezone=True))
+    assignee_id = Column(UUID(as_uuid=True))
+    assignee_name = Column(String(200))
+    status = Column(String(20), nullable=False, default="open")
+    created_by = Column(UUID(as_uuid=True))
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    completed_at = Column(DateTime(timezone=True))

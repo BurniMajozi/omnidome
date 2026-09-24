@@ -157,7 +157,8 @@ async def ensure_schema(session) -> None:
     because several workers start at once."""
     await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SCHEMA_LOCK})
     for statement in SCHEMA_SQL.split(";"):
-        if statement.strip():
+        # Skip fragments that are only comments: asyncpg cannot execute them.
+        if re.sub(r"--[^\n]*", "", statement).strip():
             await session.execute(text(statement))
 
 

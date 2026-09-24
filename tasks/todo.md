@@ -5,8 +5,8 @@
 - [x] T3 notifications + deliveries API (orchestrator), header bell — API live (feed, unread, read, tenant isolation, proxy 200); bell verified in browser at Checkpoint B
 - [ ] Checkpoint A
 - [x] T4 lead_stages rules + unit tests — 23 tests; sales suite 39 passing (run with PYTHONPATH=../.. from services/sales)
-- [ ] T5 lead migration + models (ref_no, owner, priority, closed, activities, tasks)
-- [ ] T6 sales API: pipeline on create, stage endpoint, detail, owners, board→lead sync, events
+- [x] T5 lead migration + models (ref_no, owner, priority, closed, activities, tasks) — applied at startup (advisory lock); 34 leads referenced, PROPOSAL→QUALIFIED
+- [x] T6 sales API: pipeline on create, stage endpoint, detail, owners, board→lead sync, events — live 21/21 (board↔table, 409/400 rules, convert idempotent, close-won mirror, legacy PUT, 16 owners, 13 events)
 - [ ] T7 web: lead table, Lead sources → board, linked create modal, board card ref/owner
 - [ ] Checkpoint B
 - [ ] T8 sales action endpoints + sales consumer (email, campaign)
