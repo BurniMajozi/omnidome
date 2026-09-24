@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from services.common.middleware import configure_production
 from services.fno_intelligence.database import init_tables
-from services.fno_intelligence.routes import router
+from services.fno_intelligence.routes import router, sweep_stuck_passed_home_imports
 
 logger = logging.getLogger("fno_intelligence")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -26,6 +26,9 @@ app.include_router(router, prefix="/api/fno")
 @app.on_event("startup")
 async def startup():
     await init_tables()
+    swept = await sweep_stuck_passed_home_imports()
+    if swept:
+        logger.info("Marked %d interrupted passed-home import(s) as failed", swept)
     logger.info("FNO Intelligence service started")
 
 

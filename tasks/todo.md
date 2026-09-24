@@ -13,9 +13,10 @@ Commands:
 ---
 
 ## A1: Backend — `address_raw` in passed-homes list + stuck-import sweep
+**Status: DONE** — 5 new tests (97 total); live: 5 stuck imports swept to failed with the message (second worker found none), 0 left; `address_raw` returned.
 **Acceptance:**
-- [ ] `GET /passed-homes` rows include `address_raw`.
-- [ ] Imports in `uploaded`/`parsing` older than 30 min become `failed` with the spec's message on service start; newer ones untouched (unit-tested cutoff).
+- [x] `GET /passed-homes` rows include `address_raw`.
+- [x] Imports in `uploaded`/`parsing` older than 30 min become `failed` with the spec's message on service start; newer ones untouched (unit-tested cutoff).
 **Verify:** PYTEST; live: the old stuck `passed_homes.csv` import shows Failed after restart.
 **Files:** `services/fno_intelligence/routes.py`, `services/fno_intelligence/passed_homes.py`, `main.py`, tests. **Scope:** S
 

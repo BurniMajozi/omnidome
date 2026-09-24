@@ -147,3 +147,22 @@ def normalize_row(raw_row: dict, column_map: Dict[str, str]) -> dict:
         "valid": True,
         "reject_reason": None,
     }
+
+
+# ── Stuck-import sweep (SPEC-geo-segments v2) ──────────────────────────────
+
+STUCK_IMPORT_MINUTES = 30
+STUCK_IMPORT_MESSAGE = "Processing was interrupted before it finished. Upload the file again."
+
+
+def is_stuck_import(status: str, created_at, now) -> bool:
+    """An import still 'uploaded'/'parsing' long after upload never finished
+    (e.g. the process died mid-import) and would otherwise show as
+    in progress forever. Naive datetimes are treated as UTC."""
+    from datetime import timedelta, timezone
+
+    if status not in ("uploaded", "parsing"):
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return now - created_at > timedelta(minutes=STUCK_IMPORT_MINUTES)

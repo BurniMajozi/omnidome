@@ -158,3 +158,38 @@ def test_normalize_row_dwelling_type_from_address():
     column_map = {"address": "Address"}
     result = normalize_row({"Address": "Unit 4, Ocean View Complex"}, column_map)
     assert result["dwelling_type"] == "mdu_unit"
+
+
+# ── is_stuck_import (v2: sweep imports interrupted mid-processing) ─────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from passed_homes import STUCK_IMPORT_MINUTES, is_stuck_import  # noqa: E402
+
+_NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
+
+
+def test_uploaded_import_older_than_cutoff_is_stuck():
+    created = _NOW - timedelta(minutes=STUCK_IMPORT_MINUTES + 1)
+    assert is_stuck_import("uploaded", created, _NOW) is True
+
+
+def test_parsing_import_older_than_cutoff_is_stuck():
+    created = _NOW - timedelta(hours=5)
+    assert is_stuck_import("parsing", created, _NOW) is True
+
+
+def test_recent_uploaded_import_is_not_stuck():
+    created = _NOW - timedelta(minutes=STUCK_IMPORT_MINUTES - 1)
+    assert is_stuck_import("uploaded", created, _NOW) is False
+
+
+def test_finished_imports_are_never_stuck():
+    created = _NOW - timedelta(days=3)
+    for status in ("imported", "partial", "failed"):
+        assert is_stuck_import(status, created, _NOW) is False
+
+
+def test_naive_created_at_is_treated_as_utc():
+    created = (_NOW - timedelta(hours=1)).replace(tzinfo=None)
+    assert is_stuck_import("parsing", created, _NOW) is True

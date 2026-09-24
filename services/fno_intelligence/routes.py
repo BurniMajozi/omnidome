@@ -1461,6 +1461,7 @@ async def list_passed_homes(
     homes = result.scalars().all()
     return [{
         "id": str(h.id), "import_id": str(h.import_id), "fno_name": h.fno_name,
+        "address_raw": h.address_raw,
         "address_line1": h.address_line1, "suburb": h.suburb, "city": h.city,
         "postal_code": h.postal_code, "dwelling_type": h.dwelling_type,
         "date_passed": h.date_passed.isoformat() if h.date_passed else None,
@@ -1839,3 +1840,32 @@ async def export_geo_segment(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{slug}-areas.{format}"'},
     )
+
+
+
+# ── Stuck-import sweep (SPEC-geo-segments v2) ───────────────────────────
+from services.fno_intelligence.database import get_session_factory as _ph_session_factory
+from services.fno_intelligence.passed_homes import (
+    STUCK_IMPORT_MESSAGE as _PH_STUCK_MESSAGE,
+    is_stuck_import as _ph_is_stuck_import,
+)
+
+
+async def sweep_stuck_passed_home_imports() -> int:
+    """Mark imports left in uploaded/parsing (process died mid-import) as
+    failed so the UI never shows them processing forever. Idempotent; safe to
+    run from both uvicorn workers at startup."""
+    from datetime import datetime as _dt, timezone as _tz
+
+    now = _dt.now(_tz.utc)
+    async with _ph_session_factory()() as session:
+        rows = (await session.execute(
+            select(FNOPassedHomeImport).where(FNOPassedHomeImport.status.in_(["uploaded", "parsing"]))
+        )).scalars().all()
+        stuck = [r for r in rows if _ph_is_stuck_import(r.status, r.created_at, now)]
+        for r in stuck:
+            r.status = "failed"
+            r.error_message = _PH_STUCK_MESSAGE
+            r.processed_at = now
+        await session.commit()
+    return len(stuck)

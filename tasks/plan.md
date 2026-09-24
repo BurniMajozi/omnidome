@@ -46,7 +46,7 @@ committed on its own.
 ## Task list
 
 ### Part A — import flow
-- [ ] A1: Backend: `address_raw` in passed-homes list + stuck-import sweep
+- [x] A1: Backend: `address_raw` in passed-homes list + stuck-import sweep
 - [ ] A2: Import panel, progress, auto-geocode, statuses, view issues, template
 ### Checkpoint A
 - [ ] fno + web rebuilt; a CSV imported via the UI end-to-end; API upload still works
