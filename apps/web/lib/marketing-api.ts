@@ -426,20 +426,70 @@ export interface EmailTemplateCreate {
   category?: string
 }
 
+// Audiences (SPEC-marketing-audiences.md): homes audiences carry target areas
+// (never addresses); business audiences carry public business details.
+export type AudienceType = "homes" | "businesses" | "custom"
+export type AudiencePlatform = "google_ads" | "meta" | "linkedin" | "custom"
+
+export const AUDIENCE_PLATFORMS: { id: AudiencePlatform; label: string }[] = [
+  { id: "google_ads", label: "Google Ads" },
+  { id: "meta", label: "Meta (Facebook and Instagram)" },
+  { id: "linkedin", label: "LinkedIn Ads" },
+  { id: "custom", label: "OmniDome only (export)" },
+]
+
+export interface AudienceArea {
+  suburb: string | null
+  city: string | null
+  postal_code: string | null
+  homes: number
+  centroid_lat: number | null
+  centroid_lng: number | null
+  suggested_radius_km: number
+}
+
+export interface AudienceBusiness {
+  name: string
+  category: string | null
+  address: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  lat: number
+  lng: number
+}
+
+export interface AudienceRules {
+  type: AudienceType
+  platform: AudiencePlatform
+  source?: "fno_geo_segment" | "company_search" | "manual"
+  source_id?: string
+  source_name?: string
+  areas?: AudienceArea[]
+  businesses?: AudienceBusiness[]
+  regions?: string[]
+  interest?: string
+}
+
 export interface AudienceSegment {
   id: string
   tenant_id: string
   name: string
-  description?: string
-  rules?: Record<string, unknown>
+  description?: string | null
+  rules: AudienceRules
+  member_count: number
+  type: AudienceType
+  platform: AudiencePlatform
   created_at: string
-  updated_at?: string
+  updated_at?: string | null
+  updated?: boolean
 }
 
 export interface AudienceSegmentCreate {
   name: string
   description?: string
-  rules?: Record<string, unknown>
+  rules: AudienceRules
+  member_count?: number
 }
 
 // ── Campaigns ────────────────────────────────────────────────────────
@@ -798,14 +848,20 @@ export const createEmailTemplate = (data: EmailTemplateCreate) =>
     body: JSON.stringify(data),
   })
 
-export const listAudienceSegments = () =>
-  fetchMarketing<AudienceSegment[]>("/segments")
+export const listAudienceSegments = (type?: AudienceType) =>
+  fetchMarketingResult<AudienceSegment[]>(`/segments${type ? `?type=${type}` : ""}`)
 
+export const getAudienceSegment = (id: string) => fetchMarketingResult<AudienceSegment>(`/segments/${id}`)
+
+/** Creates, or updates the audience already made from the same source. */
 export const createAudienceSegment = (data: AudienceSegmentCreate) =>
-  fetchMarketing<AudienceSegment>("/segments", {
+  fetchMarketingResult<AudienceSegment>("/segments", {
     method: "POST",
     body: JSON.stringify(data),
   })
+
+export const deleteAudienceSegment = (id: string) =>
+  fetchMarketingResult<null>(`/segments/${id}`, { method: "DELETE" })
 
 // ── Traditional Media (Radio / OOH / Billboard) ────────────────────────
 

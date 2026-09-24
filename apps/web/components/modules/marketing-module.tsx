@@ -46,6 +46,7 @@ import {
   listTeamMembers, inviteTeamMember, deleteTeamMember, type TeamMember,
 } from "@/lib/marketing-api"
 import { salesApi } from "@/lib/sales-api"
+import { MarketingAudiences } from "./marketing-audiences"
 
 const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
 
@@ -5520,20 +5521,6 @@ function AdsTab() {
   const [boostGender, setBoostGender] = useState("All")
   const [isBoosting, setIsBoosting] = useState(false)
 
-  // New Audience state matching media_1789288284060.png
-  const [showNewAudienceModal, setShowNewAudienceModal] = useState(false)
-  const [newAudienceName, setNewAudienceName] = useState("")
-  const [newAudiencePlatform, setNewAudiencePlatform] = useState("meta")
-  const [newAudienceRegion, setNewAudienceRegion] = useState("Gauteng & Western Cape")
-  const [newAudienceTier, setNewAudienceTier] = useState("High-Speed Fiber (100Mbps+)")
-
-  // Audience list
-  const [audiences, setAudiences] = useState([
-    { id: "aud-1", name: "Broad SA 18-45", size: "4.2M", platform: "meta", updated: "2 days ago" },
-    { id: "aud-2", name: "Tech & Telecom Decision Makers", size: "180k", platform: "linkedin", updated: "1 week ago" },
-    { id: "aud-3", name: "High-LTV Fiber Churn Targets", size: "45k", platform: "custom", updated: "Yesterday" },
-  ])
-
   const [leadForms, setLeadForms] = useState([
     { id: "lf-1", name: "Home Fiber Instant Quote Form", leads: 142, completionRate: "38.4%", platform: "facebook", status: "ACTIVE" },
     { id: "lf-2", name: "Business Internet Inquiry 2026", leads: 68, completionRate: "29.1%", platform: "linkedin", status: "ACTIVE" },
@@ -5865,37 +5852,7 @@ function AdsTab() {
         </div>
       )}
 
-      {activeSubTab === "audiences" && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Target Audiences</h3>
-              <p className="text-xs text-muted-foreground">Saved custom audiences and customer segments for ads</p>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setShowNewAudienceModal(true)}
-            >
-              <Plus className="mr-1.5 h-3.5 w-3.5" /> New Audience
-            </Button>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            {audiences.map((aud) => (
-              <Card key={aud.id} className="border-border bg-card">
-                <CardContent className="p-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <p className="font-semibold text-sm text-foreground">{aud.name}</p>
-                    <Badge variant="outline" className="text-[10px]">{aud.platform}</Badge>
-                  </div>
-                  <p className="text-2xl font-bold text-foreground">{aud.size}</p>
-                  <p className="text-xs text-muted-foreground">Updated {aud.updated}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {activeSubTab === "audiences" && <MarketingAudiences />}
 
       {activeSubTab === "lead-forms" && (
         <div className="space-y-4">
@@ -6507,94 +6464,6 @@ function AdsTab() {
         </div>
       )}
 
-      {/* NEW AUDIENCE MODAL — Aligned to OmniDome Telco & ISP Customer Segments */}
-      {showNewAudienceModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="relative flex w-full max-w-md flex-col rounded-xl border border-border bg-background shadow-2xl p-6 space-y-4">
-            <div className="flex items-start justify-between border-b border-border pb-3">
-              <div>
-                <h3 className="text-base font-bold text-foreground">Create Target Audience</h3>
-                <p className="text-xs text-muted-foreground">Define custom audience segment for OmniDome campaigns</p>
-              </div>
-              <button onClick={() => setShowNewAudienceModal(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="font-medium text-foreground block mb-1">Audience Name</label>
-                <Input
-                  placeholder="e.g. Western Cape High-Speed Fiber Churn Targets"
-                  value={newAudienceName}
-                  onChange={(e) => setNewAudienceName(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="font-medium text-foreground block mb-1">Platform Destination</label>
-                <select
-                  value={newAudiencePlatform}
-                  onChange={(e) => setNewAudiencePlatform(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="meta">Meta (Facebook & Instagram)</option>
-                  <option value="linkedin">LinkedIn Ads</option>
-                  <option value="google">Google Search & YouTube</option>
-                  <option value="tiktok">TikTok Ads</option>
-                  <option value="custom">OmniDome CRM Custom Segment</option>
-                </select>
-              </div>
-              <div>
-                <label className="font-medium text-foreground block mb-1">Target Geographic Regions</label>
-                <select
-                  value={newAudienceRegion}
-                  onChange={(e) => setNewAudienceRegion(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="Gauteng & Western Cape">Gauteng & Western Cape (Metro Areas)</option>
-                  <option value="Johannesburg / Sandton">Johannesburg / Sandton Central</option>
-                  <option value="Cape Town Atlantic Seaboard">Cape Town Atlantic Seaboard & Southern Suburbs</option>
-                  <option value="Durban / KZN Coast">Durban / KZN Coastal Belt</option>
-                  <option value="National SA">National South Africa</option>
-                </select>
-              </div>
-              <div>
-                <label className="font-medium text-foreground block mb-1">Telco / Internet Speed Interest</label>
-                <select
-                  value={newAudienceTier}
-                  onChange={(e) => setNewAudienceTier(e.target.value)}
-                  className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="High-Speed Fiber (100Mbps+)">High-Speed Fiber (100Mbps+)</option>
-                  <option value="Gigabit Enterprise Internet">Gigabit Enterprise Internet (SLA)</option>
-                  <option value="Budget / Prepaid Home Fiber">Budget / Prepaid Home Fiber (50Mbps)</option>
-                  <option value="LTE / 5G Failover Backup">LTE / 5G Failover Backup</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-2 border-t border-border">
-              <Button variant="ghost" size="sm" onClick={() => setShowNewAudienceModal(false)}>Cancel</Button>
-              <Button
-                size="sm"
-                disabled={!newAudienceName.trim()}
-                onClick={() => {
-                  const createdAud = {
-                    id: `aud-${Date.now()}`,
-                    name: newAudienceName,
-                    size: "95k",
-                    platform: newAudiencePlatform,
-                    updated: "Just now",
-                  }
-                  setAudiences([createdAud, ...audiences])
-                  setShowNewAudienceModal(false)
-                  setNewAudienceName("")
-                }}
-              >
-                Save Audience
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
