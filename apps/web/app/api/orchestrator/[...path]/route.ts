@@ -117,6 +117,9 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
 export async function POST(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   return proxy(request, ctx)
 }
+export async function PUT(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}
 export async function PATCH(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   return proxy(request, ctx)
 }

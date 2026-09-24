@@ -44,9 +44,9 @@ person to send (see `SPEC-lead-automations.md`).
 
 ## Success criteria
 
-- [ ] Every action appears on the timeline with who/when.
-- [ ] With Marketing stopped, "Send to campaign" still returns at once; the
+- [x] Every action appears on the timeline with who/when.
+- [x] With Marketing stopped, "Send to campaign" still returns at once; the
       delivery retries and completes when Marketing is back.
-- [ ] Email to the own inbox arrives; a provider failure shows on the timeline
+- [x] Email to the own inbox arrives; a provider failure shows on the timeline
       and in the bell.
-- [ ] Menu + panel match the Communication pattern (dropdown + right slide-over).
+- [x] Menu + panel match the Communication pattern (dropdown + right slide-over).

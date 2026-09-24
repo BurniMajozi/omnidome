@@ -78,9 +78,9 @@ Web: the header bell shows the unread count and a dropdown feed (poll every
 
 ## Success criteria
 
-- [ ] Unit tests for pattern matching, back-off and exhaustion.
-- [ ] Live: an event published in a rolled-back transaction leaves no rows.
-- [ ] Live: a handler that fails twice then succeeds is delivered on attempt 3.
-- [ ] Live: a handler that always fails ends `dead` with a critical notification; retry endpoint re-queues it.
-- [ ] Two consumer loops never deliver the same row twice.
-- [ ] The bell shows real notifications and the unread count.
+- [x] Unit tests for pattern matching, back-off and exhaustion.
+- [x] Live: an event published in a rolled-back transaction leaves no rows.
+- [x] Live: a handler that fails twice then succeeds is delivered on attempt 3.
+- [x] Live: a handler that always fails ends `dead` with a critical notification; retry endpoint re-queues it.
+- [x] Two consumer loops never deliver the same row twice.
+- [x] The bell shows real notifications and the unread count.

@@ -102,7 +102,7 @@ Every change writes a `lead_activities` row and publishes `sales.lead.created`,
 
 ## Success criteria
 
-- [ ] Company/tender "add" lands on the board in Prospecting.
-- [ ] Table and board always agree on a lead's stage.
-- [ ] Reference, owner, created/modified/closed shown for every lead.
-- [ ] Unit tests green; existing sales tests still green.
+- [x] Company/tender "add" lands on the board in Prospecting.
+- [x] Table and board always agree on a lead's stage.
+- [x] Reference, owner, created/modified/closed shown for every lead.
+- [x] Unit tests green; existing sales tests still green.

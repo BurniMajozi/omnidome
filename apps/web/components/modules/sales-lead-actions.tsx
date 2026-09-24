@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from "react"
 import { createPortal } from "react-dom"
 import {
   AlarmClock, ArrowUpRight, CalendarPlus, CheckCircle2, Circle, ClipboardList, Flag, Loader2, Mail,
-  Megaphone, MoreHorizontal, NotebookPen, Phone, PhoneOutgoing, UserCheck, X,
+  Megaphone, MoreHorizontal, NotebookPen, Phone, PhoneOutgoing, Sparkles, UserCheck, X, Zap,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -99,6 +99,8 @@ const ACTIVITY_ICON: Record<string, React.ReactNode> = {
   sent_to_outbound: <PhoneOutgoing className="h-3.5 w-3.5 text-amber-400" />,
   campaign_requested: <Megaphone className="h-3.5 w-3.5 text-amber-400" />,
   campaign_added: <Megaphone className="h-3.5 w-3.5 text-emerald-400" />,
+  ai_draft: <Sparkles className="h-3.5 w-3.5 text-primary" />,
+  automation: <Zap className="h-3.5 w-3.5 text-amber-400" />,
 }
 
 const inputCls = "h-9 w-full rounded-md border border-border bg-background px-2.5 text-sm"
@@ -429,6 +431,30 @@ export function LeadPanel({
                         <span className="block text-[10px] text-muted-foreground">
                           {formatDateTime(a.created_at)}{a.actor_name ? ` · ${a.actor_name}` : ""}
                         </span>
+                        {a.kind === "ai_draft" && typeof a.details?.body === "string" && (
+                          <span className="mt-1.5 block rounded-md border border-primary/30 bg-primary/5 p-2">
+                            <span className="block whitespace-pre-wrap text-[11px] text-foreground">{a.details.body}</span>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="mt-2 h-6 text-[10px]"
+                              disabled={!lead.email}
+                              title={lead.email ? undefined : "This lead has no email address"}
+                              onClick={() => {
+                                setSubject("Following up from OmniDome")
+                                setBody(String(a.details.body).replace(/\*\*/g, ""))
+                                setNotice(null)
+                                setMode("email")
+                              }}
+                            >
+                              Review and send as email
+                            </Button>
+                          </span>
+                        )}
+                        {(a.kind === "note" || a.kind === "call_logged") && typeof a.details?.body === "string"
+                          && a.details.body.trim() !== a.summary.replace(/^Call: /, "").trim() && (
+                          <span className="mt-1 block whitespace-pre-wrap text-[11px] text-muted-foreground">{a.details.body}</span>
+                        )}
                       </span>
                     </li>
                   ))}

@@ -28,7 +28,6 @@ import {
   Mail,
   PhoneCall,
   PhoneOutgoing,
-  Globe,
   MapPin,
   Store,
   Plus,
@@ -36,9 +35,6 @@ import {
   RefreshCw,
   Sparkles,
   Bot,
-  Zap,
-  ShoppingCart,
-  FileText,
   Package,
   Building2,
   Phone,
@@ -61,6 +57,7 @@ import { SalesPipelineBoard } from "./sales-pipeline-board"
 import { SalesLeadSources } from "./sales-lead-sources"
 import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales-leads-tab"
 import { LeadActionsMenu, LeadPanel, type LeadPanelMode } from "./sales-lead-actions"
+import { LeadWarmingRules } from "./sales-lead-warming"
 
 const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
@@ -894,91 +891,8 @@ export function SalesModule() {
             </div>
           </div>
 
-          {/* Active Digital Channel Automation Rules */}
-          <div className="surface-card p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-amber-400" />
-                  Active Event Triggers & Stage Rules
-                </h4>
-                <p className="text-xs text-muted-foreground">
-                  Automated stage movement criteria for digital customer interactions
-                </p>
-              </div>
-              <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-xs">
-                3 Active Event Listeners
-              </Badge>
-            </div>
-
-            <div className="grid gap-3 sm:grid-cols-3">
-              {/* Rule 1: Abandoned Cart */}
-              <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <ShoppingCart className="h-4 w-4 text-cyan-400" />
-                    Abandoned Basket ("Unbandered Basket")
-                  </div>
-                  <Badge className="bg-cyan-500/20 text-cyan-400 text-[10px]">Active</Badge>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Customer placed internet package in portal basket but left without paying (&gt;2 hrs).
-                </p>
-                <div className="rounded bg-muted/40 p-2 text-[11px] space-y-1">
-                  <div className="text-muted-foreground">
-                    Stage Movement: <span className="font-semibold text-foreground">New ➔ Contacted (Warming Active)</span>
-                  </div>
-                  <div className="text-emerald-400 font-medium">
-                    AI Action: DomeBot generates 15% discount voucher <code className="text-xs">FIBERWARM15</code> + free installation waiver.
-                  </div>
-                </div>
-              </div>
-
-              {/* Rule 2: Quote Request */}
-              <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <FileText className="h-4 w-4 text-purple-400" />
-                    Instant Quotation Request
-                  </div>
-                  <Badge className="bg-purple-500/20 text-purple-400 text-[10px]">Active</Badge>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Customer requested pricing on website calculator or emailed inquiry.
-                </p>
-                <div className="rounded bg-muted/40 p-2 text-[11px] space-y-1">
-                  <div className="text-muted-foreground">
-                    Stage Movement: <span className="font-semibold text-foreground">New ➔ Proposal Sent</span>
-                  </div>
-                  <div className="text-purple-400 font-medium">
-                    AI Action: DomeBot generates itemized quote spec PDF and schedules follow-up touchpoint.
-                  </div>
-                </div>
-              </div>
-
-              {/* Rule 3: Registered but Inactive */}
-              <div className="rounded-xl border border-border bg-card p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
-                    <Globe className="h-4 w-4 text-amber-400" />
-                    Online Registration Inactive
-                  </div>
-                  <Badge className="bg-amber-500/20 text-amber-400 text-[10px]">Active</Badge>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  User registered on self-service portal but took no action (&gt;24 hrs).
-                </p>
-                <div className="rounded bg-muted/40 p-2 text-[11px] space-y-1">
-                  <div className="text-muted-foreground">
-                    Stage Movement: <span className="font-semibold text-foreground">New ➔ Qualified</span>
-                  </div>
-                  <div className="text-amber-400 font-medium">
-                    AI Action: Concierge bot sends friendly WhatsApp check-in offering address coverage check.
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* Event triggers & stage rules: real orchestrator workflows (SPEC-lead-automations.md) */}
+          <LeadWarmingRules />
 
           {/* Real lead sources: FNO passed homes → geo segments (SPEC-geo-segments.md) */}
           <SalesLeadSources />

@@ -13,5 +13,5 @@
 - [x] T9 web: action menu + record panel + forms — browser: ⋯ and right-click menu (8 actions), record panel (ref/stage/owner/dates/deal/tasks/timeline), note saved via form, campaign picker lists real campaigns
 - [x] Checkpoint C — every action on the timeline; email delivered to own inbox; Marketing-down retry proven (T8)
 - [x] T10 orchestrator event triggers, intake, consumer, engine templating, templates; sales automation endpoint — live 18/18 (3 cards end-to-end with real AI drafts, idempotency, orchestrator-down catch-up); fixed phone-match merging different people
-- [ ] T11 web: real rule cards
+- [x] T11 web: real rule cards — browser: 3 of 3 active, test event from the card → run succeeded (62 s on the free model; polling window raised to 3 min), open lead → AI draft → "Review and send as email" prefilled; dead-delivery retry verified
 - [ ] Checkpoint D (push, CI)

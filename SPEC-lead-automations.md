@@ -55,9 +55,21 @@ orchestrator moves the lead's stage and has DomeBot draft the warm-up message.
 
 ## Success criteria
 
-- [ ] Test event for each card → lead created/advanced, workflow run succeeded,
+- [x] Test event for each card → lead created/advanced, workflow run succeeded,
       AI draft on the timeline (or a clear "AI unavailable" step when every
       model is rate-limited), notification in the bell.
-- [ ] Same idempotency key twice → one run.
-- [ ] Orchestrator stopped while events arrive → they run when it is back.
-- [ ] Cards show real run counts.
+- [x] Same idempotency key twice → one run.
+- [x] Orchestrator stopped while events arrive → they run when it is back.
+- [x] Cards show real run counts.
+
+## Implementation notes (2026-09-24)
+
+- Live 18/18 plus the browser check: each card creates/advances the lead and
+  saves a real AI draft; the same idempotency key runs once; an event published
+  while the orchestrator was stopped ran when it came back.
+- Lead matching uses the email only when the event has one; a shared phone
+  first merged two different people into one lead during testing.
+- On the free Qwen model a run took 62 s end to end (the AI draft step), so the
+  card watches a test run for up to 3 minutes.
+- "Review and send as email" on an AI draft opens the email form prefilled;
+  nothing is sent automatically.
