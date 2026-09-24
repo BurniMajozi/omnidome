@@ -1,55 +1,33 @@
-# Implementation Plan: Sales lead lifecycle, event bus, automations
+# Implementation Plan: Orchestrator memory management + agent hardening
 
-Specs: `SPEC-event-bus.md`, `SPEC-lead-lifecycle.md`, `SPEC-lead-actions.md`,
-`SPEC-lead-automations.md`. Map: `CAPABILITY-MAP-sales-lifecycle.md`.
-Previous plan archived in `tasks/archive/`.
+Spec: `SPEC-orchestrator-memory-hardening.md` (decisions recorded there).
+Previous plans archived in `tasks/archive/`.
 
-## Architecture decisions
+## Stage 1 — agent hardening (this run)
+Order: A1 → A2 → A3 → A6 → A5 → A4 → A7, then Checkpoint 1 (tests, rebuild,
+live checks, push, CI).
 
-- Broker = Postgres outbox + per-consumer deliveries (`services/common/event_bus.py`);
-  no new container. Notifications live beside it; the orchestrator serves the API.
-- Once a lead has a deal, the deal stage is the single source of truth; the lead
-  table and the board call the same server rules (`services/sales/lead_stages.py`).
-- Actions that touch other services publish events; sales and orchestrator run consumers.
-- Automations are ordinary orchestrator workflows with a `trigger_event`.
-- Schema changes are idempotent SQL migrations in `config/migrations/` (create_all never ALTERs).
-- Commit per task; push at the end after live verification (the user asked to push).
+- A1 `tool-call-repair`: `services/agent_orchestrator/json_repair.py`; llm.py
+  keeps the raw arguments + a repair verdict; agents.py refuses invalid/cut-off
+  calls with a tool error.
+- A2 `loop-guards`: final synthesis at the step limit (today it returns the last
+  tool message's JSON as the answer — bug), empty-answer retries, repeated-answer
+  and consecutive-truncation stops, per-tool timeout.
+- A3 `tool-output-budget`: `tool_budget.py` cap + fair split + marker.
+- A6 `tool-policy`: `mutates / requires_approval / timeout_s / max_output_chars`
+  on every Tool; completeness test.
+- A5 `parallel-reads`: group consecutive read-only calls; writes are barriers.
+- A4 `model-limiter`: per-model semaphore + 429 cool-down in common/openrouter.py.
+- A7 `usage-tracing`: usage/model/latency from responses → `llm_calls`;
+  `/api/usage/llm`.
+- Cleanup: delete dead `agents/base.py`.
 
-## Tasks
-
-### Phase 1 — event-bus
-- T1 Pure helpers + tests (pattern match, back-off, exhaustion) — `services/common/event_bus.py`, fno tests.
-- T2 Migration + publish/notify/EventConsumer; live test (rollback, retry, dead, concurrency).
-- T3 Orchestrator notifications + deliveries API; header bell wired.
-
-### Checkpoint A: bus delivers, bell shows notifications.
-
-### Phase 2 — lead-lifecycle
-- T4 `lead_stages.py` rules + tests.
-- T5 Migration (lead columns, ref_no backfill, activities, tasks, status migration) + models.
-- T6 Sales API: create-with-pipeline, stage endpoint, detail, owners, board→lead sync, events.
-- T7 Web: lead table (reference/owner/dates, grouped stage dropdown), Lead sources → board, unified modal linked, board card ref/owner.
-
-### Checkpoint B: add company → board; board ↔ table agree; build + tests green.
-
-### Phase 3 — lead-actions
-- T8 Sales action endpoints + sales consumer (email via AgentMail, campaign audience).
-- T9 Web: ⋯ menu + right-click, record slide-over (details, timeline, tasks), action forms.
-
-### Checkpoint C: every action on the timeline; email to own inbox; marketing-down retry.
-
-### Phase 4 — lead-automations
-- T10 Orchestrator: trigger_event, intake endpoint, orchestrator consumer, engine templating/service calls, templates endpoint; sales automation endpoint.
-- T11 Web: real rule cards (install, runs, send test event).
-
-### Checkpoint D: three test events run end-to-end; push; CI green.
+## Stage 2 — memory (next run): M1 → M2 → M3 → M4 → M5
+## Stage 3 — approvals + safe SQL: A8 → A9
 
 ## Risks
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Free LLMs rate-limited | AI draft step fails | fallback chain; workflow records the failure; stage move still happens first |
-| Email to real businesses during testing | High | only send to own AgentMail inbox |
-| Two uvicorn workers × consumers | Double delivery | SKIP LOCKED claim + unique (event, consumer) |
-| Lead status migration | Medium | idempotent SQL; only PROPOSAL/NEGOTIATION without deal change |
-| Docker/WSL instability | Delays | rebuild one service at a time |
+| Risk | Mitigation |
+|---|---|
+| Loop changes break workflows/MCP specialists | scripted fake-LLM unit tests + live workflow + MCP call after rebuild |
+| Free models stay rate-limited during live checks | cool-down proves itself; accept a failed-AI step as long as it fails visibly |
+| Slow pip inside WSL rebuilds | requirements unchanged in stage 1 (no new deps) so layers are cached |

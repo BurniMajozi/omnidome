@@ -270,11 +270,11 @@ Stable ids. A = agent hardening, M = memory management.
 3. A8 → A9 — **Checkpoint 3**: approvals live in the queue; safe SQL answering.
 Push after each checkpoint with CI green.
 
-## Open questions for you (needed before the affected module)
-1. **A6/A8:** confirm the approval list (create customer, create ticket,
-   provisioning, customer-facing sends) — add or remove?
-2. **A9:** OK to add `sqlglot` (pure-Python SQL parser, MIT) and which tables
-   InsightBot/MetricBot may read?
-3. **M5:** retention periods — roll up after 30 days, archive low-importance
-   after 90?
-4. **Cleanup:** OK to delete the dead `agents/base.py`?
+## Decisions (answered 2026-09-24)
+1. **A6/A8 approval list:** create customer, create ticket, provisioning,
+   customer-facing sends, **plus refunds and posting/publishing marketing
+   campaigns** (added by the user). Tools for those two are flagged as they are
+   added to the registry.
+2. **A9:** `sqlglot` approved. Table allowlist still to be proposed when A9 starts.
+3. **M5:** roll up after 30 days, archive low-importance after 90 — approved.
+4. **Cleanup:** delete the dead `agents/base.py` — approved.
