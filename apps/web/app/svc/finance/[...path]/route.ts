@@ -37,7 +37,10 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     })
     const contentType = res.headers.get("content-type") || "application/json"
     const data = await res.text()
-    return new NextResponse(data, {
+    // 204/205/304 must not carry a body: passing "" makes NextResponse throw,
+    // which the catch below turned into a 502 for every successful DELETE.
+    const noBody = res.status === 204 || res.status === 205 || res.status === 304
+    return new NextResponse(noBody ? null : data, {
       status: res.status,
       headers: { "Content-Type": contentType },
     })
