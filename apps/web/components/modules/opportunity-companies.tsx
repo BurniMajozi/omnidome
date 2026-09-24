@@ -66,8 +66,19 @@ export function OpportunityCompanies({
     })
   }, [])
 
+  // One chip per distinct search (area, type, radius), newest first.
   const loadRecent = useCallback(() => {
-    opportunityApi.listCompanySearches().then(setRecent).catch(() => {})
+    opportunityApi.listCompanySearches()
+      .then((all) => {
+        const seen = new Set<string>()
+        setRecent(all.filter((s) => {
+          const key = `${s.area_query.toLowerCase()}|${s.category}|${s.radius_km}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        }))
+      })
+      .catch(() => {})
   }, [])
 
   useEffect(() => {

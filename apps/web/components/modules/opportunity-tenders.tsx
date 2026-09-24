@@ -175,7 +175,8 @@ export function OpportunityTenders() {
     setEvidence(null)
   }
 
-  const updateTender = (t: Tender) => setTenders((prev) => (prev ?? []).map((x) => (x.id === t.id ? { ...x, ...t } : x)))
+  const updateTender = (t: Tender) =>
+    setTenders((prev) => (prev ?? []).map((x) => (x.id === t.id ? { ...x, ...t, source_label: t.source_label ?? x.source_label } : x)))
 
   const tenderAction = async (t: Tender, fn: () => Promise<void>) => {
     setRowBusy((p) => ({ ...p, [t.id]: true }))
