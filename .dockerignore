@@ -28,4 +28,9 @@ hermes_data
 # unreadable, breaks build-context stat; not part of any image).
 supabase/volumes
 supabase/volumes/db/data
+# Host-only dev overrides (service URLs on localhost). Next.js ranks .env.local
+# above .env, and rewrites() are resolved at build time, so letting it into the
+# image baked every /svc/* rewrite as localhost -- the web container proxied to
+# itself and those routes 500'd. Railway builds from git, where it never exists.
+apps/web/.env.local
 
