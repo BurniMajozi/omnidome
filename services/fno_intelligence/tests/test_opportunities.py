@@ -227,3 +227,116 @@ def test_title_is_used_without_reference():
 
 def test_reference_and_title_keys_do_not_collide():
     assert tender_dedupe_key("abc", "x") != tender_dedupe_key(None, "abc")
+
+
+# ── choosing the Nominatim result for an area ─────────────────────────────
+
+from opportunities import pick_area_result, area_query  # noqa: E402
+
+
+def _nom(category, typ, addresstype, name):
+    return {"category": category, "type": typ, "addresstype": addresstype, "display_name": name, "lat": "-26.1", "lon": "28.0"}
+
+
+def test_place_result_beats_a_higher_ranked_park():
+    park = _nom("leisure", "park", "leisure", "Johannesburg Botanical Gardens, Randburg")
+    suburb = _nom("place", "suburb", "suburb", "Rosebank, Johannesburg")
+    assert pick_area_result([park, suburb])["display_name"] == "Rosebank, Johannesburg"
+
+
+def test_administrative_boundary_is_accepted_when_no_place_node():
+    station = _nom("railway", "station", "railway", "Rosebank station")
+    boundary = _nom("boundary", "administrative", "city", "Stellenbosch")
+    assert pick_area_result([station, boundary])["display_name"] == "Stellenbosch"
+
+
+def test_first_result_is_the_fallback():
+    only = _nom("amenity", "school", "amenity", "Some School")
+    assert pick_area_result([only]) is only
+
+
+def test_no_results_gives_none():
+    assert pick_area_result([]) is None
+
+
+def test_area_query_adds_country_once():
+    assert area_query(" Rosebank, Johannesburg ") == "Rosebank, Johannesburg, South Africa"
+    assert area_query("Sea Point, Cape Town, South Africa") == "Sea Point, Cape Town, South Africa"
+
+
+def test_generic_tag_values_fall_back_to_the_key_name():
+    for value in ("yes", "unknown"):
+        el = _node(8, "Generic Co", -26.1, 28.0, office=value)
+        assert parse_overpass_elements([el], CENTER)[0]["category_label"] == "Office"
+
+
+# ── structured extraction output + link resolution ────────────────────────
+
+from opportunities import TENDER_JSON_SCHEMA, resolve_url, tenders_from_data  # noqa: E402
+
+
+def test_tenders_from_firecrawl_json_object():
+    data = {"tenders": [{"title": "RFB 3281", "closing_text": "29/09/2026 at 11:00"}, {"title": ""}]}
+    [t] = tenders_from_data(data)
+    assert t["title"] == "RFB 3281"
+    assert t["closing_text"] == "29/09/2026 at 11:00"
+
+
+def test_tenders_from_data_handles_missing_or_odd_shapes():
+    assert tenders_from_data(None) == []
+    assert tenders_from_data({"something": 1}) == []
+    assert tenders_from_data([{"title": "A"}])[0]["title"] == "A"
+
+
+def test_schema_requires_title_and_lists_the_spec_fields():
+    item = TENDER_JSON_SCHEMA["properties"]["tenders"]["items"]
+    assert item["required"] == ["title"]
+    for field in ("reference", "issuer", "closing_text", "briefing_text", "required_documents", "document_links", "detail_url"):
+        assert field in item["properties"]
+
+
+def test_relative_links_resolve_against_the_page():
+    assert resolve_url("https://www.sita.co.za/content/invitations", "/sites/default/files/rfb.pdf") == \
+        "https://www.sita.co.za/sites/default/files/rfb.pdf"
+    assert resolve_url("https://a.gov.za/tenders/", "doc.pdf") == "https://a.gov.za/tenders/doc.pdf"
+
+
+def test_absolute_links_are_kept_and_junk_is_dropped():
+    assert resolve_url("https://a.gov.za/x", "https://b.gov.za/y.pdf") == "https://b.gov.za/y.pdf"
+    assert resolve_url("https://a.gov.za/x", "javascript:void(0)") is None
+    assert resolve_url("https://a.gov.za/x", "mailto:bids@a.gov.za") is None
+    assert resolve_url("https://a.gov.za/x", None) is None
+
+
+# ── compact listing schema + separator-insensitive references ─────────────
+
+from opportunities import TENDER_LIST_JSON_SCHEMA  # noqa: E402
+
+
+def test_dash_and_underscore_references_are_the_same_tender():
+    assert tender_dedupe_key("RFB 3281-2026", "a") == tender_dedupe_key("RFB 3281_2026", "b") == tender_dedupe_key("rfb3281/2026", "c")
+
+
+def test_listing_schema_is_compact_so_long_lists_fit():
+    fields = set(TENDER_LIST_JSON_SCHEMA["properties"]["tenders"]["items"]["properties"])
+    assert fields == {"title", "reference", "issuer", "closing_text", "briefing_text", "detail_url"}
+
+
+# ── junk links and relative closing dates (found scanning SITA / eTenders) ──
+
+def test_link_text_is_not_a_url():
+    assert resolve_url("https://www.sita.co.za/content/invitations", "Download 5 Documents") is None
+
+
+def test_link_back_to_the_listing_page_is_ignored():
+    assert resolve_url("https://www.sita.co.za/content/invitations", "/content/invitations") is None
+
+
+def test_relative_days_are_counted_from_now():
+    now = datetime(2026, 9, 24, 10, 0, tzinfo=SAST)
+    assert parse_sa_datetime("in 34 days", now=now) == datetime(2026, 10, 28, 23, 59, tzinfo=SAST)
+    assert parse_sa_datetime("Closes in 1 day", now=now) == datetime(2026, 9, 25, 23, 59, tzinfo=SAST)
+
+
+def test_relative_days_need_a_reference_time():
+    assert parse_sa_datetime("in 34 days") is None

@@ -84,7 +84,7 @@ def _category_label(tags: dict) -> Optional[str]:
     for key in _CATEGORY_KEYS:
         value = (tags.get(key) or "").strip()
         if value:
-            text = key if value == "yes" else value
+            text = key if value.lower() in ("yes", "unknown") else value
             text = text.replace("_", " ")
             return text[:1].upper() + text[1:]
     return None
@@ -126,6 +126,31 @@ def parse_overpass_elements(elements: list[dict], center: tuple[float, float], l
         })
     companies.sort(key=lambda c: (c["distance_km"], c["name"].lower()))
     return companies[:limit]
+
+
+# ── area lookup ───────────────────────────────────────────────────────────
+
+_PLACE_ADDRESSTYPES = {"suburb", "neighbourhood", "quarter", "city_district", "town", "city",
+                       "village", "hamlet", "municipality", "county", "state_district"}
+
+
+def area_query(area: str) -> str:
+    area = (area or "").strip().rstrip(",")
+    return area if "south africa" in area.lower() else f"{area}, South Africa"
+
+
+def pick_area_result(results: list[dict]) -> Optional[dict]:
+    """Prefer an actual place (suburb/town/city) over whatever Nominatim ranked
+    first -- e.g. "Rosebank, Johannesburg" can rank a botanical garden first."""
+    if not results:
+        return None
+    for r in results:
+        if r.get("category") == "place" and r.get("addresstype", r.get("type")) in _PLACE_ADDRESSTYPES | {"place"}:
+            return r
+    for r in results:
+        if r.get("category") == "boundary":
+            return r
+    return results[0]
 
 
 # ── source URLs ───────────────────────────────────────────────────────────
@@ -261,15 +286,7 @@ def normalize_tender(item: dict) -> Optional[dict]:
 def parse_tender_json(text: str) -> list[dict]:
     """Tolerant parse of the LLM's answer: code fences and surrounding prose
     are ignored; accepts a list or {"tenders": [...]}; drops untitled items."""
-    data = _extract_json(text)
-    if isinstance(data, dict):
-        data = data.get("tenders", [data] if data.get("title") else [])
-    tenders = []
-    for item in data if isinstance(data, list) else []:
-        t = normalize_tender(item)
-        if t and t["title"]:
-            tenders.append(t)
-    return tenders
+    return tenders_from_data(_extract_json(text))
 
 
 def parse_tender_detail_json(text: str) -> dict:
@@ -290,11 +307,21 @@ _DMY = re.compile(r"(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})")
 _TIME = re.compile(r"(?:at\s*)?(\d{1,2})\s*[:hH]\s*(\d{2})")
 
 
-def parse_sa_datetime(text: Optional[str], *, end_of_day: bool = True) -> Optional[datetime]:
+_RELATIVE_DAYS = re.compile(r"\bin\s+(\d{1,3})\s+days?\b", re.I)
+
+
+def parse_sa_datetime(text: Optional[str], *, end_of_day: bool = True, now: Optional[datetime] = None) -> Optional[datetime]:
     """Parse the date formats SA tender pages use (day-first). Date-only values
-    default to 23:59 so a tender isn't shown as closed before its closing day ends."""
+    default to 23:59 so a tender isn't shown as closed before its closing day ends.
+    Relative values ("in 34 days", as eTenders shows) need `now`."""
     if not text:
         return None
+    rel = _RELATIVE_DAYS.search(text)
+    if rel and not re.search(r"\d{4}", text):
+        if now is None:
+            return None
+        day = (now.astimezone(SAST) + timedelta(days=int(rel.group(1)))).date()
+        return datetime(day.year, day.month, day.day, 23, 59, tzinfo=SAST)
     y = mo = d = None
     m = _DMY_WORDS.search(text)
     if m and m.group(2).lower() in _MONTHS:
@@ -318,7 +345,96 @@ def parse_sa_datetime(text: Optional[str], *, end_of_day: bool = True) -> Option
 
 
 def tender_dedupe_key(reference: Optional[str], title: Optional[str]) -> str:
-    ref = re.sub(r"[^a-z0-9/\-]", "", (reference or "").lower())
+    # Separators vary between scans ("RFB 3281-2026" vs "RFB 3281_2026"), so only
+    # letters and digits count.
+    ref = re.sub(r"[^a-z0-9]", "", (reference or "").lower())
     if ref:
         return f"ref:{ref}"
     return "title:" + re.sub(r"[^a-z0-9]+", " ", (title or "").lower()).strip()
+
+
+# ── structured extraction (Firecrawl "json" format) ───────────────────────
+
+_TENDER_ITEM_PROPERTIES = {
+    "title": {"type": "string"},
+    "reference": {"type": "string"},
+    "issuer": {"type": "string"},
+    "description": {"type": "string"},
+    "closing_text": {"type": "string", "description": "Closing date and time exactly as written"},
+    "briefing_text": {"type": "string", "description": "Briefing session date and time as written"},
+    "briefing_location": {"type": "string"},
+    "required_documents": {"type": "array", "items": {"type": "string"}},
+    "document_links": {"type": "array", "items": {"type": "object", "properties": {
+        "label": {"type": "string"}, "url": {"type": "string"}}}},
+    "detail_url": {"type": "string", "description": "Link to this tender's own page"},
+    "contact": {"type": "string"},
+}
+
+TENDER_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {"tenders": {"type": "array", "items": {
+        "type": "object", "properties": _TENDER_ITEM_PROPERTIES, "required": ["title"],
+    }}},
+    "required": ["tenders"],
+}
+
+# Listing pages can hold dozens of tenders; the extractor's output is capped, so
+# the listing pass asks for a few short fields per tender (48 of SITA's tenders
+# fit in one pass this way, versus 10-29 with every field). The rest comes from
+# each tender's own page in the detail pass.
+TENDER_LIST_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {"tenders": {"type": "array", "items": {
+        "type": "object",
+        "properties": {k: _TENDER_ITEM_PROPERTIES[k] for k in (
+            "title", "reference", "issuer", "closing_text", "briefing_text", "detail_url")},
+        "required": ["title"],
+    }}},
+    "required": ["tenders"],
+}
+
+TENDER_DETAIL_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {k: v for k, v in _TENDER_ITEM_PROPERTIES.items() if k not in ("title", "detail_url")},
+}
+
+CONTACT_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {"website": {"type": "string"}, "phone": {"type": "string"}, "email": {"type": "string"}},
+}
+
+TENDER_LIST_PROMPT = (
+    "List EVERY tender, RFQ, RFP, RFB or bid on this page, including all of them in long lists. Keep each "
+    "field short and copy values exactly as written; leave a field empty when the page doesn't state it. "
+    "Never invent values."
+)
+TENDER_DETAIL_PROMPT = (
+    "From this tender's page, extract the closing date/time, briefing session, required documents a bidder "
+    "must submit, downloadable document links and contact details. Leave fields empty when not stated."
+)
+
+
+def tenders_from_data(data: Any) -> list[dict]:
+    """Normalise already-parsed extraction output: a list or {"tenders": [...]}."""
+    if isinstance(data, dict):
+        data = data.get("tenders", [data] if data.get("title") else [])
+    if not isinstance(data, list):
+        return []
+    return [t for t in (normalize_tender(item) for item in data) if t and t["title"]]
+
+
+def resolve_url(base_url: str, href: Optional[str]) -> Optional[str]:
+    """Absolute http(s) URL for a link found on base_url; None for junk links."""
+    from urllib.parse import urljoin
+
+    href = (href or "").strip()
+    # Extractors sometimes return a link's text ("Download 5 Documents") instead
+    # of its target; real URLs never contain raw whitespace.
+    if not href or re.search(r"\s", href) or href.lower().startswith(("javascript:", "mailto:", "tel:", "#")):
+        return None
+    absolute = urljoin(base_url, href)
+    if urlsplit(absolute).scheme not in ("http", "https"):
+        return None
+    if absolute.split("#")[0].rstrip("/") == base_url.split("#")[0].rstrip("/"):
+        return None
+    return absolute

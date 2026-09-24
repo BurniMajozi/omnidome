@@ -118,7 +118,8 @@ class FirecrawlClient:
 
     # ── capability wrappers (the six use cases) ──────────────────────────
     async def search(self, query: str, *, limit: int = 5,
-                     lang: str = "en", country: str = "za") -> dict:
+                     lang: str = "en", country: str = "za",
+                     scrape_formats: Optional[list] = None, timeout: float = 60.0) -> dict:
         """Web search → returns result list + optional full-page markdown.
 
         Powers: product_research, new_site_releases, competitor_analysis.
@@ -128,18 +129,21 @@ class FirecrawlClient:
             "limit": limit,
             "lang": lang,
             "country": country,
-            "scrapeOptions": {"formats": ["markdown"]},
+            "scrapeOptions": {"formats": scrape_formats or ["markdown"]},
         }
-        return await self._post("/search", payload, require_key=False)
+        return await self._post("/search", payload, require_key=False, timeout=timeout)
 
-    async def scrape(self, url: str, *, formats: Optional[list[str]] = None) -> dict:
+    async def scrape(self, url: str, *, formats: Optional[list] = None,
+                     timeout: float = 60.0, only_main_content: Optional[bool] = None) -> dict:
         """Scrape a single known URL → clean markdown (and/or HTML).
 
         Powers: fno_site_message, cancellation_processing, address_lookup.
         Public document URLs (PDF/DOCX) are also accepted here.
         """
-        payload = {"url": url, "formats": formats or ["markdown"]}
-        return await self._post("/scrape", payload, require_key=False)
+        payload: dict[str, Any] = {"url": url, "formats": formats or ["markdown"]}
+        if only_main_content is not None:
+            payload["onlyMainContent"] = only_main_content
+        return await self._post("/scrape", payload, require_key=False, timeout=timeout)
 
     async def interact(self, url: str, actions: list[dict]) -> dict:
         """Browser actions on a live page (clicks/forms/login) for portals that

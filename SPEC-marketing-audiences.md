@@ -85,3 +85,14 @@ Never: put home addresses in an audience; call a real ad platform API.
 3. The Audiences tab shows only real data; New Audience creates real records
    for all three types; export and delete work.
 4. tsc, lint clean; browser pass on the deployed app.
+
+## Implementation notes (2026-09-24)
+
+- Bug reproduced first: `POST /segments` returned 500 (`syntax error at or near
+  ":"`), so no audience had ever been saved. Fixed with `CAST(:rules AS jsonb)`.
+- One additive column, `updated_at`, so re-pushing a source shows a fresh date
+  (added idempotently by the service's table-ensure DDL).
+- Isolation: other tenants get 403 from the marketing entitlement guard before
+  the route runs, and every query also filters on `tenant_id`; the 404
+  cross-tenant path couldn't be exercised live because only the dev tenant has
+  marketing enabled.

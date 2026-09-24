@@ -138,3 +138,24 @@ OpenRouter) are live-verified against real sites.
 4. Scheduled rescans run without duplicate scans across the two workers.
 5. Add as lead / Add to pipeline create real Sales leads and mark the row.
 6. pytest, tsc and lint clean; browser pass on the deployed app.
+
+## Implementation notes (2026-09-24, found during live verification)
+
+- **Extraction provider.** The OpenRouter key in `.env` has expired (401), so
+  structured extraction uses Firecrawl's own `json` format (valid key) as the
+  primary path for both tenders and contact lookup; OpenRouter is only a
+  fallback once the key is renewed.
+- **Listing vs detail pass.** Firecrawl's extraction output is capped, so the
+  listing pass asks for a compact set of fields (title, reference, issuer,
+  closing, briefing, link) — SITA went from 10–29 to ~94 tenders per pass.
+  Documents, briefing location and contact come from each tender's own page,
+  up to 10 open, unread tenders per scan, soonest closing first.
+- **Link hygiene.** Extractors sometimes return link *text* ("Download 5
+  Documents"); anything with whitespace or pointing back at the listing page is
+  discarded.
+- **Relative dates.** eTenders shows "in 34 days"; parsed relative to the scan time.
+- **Double-scan protection** is an atomic claim (`UPDATE … WHERE last_status <>
+  'scanning' … RETURNING`) rather than an advisory lock held during a 60–200 s
+  network call; stale claims expire after 30 minutes. Verified: a due source
+  scanned exactly once across both workers.
+- **Reference de-dup** ignores separators ("RFB 3281-2026" = "RFB 3281_2026").
