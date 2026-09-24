@@ -202,3 +202,48 @@ def test_large_tool_results_are_trimmed_for_the_model_but_kept_in_the_log(harnes
     sent = tool_messages(llm.requests[1])[0]["content"]
     assert len(sent) < 3500 and "trimmed" in sent.lower()
     assert out["tool_calls"][0]["result"]["data"] == rows      # full result kept
+
+
+# ── A5 parallel-reads ───────────────────────────────────────────────────────
+
+def test_plan_batches_groups_consecutive_reads_and_isolates_writes():
+    reads = {"r1", "r2", "r3"}
+    calls = [{"name": n} for n in ("r1", "r2", "w1", "r3", "unknown", "r1")]
+    batches = agents.plan_batches(calls, lambda c: c["name"] in reads)
+    assert [[c["name"] for c in b] for b in batches] == [["r1", "r2"], ["w1"], ["r3"], ["unknown"], ["r1"]]
+
+
+def test_reads_in_one_round_run_concurrently(harness):
+    import time
+    a = FakeTool("billing_get_balance", delay=0.3)
+    b = FakeTool("support_get_tickets", delay=0.3)
+    c = FakeTool("network_get_service_status", delay=0.3)
+    llm, agent = harness([
+        reply(tool_calls=[call(a.name, {}, "a"), call(b.name, {}, "b"), call(c.name, {}, "c")]),
+        reply("All checked."),
+    ], a, b, c)
+    started = time.perf_counter()
+    out = run(agent)
+    assert time.perf_counter() - started < 0.75                 # ~0.3 s, not ~0.9 s
+    assert [t["name"] for t in out["tool_calls"]] == [a.name, b.name, c.name]   # order kept
+
+
+def test_writes_do_not_overlap_with_other_calls(harness):
+    events = []
+
+    class Tracked(FakeTool):
+        async def execute(self, tool_input, tenant_id=None, user_id=None):
+            events.append(("start", self.name))
+            await asyncio.sleep(0.05)
+            events.append(("end", self.name))
+            return {"success": True}
+
+    r = Tracked("support_get_tickets")
+    w = Tracked("support_create_ticket", mutates=True)
+    llm, agent = harness([
+        reply(tool_calls=[call(r.name, {"p": 1}, "a"), call(w.name, {}, "b"), call(r.name, {"p": 2}, "c")]),
+        reply("Ticket created."),
+    ], r, w)
+    run(agent)
+    w_start = events.index(("start", w.name))
+    assert events[w_start + 1] == ("end", w.name)               # nothing ran during the write

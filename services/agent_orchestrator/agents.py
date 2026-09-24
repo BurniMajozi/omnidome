@@ -43,6 +43,20 @@ SPECIALIST_MAP = {
 }
 
 
+def plan_batches(calls: List[Dict[str, Any]], can_run_concurrently) -> List[List[Dict[str, Any]]]:
+    """Group a round's tool calls (spec A5; WeKnora CanRunConcurrently): runs of
+    consecutive read-only calls form one batch that executes concurrently; any
+    other call (writes, unknown tools, consultations) is a barrier and runs alone,
+    in order."""
+    batches: List[List[Dict[str, Any]]] = []
+    for tc in calls:
+        if can_run_concurrently(tc) and batches and batches[-1] and batches[-1][-1].get("_read"):
+            batches[-1].append({**tc, "_read": True})
+        else:
+            batches.append([{**tc, "_read": bool(can_run_concurrently(tc))}])
+    return [[{k: v for k, v in tc.items() if k != "_read"} for tc in batch] for batch in batches]
+
+
 def clean_response(text: str) -> str:
     """Clean repeated assistant responses if the LLM emitted premature drafts."""
     if not text or not isinstance(text, str):
@@ -157,16 +171,17 @@ class Agent:
                 continue
 
             executed_calls = []
-            for tc in raw_tool_calls:
-                tool_name, tool_args, tool_result = await self._execute_call(tc, call_counts, tenant)
-                executed_calls.append({
-                    "id": tc.get("id", ""),
-                    "name": tc.get("name", tool_name),
-                    "arguments": tool_args,
-                    "result": tool_result,
-                })
-                tool_call_log.append({"name": tool_name, "arguments": tool_args, "result": tool_result})
-                tool_count += 1
+            for batch in plan_batches(raw_tool_calls, self._is_read_call):
+                outcomes = await asyncio.gather(*(self._execute_call(tc, call_counts, tenant) for tc in batch))
+                for tc, (tool_name, tool_args, tool_result) in zip(batch, outcomes):
+                    executed_calls.append({
+                        "id": tc.get("id", ""),
+                        "name": tc.get("name", tool_name),
+                        "arguments": tool_args,
+                        "result": tool_result,
+                    })
+                    tool_call_log.append({"name": tool_name, "arguments": tool_args, "result": tool_result})
+                    tool_count += 1
 
             self._append_tool_round(messages, executed_calls)
 
@@ -182,6 +197,12 @@ class Agent:
 
         logger.warning("Agent %s reached the step limit (%d)", self.agent_type, MAX_TOOL_CALLS)
         return await self._final_answer(messages, tools_for_llm, tenant, done, "step_limit")
+
+    @staticmethod
+    def _is_read_call(tc: Dict[str, Any]) -> bool:
+        """Known tool whose policy says it does not change anything (spec A6)."""
+        tool = tool_registry.get(tc.get("name", ""))
+        return bool(tool) and getattr(tool, "mutates", True) is False
 
     async def _final_answer(self, messages, tools_for_llm, tenant, done, stopped_by: str) -> Dict[str, Any]:
         """One last call with tools disabled: answer from what was gathered
