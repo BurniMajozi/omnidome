@@ -27,8 +27,8 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Enum as SAEnum, ForeignKey,
-    Index, Integer, Numeric, String, Text, UniqueConstraint, func,
+    BigInteger, Boolean, Date, DateTime, Enum as SAEnum, Float, ForeignKey,
+    Index, Integer, LargeBinary, Numeric, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -1032,4 +1032,145 @@ class NetworkFaultUpdate(Base):
 
     __table_args__ = (
         Index("ix_nfu_fault", "fault_id", "created_at"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
+# 9. OPPORTUNITY FINDER (SPEC-opportunity-finder.md)
+# ════════════════════════════════════════════════════════════════════════
+# Statuses are plain strings (validated in the routes) rather than Postgres
+# enums: create_all never ALTERs enums, and this schema has already had
+# cross-service enum-name collisions.
+
+class OppCompanySearch(Base):
+    """One OpenStreetMap company search (runs as a background job)."""
+    __tablename__ = "opp_company_searches"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    area_query: Mapped[str] = mapped_column(String(200), nullable=False)
+    area_label: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    radius_km: Mapped[int] = mapped_column(Integer, nullable=False)
+    center_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    center_lng: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")  # queued|running|done|failed
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OppCompany(Base):
+    """A named business found by a company search (public OSM data)."""
+    __tablename__ = "opp_companies"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    search_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("opp_company_searches.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    osm_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    osm_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    category_label: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    address_line: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    suburb: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    city: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    postal_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    phone: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    email: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    website: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    lat: Mapped[float] = mapped_column(Float, nullable=False)
+    lng: Mapped[float] = mapped_column(Float, nullable=False)
+    distance_km: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")  # new|lead_created|dismissed
+    sales_lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    enriched_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrichment: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "search_id", "osm_type", "osm_id", name="uq_opp_company_osm"),
+    )
+
+
+class OppSource(Base):
+    """A procurement page the user asked us to watch for tenders / RFQs."""
+    __tablename__ = "opp_sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False, default="tenders")
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    scan_interval_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24)
+    last_scanned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")  # queued|scanning|ok|failed
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_tender_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "url", name="uq_opp_source_tenant_url"),
+    )
+
+
+class OppSnapshot(Base):
+    """What a scan saw: page markdown + screenshot, kept as evidence."""
+    __tablename__ = "opp_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("opp_sources.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    markdown: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    screenshot: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    screenshot_mime: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    tender_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class OppTender(Base):
+    """A tender / RFQ extracted from a source page."""
+    __tablename__ = "opp_tenders"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("opp_sources.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    snapshot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("opp_snapshots.id", ondelete="SET NULL"), nullable=True,
+    )
+    dedupe_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    issuer: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    closing_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    closing_text: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    briefing_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    briefing_text: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    briefing_location: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    required_documents: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    document_links: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    detail_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    contact: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="new")  # new|reviewing|bidding|skipped
+    sales_lead_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    detail_scanned: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "source_id", "dedupe_key", name="uq_opp_tender_dedupe"),
+        Index("ix_opp_tender_closing", "tenant_id", "closing_at"),
     )
