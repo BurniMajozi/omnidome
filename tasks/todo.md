@@ -4,7 +4,7 @@
 - [x] A1 tool-call-repair — json_repair.py (18 tests), llm.py reports arguments_error, agent refuses; loop tests 2
 - [x] A2 loop-guards — final answer at step limit (was returning tool JSON), empty retries, identical-call refusal, cut-off rounds stop, per-tool timeout; 6 tests
 - [x] A3 tool-output-budget — tool_budget.py (fair split, head/tail), loop sends trimmed text, log keeps full; 7 tests
-- [ ] A6 tool-policy
+- [x] A6 tool-policy — TOOL_POLICIES for all 35 tools + name rule for refunds/campaign posting/provisioning/customer sends; fixed hard-coded 10 s tool HTTP timeout; 7 tests
 - [ ] A5 parallel-reads
 - [ ] A4 model-limiter
 - [ ] A7 usage-tracing

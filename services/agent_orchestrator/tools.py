@@ -36,6 +36,83 @@ SERVICE_URLS = {
 }
 
 
+@dataclass(frozen=True)
+class ToolPolicy:
+    """What a tool may do (spec A6). HTTP method is not a reliable signal: the
+    web-intel tools POST but only read."""
+    mutates: bool = True             # changes data; runs alone, never in parallel (A5)
+    requires_approval: bool = False  # waits for a person before running (A8)
+    timeout_s: int = 60
+    max_output_chars: int = 8000     # cap on the result sent back to the model (A3)
+
+
+_READ = ToolPolicy(mutates=False)
+_WEB_READ = ToolPolicy(mutates=False, timeout_s=120, max_output_chars=12000)
+
+# Every registered tool has an explicit entry (enforced by tests/test_tool_policy.py).
+TOOL_POLICIES: Dict[str, ToolPolicy] = {
+    # CRM
+    "crm_get_customer": _READ,
+    "crm_get_customer_360": _READ,
+    "crm_create_customer": ToolPolicy(mutates=True, requires_approval=True),
+    # Billing
+    "billing_get_balance": _READ,
+    "billing_get_invoice": _READ,
+    "billing_get_payment_history": _READ,
+    # Network: diagnostics can act on the line, so it runs alone.
+    "network_check_coverage": _READ,
+    "network_get_service_status": _READ,
+    "network_run_diagnostics": ToolPolicy(mutates=True, timeout_s=90),
+    # Support
+    "support_create_ticket": ToolPolicy(mutates=True, requires_approval=True),
+    "support_get_tickets": _READ,
+    # Retention, analytics, sales, finance, call centre
+    "retention_get_predictions": _READ,
+    "retention_get_cases": _READ,
+    "analytics_get_executive_summary": _READ,
+    "analytics_get_mrr_trends": _READ,
+    "analytics_get_network_health": _READ,
+    "sales_get_pipeline": _READ,
+    "finance_get_financial_summary": _READ,
+    "call_center_get_intelligence": _READ,
+    "call_center_get_queues": _READ,
+    "call_center_get_agent_metrics": _READ,
+    # Products, talent
+    "products_list_plans": _READ,
+    "products_list_bundles": _READ,
+    "talent_list_employees": _READ,
+    "talent_get_performance_summary": _READ,
+    # Tenant memory
+    "memory.recall": _READ,
+    "memory.write_entry": ToolPolicy(mutates=True),
+    "memory.upsert_summary": ToolPolicy(mutates=True),
+    # FNO web intelligence (Firecrawl): reads, but slow and large
+    "fno_intelligence.web_intel_product_research": _WEB_READ,
+    "fno_intelligence.web_intel_fno_site_message": _WEB_READ,
+    "fno_intelligence.web_intel_new_site_releases": _WEB_READ,
+    "fno_intelligence.web_intel_cancellation_processing": _WEB_READ,
+    "fno_intelligence.web_intel_address_lookup": _WEB_READ,
+    "fno_intelligence.web_intel_competitor_analysis": _WEB_READ,
+    # A sub-agent may call mutating tools itself (each gated on its own), so the
+    # consultation runs alone and gets a longer timeout.
+    "orchestrator_consult_specialist": ToolPolicy(mutates=True, timeout_s=180),
+}
+
+# User decision 2026-09-24: creating customers or tickets, provisioning,
+# customer-facing sends, refunds and posting/publishing campaigns need approval.
+# Tools not in TOOL_POLICIES whose names match this are gated automatically.
+_APPROVAL_NAME_RE = re.compile(
+    r"refund|publish|post_campaign|send_campaign|provision|send_customer|customer_message|"
+    r"send_(sms|email|whatsapp)", re.IGNORECASE)
+
+
+def policy_for(name: str) -> ToolPolicy:
+    """Explicit policy, or the safe default for tools not listed yet."""
+    if name in TOOL_POLICIES:
+        return TOOL_POLICIES[name]
+    return ToolPolicy(mutates=True, requires_approval=bool(_APPROVAL_NAME_RE.search(name)))
+
+
 @dataclass
 class Tool:
     name: str
@@ -44,6 +121,11 @@ class Tool:
     method: str
     endpoint: str
     parameters: Dict[str, Any]
+    # Filled from the tool's ToolPolicy when registered (spec A6).
+    mutates: bool = True
+    requires_approval: bool = False
+    timeout_s: int = 60
+    max_output_chars: int = 8000
 
     async def execute(
         self,
@@ -70,7 +152,8 @@ class Tool:
             headers["X-User-Id"] = str(user_id)
 
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            # Per-tool timeout (spec A6): the web-intel tools need well over 10 s.
+            async with httpx.AsyncClient(timeout=float(self.timeout_s)) as client:
                 if self.method == "GET":
                     # Map tool_input to query params
                     resp = await client.get(url, params=request_input, headers=headers)
@@ -499,6 +582,11 @@ class ToolRegistry:
         ))
 
     def register(self, tool: Tool):
+        policy = policy_for(tool.name)
+        tool.mutates = policy.mutates
+        tool.requires_approval = policy.requires_approval
+        tool.timeout_s = policy.timeout_s
+        tool.max_output_chars = policy.max_output_chars
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Optional[Tool]:
