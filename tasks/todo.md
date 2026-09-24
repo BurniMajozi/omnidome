@@ -94,18 +94,18 @@ Commands referenced below:
 
 ## Task 4: Segment builder UI with live count; fake panels deleted
 
-**Status: CODE DONE** — tsc + lint clean (0 errors; the 4 icon imports orphaned by the deletion removed); browser check at Checkpoint B.
+**Status: DONE** — tsc + lint clean (0 errors; the 4 icon imports orphaned by the deletion removed); browser check at Checkpoint B.
 
 **Description:** Create `fno-api.ts` (typed client for filter-options and preview) and `sales-lead-sources.tsx` with a past-imports table and the segment builder (FNO, import, city, suburbs, postcode, dwelling type with friendly labels, passed from/to, geocoded-only). Live count debounced ~400 ms with per-reason exclusions and an area list. Mount it in the `ai-engine` tab and delete the simulation / output / prospect-generator panels plus their state and handlers.
 
 **Acceptance criteria:**
-- [ ] Dropdowns populate from `filter-options`; count updates on change without a full-section spinner; loading, empty and error states shown.
+- [x] Dropdowns populate from `filter-options`; count updates on change without a full-section spinner; loading, empty and error states shown.
 - [x] `handleRunAiWarmingSimulation`, `handleGenerateAiProspects`, their state and JSX are gone; `grep "Nexus Logistics"` returns 0.
-- [ ] Pipeline, channels and leads tabs unaffected.
+- [x] Pipeline, channels and leads tabs unaffected.
 
 **Verification:**
 - [x] `TSC` and `LINT` clean
-- [ ] Manual (at Checkpoint B): builder shows real counts on `http://127.0.0.1:3000`
+- [x] Manual (at Checkpoint B): builder shows real counts on `http://127.0.0.1:3000`
 
 **Dependencies:** Task 3
 
@@ -120,14 +120,14 @@ Commands referenced below:
 
 ## Task 5: Save / list / detail / delete (API + UI)
 
-**Status: CODE DONE** — backend live-verified (12/12: 201, summary == preview, 409 after trim, blank 422, list order, detail, other-tenant 404 x2, survives restart, 204, 404 after delete; scratchpad verify_task5.py); tsc + lint clean; browser check at Checkpoint B.
+**Status: DONE** — backend live-verified (12/12: 201, summary == preview, 409 after trim, blank 422, list order, detail, other-tenant 404 x2, survives restart, 204, 404 after delete; scratchpad verify_task5.py); tsc + lint clean; browser check at Checkpoint B.
 
 **Description:** `POST /geo-segments`, `GET /geo-segments`, `GET /geo-segments/{id}`, `DELETE /geo-segments/{id}`; UI "Save segment" (name input) and a saved-segments list with home count, area count and refreshed time; detail shows areas.
 
 **Acceptance criteria:**
 - [x] Save persists the summary computed by the same query as preview; duplicate name → `409` shown inline; other tenant's id → `404`.
 - [x] Saved segment survives a service restart and appears newest first.
-- [ ] Delete removes it from the list without a page reload.
+- [x] Delete removes it from the list without a page reload.
 
 **Verification:**
 - [x] `PYTEST`, `TSC`, `LINT`
@@ -146,7 +146,7 @@ Commands referenced below:
 
 ## Task 6: Refresh + CSV/KML export (API + UI)
 
-**Status: CODE DONE** — backend live-verified 13/13 in a throwaway tenant (refresh picks up a new home, refreshed_at advances, CSV/KML headers + content, no address text, 422s, cleanup = 0 rows; scratchpad verify_task6.py); tsc + lint + pytest clean; browser check at Checkpoint B.
+**Status: DONE** — backend live-verified 13/13 in a throwaway tenant (refresh picks up a new home, refreshed_at advances, CSV/KML headers + content, no address text, 422s, cleanup = 0 rows; scratchpad verify_task6.py); tsc + lint + pytest clean; browser check at Checkpoint B.
 
 **Description:** `POST /geo-segments/{id}/refresh` and `GET /geo-segments/{id}/export?format=csv|kml` with attachment headers; UI Refresh and Export CSV / Export KML buttons per saved segment.
 
@@ -170,11 +170,12 @@ Commands referenced below:
 ---
 
 ## Checkpoint B: End-to-end
-- [ ] `fno_intelligence` and `web` rebuilt (build logs grepped for failures)
-- [ ] Browser pass on `http://127.0.0.1:3000`: filters → live count → save → list → refresh → both exports → delete
-- [ ] Pipeline / leads tabs still work; no console errors
-- [ ] Review with human
+- [x] `fno_intelligence` and `web` rebuilt (build logs grepped for failures)
+- [x] Browser pass on `http://127.0.0.1:3000`: filters → live count → save → list → refresh → both exports → delete
+- [x] Pipeline / leads tabs still work; no console errors
+- [x] Review with human
 
+- Notes: first browser pass exposed that the local web image baked every `/svc/*` rewrite as localhost (apps/web/.env.local leaking into the Docker build) — fixed in c9aa7a6d by excluding it in .dockerignore. Review data for the dev tenant loaded through the real import + geocode endpoints (8 geocoded homes; 1 customer, 2 duplicates, 1 invalid excluded). Date inputs clipped at narrow widths — stacked below xl.
 ---
 
 ## Task 7: 10k-home performance check
@@ -204,6 +205,6 @@ Commands referenced below:
 ---
 
 ## Checkpoint: Complete
-- [ ] Spec success criteria 1–5 all met
-- [ ] Commits per task on `main` (local); push on user approval
+- [x] Spec success criteria 1–5 all met (1: preview == SQL on 4 filter combos; 2: survives restart; 3: CSV/KML columns + no addresses; 4: 0.785 s worst at 10k; 5: section live, fake panels deleted, tsc/lint/pytest clean)
+- [x] Commits per task on `main` (local); push on user approval
 - [ ] Memory updated with anything non-obvious learned

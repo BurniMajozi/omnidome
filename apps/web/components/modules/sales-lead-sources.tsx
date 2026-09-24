@@ -334,7 +334,7 @@ export function SalesLeadSources() {
               </FilterGroup>
             )}
 
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 xl:grid-cols-2">
               <FilterGroup label="Import">
                 <select
                   value={filters.import_ids[0] ?? ""}
@@ -356,7 +356,7 @@ export function SalesLeadSources() {
                     aria-label="Passed from"
                     value={filters.date_passed_from ?? ""}
                     onChange={(e) => setFilters((s) => ({ ...s, date_passed_from: e.target.value || null }))}
-                    className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                    className="min-w-0 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
                   />
                   <span className="text-xs text-muted-foreground">to</span>
                   <input
@@ -364,7 +364,7 @@ export function SalesLeadSources() {
                     aria-label="Passed to"
                     value={filters.date_passed_to ?? ""}
                     onChange={(e) => setFilters((s) => ({ ...s, date_passed_to: e.target.value || null }))}
-                    className="w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
+                    className="min-w-0 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
                   />
                 </div>
               </FilterGroup>

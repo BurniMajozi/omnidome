@@ -56,13 +56,13 @@ FNOGeoSegment model + migration ──┼── preview / filter-options endpoin
 - [x] Task 6: Refresh + CSV/KML export (API + UI)
 
 ### Checkpoint B: End-to-end
-- [ ] web + service rebuilt; full browser pass on `http://127.0.0.1:3000`
+- [x] web + service rebuilt; full browser pass on `http://localhost:3000`
 
 ### Phase 3: Hardening
 - [x] Task 7: 10k-home performance check (throwaway tenant, cleaned up)
 
 ### Checkpoint: Complete
-- [ ] All five spec success criteria met; ready for review
+- [x] All five spec success criteria met; ready for review
 
 ## Risks and Mitigations
 

@@ -1,6 +1,6 @@
 # Spec: geo-segments
 
-Module 1 of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Status: draft, awaiting approval.
+Module 1 of [CAPABILITY-MAP.md](CAPABILITY-MAP.md). Status: approved 2026-09-24; implemented (see tasks/todo.md).
 
 ## Objective
 
