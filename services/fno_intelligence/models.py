@@ -897,6 +897,32 @@ class FNOPassedHome(Base):
     )
 
 
+class FNOGeoSegment(Base):
+    """A saved filter over passed homes plus its cached area summary
+    (SPEC-geo-segments.md). Describes places only -- never an address list;
+    per-address walk lists belong to field-territories."""
+    __tablename__ = "fno_geo_segments"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    filters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # Cached at save/refresh time; refreshed manually, not on every import.
+    home_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    area_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    excluded: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    areas: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_fno_geo_segment_tenant_name"),
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════
 # 8. FAULT REPORTING
 # ════════════════════════════════════════════════════════════════════════
