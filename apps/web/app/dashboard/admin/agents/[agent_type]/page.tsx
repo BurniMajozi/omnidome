@@ -16,19 +16,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { listAgentActions, listConversations, listAgents, type AgentActionAuditItem } from "@/lib/orchestrator-api"
+import {
+  listAgentActions,
+  listConversations,
+  listAgents,
+  listWorkflows,
+  workflowsUsingAgent,
+  type AgentActionAuditItem,
+  type AgentInfo,
+  type Workflow,
+} from "@/lib/orchestrator-api"
+import { AgentUsageStats, ToolPolicyTable, useLlmUsage } from "@/components/admin/agent-insights"
 
 // ─── Types (mirror backend contracts) ───────────────────────────────────────
 // AgentInfo: services/agent_orchestrator/schemas.py (via GET /api/orchestrator/agents list)
 // ActionItem: audit_actions rows via GET /api/orchestrator/agents/actions (NEWEST-FIRST, do NOT re-sort)
 // ConversationItem: via GET /api/orchestrator/conversations (proxy → /api/conversations)
-
-interface AgentInfo {
-  agent_type: string
-  description: string
-  llm: string
-  tools: string[]
-}
 
 interface ActionItem {
   id: string
@@ -787,6 +790,17 @@ export default function AgentDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Agent flows: workflows with an agent step for this agent (native runner).
+  const [flows, setFlows] = useState<Workflow[] | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    listWorkflows()
+      .then((all) => { if (!cancelled) setFlows(workflowsUsingAgent(all, agentType)) })
+      .catch(() => { if (!cancelled) setFlows([]) })
+    return () => { cancelled = true }
+  }, [agentType])
+  const { usage } = useLlmUsage(7)
+
   // No GET /api/agents/{type} exists — derive config from the registry list.
   useEffect(() => {
     let cancelled = false
@@ -849,11 +863,17 @@ export default function AgentDetailPage() {
             <CardContent>
               <dl className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</dt>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Chat model</dt>
                   <dd className="mt-1 inline-flex items-center gap-1">
                     <Cpu className="h-3.5 w-3.5 text-muted-foreground" />
                     <span className="font-mono text-sm">{agent.llm}</span>
                   </dd>
+                  {(agent.specialist_models ?? []).length > 0 && (
+                    <dd className="mt-1 text-xs text-muted-foreground">
+                      Specialist &amp; flows:{" "}
+                      <span className="font-mono text-foreground">{(agent.specialist_models ?? []).join(" → ")}</span>
+                    </dd>
+                  )}
                 </div>
                 <div>
                   <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Status</dt>
@@ -864,14 +884,18 @@ export default function AgentDetailPage() {
                 </div>
                 <div className="sm:col-span-2">
                   <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                    Tools ({(agent.tools ?? []).length})
+                    Tools ({(agent.tools ?? []).length}) and what they may do
                   </dt>
-                  <dd className="mt-1 flex flex-wrap gap-1">
-                    {(agent.tools ?? []).map((tool, i) => (
-                      <Badge key={`${tool}-${i}`} variant="outline" className="font-mono text-[11px]">
-                        {tool}
-                      </Badge>
-                    ))}
+                  <dd className="mt-2">
+                    {agent.tool_policies?.length ? (
+                      <ToolPolicyTable policies={agent.tool_policies} />
+                    ) : (
+                      <span className="flex flex-wrap gap-1">
+                        {(agent.tools ?? []).map((tool, i) => (
+                          <Badge key={`${tool}-${i}`} variant="outline" className="font-mono text-[11px]">{tool}</Badge>
+                        ))}
+                      </span>
+                    )}
                   </dd>
                 </div>
                 <div className="sm:col-span-2">
@@ -879,20 +903,28 @@ export default function AgentDetailPage() {
                   <dd className="mt-1 text-sm text-muted-foreground">{agent.description}</dd>
                 </div>
                 <div className="sm:col-span-2">
-                  <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Flow Builder</dt>
+                  <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Agent flows using this agent</dt>
                   <dd className="mt-1 text-sm">
-                    {process.env.NEXT_PUBLIC_SIM_URL ? (
-                      <a
-                        href={`${process.env.NEXT_PUBLIC_SIM_URL}/workspaces?agent=${encodeURIComponent(agent.agent_type)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary hover:underline text-sm"
-                      >
-                        Open in Sim Flow Builder
-                      </a>
-                    ) : (
+                    {flows === null ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                    ) : flows.length === 0 ? (
                       <span className="text-muted-foreground">
-                        Set NEXT_PUBLIC_SIM_URL to link a hosted Sim workspace.
+                        No workflow has a step for this agent yet.{" "}
+                        <Link href="/dashboard/admin/workflows" className="text-primary hover:underline">Open Workflows</Link>
+                      </span>
+                    ) : (
+                      <span className="flex flex-wrap gap-1.5">
+                        {flows.map((w) => (
+                          <Link key={w.id} href={`/dashboard/admin/workflows?workflow=${encodeURIComponent(w.id)}`}>
+                            <Badge variant="outline" className="gap-1 hover:border-primary">
+                              {w.name}
+                              <span className="text-[10px] text-muted-foreground">
+                                {w.trigger_event ? `on ${w.trigger_event}` : w.schedule_enabled && w.schedule_cron ? "scheduled" : "manual"}
+                                {w.status !== "active" ? ` · ${w.status}` : ""}
+                              </span>
+                            </Badge>
+                          </Link>
+                        ))}
                       </span>
                     )}
                   </dd>
@@ -916,6 +948,10 @@ export default function AgentDetailPage() {
                 <MessageSquare className="h-4 w-4" />
                 Chat
               </TabsTrigger>
+              <TabsTrigger value="usage" className="gap-2">
+                <Cpu className="h-4 w-4" />
+                Usage
+              </TabsTrigger>
             </TabsList>
 
             <div className="mt-4">
@@ -927,6 +963,21 @@ export default function AgentDetailPage() {
               </TabsContent>
               <TabsContent value="chat">
                 <DeploymentChatTab agentType={agent.agent_type} />
+              </TabsContent>
+              <TabsContent value="usage">
+                <Card className="border-border bg-card">
+                  <CardHeader>
+                    <CardTitle className="text-base">Last 7 days</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-2">
+                    <AgentUsageStats usage={usage?.agents.find((u) => u.agent_type === agent.agent_type)} />
+                    <p className="text-[11px] text-muted-foreground">
+                      Counts this agent&apos;s own runs (MCP specialist calls, workflows, agent-to-agent). Chat
+                      replies from Hermes are not included. Safety guards end a turn that hits the step limit,
+                      keeps answering empty, or whose tool calls keep being cut off.
+                    </p>
+                  </CardContent>
+                </Card>
               </TabsContent>
             </div>
           </Tabs>

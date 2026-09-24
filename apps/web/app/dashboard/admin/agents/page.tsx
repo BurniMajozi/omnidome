@@ -7,15 +7,8 @@ import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, Exter
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-
-// ─── Types (mirror backend AgentInfo in services/agent_orchestrator/schemas.py) ──
-
-interface AgentInfo {
-  agent_type: string
-  description: string
-  llm: string
-  tools: string[]
-}
+import { AgentUsageStats, ModelUsageTable, ToolPolicyBadge, useLlmUsage } from "@/components/admin/agent-insights"
+import type { AgentInfo } from "@/lib/orchestrator-api"
 
 // ─── Display-name map ────────────────────────────────────────────────────────
 
@@ -88,6 +81,7 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  const { usage, error: usageError } = useLlmUsage(7)
 
   useEffect(() => {
     let cancelled = false
@@ -208,16 +202,28 @@ export default function AgentsPage() {
                   </CardHeader>
 
                   <CardContent className="space-y-3 pb-3">
-                    {/* Model Spec */}
-                    <div className="flex items-center justify-between rounded-lg bg-background/60 border border-border/60 p-2 text-xs">
-                      <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
-                        <Cpu className="h-3.5 w-3.5 text-primary" />
-                        Model Engine
-                      </span>
-                      <span className="font-mono font-medium text-foreground text-[11px]">
-                        {agent.llm}
-                      </span>
+                    {/* Models: chat goes to Hermes; the agent's own loop (MCP specialist,
+                        workflows) uses the OpenRouter chain with fallbacks. */}
+                    <div className="space-y-1 rounded-lg bg-background/60 border border-border/60 p-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
+                          <Cpu className="h-3.5 w-3.5 text-primary" />
+                          Chat
+                        </span>
+                        <span className="font-mono font-medium text-foreground text-[11px] truncate">{agent.llm}</span>
+                      </div>
+                      {(agent.specialist_models ?? []).length > 0 && (
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-muted-foreground font-medium shrink-0">Specialist & flows</span>
+                          <span className="font-mono text-[10px] text-foreground text-right">
+                            {(agent.specialist_models ?? []).join(" → ")}
+                          </span>
+                        </div>
+                      )}
                     </div>
+
+                    {/* Usage, last 7 days (spec A7) */}
+                    <AgentUsageStats usage={usage?.agents.find((u) => u.agent_type === agent.agent_type)} compact />
 
                     {/* Tools / Capabilities */}
                     <div className="space-y-1.5">
@@ -227,20 +233,33 @@ export default function AgentsPage() {
                           Tool Bindings
                         </span>
                         <span className="font-mono text-[11px] font-semibold text-foreground">
-                          {(agent.tools ?? []).length} registered
+                          {(agent.tools ?? []).length} ·{" "}
+                          {(agent.tool_policies ?? []).filter((p) => p.requires_approval).length} need approval ·{" "}
+                          {(agent.tool_policies ?? []).filter((p) => p.mutates && !p.requires_approval).length} change data
                         </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <ToolPolicyBadge policy={{ name: "", mutates: false, requires_approval: false, timeout_s: 0, max_output_chars: 0 }} />
+                        <ToolPolicyBadge policy={{ name: "", mutates: true, requires_approval: false, timeout_s: 0, max_output_chars: 0 }} />
+                        <ToolPolicyBadge policy={{ name: "", mutates: true, requires_approval: true, timeout_s: 0, max_output_chars: 0 }} />
                       </div>
                       <div className="flex flex-wrap gap-1 max-h-16 overflow-y-auto pr-0.5">
                         {(agent.tools ?? []).length > 0 ? (
-                          agent.tools.map((tool, idx) => (
-                            <Badge
-                              key={`${tool}-${idx}`}
-                              variant="secondary"
-                              className="font-mono text-[10px] px-1.5 py-0 bg-background/80 border border-border/50 text-foreground"
-                            >
-                              {tool}
-                            </Badge>
-                          ))
+                          agent.tools.map((tool, idx) => {
+                            const policy = agent.tool_policies?.find((p) => p.name === tool)
+                            return (
+                              <Badge
+                                key={`${tool}-${idx}`}
+                                variant="secondary"
+                                className={`font-mono text-[10px] px-1.5 py-0 bg-background/80 border text-foreground ${
+                                  policy?.requires_approval ? "border-red-500/50" : policy?.mutates ? "border-amber-500/50" : "border-border/50"
+                                }`}
+                                title={policy ? (policy.requires_approval ? "Needs approval" : policy.mutates ? "Changes data" : "Reads") : undefined}
+                              >
+                                {tool}
+                              </Badge>
+                            )
+                          })
                         ) : (
                           <span className="text-[11px] text-muted-foreground italic">
                             No custom tools attached
@@ -286,6 +305,25 @@ export default function AgentsPage() {
           })}
         </div>
       )}
+
+      {/* AI models used, last 7 days (spec A7) */}
+      <Card className="border-border bg-card">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">AI models used · last 7 days</CardTitle>
+          <CardDescription className="text-xs">
+            Which model actually answered each call (primary or a fallback), how often it failed and how long it took.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {usageError ? (
+            <p className="text-xs text-red-400">{usageError}</p>
+          ) : !usage ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <ModelUsageTable models={usage.models} />
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

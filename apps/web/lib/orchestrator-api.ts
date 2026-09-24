@@ -33,7 +33,99 @@ export interface AgentInfo {
   description: string
   llm: string
   tools: string[]
+  /** Per-tool policy (spec A6): reads vs changes data, approval, timeout, output cap. */
+  tool_policies?: ToolPolicyInfo[]
+  /** Models the agent's own loop uses (MCP specialist, workflows): primary then fallbacks. */
+  specialist_models?: string[]
 }
+
+export interface ToolPolicyInfo {
+  name: string
+  mutates: boolean
+  requires_approval: boolean
+  timeout_s: number
+  max_output_chars: number
+}
+
+/** GET /api/usage/llm (spec A7). */
+export interface AgentUsage {
+  agent_type: string
+  turns: number
+  tool_calls: number
+  tokens: number
+  avg_duration_ms: number | null
+  stopped_step_limit: number
+  stopped_empty: number
+  stopped_truncated: number
+  ai_unavailable: number
+}
+
+export interface ModelUsage {
+  model: string
+  calls: number
+  tokens: number
+  failures: number
+  avg_latency_ms: number | null
+}
+
+export interface LlmUsage {
+  days: number
+  agents: AgentUsage[]
+  models: ModelUsage[]
+}
+
+export interface WorkflowNode {
+  id: string
+  type: string
+  name?: string
+  config?: Record<string, unknown>
+}
+
+export interface Workflow {
+  id: string
+  name: string
+  description?: string | null
+  definition: { nodes?: WorkflowNode[]; edges?: { from: string; to: string }[] }
+  status: string
+  schedule_cron?: string | null
+  schedule_enabled?: boolean
+  trigger_event?: string | null
+  last_run_at?: string | null
+}
+
+export interface WorkflowRunSummary {
+  id: string
+  status: string
+  trigger: string
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+}
+
+export interface WorkflowRunDetail {
+  id: string
+  status: string
+  input: Record<string, unknown> | null
+  output: Record<string, unknown> | null
+  error: string | null
+  steps: { node_id: string; node_type: string; status: string; output: unknown; error: string | null }[]
+}
+
+/** Event types workflows can start on (bus events published today). */
+export const KNOWN_EVENT_TYPES: { type: string; label: string }[] = [
+  { type: "portal.cart.abandoned", label: "Portal: basket abandoned" },
+  { type: "portal.quote.requested", label: "Portal: quote requested" },
+  { type: "portal.registration.inactive", label: "Portal: registration inactive" },
+  { type: "sales.lead.created", label: "Sales: lead created" },
+  { type: "sales.lead.stage_changed", label: "Sales: lead stage changed" },
+  { type: "sales.lead.assigned", label: "Sales: lead assigned" },
+  { type: "sales.lead.escalated", label: "Sales: lead escalated" },
+  { type: "sales.lead.outbound_requested", label: "Sales: sent to outbound agent" },
+  { type: "sales.lead.campaign_requested", label: "Sales: sent to marketing campaign" },
+  { type: "sales.deal.stage_changed", label: "Sales: deal moved on the board" },
+  { type: "sales.deal.won", label: "Sales: deal won" },
+  { type: "sales.deal.lost", label: "Sales: deal lost" },
+]
 
 export interface AgentMessage {
   id?: string
@@ -579,3 +671,40 @@ export async function recordAgentFeedback(payload: AgentFeedbackPayload): Promis
   }
   return res.json()
 }
+
+// ── Usage + workflows (Agent Manager / agent flow; spec A7) ─────────────
+
+async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}${path}`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(15000),
+    ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let detail = text
+    try { detail = JSON.parse(text)?.detail ?? text } catch { /* not JSON */ }
+    throw new Error(detail || `Orchestrator error ${res.status}`)
+  }
+  return res.json()
+}
+
+export const getLlmUsage = (days = 7) => getJson<LlmUsage>(`/usage/llm?days=${days}`)
+
+export const listWorkflows = () => getJson<{ data: Workflow[] }>("/workflows").then((r) => r.data ?? [])
+
+export const updateWorkflow = (id: string, patch: Partial<Workflow>) =>
+  getJson<Workflow>(`/workflows/${id}`, { method: "PUT", body: JSON.stringify(patch) })
+
+export const listWorkflowRuns = (id: string) =>
+  getJson<{ data: WorkflowRunSummary[] }>(`/workflows/${id}/runs`).then((r) => r.data ?? [])
+
+export const getWorkflowRun = (runId: string) => getJson<WorkflowRunDetail>(`/workflows/runs/${runId}`)
+
+/** Workflows with an agent step for this agent type (the agent's "flows"). */
+export function workflowsUsingAgent(workflows: Workflow[], agentType: string): Workflow[] {
+  return workflows.filter((w) =>
+    (w.definition?.nodes ?? []).some((n) => n.type === "agent_invoke" && n.config?.agent_type === agentType))
+}
+

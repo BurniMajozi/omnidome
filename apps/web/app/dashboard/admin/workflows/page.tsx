@@ -8,10 +8,12 @@
  * editor + a read-only visual flow of the nodes.
  */
 import { useEffect, useState, useCallback } from "react"
-import { Play, Plus, Save, Loader2, RefreshCw, Clock } from "lucide-react"
+import { Play, Plus, Save, Loader2, RefreshCw, Clock, Zap, History } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FlowCanvas } from "@/components/workflows/flow-canvas"
+import { WorkflowRunHistory } from "@/components/admin/agent-insights"
+import { KNOWN_EVENT_TYPES } from "@/lib/orchestrator-api"
 
 interface WF {
   id: string
@@ -21,6 +23,7 @@ interface WF {
   status: string
   schedule_cron?: string | null
   schedule_enabled?: boolean
+  trigger_event?: string | null
   last_run_at?: string | null
   next_run_at?: string | null
 }
@@ -121,6 +124,9 @@ export default function WorkflowsPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [showJson, setShowJson] = useState(false)
+  // Event trigger (SPEC-lead-automations.md): runs when this bus event arrives.
+  const [triggerEvent, setTriggerEvent] = useState("")
+  const [runsKey, setRunsKey] = useState(0)
 
   const load = useCallback(async () => {
     setError(null)
@@ -135,15 +141,27 @@ export default function WorkflowsPage() {
 
   useEffect(() => { void load() }, [load])
 
+
   const select = (w: WF) => {
     setSelected(w)
     setRunOut(null)
     setDefText(JSON.stringify(w.definition ?? { nodes: [], edges: [] }, null, 2))
+    setTriggerEvent(w.trigger_event ?? "")
     const cron = w.schedule_cron ?? ""
     setSchedCron(cron)
     setSchedEnabled(Boolean(w.schedule_enabled))
     const matched = SCHEDULE_PRESETS.find((p) => p.cron === cron)
     setActivePreset(matched ? matched.label : cron ? "Custom Cron" : "Disabled")
+  }
+
+  // Deep link from the Agent Manager: /dashboard/admin/workflows?workflow=<id>
+  const [linkedId] = useState(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("workflow"))
+  const [linkHandled, setLinkHandled] = useState(false)
+  if (linkedId && !linkHandled && list.length) {
+    const target = list.find((w) => w.id === linkedId)
+    setLinkHandled(true)
+    if (target) select(target)
   }
 
   const handlePresetSelect = (presetLabel: string) => {
@@ -202,6 +220,7 @@ export default function WorkflowsPage() {
           definition,
           schedule_cron: schedCron.trim() || null,
           schedule_enabled: schedEnabled,
+          trigger_event: triggerEvent.trim(),   // "" clears it
         }),
       })
       const w = await r.json()
@@ -219,6 +238,7 @@ export default function WorkflowsPage() {
         body: JSON.stringify({ input: { message: "Hello from the workflow runner." } }),
       })
       setRunOut(await r.json())
+      setRunsKey((k) => k + 1)
     } catch (e) { setError(String(e)) } finally { setBusy(null) }
   }
 
@@ -269,7 +289,12 @@ export default function WorkflowsPage() {
               </div>
               <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
                 <span>{(w.definition?.nodes?.length ?? 0)} step{((w.definition?.nodes?.length ?? 0) === 1) ? "" : "s"}</span>
-                {w.schedule_enabled && w.schedule_cron ? (
+                {w.trigger_event ? (
+                  <span className="flex items-center gap-1 font-mono text-[10px] text-amber-400">
+                    <Zap className="h-3 w-3" />
+                    {w.trigger_event}
+                  </span>
+                ) : w.schedule_enabled && w.schedule_cron ? (
                   <span className="flex items-center gap-1 font-mono text-[10px] text-primary">
                     <Clock className="h-3 w-3" />
                     {describeCron(w.schedule_cron)}
@@ -377,6 +402,42 @@ export default function WorkflowsPage() {
                   {busy === "run" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   Run Pipeline
                 </Button>
+              </div>
+            </div>
+
+            {/* Event trigger */}
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-amber-500/10 text-amber-400">
+                  <Zap className="h-4 w-4" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold text-foreground">Event trigger</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Run this workflow whenever the event arrives (portal, website or another OmniDome service).
+                    The event is available to steps as {"{{input.event}}"}.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={KNOWN_EVENT_TYPES.some((e) => e.type === triggerEvent) || !triggerEvent ? triggerEvent : "__custom"}
+                  onChange={(e) => setTriggerEvent(e.target.value === "__custom" ? (triggerEvent || "custom.event.name") : e.target.value)}
+                  className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                >
+                  <option value="">No event trigger</option>
+                  {KNOWN_EVENT_TYPES.map((e) => (
+                    <option key={e.type} value={e.type}>{e.label}</option>
+                  ))}
+                  <option value="__custom">Custom event name…</option>
+                </select>
+                <Input
+                  value={triggerEvent}
+                  onChange={(e) => setTriggerEvent(e.target.value)}
+                  placeholder="e.g. portal.cart.abandoned"
+                  className="h-8 w-64 font-mono text-xs"
+                />
+                <span className="text-[11px] text-muted-foreground">Saved with Save Changes.</span>
               </div>
             </div>
 
@@ -565,6 +626,20 @@ export default function WorkflowsPage() {
                 )}
               </div>
             )}
+
+            {/* Run history: manual, scheduled and event runs */}
+            <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <History className="h-4 w-4 text-muted-foreground" />
+                  <h4 className="text-sm font-semibold text-foreground">Run history</h4>
+                </div>
+                <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setRunsKey((k) => k + 1)}>
+                  <RefreshCw className="h-3 w-3 mr-1" /> Refresh
+                </Button>
+              </div>
+              <WorkflowRunHistory workflowId={selected.id} refreshKey={runsKey} />
+            </div>
           </div>
         )}
       </div>

@@ -54,11 +54,24 @@ class AgentInvokeResponse(BaseModel):
     agent_type: str
 
 
+class ToolPolicyInfo(BaseModel):
+    """Per-tool policy shown in the Agent Manager (spec A6)."""
+    name: str
+    mutates: bool
+    requires_approval: bool
+    timeout_s: int
+    max_output_chars: int
+
+
 class AgentInfo(BaseModel):
     agent_type: str
     description: str
     llm: str
     tools: List[str]
+    tool_policies: List[ToolPolicyInfo] = []
+    # Models used when this agent runs its own loop (MCP specialist, workflows):
+    # OPENROUTER_MODEL then OPENROUTER_FALLBACK_MODELS.
+    specialist_models: List[str] = []
 
 
 # ── Conversation ─────────────────────────────────────────────────────────

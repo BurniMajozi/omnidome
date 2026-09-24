@@ -17,7 +17,8 @@ from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.config import settings
 from services.agent_orchestrator.hermes_client import hermes_client
 from services.agent_orchestrator.protocols import AGUIEvent
-from services.agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo
+from services.agent_orchestrator.schemas import AgentInvokeRequest, AgentInvokeResponse, AgentInfo, ToolPolicyInfo
+from services.common import openrouter
 from services.agent_orchestrator.conversation.models import (
     AgentConversation,
     AgentMessage,
@@ -156,39 +157,30 @@ async def list_agents():
     def _llm(agent_type: str) -> str:
         return hermes_llm if settings.chat_backend == "hermes" else legacy_llm[agent_type]
 
-    agents = [
-        AgentInfo(
-            agent_type="customer_facing",
-            description="DomeBot — assists customers with balances, invoices, coverage, tickets",
-            llm=_llm("customer_facing"),
-            tools=Agent("customer_facing").available_tool_names,
-        ),
-        AgentInfo(
-            agent_type="retention",
-            description="ChurnGuard — autonomous churn prediction and retention campaigns",
-            llm=_llm("retention"),
-            tools=Agent("retention").available_tool_names,
-        ),
-        AgentInfo(
-            agent_type="provisioning",
-            description="ProvisionBot — automates new customer provisioning workflow",
-            llm=_llm("provisioning"),
-            tools=Agent("provisioning").available_tool_names,
-        ),
-        AgentInfo(
-            agent_type="executive",
-            description="InsightBot — executive briefings and analytics",
-            llm=_llm("executive"),
-            tools=Agent("executive").available_tool_names,
-        ),
-        AgentInfo(
-            agent_type="support",
-            description="SupportBot — ticket management and diagnostics",
-            llm=_llm("support"),
-            tools=Agent("support").available_tool_names,
-        ),
+    specialist_models = openrouter.model_chain()
+
+    def _info(agent_type: str, description: str) -> AgentInfo:
+        agent = Agent(agent_type)
+        return AgentInfo(
+            agent_type=agent_type,
+            description=description,
+            llm=_llm(agent_type),
+            tools=agent.available_tool_names,
+            tool_policies=[
+                ToolPolicyInfo(name=t.name, mutates=t.mutates, requires_approval=t.requires_approval,
+                               timeout_s=t.timeout_s, max_output_chars=t.max_output_chars)
+                for t in agent.tools
+            ],
+            specialist_models=specialist_models,
+        )
+
+    return [
+        _info("customer_facing", "DomeBot — assists customers with balances, invoices, coverage, tickets"),
+        _info("retention", "ChurnGuard — autonomous churn prediction and retention campaigns"),
+        _info("provisioning", "ProvisionBot — automates new customer provisioning workflow"),
+        _info("executive", "InsightBot — executive briefings and analytics"),
+        _info("support", "SupportBot — ticket management and diagnostics"),
     ]
-    return agents
 
 
 # ---------------------------------------------------------------------------
