@@ -47,6 +47,9 @@ person to send (see `SPEC-lead-automations.md`).
 - [x] Every action appears on the timeline with who/when.
 - [x] With Marketing stopped, "Send to campaign" still returns at once; the
       delivery retries and completes when Marketing is back.
-- [x] Email to the own inbox arrives; a provider failure shows on the timeline
-      and in the bell.
+- [x] Email to the own inbox arrives (live).
+- [ ] A provider failure shows on the timeline and in the bell: implemented
+      (email_failed entry on the last attempt + the bus's critical dead-letter
+      notification, which is live-verified) but the email-specific path was not
+      forced live — it needs ~2 h of back-off or a broken AgentMail key.
 - [x] Menu + panel match the Communication pattern (dropdown + right slide-over).
