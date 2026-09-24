@@ -170,6 +170,7 @@ class LLMClient:
         return {
             "content": "I'm sorry, but the AI service is currently unavailable. Please try again in a moment.",
             "tool_calls": [],
+            "unavailable": True,  # callers that aren't chats (workflows) treat this as a failure
         }
 
     async def _ollama_chat(

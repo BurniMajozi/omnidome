@@ -12,6 +12,7 @@ visual editor / scheduler yet (later phases) — this is the runnable core.
 """
 from __future__ import annotations
 
+import os
 import re
 import uuid
 import logging
@@ -41,6 +42,40 @@ def _resolve(template: Any, data: dict) -> Any:
         return str(cur) if cur is not None else ""
 
     return re.sub(r"\{\{([^}]+)\}\}", repl, template)
+
+
+_EXACT = re.compile(r"^\{\{([^}]+)\}\}$")
+
+
+def _lookup(path: str, data: dict) -> Any:
+    cur: Any = data
+    for part in path.strip().split("."):
+        cur = cur.get(part) if isinstance(cur, dict) else None
+    return cur
+
+
+def resolve_deep(template: Any, data: dict) -> Any:
+    """Resolve {{path}} references inside strings, dicts and lists. A string that
+    is exactly one placeholder keeps the raw value (objects, numbers); otherwise
+    placeholders are substituted as text."""
+    if isinstance(template, dict):
+        return {k: resolve_deep(v, data) for k, v in template.items()}
+    if isinstance(template, list):
+        return [resolve_deep(v, data) for v in template]
+    if isinstance(template, str):
+        exact = _EXACT.match(template.strip())
+        if exact:
+            return _lookup(exact.group(1), data)
+        return _resolve(template, data)
+    return template
+
+
+def service_request(service: str, path: str, *, tenant_id: Optional[str], user_id: str) -> tuple[str, dict]:
+    """URL + auth headers for an internal OmniDome service (http_request `service`).
+    Base URL from <SERVICE>_SERVICE_URL, e.g. SALES_SERVICE_URL."""
+    base = os.getenv(f"{service.upper()}_SERVICE_URL", f"http://{service}:8000").rstrip("/")
+    headers = {"X-Tenant-Id": str(tenant_id or ""), "X-User-Id": str(user_id)}
+    return f"{base}/{path.lstrip('/')}", headers
 
 
 def _eval_condition(left: str, op: str, right: Any) -> bool:
@@ -82,18 +117,35 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
             context={"user_id": user_id},
         )
         result = await agent.run(message)
+        if result.get("unavailable"):
+            # Every LLM (and fallback) failed: fail the step instead of passing an
+            # apology on as if it were real output.
+            return {"ok": False, "error": "AI unavailable: every configured model failed or is rate-limited",
+                    "content": None}
         return {"ok": True, "content": result.get("content"), "tool_calls": result.get("tool_calls", [])}
 
     if ntype == "http_request":
-        url = _resolve(cfg.get("url", ""), data)
         method = cfg.get("method", "GET").upper()
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.request(method, url, json=cfg.get("body"))
+        headers = resolve_deep(cfg.get("headers") or {}, data)
+        if cfg.get("service"):
+            # Internal OmniDome service: base URL from env + this run's tenant headers.
+            url, auth = service_request(cfg["service"], _resolve(cfg.get("path", ""), data),
+                                        tenant_id=tenant_id, user_id=user_id)
+            headers = {**headers, **auth}
+        else:
+            url = _resolve(cfg.get("url", ""), data)
+        body = resolve_deep(cfg.get("body"), data) if cfg.get("body") is not None else None
+        async with httpx.AsyncClient(timeout=float(cfg.get("timeout", 20.0))) as client:
+            resp = await client.request(method, url, json=body, headers=headers or None)
             try:
                 body = resp.json()
             except Exception:
                 body = resp.text[:1000]
-        return {"ok": resp.status_code < 400, "status": resp.status_code, "body": body}
+        ok = resp.status_code < 400
+        out = {"ok": ok, "status": resp.status_code, "body": body}
+        if not ok:
+            out["error"] = f"{method} {url} -> HTTP {resp.status_code}"
+        return out
 
     if ntype == "condition":
         left = _resolve(str(cfg.get("left", "")), data)

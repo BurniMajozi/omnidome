@@ -86,6 +86,8 @@ class Workflow(Base):
     schedule_enabled: Mapped[bool] = mapped_column(default=False, nullable=False)
     last_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    # Event trigger (SPEC-lead-automations.md): run when this event type arrives on the bus.
+    trigger_event: Mapped[str] = mapped_column(String(120), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

@@ -18,6 +18,8 @@ from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
 from services.agent_orchestrator.models import Workflow, WorkflowRun, RunStep
 from services.agent_orchestrator.workflow_engine import run_workflow
+from services.agent_orchestrator.event_triggers import install_lead_warming, lead_warming_status
+from services.common.event_bus import normalise_event_type
 
 router = APIRouter()
 
@@ -29,6 +31,7 @@ class WorkflowCreate(BaseModel):
     status: str = "draft"
     schedule_cron: Optional[str] = None
     schedule_enabled: Optional[bool] = None
+    trigger_event: Optional[str] = None  # e.g. portal.cart.abandoned
 
 
 class WorkflowUpdate(BaseModel):
@@ -38,6 +41,16 @@ class WorkflowUpdate(BaseModel):
     status: Optional[str] = None
     schedule_cron: Optional[str] = None
     schedule_enabled: Optional[bool] = None
+    trigger_event: Optional[str] = None  # "" clears it
+
+
+def _trigger_event(raw: Optional[str]) -> Optional[str]:
+    if not raw:
+        return None
+    try:
+        return normalise_event_type(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 class RunRequest(BaseModel):
@@ -70,6 +83,7 @@ def _wf_json(w: Workflow) -> dict:
         "id": str(w.id), "name": w.name, "description": w.description,
         "definition": w.definition, "status": w.status,
         "schedule_cron": w.schedule_cron, "schedule_enabled": w.schedule_enabled,
+        "trigger_event": w.trigger_event,
         "last_run_at": w.last_run_at.isoformat() if w.last_run_at else None,
         "next_run_at": w.next_run_at.isoformat() if w.next_run_at else None,
         "created_at": w.created_at.isoformat() if w.created_at else None,
@@ -90,11 +104,25 @@ async def list_workflows(ctx: AuthContext = Depends(get_auth_context)):
 async def create_workflow(body: WorkflowCreate, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as s:
         w = Workflow(tenant_id=ctx.tenant_id, name=body.name, description=body.description,
-                     definition=body.definition or {}, status=body.status)
+                     definition=body.definition or {}, status=body.status,
+                     trigger_event=_trigger_event(body.trigger_event))
         _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
         s.add(w)
         await s.flush()
         return _wf_json(w)
+
+
+@router.get("/templates/lead-warming")
+async def lead_warming_templates(ctx: AuthContext = Depends(get_auth_context)):
+    """The three AI Lead Warming rules: installed?, active?, runs in 7 days, last run."""
+    return {"data": await lead_warming_status(ctx.tenant_id)}
+
+
+@router.post("/templates/lead-warming")
+async def install_lead_warming_templates(ctx: AuthContext = Depends(get_auth_context)):
+    """Install the missing rules as active event-triggered workflows (idempotent)."""
+    await install_lead_warming(ctx.tenant_id)
+    return {"data": await lead_warming_status(ctx.tenant_id)}
 
 
 @router.get("/{workflow_id}")
@@ -122,6 +150,8 @@ async def update_workflow(workflow_id: uuid.UUID, body: WorkflowUpdate, ctx: Aut
             w.definition = body.definition
         if body.status is not None:
             w.status = body.status
+        if body.trigger_event is not None:
+            w.trigger_event = _trigger_event(body.trigger_event)
         _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
         await s.flush()
         return _wf_json(w)

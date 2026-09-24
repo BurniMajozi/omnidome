@@ -108,6 +108,7 @@ class Agent:
                     "content": cleaned,
                     "tool_calls": tool_call_log,
                     "conversation_id": conversation_id,
+                    "unavailable": bool(result.get("unavailable")),
                 }
 
             # Execute each tool call

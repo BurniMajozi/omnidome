@@ -140,3 +140,30 @@ def test_lead_status_mirrors_deal(deal_status, expected):
 def test_reference_format():
     assert format_reference(42) == "LD-000042"
     assert format_reference(None) is None
+
+
+# ── Automations only move leads forward (SPEC-lead-automations.md) ─────────
+
+from lead_stages import is_forward_move  # noqa: E402
+
+
+def test_automation_moves_new_lead_forward():
+    assert is_forward_move(current_status="NEW", deal_stage=None, stage_names=STAGES, target_status="CONTACTED")
+    assert is_forward_move(current_status="QUALIFIED", deal_stage=None, stage_names=STAGES, target_stage="Proposal")
+
+
+def test_automation_never_moves_a_lead_backwards():
+    assert not is_forward_move(current_status="QUALIFIED", deal_stage=None, stage_names=STAGES, target_status="CONTACTED")
+    assert not is_forward_move(current_status="CONVERTED", deal_stage="Negotiation", stage_names=STAGES,
+                               target_stage="Proposal")
+    assert not is_forward_move(current_status="CONVERTED", deal_stage="Prospecting", stage_names=STAGES,
+                               target_status="QUALIFIED")
+
+
+def test_automation_leaves_closed_leads_alone():
+    for status, stage in [("DISQUALIFIED", None), ("WON", "Closed Won"), ("LOST", "Closed Lost")]:
+        assert not is_forward_move(current_status=status, deal_stage=stage, stage_names=STAGES, target_status="CONTACTED")
+
+
+def test_same_stage_is_not_a_move():
+    assert not is_forward_move(current_status="CONTACTED", deal_stage=None, stage_names=STAGES, target_status="CONTACTED")

@@ -120,3 +120,36 @@ def plan_stage_change(
     if stage == LOST_STAGE:
         return StagePlan(lead_status="LOST", close_deal="lost", closed=True, reason=_require_reason(reason))
     return StagePlan(lead_status="CONVERTED", move_deal_to=stage)
+
+
+def _rank(status: str, deal_stage: Optional[str], stage_names: Sequence[str]) -> Optional[int]:
+    """Position on the journey; None for closed leads. Lead phase 0..2, board 3.."""
+    if deal_stage:
+        open_stages = _open_stages(stage_names)
+        return 3 + open_stages.index(deal_stage) if deal_stage in open_stages else None
+    order = {"NEW": 0, "CONTACTED": 1, "QUALIFIED": 2}
+    return order.get((status or "").upper())
+
+
+def is_forward_move(
+    *,
+    current_status: str,
+    deal_stage: Optional[str],
+    stage_names: Sequence[str],
+    target_status: Optional[str] = None,
+    target_stage: Optional[str] = None,
+) -> bool:
+    """Automations only ever advance a lead: never backwards, never a closed lead,
+    never onto a closing stage (a person decides won/lost)."""
+    current = _rank(current_status, deal_stage, stage_names)
+    if current is None:
+        return False
+    if target_stage:
+        try:
+            stage = _canonical_stage(target_stage, stage_names)
+        except StageChangeError:
+            return False
+        target = _rank("", stage, stage_names)
+    else:
+        target = _rank(target_status or "", None, stage_names)
+    return target is not None and target > current

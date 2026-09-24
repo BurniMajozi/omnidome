@@ -9,10 +9,12 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
+from services.common.event_bus import normalise_event_type, publish
 
 router = APIRouter()
 
@@ -88,6 +90,44 @@ async def read_one(notification_id: uuid.UUID, ctx: AuthContext = Depends(get_au
 # ── Event deliveries (operations view) ──────────────────────────────────────
 
 events_router = APIRouter()
+
+
+class EventIn(BaseModel):
+    type: str = Field(..., description="Dotted event name, e.g. portal.cart.abandoned")
+    payload: dict = {}
+    idempotency_key: Optional[str] = Field(None, max_length=200)
+
+
+@events_router.post("", status_code=202)
+async def ingest_event(body: EventIn, ctx: AuthContext = Depends(get_auth_context)):
+    """Event intake for the portal, website and other systems (SPEC-lead-automations.md).
+    Publishes on the bus; workflows whose trigger_event matches run shortly after.
+    A repeated idempotency_key returns the first event and runs nothing again."""
+    try:
+        event_type = normalise_event_type(body.type)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    async with session_scope() as s:
+        event_id = await publish(s, ctx.tenant_id, event_type, body.payload, source="api",
+                                 idempotency_key=body.idempotency_key)
+    return {"event_id": str(event_id), "type": event_type, "status": "accepted"}
+
+
+@events_router.get("/recent")
+async def recent_events(
+    type: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    where = "tenant_id = :t" + (" AND event_type = :type" if type else "")
+    async with session_scope() as s:
+        rows = (await s.execute(
+            text(f"SELECT id, event_type, source, subject_type, subject_id, created_at FROM domain_events "
+                 f"WHERE {where} ORDER BY created_at DESC LIMIT :n"),
+            {"t": str(ctx.tenant_id), "type": type, "n": limit},
+        )).mappings().all()
+    return {"data": [{**{k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in r.items()},
+                      "created_at": r["created_at"].isoformat()} for r in rows]}
 
 
 @events_router.get("/deliveries")

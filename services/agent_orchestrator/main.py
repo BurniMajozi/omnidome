@@ -115,10 +115,17 @@ async def startup() -> None:
         from services.common.background_tasks import schedule_background
         from services.common.db import run_with_db_retry, session_scope
         from services.common.event_bus import ensure_schema
+        from sqlalchemy import text
 
         async def _ensure_bus_schema() -> None:
             async with session_scope() as s:
                 await ensure_schema(s)
+                # Event-triggered workflows (SPEC-lead-automations.md); create_all never ALTERs.
+                await s.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS trigger_event VARCHAR(120)"))
+                await s.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_trigger_event ON workflows (trigger_event)"))
+            # Runs workflows whose trigger_event matches incoming bus events.
+            from services.agent_orchestrator.event_triggers import consumer as event_consumer
+            event_consumer.start()
 
         schedule_background(run_with_db_retry(_ensure_bus_schema, logger=logger))
 

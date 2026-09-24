@@ -24,8 +24,8 @@ orchestrator moves the lead's stage and has DomeBot draft the warm-up message.
    `SALES_SERVICE_URL`) which also adds the tenant/user headers.
 4. **Sales automation endpoint**: `POST /automation/lead-events`
    `{event_type, contact{first_name,last_name,email,phone,address}, source,
-   target{status | stage_name}, value_zar?, note}` upserts the lead by email then
-   phone, applies the stage through the `lead-lifecycle` rules (only forwards,
+   target{status | stage_name}, value_zar?, note}` upserts the lead by email (phone
+   only when the event has no email), applies the stage through the `lead-lifecycle` rules (only forwards,
    never backwards), writes a timeline entry, returns the lead.
 5. **Templates**: `POST /api/workflows/templates/lead-warming` installs (idempotent
    by name) three active workflows:

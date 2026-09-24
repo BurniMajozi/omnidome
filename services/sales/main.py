@@ -44,7 +44,7 @@ from services.common.middleware import configure_production
 from services.sales.database import get_db, get_session, init_tables
 from services.sales import lead_actions, lead_service
 from services.sales.lead_service import Actor
-from services.sales.lead_stages import StageChangeError
+from services.sales.lead_stages import StageChangeError, is_forward_move
 from services.sales.models import (
     Commission,
     CommissionTier,
@@ -441,8 +441,9 @@ class LeadAssign(BaseModel):
 
 
 class LeadNote(BaseModel):
-    body: str = Field(..., min_length=1, max_length=4000)
-    kind: str = Field("note", pattern="^(note|call)$")
+    body: str = Field(..., min_length=1, max_length=8000)
+    # ai_draft: a message drafted by an automation for a person to review and send
+    kind: str = Field("note", pattern="^(note|call|ai_draft)$")
 
 
 class LeadEmail(BaseModel):
@@ -473,6 +474,34 @@ class LeadOutbound(BaseModel):
 class LeadCampaign(BaseModel):
     campaign_id: str = Field(..., min_length=1, max_length=100)
     campaign_name: str = Field(..., min_length=1, max_length=200)
+
+
+class AutomationContact(BaseModel):
+    first_name: Optional[str] = Field(None, max_length=100)
+    last_name: Optional[str] = Field(None, max_length=100)
+    company: Optional[str] = Field(None, max_length=200)
+    email: Optional[str] = Field(None, max_length=255)
+    phone: Optional[str] = Field(None, max_length=20)
+    address: Optional[str] = None
+
+
+class AutomationLeadEvent(BaseModel):
+    """Called by orchestrator workflows (SPEC-lead-automations.md)."""
+    event_type: str = Field(..., max_length=120)
+    event_id: Optional[str] = Field(None, max_length=100)
+    contact: AutomationContact
+    source: str = "PORTAL_WEBSITE"
+    target_status: Optional[str] = None
+    target_stage: Optional[str] = None
+    value_zar: Optional[Decimal] = Field(None, ge=0)
+    note: Optional[str] = Field(None, max_length=2000)
+    interest_level: int = Field(4, ge=1, le=5)
+
+
+class AutomationLeadResponse(LeadResponse):
+    created: bool = False
+    stage_applied: bool = False
+    duplicate_event: bool = False
 
 
 class OwnerResponse(BaseModel):
@@ -1864,9 +1893,15 @@ async def add_lead_note(lead_id: uuid.UUID, payload: LeadNote,
                         db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
     lead = await _get_lead(db, tenant_id, lead_id)
     await _touch(db, lead)
-    kind = "call_logged" if payload.kind == "call" else "note"
-    summary = ("Call: " if kind == "call_logged" else "") + payload.body.strip().splitlines()[0][:280]
-    a = await lead_service.record_activity(db, tenant_id, lead.id, kind, summary, {"body": payload.body}, _actor(ctx))
+    kind = {"call": "call_logged", "ai_draft": "ai_draft"}.get(payload.kind, "note")
+    first_line = payload.body.strip().splitlines()[0][:240]
+    summary = {"call_logged": f"Call: {first_line}",
+               "ai_draft": "AI draft ready — review and send"}.get(kind, first_line)
+    actor = Actor(id=ctx.user_id, name="DomeBot (AI)") if kind == "ai_draft" else _actor(ctx)
+    a = await lead_service.record_activity(db, tenant_id, lead.id, kind, summary, {"body": payload.body}, actor)
+    if kind == "ai_draft":
+        await notify(db, tenant_id, f"AI draft ready for {_ref(lead)} {lead_service.full_name(lead)}",
+                     body=first_line, category="automation", source="sales", subject=("lead", lead.id))
     await db.flush()
     return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
                                 actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
@@ -2010,6 +2045,104 @@ async def send_lead_to_campaign(lead_id: uuid.UUID, payload: LeadCampaign,
     return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
                                 actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
 
+
+
+# ── Automations (SPEC-lead-automations.md) ──────────────────────────────────
+
+AUTOMATION_ACTOR = Actor(name="Automation")
+
+
+def _event_label(event_type: str) -> str:
+    return {
+        "portal.cart.abandoned": "Abandoned basket",
+        "portal.quote.requested": "Quote requested",
+        "portal.registration.inactive": "Registration inactive",
+    }.get(event_type, event_type)
+
+
+@app.post("/automation/lead-events", response_model=AutomationLeadResponse)
+async def automation_lead_event(
+    payload: AutomationLeadEvent,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Find or create the lead for a customer event and move it forward.
+    Matches by email (by phone only when the event has no email). Never moves a lead backwards or reopens a
+    closed one (lead_stages.is_forward_move). Idempotent per event_id."""
+    c = payload.contact
+    email = (c.email or "").strip().lower() or None
+    phone = "".join((c.phone or "").split()) or None
+    if not email and not phone:
+        raise HTTPException(status_code=422, detail="The event contact needs an email or a phone number")
+
+    lead: Optional[Lead] = None
+    if email:
+        lead = (await db.execute(select(Lead).where(Lead.tenant_id == tenant_id, func.lower(Lead.email) == email)
+                                 .order_by(Lead.created_at.desc()).limit(1))).scalar_one_or_none()
+    # Phone only when the event has no email: a different email with a shared
+    # phone (switchboard, family, reception) is a different person, and merging
+    # two people is worse than a duplicate lead.
+    if lead is None and phone and not email:
+        lead = (await db.execute(select(Lead).where(Lead.tenant_id == tenant_id,
+                                                    func.replace(Lead.phone, " ", "") == phone)
+                                 .order_by(Lead.created_at.desc()).limit(1))).scalar_one_or_none()
+
+    if lead is not None and payload.event_id:
+        seen = (await db.execute(select(LeadActivity.id).where(
+            LeadActivity.lead_id == lead.id, LeadActivity.kind == "automation",
+            LeadActivity.details["event_id"].astext == payload.event_id))).first()
+        if seen:
+            return AutomationLeadResponse(**await lead_service.lead_with_deal(db, lead), duplicate_event=True)
+
+    created = False
+    label = _event_label(payload.event_type)
+    if lead is None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        first = (c.first_name or c.company or "Portal").strip()
+        last = (c.last_name or ("" if c.first_name or c.company else "customer")).strip()
+        lead = Lead(
+            id=uuid.uuid4(), tenant_id=tenant_id, first_name=first, last_name=last,
+            email=c.email, phone=c.phone, address=c.address, source=payload.source,
+            interest_level=payload.interest_level, notes=payload.note,
+            ref_no=await lead_service.next_ref_no(db, tenant_id), status="NEW",
+            created_at=now, updated_at=now,
+        )
+        db.add(lead)
+        await db.flush()
+        created = True
+        await lead_service.record_activity(db, tenant_id, lead.id, "created",
+                                           f"Lead created by automation: {label}",
+                                           {"event_type": payload.event_type}, AUTOMATION_ACTOR)
+        await lead_service.publish_lead_event(db, lead, "sales.lead.created", via="automation")
+
+    stage_applied = False
+    if payload.target_status or payload.target_stage:
+        await _ensure_default_pipeline(db, tenant_id)
+        deal, deal_stage = (await lead_service.deals_by_lead(db, [lead.id])).get(lead.id, (None, None))
+        names = await lead_service.stage_names(db, tenant_id)
+        if is_forward_move(current_status=lead.status, deal_stage=deal_stage if deal else None,
+                           stage_names=names, target_status=payload.target_status,
+                           target_stage=payload.target_stage):
+            try:
+                await lead_service.apply_stage_change(
+                    db, lead, close_won=_close_won, close_lost=_close_lost, actor=AUTOMATION_ACTOR,
+                    target_status=payload.target_status, target_stage=payload.target_stage,
+                    value_zar=payload.value_zar, deal_name=f"{lead_service.full_name(lead)} - {label}")
+                stage_applied = True
+            except StageChangeError as exc:
+                raise _stage_http_error(exc) from exc
+
+    lead.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    await lead_service.record_activity(
+        db, tenant_id, lead.id, "automation",
+        f"{label}" + (f": {payload.note}" if payload.note else "")
+        + ("" if stage_applied or not (payload.target_status or payload.target_stage) else " (stage unchanged: already further along or closed)"),
+        {"event_type": payload.event_type, "event_id": payload.event_id, "stage_applied": stage_applied},
+        AUTOMATION_ACTOR)
+    await db.flush()
+    return AutomationLeadResponse(**await lead_service.lead_with_deal(db, lead), created=created,
+                                  stage_applied=stage_applied)
 
 
 # ── Contacts ─────────────────────────────────────────────────────────────
