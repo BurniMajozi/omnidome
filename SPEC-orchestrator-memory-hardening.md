@@ -89,9 +89,13 @@ Stable ids. A = agent hardening, M = memory management.
   final no-tools call that answers from the transcript so far (WeKnora
   `handleMaxIterations`) instead of ending with a warning.
 - Empty answer with no tool calls → retry up to 2×, then a clear fallback text.
-- Same content twice in a row with no tool calls, or 2 rounds in a row cut at
-  the token cap (`finish_reason == "length"` inside tool args) → stop with the
-  best partial answer.
+- The same tool with the same arguments a third time → refused with "use the
+  earlier result" (in this loop an answer without tool calls already ends the
+  turn, so repeated identical *calls* are the stuck pattern). Two rounds in a row
+  cut at the token cap inside tool arguments (`finish_reason == "length"`, all
+  calls refused) → stop with a final answer.
+- The result carries `stopped_by` (`step_limit` / `empty` / `truncated`) so A7
+  and the Agent Manager can count guarded turns.
 - Per-tool timeout from A6 (default 60 s) around `tool.execute` via
   `asyncio.wait_for`; a timeout is a tool error, not a crashed turn.
 - Acceptance: unit tests with a scripted fake LLM for each guard.

@@ -36,8 +36,8 @@ class ScriptedLLM:
         self.replies = list(replies)
         self.requests: list[dict] = []
 
-    async def chat(self, agent_type, messages, tools=None, tenant_id=None):
-        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools})
+    async def chat(self, agent_type, messages, tools=None, tenant_id=None, tool_choice=None):
+        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools, "tool_choice": tool_choice})
         if not self.replies:
             return reply("(script exhausted)")
         return self.replies.pop(0)
@@ -117,3 +117,73 @@ def test_malformed_string_arguments_are_repaired_before_running(harness):
     ], lookup)
     run(agent)
     assert lookup.calls == [{"status": "open"}]
+
+
+# ── A2 loop-guards ──────────────────────────────────────────────────────────
+
+def test_step_limit_ends_with_a_real_answer_not_tool_json(harness, monkeypatch):
+    monkeypatch.setattr(agents, "MAX_TOOL_CALLS", 3)
+    lookup = FakeTool("support_get_tickets")
+    llm, agent = harness([
+        reply(tool_calls=[call("support_get_tickets", {"page": 1}, "a")]),
+        reply(tool_calls=[call("support_get_tickets", {"page": 2}, "b")]),
+        reply(tool_calls=[call("support_get_tickets", {"page": 3}, "c")]),
+        reply("Three pages checked: 4 open tickets."),
+    ], lookup)
+    out = run(agent)
+    assert out["content"] == "Three pages checked: 4 open tickets."
+    assert out["stopped_by"] == "step_limit"
+    final = llm.requests[-1]
+    assert final.get("tool_choice") == "none"
+    assert "limit" in final["messages"][-1]["content"].lower()
+
+
+def test_empty_answer_is_retried(harness):
+    llm, agent = harness([reply(""), reply("   "), reply("Here you go.")])
+    out = run(agent)
+    assert out["content"] == "Here you go." and len(llm.requests) == 3
+
+
+def test_empty_answers_end_with_a_clear_fallback(harness):
+    llm, agent = harness([reply(""), reply(""), reply("")])
+    out = run(agent)
+    assert out["stopped_by"] == "empty" and "wasn't able" in out["content"]
+
+
+def test_identical_repeated_tool_call_is_not_run_again(harness):
+    lookup = FakeTool("support_get_tickets")
+    same = {"status": "open"}
+    llm, agent = harness([
+        reply(tool_calls=[call("support_get_tickets", same, "a")]),
+        reply(tool_calls=[call("support_get_tickets", same, "b")]),
+        reply(tool_calls=[call("support_get_tickets", same, "c")]),
+        reply("Using the earlier result."),
+    ], lookup)
+    out = run(agent)
+    assert len(lookup.calls) == 2                      # third identical call refused
+    assert "same arguments" in tool_messages(llm.requests[3])[-1]["content"]
+    assert out["content"] == "Using the earlier result."
+
+
+def test_consecutive_cut_off_rounds_stop_the_turn(harness):
+    lookup = FakeTool("support_get_tickets")
+    cut = "Tool arguments were cut off before they ended"
+    llm, agent = harness([
+        reply(tool_calls=[call("support_get_tickets", {}, "a", error=cut)], finish_reason="length"),
+        reply(tool_calls=[call("support_get_tickets", {}, "b", error=cut)], finish_reason="length"),
+        reply("Partial answer from what I have."),
+    ], lookup)
+    out = run(agent)
+    assert out["stopped_by"] == "truncated" and lookup.calls == []
+    assert out["content"] == "Partial answer from what I have."
+
+
+def test_slow_tool_times_out_without_crashing_the_turn(harness):
+    slow = FakeTool("support_get_tickets", delay=0.5, timeout_s=0.05)
+    llm, agent = harness([
+        reply(tool_calls=[call("support_get_tickets", {}, "a")]),
+        reply("The ticket system is slow right now."),
+    ], slow)
+    out = run(agent)
+    assert "timed out" in tool_messages(llm.requests[1])[0]["content"]
+    assert out["content"] == "The ticket system is slow right now."

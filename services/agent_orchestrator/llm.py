@@ -146,8 +146,11 @@ class LLMClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict[str, Any]]] = None,
         tenant_id: Optional[str] = None,
+        tool_choice: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Send a chat completion request. Returns {content, tool_calls}."""
+        """Send a chat completion request. Returns {content, tool_calls, ...}.
+        tool_choice="none" keeps the tool definitions (needed when the history
+        holds tool calls) but forbids new calls — the agent's final answer."""
         primary_model, fallback_model = MODEL_ROUTES.get(
             agent_type, ("qwen2.5:7b", OPENROUTER_MODEL)
         )
@@ -158,13 +161,13 @@ class LLMClient:
         # Try Ollama first
         ollama_ok = await self._check_ollama()
         if ollama_ok:
-            result = await self._ollama_chat(primary_model, full_messages, tools)
+            result = await self._ollama_chat(primary_model, full_messages, None if tool_choice == "none" else tools)
             if result:
                 return result
 
         # Fallback to OpenRouter
         if OPENROUTER_API_KEY:
-            result = await self._openrouter_chat(fallback_model, full_messages, tools)
+            result = await self._openrouter_chat(fallback_model, full_messages, tools, tool_choice=tool_choice)
             if result:
                 return result
 
@@ -225,6 +228,7 @@ class LLMClient:
         model: str,
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
+        tool_choice: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call OpenRouter /api/v1/chat/completions endpoint with prompt caching optimizations."""
         # Prompt caching: Add cache_control to system message for prefix caching
@@ -247,7 +251,7 @@ class LLMClient:
             if formatted_tools:
                 formatted_tools[-1]["cache_control"] = {"type": "ephemeral"}
             payload["tools"] = formatted_tools
-            payload["tool_choice"] = "auto"
+            payload["tool_choice"] = tool_choice or "auto"
 
         # Walk OPENROUTER_MODEL -> OPENROUTER_FALLBACK_MODELS: free models share
         # a pool across all OpenRouter users and 429 at random.

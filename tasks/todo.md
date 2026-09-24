@@ -2,7 +2,7 @@
 
 ## Stage 1 — agent hardening
 - [x] A1 tool-call-repair — json_repair.py (18 tests), llm.py reports arguments_error, agent refuses; loop tests 2
-- [ ] A2 loop-guards
+- [x] A2 loop-guards — final answer at step limit (was returning tool JSON), empty retries, identical-call refusal, cut-off rounds stop, per-tool timeout; 6 tests
 - [ ] A3 tool-output-budget
 - [ ] A6 tool-policy
 - [ ] A5 parallel-reads
