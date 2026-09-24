@@ -1,210 +1,103 @@
-# Tasks: geo-segments
+# Tasks: import flow → opportunity-finder → marketing-audiences
 
-Plan: [plan.md](plan.md) · Spec: [SPEC-geo-segments.md](../SPEC-geo-segments.md)
+Plan: [plan.md](plan.md). geo-segments v1 tasks (1–7) are complete; see git history.
 
-Commands referenced below:
+Commands:
 - `PYTEST` = `cd services/fno_intelligence && ../../.venv/Scripts/python.exe -m pytest tests/ -q`
 - `TSC` = `cd apps/web && npx tsc --noEmit -p tsconfig.json`
-- `LINT` = `cd apps/web && npm run lint`
-- Service/web rebuild + migration: see the Commands section of the spec (run inside WSL, `~/omnidome` mirror, sync changed files first).
+- `LINT` = `cd apps/web && npx eslint <changed files>` (0 errors, no new warnings)
+- Rebuild fno: `~/rebuild_fno.sh` in WSL (syncs `services/fno_intelligence` + migrations, grep-checks the build log)
+- Rebuild web: sync changed web files into `~/omnidome`, `~/rebuild_web_getsession_fix.sh`, `docker compose up -d --no-deps web`
+- Verify in the browser at `http://localhost:3000` (dev tenant `…0001`)
 
 ---
 
-## Task 1: Pure logic module with unit tests
+## A1: Backend — `address_raw` in passed-homes list + stuck-import sweep
+**Acceptance:**
+- [ ] `GET /passed-homes` rows include `address_raw`.
+- [ ] Imports in `uploaded`/`parsing` older than 30 min become `failed` with the spec's message on service start; newer ones untouched (unit-tested cutoff).
+**Verify:** PYTEST; live: the old stuck `passed_homes.csv` import shows Failed after restart.
+**Files:** `services/fno_intelligence/routes.py`, `services/fno_intelligence/passed_homes.py`, `main.py`, tests. **Scope:** S
 
-**Description:** Create `geo_segments.py` with the filter model and validation, the eligibility predicate, exclusion-reason classification, area grouping, centroid, haversine, `suggested_radius_km` (round up to 0.5 km, min 1.0) and CSV/KML rendering. No DB or network.
+## A2: Import panel, progress, auto-geocode, statuses, view issues, template
+**Acceptance:**
+- [ ] "Import FNO file" opens an inline panel above the imports table (FNO select incl. Other + name; drop zone; recognised columns; Download template).
+- [ ] Wrong type / > 25 MB / missing FNO rejected inline before upload.
+- [ ] New import appears at the top immediately, polls to a terminal status, then geocodes with "Placing on map n/N"; builder data reloads after.
+- [ ] Status labels per spec; failed shows error; View issues lists invalid rows with reasons; column mapping visible.
+**Verify:** TSC, LINT; browser at Checkpoint A.
+**Files:** `apps/web/lib/fno-api.ts`, `apps/web/components/modules/sales-lead-sources.tsx` (+ a new `passed-home-import-panel.tsx`). **Scope:** M
 
-**Status: DONE** — 32 new tests, full suite 87 passed.
-
-**Acceptance criteria:**
-- [x] Eligibility: only `normalized` (+ `geocoded` with coordinates when `geocoded_only`); every other status maps to its exclusion reason.
-- [x] Areas group by (suburb, city, postal code) with correct counts, centroid and radius (1.0 km floor, 0.5 km rounding, null centroid when no coordinates).
-- [x] CSV has exactly the spec's columns and no address column; KML parses and skips centroid-less areas; invalid filters (date order, unknown dwelling type) raise.
-
-**Verification:**
-- [x] Tests pass: `PYTEST` (new `tests/test_geo_segments.py`, existing tests still green)
-
-**Dependencies:** None
-
-**Files likely touched:**
-- `services/fno_intelligence/geo_segments.py`
-- `services/fno_intelligence/tests/test_geo_segments.py`
-
-**Estimated scope:** Small
-
----
-
-## Task 2: `fno_geo_segments` model + migration
-
-**Status: DONE** — migration applied twice (idempotent), unique constraint present, service boots healthy with the model.
-
-**Description:** Add the `FNOGeoSegment` model (id, tenant_id, name, filters JSONB, home_count, area_count, excluded JSONB, areas JSONB, created_by, created_at, refreshed_at; unique `(tenant_id, name)`) and the matching migration SQL, applied to the dev DB.
-
-**Acceptance criteria:**
-- [x] Migration applies cleanly to `coreconnect` and is idempotent (`IF NOT EXISTS`).
-- [x] Service boots with the new model (create_all doesn't conflict with the migration).
-- [x] No existing passed-homes table or enum is altered.
-
-**Verification:**
-- [x] `\d fno_geo_segments` shows the columns and the unique constraint
-- [x] Service `/health` 200 after rebuild
-
-**Dependencies:** None
-
-**Files likely touched:**
-- `services/fno_intelligence/models.py`
-- `config/migrations/20260924_fno_geo_segments.sql`
-
-**Estimated scope:** Small
+### Checkpoint A
+- [ ] fno + web rebuilt (logs grepped)
+- [ ] CSV imported through the UI end-to-end (drop → imported → geocoded → count updates)
+- [ ] API upload path still works (curl multipart)
 
 ---
 
-## Task 3: Preview + filter-options endpoints
+## B1: `opportunities.py` pure logic + tests
+**Acceptance:**
+- [ ] Categories → Overpass query (around centre, radius m, named features, `out center tags`).
+- [ ] Overpass elements → companies (address from `addr:*`, contact from plain/`contact:*`, distance, dedupe, sort, cap 300).
+- [ ] Source URL validation (http/https, no localhost/private IPs, normalised).
+- [ ] LLM tender JSON parsing (code fences / surrounding text tolerated), SA date parsing, dedupe key.
+**Verify:** PYTEST. **Files:** `opportunities.py`, `tests/test_opportunities.py`. **Scope:** M
 
-**Status: DONE** — live-verified vs SQL on 4 filter combos + 422s + tenant isolation (scratchpad verify_task3.py). Web path resolves to the dev tenant, which has only 2 homes; review data handled before Checkpoint B.
+## B2: Models + migration (5 tables)
+**Acceptance:**
+- [ ] `opp_company_searches`, `opp_companies`, `opp_sources`, `opp_snapshots`, `opp_tenders` with the spec's unique constraints; migration idempotent; service boots.
+**Verify:** migration applied twice; `\d`; `/health`. **Files:** `models.py`, `config/migrations/20260924_opportunity_finder.sql`. **Scope:** S
 
-**Description:** Add the shared filter → query compiler and `POST /geo-segments/preview` and `GET /geo-segments/filter-options`, tenant-scoped. Confirm which tenant the web path resolves to versus the imported data's tenant.
+## B3: Company search API
+**Acceptance:**
+- [ ] categories, create (422 unknown area), list, detail, enrich, patch endpoints per spec; search runs in background with Overpass fallbacks.
+- [ ] Live: a real SA area returns named businesses with distance; enrich fills contact data for a business with a website; tenant isolation.
+**Verify:** PYTEST; live script. **Files:** `opportunity_routes.py`, `main.py`. **Scope:** M
 
-**Acceptance criteria:**
-- [x] Preview `home_count` and each `excluded` reason equal direct SQL counts for at least 3 different filter combinations.
-- [x] Filter-options lists only values that have eligible homes, with counts.
-- [x] Invalid filters return `422`.
+## B4: Tender sources / scan / tenders / screenshot API + scheduler
+**Acceptance:**
+- [ ] sources CRUD (409 dup, 422 bad URL), scan-now, tenders list/patch, screenshot endpoint.
+- [ ] Live: a real public tender page yields tenders with title + closing date and a stored screenshot; rescan does not duplicate and keeps user status.
+- [ ] Scheduler + advisory lock: due sources scanned once across both workers.
+**Verify:** PYTEST; live script. **Files:** `opportunity_routes.py`, `opportunities.py`, `main.py`. **Scope:** M–L
 
-**Verification:**
-- [x] Tests pass: `PYTEST`
-- [x] Manual: curl both endpoints inside WSL; compare with `psql` counts
+## B5: UI — segmented control + Companies view
+**Acceptance:**
+- [ ] Homes passed / Companies / Tenders & RFQs switcher; existing homes-passed content unchanged under it.
+- [ ] Search form row aligned above results table; job progress; results with Find contacts / Add as lead / Dismiss; recent searches; OSM attribution.
+- [ ] Add as lead creates a real Sales lead (source `COMPANY_SEARCH`) and marks the company.
+**Verify:** TSC, LINT; browser at Checkpoint B. **Files:** `fno-api.ts`, `sales-lead-sources.tsx`, new `opportunity-companies.tsx`, `sales-api.ts` (channels). **Scope:** M
 
-**Dependencies:** Task 1
+## B6: UI — Tenders & RFQs view
+**Acceptance:**
+- [ ] Source form row aligned above the sources table; Scan now / Pause / Delete; scan status.
+- [ ] Tenders table with closing countdown, briefing, documents list, screenshot evidence, status select, Add to pipeline (Sales lead source `TENDER`); status filter + show closed.
+**Verify:** TSC, LINT; browser at Checkpoint B. **Files:** `fno-api.ts`, new `opportunity-tenders.tsx`. **Scope:** M
 
-**Files likely touched:**
-- `services/fno_intelligence/routes.py`
-- `services/fno_intelligence/geo_segments.py` (query compiler, if not in routes)
-
-**Estimated scope:** Small
-
----
-
-## Checkpoint A: Foundation
-- [x] `PYTEST` green
-- [x] Service rebuilt and healthy; migration applied
-- [x] Preview matches SQL; tenant question from Task 3 answered
-- [x] Review with human before UI work
-
----
-
-## Task 4: Segment builder UI with live count; fake panels deleted
-
-**Status: DONE** — tsc + lint clean (0 errors; the 4 icon imports orphaned by the deletion removed); browser check at Checkpoint B.
-
-**Description:** Create `fno-api.ts` (typed client for filter-options and preview) and `sales-lead-sources.tsx` with a past-imports table and the segment builder (FNO, import, city, suburbs, postcode, dwelling type with friendly labels, passed from/to, geocoded-only). Live count debounced ~400 ms with per-reason exclusions and an area list. Mount it in the `ai-engine` tab and delete the simulation / output / prospect-generator panels plus their state and handlers.
-
-**Acceptance criteria:**
-- [x] Dropdowns populate from `filter-options`; count updates on change without a full-section spinner; loading, empty and error states shown.
-- [x] `handleRunAiWarmingSimulation`, `handleGenerateAiProspects`, their state and JSX are gone; `grep "Nexus Logistics"` returns 0.
-- [x] Pipeline, channels and leads tabs unaffected.
-
-**Verification:**
-- [x] `TSC` and `LINT` clean
-- [x] Manual (at Checkpoint B): builder shows real counts on `http://127.0.0.1:3000`
-
-**Dependencies:** Task 3
-
-**Files likely touched:**
-- `apps/web/lib/fno-api.ts`
-- `apps/web/components/modules/sales-lead-sources.tsx`
-- `apps/web/components/modules/sales-module.tsx`
-
-**Estimated scope:** Medium
+### Checkpoint B
+- [ ] fno + web rebuilt; real area search and real tender URL work in the browser; leads created
 
 ---
 
-## Task 5: Save / list / detail / delete (API + UI)
+## C1: Marketing API — fix jsonb bug, upsert, detail, delete, type filter
+**Acceptance:**
+- [ ] Bug reproduced (POST /segments fails) then fixed.
+- [ ] Upsert on same `source` + `source_id`; `GET /segments?type=`, `GET /segments/{id}`, `DELETE`; validation; tenant isolation.
+**Verify:** live script before/after. **Files:** `services/marketing/main.py`. **Scope:** S
 
-**Status: DONE** — backend live-verified (12/12: 201, summary == preview, 409 after trim, blank 422, list order, detail, other-tenant 404 x2, survives restart, 204, 404 after delete; scratchpad verify_task5.py); tsc + lint clean; browser check at Checkpoint B.
+## C2: Sales — "Add to audience"
+**Acceptance:**
+- [ ] Saved geo segment row → platform + name → homes audience (areas only); row shows "In Marketing".
+- [ ] Company search → business audience with non-dismissed businesses.
+**Verify:** TSC, LINT; browser at Complete. **Files:** new `apps/web/lib/audiences-api.ts` (or marketing-api additions), `sales-lead-sources.tsx`, `opportunity-companies.tsx`. **Scope:** S–M
 
-**Description:** `POST /geo-segments`, `GET /geo-segments`, `GET /geo-segments/{id}`, `DELETE /geo-segments/{id}`; UI "Save segment" (name input) and a saved-segments list with home count, area count and refreshed time; detail shows areas.
+## C3: Marketing → Audiences real
+**Acceptance:**
+- [ ] Hard-coded audience fixtures removed; cards from API with type/platform/count/source/updated; empty state.
+- [ ] Detail with areas or businesses, Export CSV, Delete.
+- [ ] New Audience modal aligned (type, source picker, platform, description; custom regions) creating real records.
+**Verify:** TSC, LINT; browser. **Files:** `apps/web/components/modules/marketing-module.tsx` (+ new `marketing-audiences.tsx`). **Scope:** M
 
-**Acceptance criteria:**
-- [x] Save persists the summary computed by the same query as preview; duplicate name → `409` shown inline; other tenant's id → `404`.
-- [x] Saved segment survives a service restart and appears newest first.
-- [x] Delete removes it from the list without a page reload.
-
-**Verification:**
-- [x] `PYTEST`, `TSC`, `LINT`
-- [x] Manual: curl create → list → detail → delete; restart service and list again
-
-**Dependencies:** Tasks 2, 4
-
-**Files likely touched:**
-- `services/fno_intelligence/routes.py`
-- `apps/web/lib/fno-api.ts`
-- `apps/web/components/modules/sales-lead-sources.tsx`
-
-**Estimated scope:** Medium
-
----
-
-## Task 6: Refresh + CSV/KML export (API + UI)
-
-**Status: DONE** — backend live-verified 13/13 in a throwaway tenant (refresh picks up a new home, refreshed_at advances, CSV/KML headers + content, no address text, 422s, cleanup = 0 rows; scratchpad verify_task6.py); tsc + lint + pytest clean; browser check at Checkpoint B.
-
-**Description:** `POST /geo-segments/{id}/refresh` and `GET /geo-segments/{id}/export?format=csv|kml` with attachment headers; UI Refresh and Export CSV / Export KML buttons per saved segment.
-
-**Acceptance criteria:**
-- [x] Refresh recomputes counts and `refreshed_at` after the underlying data changes.
-- [x] CSV/KML downloads match the spec (columns, no addresses, placemark per centroid area); bad `format` → `422`.
-
-**Verification:**
-- [x] `PYTEST`, `TSC`, `LINT`
-- [x] Manual: curl both formats; parse KML; open CSV
-
-**Dependencies:** Task 5
-
-**Files likely touched:**
-- `services/fno_intelligence/routes.py`
-- `apps/web/lib/fno-api.ts`
-- `apps/web/components/modules/sales-lead-sources.tsx`
-
-**Estimated scope:** Small
-
----
-
-## Checkpoint B: End-to-end
-- [x] `fno_intelligence` and `web` rebuilt (build logs grepped for failures)
-- [x] Browser pass on `http://127.0.0.1:3000`: filters → live count → save → list → refresh → both exports → delete
-- [x] Pipeline / leads tabs still work; no console errors
-- [x] Review with human
-
-- Notes: first browser pass exposed that the local web image baked every `/svc/*` rewrite as localhost (apps/web/.env.local leaking into the Docker build) — fixed in c9aa7a6d by excluding it in .dockerignore. Review data for the dev tenant loaded through the real import + geocode endpoints (8 geocoded homes; 1 customer, 2 duplicates, 1 invalid excluded). Date inputs clipped at narrow widths — stacked below xl.
----
-
-## Task 7: 10k-home performance check
-
-**Status: DONE** — measured 2026-09-24 with 10,000 synthetic homes (200 suburbs; 85% eligible, 10% duplicate, 3% invalid, 2% customers) in throwaway tenant `…00f7`, while the web image was building (CPU contended):
-- preview, all 10k: worst **0.785 s**, best 0.280 s (5 runs after warm-up) → home_count 8,500 (exact), 170 areas
-- save, all 10k: worst 0.503 s, best 0.303 s
-- preview filtered to 50 suburbs: 0.085 s
-- no index needed; synthetic rows removed (0 left). Script: scratchpad `perf_task7.py`.
-
-**Description:** Insert ~10,000 synthetic passed homes into a separate throwaway tenant, time `preview` and `save` (5 runs, take the worst), add an index only if needed, then delete the synthetic rows.
-
-**Acceptance criteria:**
-- [x] Preview < 1 s at 10k homes (spec criterion 4), measured and recorded in this file.
-- [x] Synthetic tenant rows fully removed afterwards (count = 0).
-
-**Verification:**
-- [x] Timing output recorded; `select count(*)` for the throwaway tenant = 0
-
-**Dependencies:** Task 6
-
-**Files likely touched:**
-- `services/fno_intelligence/models.py` / a migration (only if an index is needed)
-
-**Estimated scope:** Small
-
----
-
-## Checkpoint: Complete
-- [x] Spec success criteria 1–5 all met (1: preview == SQL on 4 filter combos; 2: survives restart; 3: CSV/KML columns + no addresses; 4: 0.785 s worst at 10k; 5: section live, fake panels deleted, tsc/lint/pytest clean)
-- [x] Commits per task on `main` (local); push on user approval
-- [ ] Memory updated with anything non-obvious learned
+### Checkpoint: Complete
+- [ ] All tasks above ticked with evidence; every success criterion in the three specs verified
+- [ ] Final rebuild of fno, marketing and web; full browser pass; pushed

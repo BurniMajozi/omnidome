@@ -196,3 +196,55 @@ debounced (~400 ms) and never flashes the whole section.
 - Segment scope when a new import arrives: stays on the cached summary until
   someone clicks Refresh (proposed), or auto-refreshes on the next import?
 - Default "passed since" window in the builder: none (proposed) or last 90 days?
+
+---
+
+## v2 amendment: manual import flow (approved 2026-09-24)
+
+The upload API (`POST /passed-home-imports`, multipart `fno_name`,
+`fno_portal`, `file`) **stays unchanged**; the UI adds a manual way to use it.
+
+### User stories
+- As a sales manager I click **Import FNO file**, pick the FNO, drop a CSV or
+  Excel file, and click **Import homes** — no API knowledge needed.
+- I watch the new import move through *Processing → Imported* in the imports
+  table, then *Placing on map n/N*, and the segment builder updates when it's done.
+- When rows are rejected I open **View issues** and see each invalid row's
+  reason; when the whole file fails I see why.
+
+### UI (Sales → lead sources, imports card)
+- Primary **Import FNO file** button in the imports card header; the empty
+  state offers the same action.
+- Import panel (inline, directly above the imports table, same width and
+  column rhythm — "aligned to the main table"): **FNO** select (Vumatel
+  active/passive, Openserve, Frogfoot, Octotel, MetroFibre, Liquid, Other →
+  free-text name) and a **file** drop zone (.csv/.xlsx/.xls, ≤ 25 MB, checked
+  before upload). Shows the recognised columns (address required; suburb,
+  city/town, postcode, date passed/RFS date, units optional) and a
+  **Download template** link (client-generated CSV with the canonical headers).
+- On submit the new import is inserted at the top of the table immediately and
+  polled every 2 s (`GET /passed-home-imports/{id}`) until terminal. Then the
+  UI triggers `POST /passed-homes/geocode?import_id=…` and polls
+  `GET /passed-homes/geocode-status?import_id=…`, showing "Placing on map n/N".
+  When done, filter options and the live count reload.
+- Status labels: `uploaded`/`parsing` → Processing; `imported` → Imported;
+  `partial` → No new homes; `failed` → Failed (error message shown).
+- Detected column mapping (from `column_map`) is shown on the row's detail.
+- **View issues** (when `invalid_rows > 0`) lists the import's invalid rows via
+  `GET /passed-homes?import_id=…&status=invalid` with `address_raw` and
+  `reject_reason`.
+
+### Backend changes (small)
+- `GET /passed-homes` also returns `address_raw` (internal tool; needed to show
+  what was rejected).
+- Startup sweep: imports stuck in `uploaded`/`parsing` for more than 30 minutes
+  are marked `failed` with "Processing was interrupted before it finished.
+  Upload the file again." (e.g. the rows left behind by the old
+  BackgroundTasks bug). Idempotent.
+
+### Success criteria (v2)
+6. A CSV dropped in the UI is imported, geocoded and reflected in the live
+   count without any API call by the user; the API path still works.
+7. Wrong file type / > 25 MB / missing FNO are rejected inline before upload.
+8. Invalid rows are listed with their reasons; failed imports show the error.
+9. No import stays "Processing" forever (stuck rows are swept to Failed).
