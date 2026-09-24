@@ -187,3 +187,18 @@ def test_slow_tool_times_out_without_crashing_the_turn(harness):
     out = run(agent)
     assert "timed out" in tool_messages(llm.requests[1])[0]["content"]
     assert out["content"] == "The ticket system is slow right now."
+
+
+# ── A3 tool-output-budget in the loop ───────────────────────────────────────
+
+def test_large_tool_results_are_trimmed_for_the_model_but_kept_in_the_log(harness):
+    rows = [{"id": f"C-{i}", "notes": "n" * 400} for i in range(100)]
+    big = FakeTool("crm_get_customer", result={"success": True, "data": rows}, max_output_chars=3000)
+    llm, agent = harness([
+        reply(tool_calls=[call("crm_get_customer", {}, "a")]),
+        reply("100 customers found."),
+    ], big)
+    out = run(agent)
+    sent = tool_messages(llm.requests[1])[0]["content"]
+    assert len(sent) < 3500 and "trimmed" in sent.lower()
+    assert out["tool_calls"][0]["result"]["data"] == rows      # full result kept

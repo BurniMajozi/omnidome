@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
+from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -283,12 +284,12 @@ class Agent:
             logger.error("Cross-agent consultation failed: %s", err)
             return {"success": False, "error": f"Failed to consult {specialist}: {str(err)}"}
 
-    @staticmethod
-    def _append_tool_round(messages: List[Dict[str, Any]], executed_calls: List[Dict[str, Any]]) -> None:
+    def _append_tool_round(self, messages: List[Dict[str, Any]], executed_calls: List[Dict[str, Any]]) -> None:
         """Feed results back in OpenAI/Anthropic tool-calling format: an assistant
         message carrying the tool_calls (with ids), then one tool message per
         result keyed by tool_call_id. Content stays None so the model does not
-        echo a premature draft into the final response."""
+        echo a premature draft into the final response. Each result is capped
+        to the tool's output budget (spec A3); the full result stays in the log."""
         messages.append({
             "role": "assistant",
             "content": None,
@@ -305,8 +306,10 @@ class Agent:
         for c in executed_calls:
             if not c.get("id"):
                 continue
+            tool = tool_registry.get(c["name"])
+            max_chars = getattr(tool, "max_output_chars", None) or DEFAULT_MAX_OUTPUT_CHARS
             messages.append({
                 "role": "tool",
                 "tool_call_id": c["id"],
-                "content": json.dumps(c["result"], default=str),
+                "content": budget_tool_result(c["result"], max_chars),
             })
