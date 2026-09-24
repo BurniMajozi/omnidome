@@ -87,6 +87,23 @@ def _skill_from_row(row: Any) -> AgentSkillRead:
     return AgentSkillRead.model_validate(item)
 
 
+async def _author(session: AsyncSession, ctx: AuthContext, metadata: Optional[dict]) -> tuple[Optional[str], dict]:
+    """created_by / updated_by reference login users (FK to users). Agents,
+    automations and system jobs write with ids that are not users, which made
+    every such write fail with a foreign-key error. Keep the FK for real users
+    and record any other actor in metadata.actor_id instead."""
+    meta = dict(metadata or {})
+    if ctx.user_id is None:
+        return None, meta
+    exists = (await session.execute(
+        text("select 1 from users where id = :id"), {"id": str(ctx.user_id)}
+    )).first()
+    if exists:
+        return str(ctx.user_id), meta
+    meta.setdefault("actor_id", str(ctx.user_id))
+    return None, meta
+
+
 @app.post("/api/v1/memories", response_model=MemoryEntryRead, status_code=status.HTTP_201_CREATED)
 async def create_memory(
     payload: MemoryEntryCreate,
@@ -94,6 +111,7 @@ async def create_memory(
     session: AsyncSession = Depends(get_async_session),
 ):
     entry_id = uuid.uuid4()
+    created_by, metadata = await _author(session, ctx, payload.metadata)
     result = await session.execute(
         text(
             """
@@ -124,8 +142,8 @@ async def create_memory(
             "visibility": payload.visibility,
             "importance": payload.importance,
             "tags": payload.tags,
-            "metadata": payload.metadata,
-            "created_by": str(ctx.user_id),
+            "metadata": metadata,
+            "created_by": created_by,
             "occurred_at": payload.occurred_at or datetime.now(timezone.utc),
         },
     )
@@ -249,6 +267,7 @@ async def upsert_summary(
     if payload.scope_key != scope_key:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="scope_key mismatch")
 
+    updated_by, metadata = await _author(session, ctx, payload.metadata)
     result = await session.execute(
         text(
             """
@@ -280,8 +299,8 @@ async def upsert_summary(
             "title": payload.title,
             "summary": payload.summary,
             "source_entry_ids": payload.source_entry_ids,
-            "metadata": payload.metadata,
-            "updated_by": str(ctx.user_id),
+            "metadata": metadata,
+            "updated_by": updated_by,
         },
     )
     return _summary_from_row(result.mappings().one())
