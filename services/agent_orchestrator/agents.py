@@ -4,9 +4,11 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from services.agent_orchestrator import usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -137,8 +139,17 @@ class Agent:
         call_counts: Dict[str, int] = {}
         tools_for_llm = tool_registry.to_openai_format(self.tools)
         tenant = str(self.tenant_id) if self.tenant_id else None
+        started = time.perf_counter()
+        turn = {"rounds": 0, "tokens": 0}
 
         def done(content: str, stopped_by: Optional[str] = None, unavailable: bool = False) -> Dict[str, Any]:
+            # Usage tracing (spec A7): one agent_turns row per turn.
+            usage.record_agent_turn(
+                tenant_id=tenant, agent_type=self.agent_type, channel=self.channel, rounds=turn["rounds"],
+                tool_calls=len(tool_call_log), total_tokens=turn["tokens"],
+                duration_ms=int((time.perf_counter() - started) * 1000), stopped_by=stopped_by,
+                unavailable=unavailable,
+            )
             return {
                 "content": content,
                 "tool_calls": tool_call_log,
@@ -153,7 +164,10 @@ class Agent:
                 messages=messages,
                 tools=tools_for_llm,
                 tenant_id=tenant,
+                channel=self.channel,
             )
+            turn["rounds"] += 1
+            turn["tokens"] += usage.tokens_from(result)[2]
             content = result.get("content") or ""
             raw_tool_calls = result.get("tool_calls", [])
 
@@ -220,7 +234,7 @@ class Agent:
         try:
             result = await llm_client.chat(
                 agent_type=self.agent_type, messages=final_messages, tools=tools_for_llm,
-                tenant_id=tenant, tool_choice="none",
+                tenant_id=tenant, tool_choice="none", channel=self.channel, purpose="final",
             )
         except Exception as exc:  # noqa: BLE001 - the turn must still end with text
             logger.error("Final answer call failed: %s", exc)

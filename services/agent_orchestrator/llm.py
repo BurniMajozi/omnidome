@@ -3,12 +3,14 @@
 import os
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import httpx
 
 from services.common import openrouter
 from services.agent_orchestrator.json_repair import parse_tool_arguments
+from services.agent_orchestrator import usage
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,8 @@ class LLMClient:
         tools: Optional[List[Dict[str, Any]]] = None,
         tenant_id: Optional[str] = None,
         tool_choice: Optional[str] = None,
+        channel: Optional[str] = None,
+        purpose: str = "round",
     ) -> Dict[str, Any]:
         """Send a chat completion request. Returns {content, tool_calls, ...}.
         tool_choice="none" keeps the tool definitions (needed when the history
@@ -155,6 +159,14 @@ class LLMClient:
             agent_type, ("qwen2.5:7b", OPENROUTER_MODEL)
         )
 
+        started = time.perf_counter()
+        result = await self._chat(agent_type, messages, tools, tool_choice, primary_model, fallback_model)
+        # Usage tracing (spec A7): one row per call, written off the request path.
+        usage.record_llm_call(tenant_id=tenant_id, agent_type=agent_type, channel=channel, result=result,
+                              latency_ms=int((time.perf_counter() - started) * 1000), purpose=purpose)
+        return result
+
+    async def _chat(self, agent_type, messages, tools, tool_choice, primary_model, fallback_model) -> Dict[str, Any]:
         system_prompt = SYSTEM_PROMPTS.get(agent_type, "You are a helpful AI assistant.")
         full_messages = [{"role": "system", "content": system_prompt}] + messages
 

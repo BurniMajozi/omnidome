@@ -36,7 +36,7 @@ class ScriptedLLM:
         self.replies = list(replies)
         self.requests: list[dict] = []
 
-    async def chat(self, agent_type, messages, tools=None, tenant_id=None, tool_choice=None):
+    async def chat(self, agent_type, messages, tools=None, tenant_id=None, tool_choice=None, **_):
         self.requests.append({"messages": [dict(m) for m in messages], "tools": tools, "tool_choice": tool_choice})
         if not self.replies:
             return reply("(script exhausted)")
@@ -79,6 +79,8 @@ class FakeRegistry:
 
 @pytest.fixture
 def harness(monkeypatch):
+    monkeypatch.setattr(agents.usage, "ENABLED", False)   # no DB in unit tests
+
     def make(replies, *tools):
         llm = ScriptedLLM(replies)
         monkeypatch.setattr(agents, "llm_client", llm)

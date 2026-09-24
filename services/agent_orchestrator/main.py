@@ -123,6 +123,9 @@ async def startup() -> None:
                 # Event-triggered workflows (SPEC-lead-automations.md); create_all never ALTERs.
                 await s.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS trigger_event VARCHAR(120)"))
                 await s.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_trigger_event ON workflows (trigger_event)"))
+                # LLM usage tracing tables (spec A7).
+                from services.agent_orchestrator.usage import ensure_schema as ensure_usage_schema
+                await ensure_usage_schema(s)
             # Runs workflows whose trigger_event matches incoming bus events.
             from services.agent_orchestrator.event_triggers import consumer as event_consumer
             event_consumer.start()
@@ -178,6 +181,9 @@ from services.agent_orchestrator.routes.notifications import (
     router as notifications_router,
 )
 app.include_router(notifications_router, prefix="/api/notifications")
+
+from services.agent_orchestrator.routes.usage import router as usage_router
+app.include_router(usage_router, prefix="/api/usage")
 app.include_router(bus_events_router, prefix="/api/events")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 
