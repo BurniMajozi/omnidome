@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 
 from services.common import openrouter
+from services.agent_orchestrator.json_repair import parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -258,27 +259,29 @@ class LLMClient:
             )
             if result_or_none is None:
                 return None
-            data, _model_used = result_or_none
+            data, model_used = result_or_none
             choice = data.get("choices", [{}])[0]
             msg = choice.get("message", {})
             result = {
                 "content": msg.get("content", ""),
                 "tool_calls": [],
+                # Loop guards (spec A2) and usage tracing (A7) read these.
+                "finish_reason": choice.get("finish_reason"),
+                "usage": data.get("usage") or {},
+                "model": data.get("model") or model_used,
             }
             raw_tool_calls = msg.get("tool_calls", [])
             for tc in raw_tool_calls:
                 if "function" in tc:
-                    import json
-                    args = tc["function"].get("arguments", "{}")
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except json.JSONDecodeError:
-                            args = {}
+                    # Repair malformed arguments; a call whose arguments cannot
+                    # be repaired (or were cut off) carries arguments_error and
+                    # is refused by the agent loop instead of running with {}.
+                    args, args_error = parse_tool_arguments(tc["function"].get("arguments", "{}"))
                     result["tool_calls"].append({
                         "id": tc.get("id", ""),
                         "name": tc["function"]["name"],
-                        "arguments": args,
+                        "arguments": args if args is not None else {},
+                        "arguments_error": args_error,
                     })
             return result
         except httpx.TimeoutException:

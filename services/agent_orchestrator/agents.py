@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.json_repair import parse_tool_arguments
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +116,19 @@ class Agent:
             executed_calls = []
             for tc in raw_tool_calls:
                 tool_name = tc.get("name", "")
-                tool_args = tc.get("arguments", {})
-                if isinstance(tool_args, str):
-                    import json
-                    try:
-                        tool_args = json.loads(tool_args)
-                    except (json.JSONDecodeError, TypeError):
-                        tool_args = {}
+                # Spec A1: repaired arguments only. A call whose arguments could not
+                # be repaired or were cut off is refused (never run with {}); the
+                # error goes back to the model so it re-issues the call.
+                args_error = tc.get("arguments_error")
+                tool_args, parse_error = parse_tool_arguments(tc.get("arguments", {}))
+                args_error = args_error or parse_error
+                tool_args = tool_args or {}
 
+                if args_error:
+                    logger.warning("Refused %s: %s", tool_name, args_error)
+                    tool_result = {"success": False, "error": args_error, "refused": True}
                 # Intercept cross-agent consultation for in-process specialist reasoning
-                if tool_name in ("orchestrator_consult_specialist", "orchestrator.consult_specialist"):
+                elif tool_name in ("orchestrator_consult_specialist", "orchestrator.consult_specialist"):
                     specialist = str(tool_args.get("specialist", "support")).lower()
                     query = str(tool_args.get("query", ""))
                     extra_ctx = str(tool_args.get("context", ""))

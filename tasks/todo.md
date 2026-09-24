@@ -1,7 +1,7 @@
 # Todo: Orchestrator memory management + agent hardening
 
 ## Stage 1 — agent hardening
-- [ ] A1 tool-call-repair
+- [x] A1 tool-call-repair — json_repair.py (18 tests), llm.py reports arguments_error, agent refuses; loop tests 2
 - [ ] A2 loop-guards
 - [ ] A3 tool-output-budget
 - [ ] A6 tool-policy
