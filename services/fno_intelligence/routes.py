@@ -1794,3 +1794,48 @@ async def delete_geo_segment(
 ):
     await db.delete(await _gs_get_owned(db, tenant_id, segment_id))
     return _GSResponse(status_code=204)
+
+
+import re as _gs_re
+from datetime import timezone as _gs_tz
+from typing import Literal as _GSLiteral
+from services.fno_intelligence.geo_segments import areas_to_csv as _gs_areas_to_csv, areas_to_kml as _gs_areas_to_kml
+
+
+@router.post("/geo-segments/{segment_id}/refresh")
+async def refresh_geo_segment(
+    segment_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Recompute the cached summary from the stored filters (e.g. after a new import)."""
+    seg = await _gs_get_owned(db, tenant_id, segment_id)
+    summary = await _gs_compute(db, tenant_id, GeoSegmentFilters(**seg.filters))
+    seg.home_count = summary["home_count"]
+    seg.area_count = summary["area_count"]
+    seg.excluded = summary["excluded"]
+    seg.areas = summary["areas"]
+    seg.refreshed_at = datetime.now(_gs_tz.utc)
+    await db.flush()
+    return _gs_segment_dict(seg, include_areas=True)
+
+
+@router.get("/geo-segments/{segment_id}/export")
+async def export_geo_segment(
+    segment_id: uuid.UUID,
+    format: _GSLiteral["csv", "kml"] = Query(...),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_session),
+):
+    """Target areas as CSV or KML for any ad platform. Areas only -- no addresses."""
+    seg = await _gs_get_owned(db, tenant_id, segment_id)
+    slug = _gs_re.sub(r"[^a-z0-9]+", "-", seg.name.lower()).strip("-") or "segment"
+    if format == "csv":
+        body, media_type = _gs_areas_to_csv(seg.areas), "text/csv; charset=utf-8"
+    else:
+        body, media_type = _gs_areas_to_kml(seg.areas, seg.name), "application/vnd.google-earth.kml+xml"
+    return _GSResponse(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{slug}-areas.{format}"'},
+    )

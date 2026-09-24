@@ -51,9 +51,9 @@ FNOGeoSegment model + migration ──┼── preview / filter-options endpoin
 - [x] pytest green; service rebuilt; preview count matches direct SQL count
 
 ### Phase 2: Core flow
-- [ ] Task 4: Segment builder UI with live count; fake panels deleted
-- [ ] Task 5: Save / list / detail / delete (API + UI)
-- [ ] Task 6: Refresh + CSV/KML export (API + UI)
+- [x] Task 4: Segment builder UI with live count; fake panels deleted
+- [x] Task 5: Save / list / detail / delete (API + UI)
+- [x] Task 6: Refresh + CSV/KML export (API + UI)
 
 ### Checkpoint B: End-to-end
 - [ ] web + service rebuilt; full browser pass on `http://127.0.0.1:3000`

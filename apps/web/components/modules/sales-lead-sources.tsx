@@ -1,7 +1,9 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, ChevronRight, FileSpreadsheet, Layers, Loader2, MapPin, Target, Trash2 } from "lucide-react"
+import {
+  ChevronDown, ChevronRight, Download, FileSpreadsheet, Layers, Loader2, MapPin, RefreshCw, Target, Trash2,
+} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -161,6 +163,30 @@ export function SalesLeadSources() {
       setRowError((prev) => ({ ...prev, [seg.id]: err instanceof Error ? err.message : "Couldn't load areas" }))
     }
   }
+
+  const [busy, setBusy] = useState<Record<string, string>>({})
+
+  const runRowAction = async (seg: GeoSegment, label: string, action: () => Promise<void>) => {
+    setBusy((prev) => ({ ...prev, [seg.id]: label }))
+    setRowError((prev) => omitKey(prev, seg.id))
+    try {
+      await action()
+    } catch (err) {
+      setRowError((prev) => ({ ...prev, [seg.id]: err instanceof Error ? err.message : `Couldn't ${label}` }))
+    } finally {
+      setBusy((prev) => omitKey(prev, seg.id))
+    }
+  }
+
+  const handleRefresh = (seg: GeoSegment) =>
+    runRowAction(seg, "refresh", async () => {
+      const updated = await fnoApi.refreshGeoSegment(seg.id)
+      setSegments((prev) => (prev ?? []).map((s) => (s.id === seg.id ? updated : s)))
+      setExpanded((prev) => (prev[seg.id] ? { ...prev, [seg.id]: updated.areas ?? [] } : prev))
+    })
+
+  const handleExport = (seg: GeoSegment, format: "csv" | "kml") =>
+    runRowAction(seg, `export ${format.toUpperCase()}`, () => fnoApi.downloadGeoSegmentExport(seg.id, format))
 
   const handleDelete = async (seg: GeoSegment) => {
     if (!window.confirm(`Delete the segment "${seg.name}"? The homes themselves aren't affected.`)) return
@@ -489,6 +515,24 @@ export function SalesLeadSources() {
                         {s.area_count} {s.area_count === 1 ? "area" : "areas"}
                       </span>
                       <span>Updated {formatDate(s.refreshed_at)}</span>
+                      <div className="flex items-center gap-1">
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[11px]"
+                          onClick={() => handleRefresh(s)} disabled={Boolean(busy[s.id])}
+                          title="Recount homes with this segment's filters">
+                          <RefreshCw className={`h-3 w-3 ${busy[s.id] === "refresh" ? "animate-spin" : ""}`} />
+                          Refresh
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[11px]"
+                          onClick={() => handleExport(s, "csv")} disabled={Boolean(busy[s.id])}
+                          title="Download target areas as CSV">
+                          <Download className="h-3 w-3" /> CSV
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[11px]"
+                          onClick={() => handleExport(s, "kml")} disabled={Boolean(busy[s.id])}
+                          title="Download target areas as KML (Google Earth / ad platforms)">
+                          <Download className="h-3 w-3" /> KML
+                        </Button>
+                      </div>
                       <Button
                         variant="ghost"
                         size="icon"

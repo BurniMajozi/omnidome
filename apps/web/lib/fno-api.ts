@@ -165,4 +165,24 @@ export const fnoApi = {
     }),
 
   deleteGeoSegment: (id: string) => fetchFno<void>(`/geo-segments/${id}`, { method: "DELETE" }),
+
+  refreshGeoSegment: (id: string) => fetchFno<GeoSegment>(`/geo-segments/${id}/refresh`, { method: "POST" }),
+
+  /** Fetches the export with auth headers and saves it; a plain <a href> can't send them. */
+  downloadGeoSegmentExport: async (id: string, format: "csv" | "kml") => {
+    const res = await fetch(`${API_BASE}/geo-segments/${id}/export?format=${format}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+      headers: await getAuthHeaders(),
+    })
+    if (!res.ok) throw new FnoApiError(res.status, `Export failed (${res.status})`)
+    const disposition = res.headers.get("content-disposition") ?? ""
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `segment-areas.${format}`
+    const url = URL.createObjectURL(await res.blob())
+    const link = document.createElement("a")
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  },
 }

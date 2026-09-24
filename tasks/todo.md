@@ -146,15 +146,17 @@ Commands referenced below:
 
 ## Task 6: Refresh + CSV/KML export (API + UI)
 
+**Status: CODE DONE** — backend live-verified 13/13 in a throwaway tenant (refresh picks up a new home, refreshed_at advances, CSV/KML headers + content, no address text, 422s, cleanup = 0 rows; scratchpad verify_task6.py); tsc + lint + pytest clean; browser check at Checkpoint B.
+
 **Description:** `POST /geo-segments/{id}/refresh` and `GET /geo-segments/{id}/export?format=csv|kml` with attachment headers; UI Refresh and Export CSV / Export KML buttons per saved segment.
 
 **Acceptance criteria:**
-- [ ] Refresh recomputes counts and `refreshed_at` after the underlying data changes.
-- [ ] CSV/KML downloads match the spec (columns, no addresses, placemark per centroid area); bad `format` → `422`.
+- [x] Refresh recomputes counts and `refreshed_at` after the underlying data changes.
+- [x] CSV/KML downloads match the spec (columns, no addresses, placemark per centroid area); bad `format` → `422`.
 
 **Verification:**
-- [ ] `PYTEST`, `TSC`, `LINT`
-- [ ] Manual: curl both formats; parse KML; open CSV
+- [x] `PYTEST`, `TSC`, `LINT`
+- [x] Manual: curl both formats; parse KML; open CSV
 
 **Dependencies:** Task 5
 
