@@ -94,15 +94,17 @@ Commands referenced below:
 
 ## Task 4: Segment builder UI with live count; fake panels deleted
 
+**Status: CODE DONE** — tsc + lint clean (0 errors; the 4 icon imports orphaned by the deletion removed); browser check at Checkpoint B.
+
 **Description:** Create `fno-api.ts` (typed client for filter-options and preview) and `sales-lead-sources.tsx` with a past-imports table and the segment builder (FNO, import, city, suburbs, postcode, dwelling type with friendly labels, passed from/to, geocoded-only). Live count debounced ~400 ms with per-reason exclusions and an area list. Mount it in the `ai-engine` tab and delete the simulation / output / prospect-generator panels plus their state and handlers.
 
 **Acceptance criteria:**
 - [ ] Dropdowns populate from `filter-options`; count updates on change without a full-section spinner; loading, empty and error states shown.
-- [ ] `handleRunAiWarmingSimulation`, `handleGenerateAiProspects`, their state and JSX are gone; `grep "Nexus Logistics"` returns 0.
+- [x] `handleRunAiWarmingSimulation`, `handleGenerateAiProspects`, their state and JSX are gone; `grep "Nexus Logistics"` returns 0.
 - [ ] Pipeline, channels and leads tabs unaffected.
 
 **Verification:**
-- [ ] `TSC` and `LINT` clean
+- [x] `TSC` and `LINT` clean
 - [ ] Manual (at Checkpoint B): builder shows real counts on `http://127.0.0.1:3000`
 
 **Dependencies:** Task 3
