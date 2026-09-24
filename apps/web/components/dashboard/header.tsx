@@ -1,11 +1,12 @@
 "use client"
 
 import React from "react"
-import { Bell, Search, Sun, Moon, Menu } from "lucide-react"
+import { Search, Sun, Moon, Menu } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useTheme } from "next-themes"
 import { useIsClient } from "@/lib/use-is-client"
+import { NotificationsBell } from "./notifications-bell"
 
 interface HeaderProps {
   title: string
@@ -59,15 +60,7 @@ export function Header({ title, onMenuToggle }: HeaderProps) {
           <span className="sr-only">Toggle theme</span>
         </Button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          title="Notifications"
-        >
-          <Bell className="h-5 w-5" />
-          <span className="absolute right-2.5 top-2.5 h-2 w-2 rounded-full bg-primary shadow-[0_0_10px_rgba(79,70,229,0.5)]" />
-        </Button>
+        <NotificationsBell />
       </div>
     </header>
   )

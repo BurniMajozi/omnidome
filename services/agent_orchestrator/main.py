@@ -38,7 +38,10 @@ guard = EntitlementGuard(
     # Prefix match: exact public_paths can't cover /api/chat/{identifier}.
     # /api/workflows/hooks/{id} = public webhook trigger; tenant resolved from
     # the workflow row. The rest of /api/workflows stays auth-gated.
-    public_prefixes=("/api/chat", "/api/workflows/hooks"),
+    # /api/notifications = the platform-wide bell feed: every tenant has it,
+    # not only tenants with the agents module. The routes still require the
+    # tenant/user headers (get_auth_context) and only return that tenant's rows.
+    public_prefixes=("/api/chat", "/api/workflows/hooks", "/api/notifications"),
 )
 
 configure_production(app)
@@ -106,6 +109,19 @@ async def startup() -> None:
         asyncio.create_task(scheduler_loop())
         logger.info("Workflow cron scheduler started")
 
+    # Event bus + notifications tables (SPEC-event-bus.md). Idempotent; the
+    # orchestrator serves the notifications feed, so make sure it exists.
+    if not skip_db:
+        from services.common.background_tasks import schedule_background
+        from services.common.db import run_with_db_retry, session_scope
+        from services.common.event_bus import ensure_schema
+
+        async def _ensure_bus_schema() -> None:
+            async with session_scope() as s:
+                await ensure_schema(s)
+
+        schedule_background(run_with_db_retry(_ensure_bus_schema, logger=logger))
+
 
 @app.middleware("http")
 async def entitlement_middleware(request, call_next):
@@ -149,6 +165,13 @@ app.include_router(mcp_router)
 
 from services.agent_orchestrator.routes.workflows import router as workflows_router
 app.include_router(workflows_router, prefix="/api/workflows")
+
+from services.agent_orchestrator.routes.notifications import (
+    events_router as bus_events_router,
+    router as notifications_router,
+)
+app.include_router(notifications_router, prefix="/api/notifications")
+app.include_router(bus_events_router, prefix="/api/events")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 
 
