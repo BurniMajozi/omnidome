@@ -28,13 +28,13 @@ export class FnoApiError extends Error {
   }
 }
 
-async function fetchFno<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchFno<T>(path: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
     ...init,
     signal: init?.signal
-      ? AbortSignal.any([init.signal, AbortSignal.timeout(15000)])
-      : AbortSignal.timeout(15000),
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs),
     headers: { ...(await getAuthHeaders()), "Content-Type": "application/json", ...init?.headers },
   })
   if (!res.ok) {
@@ -274,5 +274,142 @@ export const fnoApi = {
     link.download = filename
     link.click()
     URL.revokeObjectURL(url)
+  },
+}
+
+// ── Opportunity finder (SPEC-opportunity-finder.md) ──────────────────────
+
+export interface CompanyCategory {
+  id: string
+  label: string
+}
+
+export type CompanySearchStatus = "queued" | "running" | "done" | "failed"
+
+export interface CompanySearch {
+  id: string
+  area_query: string
+  area_label: string | null
+  category: string
+  category_label: string
+  radius_km: number
+  center_lat: number
+  center_lng: number
+  status: CompanySearchStatus
+  error_message: string | null
+  result_count: number
+  created_at: string | null
+  finished_at: string | null
+}
+
+export type CompanyStatus = "new" | "lead_created" | "dismissed"
+
+export interface OppCompany {
+  id: string
+  search_id: string
+  name: string
+  category_label: string | null
+  address_line: string | null
+  suburb: string | null
+  city: string | null
+  postal_code: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  lat: number
+  lng: number
+  distance_km: number
+  status: CompanyStatus
+  sales_lead_id: string | null
+  enriched_at: string | null
+  updated_fields?: string[]
+}
+
+export interface TenderSource {
+  id: string
+  url: string
+  label: string | null
+  active: boolean
+  scan_interval_hours: 12 | 24 | 168
+  last_scanned_at: string | null
+  next_scan_at: string | null
+  last_status: "queued" | "scanning" | "ok" | "failed"
+  last_error: string | null
+  last_tender_count: number
+  tender_count: number
+  latest_snapshot_id: string | null
+  created_at: string | null
+}
+
+export type TenderStatus = "new" | "reviewing" | "bidding" | "skipped"
+
+export interface Tender {
+  id: string
+  source_id: string
+  source_label: string | null
+  snapshot_id: string | null
+  title: string
+  reference: string | null
+  issuer: string | null
+  description: string | null
+  closing_at: string | null
+  closing_text: string | null
+  briefing_at: string | null
+  briefing_text: string | null
+  briefing_location: string | null
+  required_documents: string[]
+  document_links: { label: string | null; url: string }[]
+  detail_url: string | null
+  contact: string | null
+  status: TenderStatus
+  sales_lead_id: string | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+}
+
+const OPP = "/opportunities"
+
+export const opportunityApi = {
+  listCategories: () => fetchFno<CompanyCategory[]>(`${OPP}/company-categories`),
+  createCompanySearch: (area: string, category: string, radius_km: number) =>
+    fetchFno<CompanySearch>(`${OPP}/company-searches`, {
+      method: "POST",
+      body: JSON.stringify({ area, category, radius_km }),
+    }),
+  listCompanySearches: () => fetchFno<CompanySearch[]>(`${OPP}/company-searches`),
+  getCompanySearch: (id: string) => fetchFno<CompanySearch & { companies: OppCompany[] }>(`${OPP}/company-searches/${id}`),
+  enrichCompany: (id: string) =>
+    fetchFno<OppCompany>(`${OPP}/companies/${id}/enrich`, { method: "POST" }, 120000),
+  patchCompany: (id: string, data: { status?: CompanyStatus; sales_lead_id?: string }) =>
+    fetchFno<OppCompany>(`${OPP}/companies/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+
+  listSources: () => fetchFno<TenderSource[]>(`${OPP}/sources`),
+  createSource: (url: string, label: string | null, scan_interval_hours: number) =>
+    fetchFno<TenderSource>(`${OPP}/sources`, {
+      method: "POST",
+      body: JSON.stringify({ url, label, scan_interval_hours }),
+    }),
+  patchSource: (id: string, data: { label?: string; active?: boolean; scan_interval_hours?: number }) =>
+    fetchFno<TenderSource>(`${OPP}/sources/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteSource: (id: string) => fetchFno<void>(`${OPP}/sources/${id}`, { method: "DELETE" }),
+  scanSource: (id: string) => fetchFno<TenderSource>(`${OPP}/sources/${id}/scan`, { method: "POST" }),
+  listTenders: (params: { status?: TenderStatus; source_id?: string; include_closed?: boolean }) => {
+    const q = new URLSearchParams()
+    if (params.status) q.set("status", params.status)
+    if (params.source_id) q.set("source_id", params.source_id)
+    if (params.include_closed) q.set("include_closed", "true")
+    return fetchFno<Tender[]>(`${OPP}/tenders?${q}`)
+  },
+  patchTender: (id: string, data: { status?: TenderStatus; sales_lead_id?: string }) =>
+    fetchFno<Tender>(`${OPP}/tenders/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  /** Screenshot evidence as an object URL (the endpoint needs auth headers). */
+  screenshotUrl: async (snapshotId: string) => {
+    const res = await fetch(`${API_BASE}${OPP}/snapshots/${snapshotId}/screenshot`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(30000),
+      headers: await getAuthHeaders(),
+    })
+    if (!res.ok) throw new FnoApiError(res.status, "Screenshot not available")
+    return URL.createObjectURL(await res.blob())
   },
 }

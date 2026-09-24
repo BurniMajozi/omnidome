@@ -2,10 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ChevronDown, ChevronRight, Download, Layers, Loader2, MapPin, RefreshCw, Target, Trash2,
+  Building2, ChevronDown, ChevronRight, Download, FileText, Home, Layers, Loader2, MapPin, RefreshCw, Target, Trash2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { PassedHomeImports } from "./passed-home-imports"
+import { OpportunityCompanies } from "./opportunity-companies"
+import { OpportunityTenders } from "./opportunity-tenders"
+import { AddToAudience } from "./add-to-audience"
+import { pushGeoSegmentAudience } from "@/lib/audiences"
+import { listAudienceSegments, type AudienceSegment } from "@/lib/marketing-api"
 import {
   DWELLING_LABELS,
   EMPTY_FILTERS,
@@ -99,7 +104,7 @@ function FilterGroup({ label, children }: { label: string; children: React.React
   )
 }
 
-export function SalesLeadSources() {
+function HomesPassedSection() {
   const [options, setOptions] = useState<GeoSegmentFilterOptions | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -115,6 +120,14 @@ export function SalesLeadSources() {
   const [saveError, setSaveError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Record<string, GeoArea[] | "loading">>({})
   const [rowError, setRowError] = useState<Record<string, string>>({})
+  // Marketing audiences already made from these segments, by segment id.
+  const [audiences, setAudiences] = useState<Record<string, AudienceSegment>>({})
+  useEffect(() => {
+    listAudienceSegments("homes").then((r) => {
+      if (!r.ok || !r.data) return
+      setAudiences(Object.fromEntries(r.data.filter((a) => a.rules.source_id).map((a) => [a.rules.source_id!, a])))
+    })
+  }, [])
 
   useEffect(() => {
     Promise.all([fnoApi.getGeoSegmentFilterOptions(), fnoApi.listGeoSegments()])
@@ -464,6 +477,16 @@ export function SalesLeadSources() {
                         {s.area_count} {s.area_count === 1 ? "area" : "areas"}
                       </span>
                       <span>Updated {formatDate(s.refreshed_at)}</span>
+                      <AddToAudience
+                        existing={audiences[s.id]}
+                        defaultName={s.name}
+                        disabled={Boolean(busy[s.id]) || s.home_count === 0}
+                        onPush={async (platform, name) => {
+                          const audience = await pushGeoSegmentAudience(s.id, platform, name)
+                          setAudiences((prev) => ({ ...prev, [s.id]: audience }))
+                          return audience
+                        }}
+                      />
                       <div className="flex items-center gap-1">
                         <Button variant="outline" size="sm" className="h-7 gap-1 px-2 text-[11px]"
                           onClick={() => handleRefresh(s)} disabled={Boolean(busy[s.id])}
@@ -513,6 +536,50 @@ export function SalesLeadSources() {
           </ul>
         )}
       </div>
+    </div>
+  )
+}
+
+type LeadSourceView = "homes" | "companies" | "tenders"
+
+const VIEWS: { id: LeadSourceView; label: string; hint: string; icon: typeof Home }[] = [
+  { id: "homes", label: "Homes passed", hint: "FNO address lists → target areas", icon: Home },
+  { id: "companies", label: "Companies", hint: "Businesses in an area", icon: Building2 },
+  { id: "tenders", label: "Tenders & RFQs", hint: "Bids from pages you watch", icon: FileText },
+]
+
+export function SalesLeadSources() {
+  const [view, setView] = useState<LeadSourceView>("homes")
+  return (
+    <div className="space-y-4">
+      <div role="tablist" aria-label="Lead sources" className="grid gap-2 sm:grid-cols-3">
+        {VIEWS.map((v) => {
+          const Icon = v.icon
+          const selected = view === v.id
+          return (
+            <button
+              key={v.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              onClick={() => setView(v.id)}
+              className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${
+                selected ? "border-primary/60 bg-primary/10" : "border-border bg-card hover:border-primary/30"
+              }`}
+            >
+              <Icon className={`h-5 w-5 shrink-0 ${selected ? "text-primary" : "text-muted-foreground"}`} />
+              <span>
+                <span className={`block text-sm font-semibold ${selected ? "text-foreground" : "text-muted-foreground"}`}>{v.label}</span>
+                <span className="block text-[11px] text-muted-foreground">{v.hint}</span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+      {/* All three stay mounted so an import or scan in progress keeps being tracked. */}
+      <div role="tabpanel" hidden={view !== "homes"}><HomesPassedSection /></div>
+      <div role="tabpanel" hidden={view !== "companies"}><OpportunityCompanies /></div>
+      <div role="tabpanel" hidden={view !== "tenders"}><OpportunityTenders /></div>
     </div>
   )
 }

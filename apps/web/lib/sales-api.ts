@@ -54,6 +54,8 @@ export type SalesChannel =
   | "WALK_IN"
   | "REFERRAL"
   | "MARKETING"
+  | "COMPANY_SEARCH"
+  | "TENDER"
   | "OTHER"
 
 export const SALES_CHANNELS: { id: SalesChannel; label: string; description: string; icon: string; color: string }[] = [
@@ -65,6 +67,8 @@ export const SALES_CHANNELS: { id: SalesChannel; label: string; description: str
   { id: "FIELD_SALES", label: "Field Sales Team", description: "On-site visits & regional agents", icon: "MapPin", color: "#f87171" },
   { id: "WALK_IN", label: "Walk-in Customers", description: "Branch & retail customer work-ins", icon: "Store", color: "#38bdf8" },
   { id: "REFERRAL", label: "Partner Referral", description: "Affiliate & partner networks", icon: "Users", color: "#ec4899" },
+  { id: "COMPANY_SEARCH", label: "Company Search", description: "Businesses found by area in Lead sources", icon: "Building2", color: "#14b8a6" },
+  { id: "TENDER", label: "Tenders & RFQs", description: "Public tenders and RFQs tracked in Lead sources", icon: "FileText", color: "#f59e0b" },
 ]
 
 export interface ProductPackage {
