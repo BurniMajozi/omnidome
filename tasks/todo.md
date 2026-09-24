@@ -21,18 +21,19 @@ Commands:
 **Files:** `services/fno_intelligence/routes.py`, `services/fno_intelligence/passed_homes.py`, `main.py`, tests. **Scope:** S
 
 ## A2: Import panel, progress, auto-geocode, statuses, view issues, template
+**Status: DONE** — browser: validation (no file / wrong type), real CSV → Processing… → Placing on map 0/3 → Imported (4 rows: 3 new, 1 invalid), live count 8→11, new suburb chips, details show column mapping + rejected row. Commit 7325c5c2.
 **Acceptance:**
-- [ ] "Import FNO file" opens an inline panel above the imports table (FNO select incl. Other + name; drop zone; recognised columns; Download template).
-- [ ] Wrong type / > 25 MB / missing FNO rejected inline before upload.
-- [ ] New import appears at the top immediately, polls to a terminal status, then geocodes with "Placing on map n/N"; builder data reloads after.
-- [ ] Status labels per spec; failed shows error; View issues lists invalid rows with reasons; column mapping visible.
+- [x] "Import FNO file" opens an inline panel above the imports table (FNO select incl. Other + name; drop zone; recognised columns; Download template).
+- [x] Wrong type / > 25 MB / missing FNO rejected inline before upload.
+- [x] New import appears at the top immediately, polls to a terminal status, then geocodes with "Placing on map n/N"; builder data reloads after.
+- [x] Status labels per spec; failed shows error; View issues lists invalid rows with reasons; column mapping visible.
 **Verify:** TSC, LINT; browser at Checkpoint A.
 **Files:** `apps/web/lib/fno-api.ts`, `apps/web/components/modules/sales-lead-sources.tsx` (+ a new `passed-home-import-panel.tsx`). **Scope:** M
 
 ### Checkpoint A
-- [ ] fno + web rebuilt (logs grepped)
-- [ ] CSV imported through the UI end-to-end (drop → imported → geocoded → count updates)
-- [ ] API upload path still works (curl multipart)
+- [x] fno + web rebuilt (logs grepped)
+- [x] CSV imported through the UI end-to-end (drop → imported → geocoded → count updates)
+- [x] API upload path still works (curl multipart)
 
 ---
 
@@ -46,60 +47,75 @@ Commands:
 **Verify:** PYTEST. **Files:** `opportunities.py`, `tests/test_opportunities.py`. **Scope:** M
 
 ## B2: Models + migration (5 tables)
+**Status: DONE** — migration applied twice; 5 tables + 3 unique constraints; service boots (verified on every rebuild since).
 **Acceptance:**
-- [ ] `opp_company_searches`, `opp_companies`, `opp_sources`, `opp_snapshots`, `opp_tenders` with the spec's unique constraints; migration idempotent; service boots.
+- [x] `opp_company_searches`, `opp_companies`, `opp_sources`, `opp_snapshots`, `opp_tenders` with the spec's unique constraints; migration idempotent; service boots.
 **Verify:** migration applied twice; `\d`; `/health`. **Files:** `models.py`, `config/migrations/20260924_opportunity_finder.sql`. **Scope:** S
 
 ## B3: Company search API
+**Status: DONE** — live: Rosebank resolved correctly (Nominatim place preference), 15 real businesses in 13 s, 422s, isolation; enrich found website/phone/email via Firecrawl structured extraction (OpenRouter key expired — noted in spec); timeouts return 503, never 500. Commit 13891185.
 **Acceptance:**
-- [ ] categories, create (422 unknown area), list, detail, enrich, patch endpoints per spec; search runs in background with Overpass fallbacks.
-- [ ] Live: a real SA area returns named businesses with distance; enrich fills contact data for a business with a website; tenant isolation.
+- [x] categories, create (422 unknown area), list, detail, enrich, patch endpoints per spec; search runs in background with Overpass fallbacks.
+- [x] Live: a real SA area returns named businesses with distance; enrich fills contact data for a business with a website; tenant isolation.
 **Verify:** PYTEST; live script. **Files:** `opportunity_routes.py`, `main.py`. **Scope:** M
 
 ## B4: Tender sources / scan / tenders / screenshot API + scheduler
+**Status: DONE** — live 21/21: SITA ~94 tenders/scan with parsed closing times, screenshot served, rescan no duplicate references, user status kept, double scan-now = one scan, scheduler = one scan across both workers, eTenders scanned (relative dates). Commit 13891185.
 **Acceptance:**
-- [ ] sources CRUD (409 dup, 422 bad URL), scan-now, tenders list/patch, screenshot endpoint.
-- [ ] Live: a real public tender page yields tenders with title + closing date and a stored screenshot; rescan does not duplicate and keeps user status.
-- [ ] Scheduler + advisory lock: due sources scanned once across both workers.
+- [x] sources CRUD (409 dup, 422 bad URL), scan-now, tenders list/patch, screenshot endpoint.
+- [x] Live: a real public tender page yields tenders with title + closing date and a stored screenshot; rescan does not duplicate and keeps user status.
+- [x] Scheduler + advisory lock: due sources scanned once across both workers.
 **Verify:** PYTEST; live script. **Files:** `opportunity_routes.py`, `opportunities.py`, `main.py`. **Scope:** M–L
 
 ## B5: UI — segmented control + Companies view
+**Status: DONE** — browser: Sea Point hospitality 1 km → 92 businesses (Nominatim fallback while Overpass returned 504), failed state + Try again shown earlier, Find contacts found The Glen's phone, Add as lead → real Sales lead (COMPANY_SEARCH), dismiss/show dismissed/restore. Form columns align over the results table.
 **Acceptance:**
-- [ ] Homes passed / Companies / Tenders & RFQs switcher; existing homes-passed content unchanged under it.
-- [ ] Search form row aligned above results table; job progress; results with Find contacts / Add as lead / Dismiss; recent searches; OSM attribution.
-- [ ] Add as lead creates a real Sales lead (source `COMPANY_SEARCH`) and marks the company.
+- [x] Homes passed / Companies / Tenders & RFQs switcher; existing homes-passed content unchanged under it.
+- [x] Search form row aligned above results table; job progress; results with Find contacts / Add as lead / Dismiss; recent searches; OSM attribution.
+- [x] Add as lead creates a real Sales lead (source `COMPANY_SEARCH`) and marks the company.
 **Verify:** TSC, LINT; browser at Checkpoint B. **Files:** `fno-api.ts`, `sales-lead-sources.tsx`, new `opportunity-companies.tsx`, `sales-api.ts` (channels). **Scope:** M
 
 ## B6: UI — Tenders & RFQs view
+**Status: DONE** — browser: 2 sources (SITA 97, eTenders 10), 25 open tenders soonest-closing first, countdown '22h left' red, expand row, evidence screenshot 1920x1385, status → Bidding saved, Add to pipeline → real Sales lead (TENDER). Found + fixed: source name lost after a status edit.
 **Acceptance:**
-- [ ] Source form row aligned above the sources table; Scan now / Pause / Delete; scan status.
-- [ ] Tenders table with closing countdown, briefing, documents list, screenshot evidence, status select, Add to pipeline (Sales lead source `TENDER`); status filter + show closed.
+- [x] Source form row aligned above the sources table; Scan now / Pause / Delete; scan status.
+- [x] Tenders table with closing countdown, briefing, documents list, screenshot evidence, status select, Add to pipeline (Sales lead source `TENDER`); status filter + show closed.
 **Verify:** TSC, LINT; browser at Checkpoint B. **Files:** `fno-api.ts`, new `opportunity-tenders.tsx`. **Scope:** M
 
 ### Checkpoint B
-- [ ] fno + web rebuilt; real area search and real tender URL work in the browser; leads created
+- [x] fno + web rebuilt; real area search and real tender URL work in the browser; leads created
 
 ---
 
 ## C1: Marketing API — fix jsonb bug, upsert, detail, delete, type filter
+**Status: DONE** — bug reproduced (500 syntax error) then fixed; create/upsert/type filter/detail/delete/validation pass live; isolation = 403 entitlement guard + tenant-filtered SQL (404 path not exercisable: only dev tenant has marketing). Commit 3a92bca0.
 **Acceptance:**
-- [ ] Bug reproduced (POST /segments fails) then fixed.
-- [ ] Upsert on same `source` + `source_id`; `GET /segments?type=`, `GET /segments/{id}`, `DELETE`; validation; tenant isolation.
+- [x] Bug reproduced (POST /segments fails) then fixed.
+- [x] Upsert on same `source` + `source_id`; `GET /segments?type=`, `GET /segments/{id}`, `DELETE`; validation; tenant isolation.
 **Verify:** live script before/after. **Files:** `services/marketing/main.py`. **Scope:** S
 
 ## C2: Sales — "Add to audience"
+**Status: DONE** — browser: saved segment → 'In Marketing · Google Ads'; company search → 'In Marketing · Meta' (92 businesses).
 **Acceptance:**
-- [ ] Saved geo segment row → platform + name → homes audience (areas only); row shows "In Marketing".
-- [ ] Company search → business audience with non-dismissed businesses.
+- [x] Saved geo segment row → platform + name → homes audience (areas only); row shows "In Marketing".
+- [x] Company search → business audience with non-dismissed businesses.
 **Verify:** TSC, LINT; browser at Complete. **Files:** new `apps/web/lib/audiences-api.ts` (or marketing-api additions), `sales-lead-sources.tsx`, `opportunity-companies.tsx`. **Scope:** S–M
 
 ## C3: Marketing → Audiences real
+**Status: DONE** — browser: fake cards gone; real cards (2 homes / Google Ads, 92 businesses / Meta); homes detail + areas-only note; CSV export (brackenfell-review.csv, spec columns); businesses detail 92 rows; New Audience validation + custom save. Delete exposed a proxy bug (204 → 502) fixed in 9b1fef89 across 10 proxies; re-verified after final rebuild.
 **Acceptance:**
-- [ ] Hard-coded audience fixtures removed; cards from API with type/platform/count/source/updated; empty state.
-- [ ] Detail with areas or businesses, Export CSV, Delete.
-- [ ] New Audience modal aligned (type, source picker, platform, description; custom regions) creating real records.
+- [x] Hard-coded audience fixtures removed; cards from API with type/platform/count/source/updated; empty state.
+- [x] Detail with areas or businesses, Export CSV, Delete.
+- [x] New Audience modal aligned (type, source picker, platform, description; custom regions) creating real records.
 **Verify:** TSC, LINT; browser. **Files:** `apps/web/components/modules/marketing-module.tsx` (+ new `marketing-audiences.tsx`). **Scope:** M
 
 ### Checkpoint: Complete
-- [ ] All tasks above ticked with evidence; every success criterion in the three specs verified
-- [ ] Final rebuild of fno, marketing and web; full browser pass; pushed
+- [x] All tasks above ticked with evidence; every success criterion in the three specs verified
+- [x] Final rebuild of fno, marketing and web; full browser pass; pushed
+
+Verification summary (2026-09-24): pytest 163 passed; tsc + eslint clean on all changed web files; every
+success criterion in SPEC-geo-segments (v2 6–9), SPEC-opportunity-finder (1–6) and SPEC-marketing-audiences
+(1–4) verified live in the browser or against the running services. Final re-check after the last rebuild:
+audience delete 204 via proxy, tender lead named after its source after a status edit, recent searches
+de-duplicated, no ward names as suburbs, >25 MB and "Other FNO" validation, New Audience for homes (upsert)
+and businesses. Known external limit: the OpenRouter key has expired (Firecrawl extraction used instead).

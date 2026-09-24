@@ -47,26 +47,26 @@ committed on its own.
 
 ### Part A — import flow
 - [x] A1: Backend: `address_raw` in passed-homes list + stuck-import sweep
-- [ ] A2: Import panel, progress, auto-geocode, statuses, view issues, template
+- [x] A2: Import panel, progress, auto-geocode, statuses, view issues, template
 ### Checkpoint A
-- [ ] fno + web rebuilt; a CSV imported via the UI end-to-end; API upload still works
+- [x] fno + web rebuilt; a CSV imported via the UI end-to-end; API upload still works
 
 ### Part B — opportunity-finder
 - [x] B1: `opportunities.py` pure logic + tests
-- [ ] B2: Models + migration (5 tables)
-- [ ] B3: Company search API (background Overpass job, enrich, patch)
-- [ ] B4: Tender sources / scan / tenders / screenshot API + scheduler
-- [ ] B5: UI: segmented control + Companies view (+ Add as lead)
-- [ ] B6: UI: Tenders & RFQs view (+ Add to pipeline)
+- [x] B2: Models + migration (5 tables)
+- [x] B3: Company search API (background Overpass job, enrich, patch)
+- [x] B4: Tender sources / scan / tenders / screenshot API + scheduler
+- [x] B5: UI: segmented control + Companies view (+ Add as lead)
+- [x] B6: UI: Tenders & RFQs view (+ Add to pipeline)
 ### Checkpoint B
-- [ ] Real area search and a real tender page work in the browser
+- [x] Real area search and a real tender page work in the browser
 
 ### Part C — marketing-audiences
-- [ ] C1: Marketing API: fix jsonb bug, upsert per source, detail, delete, type filter
-- [ ] C2: Sales: "Add to audience" for geo segments and company searches
-- [ ] C3: Marketing → Audiences real cards, detail/export/delete, aligned New Audience modal
+- [x] C1: Marketing API: fix jsonb bug, upsert per source, detail, delete, type filter
+- [x] C2: Sales: "Add to audience" for geo segments and company searches
+- [x] C3: Marketing → Audiences real cards, detail/export/delete, aligned New Audience modal
 ### Checkpoint: Complete
-- [ ] Every task checked against its acceptance criteria; all spec success criteria verified; pushed
+- [x] Every task checked against its acceptance criteria; all spec success criteria verified; pushed
 
 ## Risks and mitigations
 
