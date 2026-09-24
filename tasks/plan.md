@@ -59,7 +59,7 @@ FNOGeoSegment model + migration ──┼── preview / filter-options endpoin
 - [ ] web + service rebuilt; full browser pass on `http://127.0.0.1:3000`
 
 ### Phase 3: Hardening
-- [ ] Task 7: 10k-home performance check (throwaway tenant, cleaned up)
+- [x] Task 7: 10k-home performance check (throwaway tenant, cleaned up)
 
 ### Checkpoint: Complete
 - [ ] All five spec success criteria met; ready for review

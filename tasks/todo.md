@@ -179,14 +179,20 @@ Commands referenced below:
 
 ## Task 7: 10k-home performance check
 
+**Status: DONE** — measured 2026-09-24 with 10,000 synthetic homes (200 suburbs; 85% eligible, 10% duplicate, 3% invalid, 2% customers) in throwaway tenant `…00f7`, while the web image was building (CPU contended):
+- preview, all 10k: worst **0.785 s**, best 0.280 s (5 runs after warm-up) → home_count 8,500 (exact), 170 areas
+- save, all 10k: worst 0.503 s, best 0.303 s
+- preview filtered to 50 suburbs: 0.085 s
+- no index needed; synthetic rows removed (0 left). Script: scratchpad `perf_task7.py`.
+
 **Description:** Insert ~10,000 synthetic passed homes into a separate throwaway tenant, time `preview` and `save` (5 runs, take the worst), add an index only if needed, then delete the synthetic rows.
 
 **Acceptance criteria:**
-- [ ] Preview < 1 s at 10k homes (spec criterion 4), measured and recorded in this file.
-- [ ] Synthetic tenant rows fully removed afterwards (count = 0).
+- [x] Preview < 1 s at 10k homes (spec criterion 4), measured and recorded in this file.
+- [x] Synthetic tenant rows fully removed afterwards (count = 0).
 
 **Verification:**
-- [ ] Timing output recorded; `select count(*)` for the throwaway tenant = 0
+- [x] Timing output recorded; `select count(*)` for the throwaway tenant = 0
 
 **Dependencies:** Task 6
 
