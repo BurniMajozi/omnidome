@@ -128,6 +128,64 @@ export interface PassedHomeImport {
   created_at: string
 }
 
+export interface PassedHomeImportDetail extends PassedHomeImport {
+  fno_portal: string
+  file_size_bytes: number
+  column_map: Record<string, string> | null
+  error_message: string | null
+  processed_at: string | null
+}
+
+export interface GeocodeStatus {
+  pending: number
+  geocoded: number
+  failed: number
+}
+
+export interface PassedHomeRow {
+  id: string
+  import_id: string
+  address_raw: string | null
+  address_line1: string | null
+  suburb: string | null
+  city: string | null
+  status: string
+  reject_reason: string | null
+}
+
+/** Mirrors _VALID_FNO_PORTALS in services/fno_intelligence/routes.py. */
+export const FNO_PORTALS: { portal: string; name: string; label: string }[] = [
+  { portal: "vumatel_active", name: "vumatel", label: "Vumatel (active)" },
+  { portal: "vumatel_passive", name: "vumatel", label: "Vumatel (passive)" },
+  { portal: "openserve", name: "openserve", label: "Openserve" },
+  { portal: "frogfoot", name: "frogfoot", label: "Frogfoot" },
+  { portal: "octotel", name: "octotel", label: "Octotel" },
+  { portal: "metrofibre", name: "metrofibre", label: "MetroFibre" },
+  { portal: "liquid", name: "liquid", label: "Liquid" },
+  { portal: "other", name: "", label: "Other FNO" },
+]
+
+/** Mirrors the upload limits in routes.py (_PASSED_HOME_MAX_BYTES / _EXTENSIONS). */
+export const PASSED_HOME_UPLOAD = {
+  maxBytes: 25 * 1024 * 1024,
+  extensions: ["csv", "xlsx", "xls"],
+}
+
+/** Header names the importer recognises (HEADER_SYNONYMS in passed_homes.py). */
+export const PASSED_HOME_COLUMNS: { field: string; label: string; required: boolean; accepts: string }[] = [
+  { field: "address", label: "Address", required: true, accepts: "Address, Street Address, Site Address, Stand Address" },
+  { field: "suburb", label: "Suburb", required: false, accepts: "Suburb, Area, Township" },
+  { field: "city", label: "City", required: false, accepts: "City, Town, Municipality" },
+  { field: "postal_code", label: "Postcode", required: false, accepts: "Postal Code, Postcode, Zip" },
+  { field: "date_passed", label: "Date passed", required: false, accepts: "Date Passed, Live Date, RFS Date" },
+  { field: "unit_count", label: "Units", required: false, accepts: "Units, Unit Count" },
+]
+
+export const REJECT_REASON_LABELS: Record<string, string> = {
+  missing_address: "No address in this row",
+  duplicate_in_db: "Already imported before",
+}
+
 export interface GeoSegment {
   id: string
   name: string
@@ -144,6 +202,38 @@ export interface GeoSegment {
 
 export const fnoApi = {
   listPassedHomeImports: () => fetchFno<PassedHomeImport[]>("/passed-home-imports?limit=20"),
+
+  getPassedHomeImport: (id: string) => fetchFno<PassedHomeImportDetail>(`/passed-home-imports/${id}`),
+
+  /** Same endpoint the API integration uses; multipart, so no JSON content type. */
+  uploadPassedHomes: async (fnoName: string, fnoPortal: string, file: File) => {
+    const form = new FormData()
+    form.append("fno_name", fnoName)
+    form.append("fno_portal", fnoPortal)
+    form.append("file", file)
+    const res = await fetch(`${API_BASE}/passed-home-imports`, {
+      method: "POST",
+      cache: "no-store",
+      signal: AbortSignal.timeout(120000),
+      headers: await getAuthHeaders(),
+      body: form,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => null)
+      const detail = typeof body?.detail === "string" ? body.detail : `Upload failed (${res.status})`
+      throw new FnoApiError(res.status, detail)
+    }
+    return (await res.json()) as PassedHomeImport
+  },
+
+  triggerGeocode: (importId: string) =>
+    fetchFno<{ queued: number; status: string }>(`/passed-homes/geocode?import_id=${importId}`, { method: "POST" }),
+
+  getGeocodeStatus: (importId: string) =>
+    fetchFno<GeocodeStatus>(`/passed-homes/geocode-status?import_id=${importId}`),
+
+  listImportIssues: (importId: string) =>
+    fetchFno<PassedHomeRow[]>(`/passed-homes?import_id=${importId}&status=invalid&limit=200`),
 
   getGeoSegmentFilterOptions: () => fetchFno<GeoSegmentFilterOptions>("/geo-segments/filter-options"),
 

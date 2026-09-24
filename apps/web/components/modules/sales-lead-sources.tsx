@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  ChevronDown, ChevronRight, Download, FileSpreadsheet, Layers, Loader2, MapPin, RefreshCw, Target, Trash2,
+  ChevronDown, ChevronRight, Download, Layers, Loader2, MapPin, RefreshCw, Target, Trash2,
 } from "lucide-react"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { PassedHomeImports } from "./passed-home-imports"
 import {
   DWELLING_LABELS,
   EMPTY_FILTERS,
@@ -16,7 +16,6 @@ import {
   type GeoSegmentFilterOptions,
   type GeoSegmentFilters,
   type GeoSegmentPreview,
-  type PassedHomeImport,
 } from "@/lib/fno-api"
 
 const EXCLUSION_LABELS: Record<keyof GeoSegmentPreview["excluded"], string> = {
@@ -101,7 +100,6 @@ function FilterGroup({ label, children }: { label: string; children: React.React
 }
 
 export function SalesLeadSources() {
-  const [imports, setImports] = useState<PassedHomeImport[] | null>(null)
   const [options, setOptions] = useState<GeoSegmentFilterOptions | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
 
@@ -119,13 +117,17 @@ export function SalesLeadSources() {
   const [rowError, setRowError] = useState<Record<string, string>>({})
 
   useEffect(() => {
-    Promise.all([fnoApi.listPassedHomeImports(), fnoApi.getGeoSegmentFilterOptions(), fnoApi.listGeoSegments()])
-      .then(([imp, opts, segs]) => {
-        setImports(imp)
+    Promise.all([fnoApi.getGeoSegmentFilterOptions(), fnoApi.listGeoSegments()])
+      .then(([opts, segs]) => {
         setOptions(opts)
         setSegments(segs)
       })
       .catch((err) => setLoadError(err instanceof Error ? err.message : "Couldn't load passed homes"))
+  }, [])
+
+  const reloadAfterImport = useCallback(() => {
+    fnoApi.getGeoSegmentFilterOptions().then(setOptions).catch(() => {})
+    setFilters((f) => ({ ...f }))
   }, [])
 
   const handleSave = async (e: React.FormEvent) => {
@@ -242,7 +244,7 @@ export function SalesLeadSources() {
     )
   }
 
-  if (!imports || !options || !segments) {
+  if (!options || !segments) {
     return (
       <div className="surface-card flex items-center gap-2 p-5 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin" /> Loading FNO passed homes…
@@ -252,60 +254,7 @@ export function SalesLeadSources() {
 
   return (
     <div className="space-y-6">
-      {/* Past imports */}
-      <div className="surface-card p-5 space-y-4">
-        <div>
-          <h4 className="text-sm font-bold text-foreground flex items-center gap-2">
-            <FileSpreadsheet className="h-4 w-4 text-cyan-400" />
-            FNO homes-passed imports
-          </h4>
-          <p className="text-xs text-muted-foreground">
-            Address lists from FNOs, cleaned, deduplicated and checked against existing customers
-          </p>
-        </div>
-        {imports.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-border p-4 text-xs text-muted-foreground">
-            No FNO files imported yet. Imported homes-passed lists appear here with their cleaning results.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border text-left text-muted-foreground">
-                  <th className="py-2 pr-3 font-medium">File</th>
-                  <th className="py-2 pr-3 font-medium">FNO</th>
-                  <th className="py-2 pr-3 font-medium">Imported</th>
-                  <th className="py-2 pr-3 text-right font-medium">Rows</th>
-                  <th className="py-2 pr-3 text-right font-medium">New homes</th>
-                  <th className="py-2 pr-3 text-right font-medium">Duplicates</th>
-                  <th className="py-2 pr-3 text-right font-medium">Invalid</th>
-                  <th className="py-2 pr-3 text-right font-medium">Customers</th>
-                  <th className="py-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {imports.map((i) => (
-                  <tr key={i.id} className="border-b border-border/50">
-                    <td className="py-2 pr-3 font-medium text-foreground max-w-[220px] truncate" title={i.file_name}>
-                      {i.file_name}
-                    </td>
-                    <td className="py-2 pr-3 capitalize">{i.fno_name}</td>
-                    <td className="py-2 pr-3">{formatDate(i.created_at)}</td>
-                    <td className="py-2 pr-3 text-right">{i.total_rows}</td>
-                    <td className="py-2 pr-3 text-right text-emerald-400">{i.inserted_rows}</td>
-                    <td className="py-2 pr-3 text-right">{i.duplicate_rows}</td>
-                    <td className="py-2 pr-3 text-right">{i.invalid_rows}</td>
-                    <td className="py-2 pr-3 text-right">{i.suppressed_rows}</td>
-                    <td className="py-2">
-                      <Badge variant="outline" className="text-[10px] capitalize">{i.status}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
+      <PassedHomeImports onImportFinished={reloadAfterImport} />
 
       {/* Segment builder */}
       <div className="surface-card p-5 space-y-4">
