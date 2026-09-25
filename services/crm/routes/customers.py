@@ -289,10 +289,11 @@ async def get_customer_360(
         )
         notes_count = notes_count_result.scalar_one() or 0
 
-        # Build 360 base
-        view = Customer360.model_validate(customer)
-        view.tags = [t.tag for t in tags]
-        view.notes_count = notes_count
+        # Build 360 base without triggering lazy relationship load
+        cust_dict = {c.name: getattr(customer, c.name) for c in customer.__table__.columns}
+        cust_dict["tags"] = [t.tag for t in tags]
+        cust_dict["notes_count"] = notes_count
+        view = Customer360.model_validate(cust_dict)
 
     # Aggregate cross-service data (resilient — circuit breaker + retry)
     cid = str(customer_id)

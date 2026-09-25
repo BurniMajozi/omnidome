@@ -193,10 +193,12 @@ class LeadUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def check_status(cls, v: Optional[str]) -> Optional[str]:
-        allowed = {"new", "contacted", "qualified", "converted", "lost"}
-        if v is not None and v not in allowed:
+        if v is None:
+            return v
+        allowed = {"new", "contacted", "qualified", "proposal", "converted", "lost"}
+        if v.strip().lower() not in allowed:
             raise ValueError(f"status must be one of {allowed}")
-        return v
+        return v.strip().upper()
 
 
 class LeadRead(BaseModel):
@@ -566,3 +568,62 @@ class CVMResponse(BaseModel):
     health: HealthInfo = Field(default_factory=HealthInfo)
     usage_summary: List[Dict[str, Any]] = Field(default_factory=list)
     cvm_summary: CVMSummary = Field(default_factory=CVMSummary)
+
+
+# ---------------------------------------------------------------------------
+# Company (B2B Account) schemas
+# ---------------------------------------------------------------------------
+
+class CompanyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    registration_number: Optional[str] = Field(None, max_length=50)
+    tax_id: Optional[str] = Field(None, max_length=50)
+    industry: Optional[str] = Field(None, max_length=100)
+    contact_person: Optional[str] = Field(None, max_length=200)
+    email: Optional[str] = None
+    phone: Optional[str] = Field(None, max_length=20)
+    address: Optional[str] = None
+    billing_email: Optional[str] = None
+    payment_terms: Optional[str] = Field(None, max_length=50)
+    credit_limit_zar: Optional[Decimal] = None
+    notes: Optional[str] = None
+
+
+class CompanyUpdate(BaseModel):
+    name: Optional[str] = Field(None, max_length=255)
+    registration_number: Optional[str] = None
+    tax_id: Optional[str] = None
+    industry: Optional[str] = None
+    contact_person: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    billing_email: Optional[str] = None
+    payment_terms: Optional[str] = None
+    credit_limit_zar: Optional[Decimal] = None
+    is_active: Optional[bool] = None
+    notes: Optional[str] = None
+
+
+class CompanyRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    name: str
+    registration_number: Optional[str] = None
+    tax_id: Optional[str] = None
+    industry: Optional[str] = None
+    contact_person: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    billing_email: Optional[str] = None
+    payment_terms: Optional[str] = None
+    credit_limit_zar: Optional[Decimal] = None
+    is_active: bool = True
+    notes: Optional[str] = None
+    members_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+

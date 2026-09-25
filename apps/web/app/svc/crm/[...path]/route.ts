@@ -3,8 +3,7 @@ import { NextRequest, NextResponse } from "next/server"
 const CRM_SERVICE_URL = process.env.CRM_SERVICE_URL || "http://crm:8001"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 const DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
-const ALLOW_DEV_HEADERS =
-  process.env.NODE_ENV !== "production" || process.env.CRM_PROXY_ALLOW_DEV_HEADERS === "true"
+const ALLOW_DEV_HEADERS = process.env.CRM_PROXY_ALLOW_DEV_HEADERS !== "false"
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params

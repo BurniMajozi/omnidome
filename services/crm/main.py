@@ -14,6 +14,7 @@ from services.common.middleware import configure_production
 from services.crm.database import init_tables
 from services.crm.routes.customers import router as customers_router
 from services.crm.routes.leads import router as leads_router
+from services.crm.routes.companies import router as companies_router
 from services.crm.routes.notes_tags import router as notes_tags_router
 from services.crm.routes.segments import router as segments_router
 from services.crm.routes.customer_360 import router as customer_360_router
@@ -66,6 +67,7 @@ async def health():
 app.include_router(dashboard_router)
 app.include_router(customers_router)
 app.include_router(leads_router)
+app.include_router(companies_router)
 app.include_router(notes_tags_router)
 app.include_router(segments_router)
 app.include_router(customer_360_router)

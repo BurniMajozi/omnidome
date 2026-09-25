@@ -64,6 +64,16 @@ export default function Dashboard() {
   const [authChecked, setAuthChecked] = useState(false)
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search)
+      const sec = params.get("section") || params.get("tab")
+      if (sec && sectionTitles[sec]) {
+        setActiveSection(sec)
+      }
+    }
+  }, [])
+
+  useEffect(() => {
     const handleOpenChat = (event: Event) => {
       const customEvent = event as CustomEvent<{ prompt?: string; agent?: any; draft?: string }>
       const prompt = customEvent.detail?.draft || customEvent.detail?.prompt
