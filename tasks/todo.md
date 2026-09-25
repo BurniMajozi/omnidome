@@ -10,7 +10,7 @@
 - [x] A7 usage-tracing — llm_calls + agent_turns (background writes), /api/usage/llm; 4 tests, live at checkpoint
 - [x] Delete dead agents/base.py (shadowed by agents.py; no references)
 - [x] UI stage 1: Agent Manager tool policies + usage + models table + chat vs specialist models; per-agent Usage tab + flows using the agent (replaces dead Sim link); Workflows event trigger + run history + deep link
-- [ ] Checkpoint 1 (tests, rebuild, live workflow + MCP specialist, push, CI)
+- [x] Checkpoint 1 (tests, rebuild, live workflow + MCP specialist, push, CI) — green 7c0ab41f; also fixed 25 broken tool routes, listed all 10 agents, deep link
 
 ## Stage 2 — memory
 - [ ] M1 memory-recall
