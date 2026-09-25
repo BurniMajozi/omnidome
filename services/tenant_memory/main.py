@@ -584,6 +584,30 @@ async def transfer_agent_skill(
     return _skill_from_row(updated_row)
 
 
+@app.post("/api/v1/skills/{skill_id}/deactivate", response_model=AgentSkillRead)
+async def deactivate_agent_skill(
+    skill_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Stop a skill applying to any agent (the Agent Manager's OKF skills tab).
+    Registering the same name + version again reactivates it."""
+    result = await session.execute(
+        text(
+            """
+            update tenant_agent_skills set is_active = false, updated_at = current_timestamp
+            where id = :id and tenant_id = :tenant_id
+            returning *
+            """
+        ),
+        {"id": skill_id, "tenant_id": ctx.tenant_id},
+    )
+    row = result.mappings().one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+    logger.info("Skill '%s' deactivated (tenant=%s)", row["skill_name"], ctx.tenant_id)
+    return _skill_from_row(row)
+
 
 if __name__ == "__main__":
     import uvicorn

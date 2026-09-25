@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from services.agent_orchestrator import memory_context, usage
+from services.agent_orchestrator import memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -97,6 +97,10 @@ class Agent:
         self.context = context or {}
         self.tools = tool_registry.filter_for_agent(agent_type)
         self.available_tool_names = [t.name for t in self.tools]
+        # OKF skills (spec M2), filled by load_skills() at the start of a turn.
+        self.skill_names: List[str] = []
+        self.skills_prompt = ""
+        self._skills_loaded = False
 
     def _build_messages(
         self,
@@ -132,6 +136,32 @@ class Agent:
             logger.warning("Memory recall failed for %s: %s", self.agent_type, exc)
             return ""
 
+    async def load_skills(self) -> None:
+        """Apply this agent's OKF skills (spec M2): their guidance goes into the
+        system prompt, their required tools (if registered) into the tool list."""
+        if self._skills_loaded or not self.tenant_id:
+            return
+        self._skills_loaded = True
+        try:
+            skills = await skills_runtime.skills_for(str(self.tenant_id), self.agent_type,
+                                                     actor_id=self.context.get("user_id"))
+        except Exception as exc:
+            logger.warning("OKF skills failed for %s: %s", self.agent_type, exc)
+            return
+        wanted = [n for s in skills for n in (s.get("tools_required") or [])]
+        known = [n for n in wanted if tool_registry.get(n)]
+        for name in skills_runtime.extra_tool_names(skills, self.available_tool_names, known):
+            self.tools.append(tool_registry.get(name))
+            self.available_tool_names.append(name)
+        self.skill_names = [s.get("skill_name", "") for s in skills]
+        self.skills_prompt = skills_runtime.skills_prompt(skills)
+
+    async def prepare_turn(self, user_message: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
+        """Messages for this turn with skills applied and tenant memory recalled.
+        Used by Agent.run and by every chat path that hands the turn to Hermes."""
+        await self.load_skills()
+        return self._build_messages(user_message, history, await self.recall_memory(user_message))
+
     async def run(
         self,
         user_message: str,
@@ -147,7 +177,7 @@ class Agent:
         - stopped_by: None, or which loop guard ended the turn (spec A2):
           "step_limit" | "empty" | "truncated"
         """
-        messages = self._build_messages(user_message, history, await self.recall_memory(user_message))
+        messages = await self.prepare_turn(user_message, history)
         tool_call_log: List[Dict[str, Any]] = []
         tool_count = 0
         empty_retries = 0
@@ -181,6 +211,7 @@ class Agent:
                 tools=tools_for_llm,
                 tenant_id=tenant,
                 channel=self.channel,
+                system_extra=self.skills_prompt,
             )
             turn["rounds"] += 1
             turn["tokens"] += usage.tokens_from(result)[2]
@@ -251,6 +282,7 @@ class Agent:
             result = await llm_client.chat(
                 agent_type=self.agent_type, messages=final_messages, tools=tools_for_llm,
                 tenant_id=tenant, tool_choice="none", channel=self.channel, purpose="final",
+                system_extra=self.skills_prompt,
             )
         except Exception as exc:  # noqa: BLE001 - the turn must still end with text
             logger.error("Final answer call failed: %s", exc)

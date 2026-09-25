@@ -90,7 +90,7 @@ except ImportError:  # pytest: service-dir-relative imports (pure helpers only)
 
     hermes_client = _HermesStub()
 
-    def _hermes_system_note(agent_type, tenant_id, context):
+    def _hermes_system_note(agent_type, tenant_id, context, skills=""):
         return ""
 
     async def _persist_messages(**kwargs):
@@ -320,9 +320,9 @@ async def public_chat(identifier: str, body: ChatPublicRequest):
     # Run the agent — same hermes/legacy branch as invoke_agent.
     agent = Agent(agent_type=agent_type, tenant_id=tenant_id, context={})
     if settings.chat_backend == "hermes":
-        messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
+        messages = await agent.prepare_turn(safe_message, history)
         messages.insert(
-            0, {"role": "system", "content": _hermes_system_note(agent_type, tenant_id, {})}
+            0, {"role": "system", "content": _hermes_system_note(agent_type, tenant_id, {}, agent.skills_prompt)}
         )
         content = await hermes_client.chat(messages)
         result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}

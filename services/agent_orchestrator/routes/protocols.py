@@ -6,10 +6,11 @@ import uuid
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, text
 
+from services.agent_orchestrator import skills_runtime
 from services.agent_orchestrator.agents import Agent
 from services.agent_orchestrator.config import settings
 from services.agent_orchestrator.protocols import (
@@ -122,10 +123,23 @@ async def well_known_agent_card():
 
 
 @router.get("/api/protocols/a2a/agents/{agent_type}/agent-card.json", response_model=AgentCard)
-async def agent_card(agent_type: str):
+async def agent_card(agent_type: str, x_tenant_id: Optional[str] = Header(None)):
     card = _agent_card(agent_type)
     if not card.skills:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent type not found")
+    # With a tenant, the card also lists the OKF skills that tenant gave this
+    # agent (spec M2), next to its built-in skills.
+    if x_tenant_id:
+        try:
+            tenant = str(uuid.UUID(x_tenant_id))
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid X-Tenant-Id")
+        okf = await skills_runtime.skills_for(tenant, agent_type)
+        card.skills = card.skills + [
+            {"id": f"okf:{s.get('skill_name')}", "name": str(s.get("skill_name")),
+             "description": str(s.get("description") or ""), "source": "okf"}
+            for s in okf
+        ]
     return card
 
 
@@ -195,8 +209,8 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
             # Stream tokens and emit AG-UI events
             full_content = ""
             if settings.chat_backend == "hermes":
-                messages = agent._build_messages(body.message, history, await agent.recall_memory(body.message))
-                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context)})
+                messages = await agent.prepare_turn(body.message, history)
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context, agent.skills_prompt)})
                 async for token in hermes_client.chat_stream(messages):
                     full_content += token
                     yield await emit(AGUIEvent(

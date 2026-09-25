@@ -32,16 +32,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _hermes_system_note(agent_type: str, tenant_id, context: dict) -> str:
+def _hermes_system_note(agent_type: str, tenant_id, context: dict, skills: str = "") -> str:
     """Short domain/tenant context note for Hermes — it has its own persona
     (SOUL.md) and reaches business tools itself via MCP (ask_<agent_type>_agent),
-    so this intentionally doesn't replicate the qwen/llama personas in llm.py."""
-    return (
+    so this intentionally doesn't replicate the qwen/llama personas in llm.py.
+    `skills` is the agent's OKF skills section (spec M2), if any."""
+    note = (
         f"This conversation is happening inside OmniDome's '{agent_type}' context "
         f"for tenant {tenant_id}. Use your ask_{agent_type}_agent tool (or other "
         f"ask_*_agent tools) for anything requiring real CRM/billing/network/etc. data. "
         f"Extra context: {json.dumps(context)}"
     )
+    return f"{note}\n\n{skills}" if skills else note
 
 
 # ---------------------------------------------------------------------------
@@ -446,8 +448,8 @@ async def invoke_agent(
     )
 
     if settings.chat_backend == "hermes":
-        messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
-        messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
+        messages = await agent.prepare_turn(safe_message, history)
+        messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
         content = await hermes_client.chat(messages)
         result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
     else:
@@ -561,8 +563,8 @@ async def invoke_agent_stream(
 
         try:
             if settings.chat_backend == "hermes":
-                messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
-                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
+                messages = await agent.prepare_turn(safe_message, history)
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
                 async for delta in hermes_client.chat_stream(messages):
                     full_content += delta
                     yield emit(AGUIEvent(
@@ -572,10 +574,11 @@ async def invoke_agent_stream(
             else:
                 from services.agent_orchestrator.llm import llm_client
 
-                tools_for_llm = tool_registry.to_openai_format(agent.tools)
-                messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
+                messages = await agent.prepare_turn(safe_message, history)
+                tools_for_llm = tool_registry.to_openai_format(agent.tools)   # after skills added theirs
                 async for token in llm_client.chat_stream(
                     agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
+                    system_extra=agent.skills_prompt,
                 ):
                     full_content += token
                     yield emit(AGUIEvent(

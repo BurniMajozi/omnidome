@@ -36,8 +36,9 @@ class ScriptedLLM:
         self.replies = list(replies)
         self.requests: list[dict] = []
 
-    async def chat(self, agent_type, messages, tools=None, tenant_id=None, tool_choice=None, **_):
-        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools, "tool_choice": tool_choice})
+    async def chat(self, agent_type, messages, tools=None, tenant_id=None, tool_choice=None, system_extra="", **_):
+        self.requests.append({"messages": [dict(m) for m in messages], "tools": tools, "tool_choice": tool_choice,
+                              "system_extra": system_extra})
         if not self.replies:
             return reply("(script exhausted)")
         return self.replies.pop(0)
@@ -267,6 +268,10 @@ def tenant_agent(harness, monkeypatch, replies, recalled):
             raise recalled
         return recalled
     monkeypatch.setattr(agents.memory_context, "recall_block", fake_recall)
+
+    async def no_skills(*_a, **_k):
+        return []
+    monkeypatch.setattr(agents.skills_runtime, "skills_for", no_skills)
     return llm, agents.Agent("retention", tenant_id=uuid.UUID(TENANT)), seen
 
 
@@ -285,3 +290,32 @@ def test_agent_still_answers_when_recall_breaks(harness, monkeypatch):
     out = asyncio.run(agent.run("hello"))
     assert out["content"] == "Answer without memory."
     assert "<memory>" not in llm.requests[0]["messages"][-1]["content"]
+
+
+# ── M2 okf-skills-runtime ───────────────────────────────────────────────────
+
+def test_okf_skill_guidance_reaches_the_prompt_and_its_tool_becomes_callable(harness, monkeypatch):
+    import uuid
+    balance = FakeTool("billing_get_balance", result={"success": True, "data": {"owed": 0}})
+    llm, _ = harness([
+        reply(tool_calls=[call("billing_get_balance", {"customer_id": "c1"})]),
+        reply("Offered the win-back discount."),
+    ], FakeTool("retention_get_cases"), balance)
+    # the agent's own tools come from filter_for_agent; the skill's tool only via the registry
+    monkeypatch.setattr(agents.tool_registry, "filter_for_agent", lambda _t: [agents.tool_registry.get("retention_get_cases")])
+
+    async def recall(*_a, **_k):
+        return ""
+
+    async def skills(tenant_id, agent_type, actor_id=None):
+        return [{"skill_name": "Win-back offer", "guidance_prompt": "Always check the balance before offering 15%.",
+                 "tools_required": ["billing_get_balance", "no_such_tool"], "target_agent_types": ["retention"]}]
+    monkeypatch.setattr(agents.memory_context, "recall_block", recall)
+    monkeypatch.setattr(agents.skills_runtime, "skills_for", skills)
+    agent = agents.Agent("retention", tenant_id=uuid.UUID(TENANT))
+    out = asyncio.run(agent.run("Customer c1 wants to leave."))
+    assert "Always check the balance before offering 15%." in llm.requests[0]["system_extra"]
+    assert {t["function"]["name"] for t in llm.requests[0]["tools"]} == {"retention_get_cases", "billing_get_balance"}
+    assert balance.calls == [{"customer_id": "c1"}]
+    assert out["content"] == "Offered the win-back discount."
+    assert agent.skill_names == ["Win-back offer"]
