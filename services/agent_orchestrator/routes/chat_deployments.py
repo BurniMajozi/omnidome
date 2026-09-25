@@ -320,7 +320,7 @@ async def public_chat(identifier: str, body: ChatPublicRequest):
     # Run the agent — same hermes/legacy branch as invoke_agent.
     agent = Agent(agent_type=agent_type, tenant_id=tenant_id, context={})
     if settings.chat_backend == "hermes":
-        messages = agent._build_messages(safe_message, history)
+        messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
         messages.insert(
             0, {"role": "system", "content": _hermes_system_note(agent_type, tenant_id, {})}
         )

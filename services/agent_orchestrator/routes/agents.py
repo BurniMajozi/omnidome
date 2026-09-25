@@ -446,7 +446,7 @@ async def invoke_agent(
     )
 
     if settings.chat_backend == "hermes":
-        messages = agent._build_messages(safe_message, history)
+        messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
         messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
         content = await hermes_client.chat(messages)
         result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
@@ -561,7 +561,7 @@ async def invoke_agent_stream(
 
         try:
             if settings.chat_backend == "hermes":
-                messages = agent._build_messages(safe_message, history)
+                messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context)})
                 async for delta in hermes_client.chat_stream(messages):
                     full_content += delta
@@ -573,7 +573,7 @@ async def invoke_agent_stream(
                 from services.agent_orchestrator.llm import llm_client
 
                 tools_for_llm = tool_registry.to_openai_format(agent.tools)
-                messages = agent._build_messages(safe_message, history)
+                messages = agent._build_messages(safe_message, history, await agent.recall_memory(safe_message))
                 async for token in llm_client.chat_stream(
                     agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
                 ):

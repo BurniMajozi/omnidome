@@ -195,7 +195,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
             # Stream tokens and emit AG-UI events
             full_content = ""
             if settings.chat_backend == "hermes":
-                messages = agent._build_messages(body.message, history)
+                messages = agent._build_messages(body.message, history, await agent.recall_memory(body.message))
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context)})
                 async for token in hermes_client.chat_stream(messages):
                     full_content += token

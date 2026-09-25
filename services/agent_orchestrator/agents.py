@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from services.agent_orchestrator import usage
+from services.agent_orchestrator import memory_context, usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -102,8 +102,10 @@ class Agent:
         self,
         user_message: str,
         history: Optional[List[Dict[str, str]]] = None,
+        memory_block: str = "",
     ) -> List[Dict[str, str]]:
-        """Build message list from user input + conversation history."""
+        """Build message list from user input + conversation history. Recalled
+        tenant memory (M1) goes just before the question, marked as reference."""
         messages = []
         if history:
             for msg in history:
@@ -113,8 +115,22 @@ class Agent:
                     messages.append({"role": role, "content": content})
         # Enclose user query in untrusted boundary delimiters
         bounded_user_message = f"<untrusted_user_input>\n{user_message}\n</untrusted_user_input>"
+        if memory_block:
+            bounded_user_message = f"{memory_block}\n\n{bounded_user_message}"
         messages.append({"role": "user", "content": bounded_user_message})
         return messages
+
+    async def recall_memory(self, user_message: str) -> str:
+        """Tenant memory for this turn (spec M1); "" when there is none or memory
+        is unavailable — the agent always answers."""
+        if not self.tenant_id:
+            return ""
+        try:
+            return await memory_context.recall_block(
+                str(self.tenant_id), self.agent_type, user_message, actor_id=self.context.get("user_id"))
+        except Exception as exc:
+            logger.warning("Memory recall failed for %s: %s", self.agent_type, exc)
+            return ""
 
     async def run(
         self,
@@ -131,7 +147,7 @@ class Agent:
         - stopped_by: None, or which loop guard ended the turn (spec A2):
           "step_limit" | "empty" | "truncated"
         """
-        messages = self._build_messages(user_message, history)
+        messages = self._build_messages(user_message, history, await self.recall_memory(user_message))
         tool_call_log: List[Dict[str, Any]] = []
         tool_count = 0
         empty_retries = 0

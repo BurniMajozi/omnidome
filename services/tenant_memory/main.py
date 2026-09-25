@@ -4,7 +4,7 @@ import logging
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from sqlalchemy import String, bindparam, text
@@ -338,11 +338,13 @@ async def recall(
     module: Optional[str] = Query(None),
     scope_key: Optional[str] = Query(None),
     q: Optional[str] = Query(None, min_length=2),
+    match: Literal["all", "any"] = Query("all", description="any: entries matching any word of q, best match first"),
     limit: int = Query(10, ge=1, le=50),
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
     summary_clauses = ["tenant_id = :tenant_id"]
+    order = "occurred_at desc, created_at desc"
     entry_clauses = ["tenant_id = :tenant_id", "archived_at is null"]
     params: dict[str, Any] = {"tenant_id": str(ctx.tenant_id), "limit": limit}
     if module:
@@ -354,10 +356,15 @@ async def recall(
         entry_clauses.append("scope_key = :scope_key")
         params["scope_key"] = scope_key
     if q:
-        entry_clauses.append(
-            "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, '')) "
-            "@@ plainto_tsquery('english', :query)"
-        )
+        vector = "to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || coalesce(content, ''))"
+        if match == "any":
+            # A whole question ("what did we agree with Thandi last week?") almost
+            # never matches every word; OR the stemmed words and rank instead.
+            query = "to_tsquery('english', replace(plainto_tsquery('english', :query)::text, ' & ', ' | '))"
+            order = f"ts_rank({vector}, {query}) desc, occurred_at desc"
+        else:
+            query = "plainto_tsquery('english', :query)"
+        entry_clauses.append(f"{vector} @@ {query}")
         params["query"] = q
 
     summaries_result = await session.execute(
@@ -378,7 +385,7 @@ async def recall(
             select *
             from tenant_memory_entries
             where {' and '.join(entry_clauses)}
-            order by occurred_at desc, created_at desc
+            order by {order}
             limit :limit
             """
         ),
