@@ -155,7 +155,7 @@ async def list_agents():
     hermes_llm = "hermes-agent (gemma3:4b via Ollama)"
 
     def _llm(agent_type: str) -> str:
-        return hermes_llm if settings.chat_backend == "hermes" else legacy_llm[agent_type]
+        return hermes_llm if settings.chat_backend == "hermes" else legacy_llm.get(agent_type, "qwen2.5:7b")
 
     specialist_models = openrouter.model_chain()
 
@@ -180,6 +180,14 @@ async def list_agents():
         _info("provisioning", "ProvisionBot — automates new customer provisioning workflow"),
         _info("executive", "InsightBot — executive briefings and analytics"),
         _info("support", "SupportBot — ticket management and diagnostics"),
+        # Not exposed to Hermes over MCP, but they run: OmniAssist drafts in the
+        # lead-warming flows; the specialists are reached via consult_specialist
+        # and workflow agent steps.
+        _info("assistant", "OmniAssist — drafts messages, documents and plans for staff (agent flows)"),
+        _info("analytics", "MetricBot — MRR, conversion and network analytics"),
+        _info("call_center", "CallBot — call-centre queues, wait times and SLAs"),
+        _info("products", "ProductBot — fibre plans, bundles and pricing"),
+        _info("talent", "StaffBot — HR rosters, attrition risk and leave"),
     ]
 
 

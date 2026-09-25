@@ -43,6 +43,36 @@ const AGENT_METADATA: Record<string, { name: string; role: string; color: string
     color: "from-cyan-500/20 to-blue-500/10 border-cyan-500/30",
     badge: "Diagnostics",
   },
+  assistant: {
+    name: "OmniAssist",
+    role: "Drafting Assistant for Agent Flows",
+    color: "from-rose-500/20 to-fuchsia-500/10 border-rose-500/30",
+    badge: "Agent Flows",
+  },
+  analytics: {
+    name: "MetricBot",
+    role: "Analytics & Insights Specialist",
+    color: "from-violet-500/20 to-indigo-500/10 border-violet-500/30",
+    badge: "Specialist",
+  },
+  call_center: {
+    name: "CallBot",
+    role: "Call Centre Operations Specialist",
+    color: "from-sky-500/20 to-cyan-500/10 border-sky-500/30",
+    badge: "Specialist",
+  },
+  products: {
+    name: "ProductBot",
+    role: "Product Catalogue Specialist",
+    color: "from-lime-500/20 to-green-500/10 border-lime-500/30",
+    badge: "Specialist",
+  },
+  talent: {
+    name: "StaffBot",
+    role: "Talent & HR Specialist",
+    color: "from-orange-500/20 to-yellow-500/10 border-orange-500/30",
+    badge: "Specialist",
+  },
 }
 
 function getAgentMeta(agentType: string) {

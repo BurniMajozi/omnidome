@@ -45,7 +45,7 @@ def _template(key: str, name: str, trigger_event: str, description: str, lead_bo
                  "config": {"service": "sales", "method": "POST", "path": "/automation/lead-events",
                             "body": {"event_type": "{{input.event.type}}", "event_id": "{{input.event.id}}",
                                      "contact": "{{input.event.payload.contact}}", **lead_body}}},
-                {"id": "draft", "type": "agent_invoke", "name": "DomeBot drafts the warm-up message",
+                {"id": "draft", "type": "agent_invoke", "name": "OmniAssist drafts the warm-up message",
                  "config": {"agent_type": "assistant", "message": f"{prompt} {_DRAFT_RULES}"}},
                 {"id": "save", "type": "http_request", "name": "Save the draft on the lead for review",
                  "config": {"service": "sales", "method": "POST", "path": "/leads/{{steps.lead.body.id}}/notes",
@@ -64,7 +64,7 @@ LEAD_WARMING_TEMPLATES = [
     _template(
         "abandoned_basket", "Abandoned basket → warm-up", "portal.cart.abandoned",
         "Customer left a package in the portal basket for more than 2 hours. Lead moves New → Contacted "
-        "and DomeBot drafts a recovery message with voucher FIBERWARM15 and a free installation waiver.",
+        "and OmniAssist drafts a recovery message with voucher FIBERWARM15 and a free installation waiver.",
         {"source": "PORTAL_WEBSITE", "target_status": "CONTACTED",
          "note": "Left {{input.event.payload.cart_summary}} in the basket"},
         "Write a short recovery message to {{input.event.payload.contact.first_name}}, who left "
@@ -74,7 +74,7 @@ LEAD_WARMING_TEMPLATES = [
     _template(
         "quote_request", "Quote request → proposal", "portal.quote.requested",
         "Customer asked for pricing on the website calculator or by email. Lead goes onto the pipeline "
-        "board in Proposal (deal at the quoted value) and DomeBot drafts the quote cover note.",
+        "board in Proposal (deal at the quoted value) and OmniAssist drafts the quote cover note.",
         {"source": "PORTAL_WEBSITE", "target_stage": "Proposal",
          "value_zar": "{{input.event.payload.quote_total_zar}}",
          "note": "Quote requested: {{input.event.payload.quote_summary}}"},

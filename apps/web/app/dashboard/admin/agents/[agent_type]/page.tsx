@@ -65,6 +65,11 @@ const DISPLAY_NAMES: Record<string, string> = {
   provisioning: "ProvisionBot",
   executive: "InsightBot",
   support: "SupportBot",
+  assistant: "OmniAssist",
+  analytics: "MetricBot",
+  call_center: "CallBot",
+  products: "ProductBot",
+  talent: "StaffBot",
 }
 
 function displayName(agentType: string): string {
