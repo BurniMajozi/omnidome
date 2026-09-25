@@ -28,4 +28,4 @@ EXPOSE 8007
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8007/health')" || exit 1
 
-CMD ["sh", "-c", "uvicorn services.callcenter.main:app --host ${UVICORN_HOST} --port 8007 --workers 2"]
+CMD ["sh", "-c", "uvicorn services.call_center.main:app --host ${UVICORN_HOST} --port 8007 --workers 1"]

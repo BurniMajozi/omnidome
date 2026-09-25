@@ -21,12 +21,14 @@ from services.call_center.database import (
     Agent, Script, CallSession, CallQueue, WhisperSession, VoiceAgentDeployment,
     get_session, init_tables,
 )
-from services.call_center.voicebox_adapter import (
+from services.call_center.deepgram_service import (
     transcribe_audio,
     synthesize_speech,
     analyze_audio,
-    VoiceboxUnavailable,
+    list_voices,
+    DeepgramError,
 )
+VoiceboxUnavailable = DeepgramError
 
 
 # WS JWT auth helper — mirrors services.common.auth._decode_jwt
@@ -1069,6 +1071,7 @@ class TTSRequest(BaseModel):
     text: str
     voice_profile_id: Optional[uuid.UUID] = None
     agent_id: Optional[uuid.UUID] = None  # resolves the voice bound to this call-center agent
+    model: Optional[str] = "aura-asteria-en"
 
 class AudioIntelligenceResponse(BaseModel):
     transcript: str
@@ -1080,13 +1083,31 @@ class AudioIntelligenceResponse(BaseModel):
     metadata: dict = {}
 
 
+@app.get("/ai/voices")
+async def get_ai_voices():
+    """Return available Deepgram Aura voices."""
+    return {"voices": list_voices()}
+
+
 @app.post("/ai/speech-to-text")
-async def speech_to_text(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
+async def speech_to_text(
+    file: UploadFile = File(...),
+    language: str = Form("en"),
+    model: str = Form("nova-3"),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
     try:
         audio_bytes = await file.read()
-        result = await transcribe_audio(audio_bytes=audio_bytes, tenant_id=str(tenant_id), language=language, user_id=str(user_id))
+        result = await transcribe_audio(
+            audio_bytes=audio_bytes,
+            tenant_id=str(tenant_id),
+            language=language,
+            model=model,
+            user_id=str(user_id),
+        )
         return TranscriptionResponse(**result)
-    except VoiceboxUnavailable as exc:
+    except DeepgramError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:
         logger.error(f"STT error: {exc}")
@@ -1099,12 +1120,13 @@ async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get
         audio_bytes = await synthesize_speech(
             text=request.text,
             tenant_id=str(tenant_id),
+            model=request.model or "aura-asteria-en",
             voice_profile_id=str(request.voice_profile_id) if request.voice_profile_id else None,
             scope_ref=str(request.agent_id) if request.agent_id else None,
             user_id=str(user_id),
         )
         return Response(content=audio_bytes, media_type="audio/mpeg", headers={"Content-Disposition": "attachment; filename=speech.mp3"})
-    except VoiceboxUnavailable as exc:
+    except DeepgramError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

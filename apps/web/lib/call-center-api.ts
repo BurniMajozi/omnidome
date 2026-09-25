@@ -271,3 +271,38 @@ export async function stopVoiceAgent(deploymentId: string): Promise<any> {
   return handleResponse(res)
 }
 
+// ── Deepgram AI Speech & Voices ──────────────────────────────────────────────
+
+export interface DeepgramVoice {
+  id: string
+  name: string
+  gender: string
+  language?: string
+  accent?: string
+  description?: string
+  voice_type?: string
+  status?: string
+}
+
+export async function listAIVoices(): Promise<{ voices: DeepgramVoice[] }> {
+  const res = await fetch(`${API_BASE}/ai/voices`, {
+    headers: await makeHeaders(),
+    cache: "no-store",
+  })
+  return handleResponse(res)
+}
+
+export async function synthesizeSpeech(text: string, model: string = "aura-asteria-en"): Promise<Blob> {
+  const headers = await makeHeaders()
+  const res = await fetch(`${API_BASE}/ai/text-to-speech`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ text, model }),
+  })
+  if (!res.ok) {
+    const errorText = await res.text()
+    throw new Error(errorText || "Speech synthesis failed")
+  }
+  return res.blob()
+}
+

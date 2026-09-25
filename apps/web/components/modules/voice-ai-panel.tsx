@@ -51,7 +51,7 @@ import {
   Radio,
   RefreshCw,
 } from "lucide-react"
-import { deployVoiceAgent, stopVoiceAgent, listVoiceAgentDeployments } from "@/lib/call-center-api"
+import { deployVoiceAgent, stopVoiceAgent, listVoiceAgentDeployments, listAIVoices, synthesizeSpeech, type DeepgramVoice } from "@/lib/call-center-api"
 
 const API_BASE = "/svc/call-center"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -120,6 +120,21 @@ interface AudioIntelResult {
   }
 }
 
+const DEFAULT_AURA_VOICES: DeepgramVoice[] = [
+  { id: "aura-asteria-en", name: "Asteria", gender: "Female", accent: "American", description: "Warm, natural, confident" },
+  { id: "aura-luna-en", name: "Luna", gender: "Female", accent: "American", description: "Approachable, conversational, casual" },
+  { id: "aura-stella-en", name: "Stella", gender: "Female", accent: "American", description: "Expressive, cheerful, dynamic" },
+  { id: "aura-athena-en", name: "Athena", gender: "Female", accent: "British", description: "Authoritative, calm, formal" },
+  { id: "aura-hera-en", name: "Hera", gender: "Female", accent: "American", description: "Sophisticated, articulate" },
+  { id: "aura-orion-en", name: "Orion", gender: "Male", accent: "American", description: "Approachable, deep, natural" },
+  { id: "aura-arcas-en", name: "Arcas", gender: "Male", accent: "American", description: "Calm, narrative, smooth" },
+  { id: "aura-perseus-en", name: "Perseus", gender: "Male", accent: "American", description: "Confident, crisp, professional" },
+  { id: "aura-angus-en", name: "Angus", gender: "Male", accent: "Irish", description: "Energetic, dynamic" },
+  { id: "aura-orpheus-en", name: "Orpheus", gender: "Male", accent: "American", description: "Clear, conversational" },
+  { id: "aura-helios-en", name: "Helios", gender: "Male", accent: "British", description: "Warm, distinct" },
+  { id: "aura-zeus-en", name: "Zeus", gender: "Male", accent: "American", description: "Commanding, resonant" },
+]
+
 // ═══════════════════════════════════════════════════════════════════════
 // Speech-to-Text Tab
 // ═══════════════════════════════════════════════════════════════════════
@@ -138,6 +153,7 @@ function SpeechToTextPanel() {
   }, [isProcessing])
   const [result, setResult] = useState<TranscriptResult | null>(null)
   const [language, setLanguage] = useState("en")
+  const [sttModel, setSttModel] = useState("nova-3")
   const [error, setError] = useState<string | null>(null)
   const [audioInputs, setAudioInputs] = useState<MediaDeviceInfo[]>([])
   const [selectedMicId, setSelectedMicId] = useState(DEFAULT_MIC_ID)
@@ -223,6 +239,7 @@ function SpeechToTextPanel() {
       const form = new FormData()
       form.append("file", blob, blob.type === "audio/wav" ? "recording.wav" : "recording.webm")
       form.append("language", language)
+      form.append("model", sttModel)
 
       const res = await fetch(`${API_BASE}/ai/speech-to-text`, {
         method: "POST",
@@ -238,7 +255,7 @@ function SpeechToTextPanel() {
     } finally {
       setIsProcessing(false)
     }
-  }, [language])
+  }, [language, sttModel])
 
   const startRecording = useCallback(async () => {
     setError(null)
@@ -332,13 +349,30 @@ function SpeechToTextPanel() {
   return (
     <div className="space-y-4">
       {/* Sub-tabs */}
-      <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Whisper: Transcription</span>
+      <div className="flex items-center gap-3 border-b border-border pb-2">
+        <span className="text-sm font-medium text-foreground">Deepgram Nova-3: Speech to Text</span>
+        <Badge variant="outline" className="border-cyan-500/30 text-cyan-400 text-xs">
+          Cloud Powered (Ultra-Fast)
+        </Badge>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
         {/* Left — controls */}
         <div className="space-y-6">
+          {/* Model select */}
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-foreground">Deepgram Model</label>
+            <select
+              value={sttModel}
+              onChange={(e) => setSttModel(e.target.value)}
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+            >
+              <option value="nova-3">Deepgram Nova-3 (Latest & Highest Accuracy)</option>
+              <option value="nova-2">Deepgram Nova-2 (General Purpose)</option>
+              <option value="nova-2-conversationalai">Deepgram Nova-2 (Conversational AI)</option>
+            </select>
+          </div>
+
           {/* Language select */}
           <div>
             <label className="mb-1.5 block text-sm font-medium text-foreground">Language</label>
@@ -419,7 +453,7 @@ function SpeechToTextPanel() {
             </button>
             <span className="text-sm text-muted-foreground">
               {isProcessing
-                ? `Transcribing… ${processingSeconds}s (takes ~20s on this server — don't navigate away)`
+                ? `Transcribing with Deepgram… ${processingSeconds}s`
                 : isRecording
                   ? "Recording — click to stop"
                   : "Speak"}
@@ -492,25 +526,28 @@ function SpeechToTextPanel() {
 // ═══════════════════════════════════════════════════════════════════════
 function TextToSpeechPanel() {
   const [text, setText] = useState("")
-  const [voices, setVoices] = useState<VoiceProfile[]>([])
-  const [voiceId, setVoiceId] = useState<string>("")
+  const [voices, setVoices] = useState<DeepgramVoice[]>(DEFAULT_AURA_VOICES)
+  const [voiceId, setVoiceId] = useState<string>("aura-asteria-en")
   const [isGenerating, setIsGenerating] = useState(false)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const audioRef = useRef<HTMLAudioElement>(null)
 
   useEffect(() => {
-    listVoices()
-      .then((all) => {
-        const ready = all.filter((v) => v.status === "ready")
-        setVoices(ready)
-        if (ready.length > 0) setVoiceId(ready[0].id)
+    listAIVoices()
+      .then((data) => {
+        const loaded: DeepgramVoice[] = (data as any)?.voices ?? (Array.isArray(data) ? data : [])
+        if (loaded && loaded.length > 0) {
+          setVoices(loaded)
+          if (!voiceId || !loaded.some((v) => v.id === voiceId)) {
+            setVoiceId(loaded[0].id)
+          }
+        }
       })
       .catch((err) => {
-        console.error("Failed to load voices", err)
-        setError(err instanceof Error ? `Could not load voices: ${err.message}` : "Could not load voices")
+        console.warn("Could not fetch Deepgram Aura voices from backend, using default catalog:", err)
       })
-  }, [])
+  }, [voiceId])
 
   const handleGenerate = async () => {
     if (!text.trim() || !voiceId) return
@@ -518,7 +555,7 @@ function TextToSpeechPanel() {
     setAudioUrl(null)
     setError(null)
     try {
-      const blob = await voiceboxSpeak({ text, voice_profile_id: voiceId, requested_by_service: "call_center_ui" })
+      const blob = await synthesizeSpeech(text, voiceId)
       const url = URL.createObjectURL(blob)
       setAudioUrl(url)
     } catch (err: any) {
@@ -539,34 +576,31 @@ function TextToSpeechPanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Voicebox: Voice Synthesis</span>
+      <div className="flex items-center gap-3 border-b border-border pb-2">
+        <span className="text-sm font-medium text-foreground">Deepgram Aura: Text to Speech</span>
+        <Badge variant="outline" className="border-pink-500/30 text-pink-400 text-xs">
+          Sub-Second Conversational Voice
+        </Badge>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Input */}
         <div className="space-y-4">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">Voice</label>
-            {voices.length > 0 ? (
-              <select
-                value={voiceId}
-                onChange={(e) => setVoiceId(e.target.value)}
-                title="Voice"
-                aria-label="Voice"
-                className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
-              >
-                {voices.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name} {v.voice_type === "cloned" ? "(cloned)" : "(preset)"}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <p className="rounded-lg border border-dashed border-border bg-card/50 px-3 py-2 text-xs text-muted-foreground">
-                No voices yet — clone or add one in the Voice Studio tab below.
-              </p>
-            )}
+            <label className="mb-1.5 block text-sm font-medium text-foreground">Aura Voice</label>
+            <select
+              value={voiceId}
+              onChange={(e) => setVoiceId(e.target.value)}
+              title="Voice"
+              aria-label="Voice"
+              className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
+            >
+              {voices.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name} ({v.gender}{v.accent ? `, ${v.accent}` : ""}) {v.description ? `— ${v.description}` : ""}
+                </option>
+              ))}
+            </select>
           </div>
 
           <textarea
@@ -640,8 +674,8 @@ function VoiceAgentPanel() {
   const [systemPrompt, setSystemPrompt] = useState(
     "You are a helpful customer support agent for a telecommunications company. Be friendly, professional, and help customers resolve their issues."
   )
-  const [sttModel, setSttModel] = useState("whisper-large-v3")
-  const [ttsVoice, setTtsVoice] = useState("voicebox-nova")
+  const [sttModel, setSttModel] = useState("nova-3")
+  const [ttsVoice, setTtsVoice] = useState("aura-asteria-en")
   const [llmProvider, setLlmProvider] = useState("anthropic")
 
   // ── Deploy modal state ─────────────────────────────────────────────────
@@ -818,8 +852,11 @@ function VoiceAgentPanel() {
       )}
 
       <div className="space-y-4">
-        <div className="flex items-center gap-6 border-b border-border pb-2">
-          <span className="text-sm text-muted-foreground">Flux: Voice Agents</span>
+        <div className="flex items-center gap-3 border-b border-border pb-2">
+          <span className="text-sm font-medium text-foreground">Deepgram Voice Agents (Nova + Aura)</span>
+          <Badge variant="outline" className="border-violet-500/30 text-violet-400 text-xs">
+            Low Latency Conversational AI
+          </Badge>
         </div>
 
         {/* Active deployment status cards */}
@@ -908,9 +945,9 @@ function VoiceAgentPanel() {
                     onChange={(e) => setSttModel(e.target.value)}
                     className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
                   >
-                    <option value="whisper-large-v3">Whisper Large v3 (Recommended)</option>
-                    <option value="whisper-medium">Whisper Medium</option>
-                    <option value="whisper-base">Whisper Base (Fastest)</option>
+                    <option value="nova-3">Deepgram Nova-3 (Fastest & Accurate)</option>
+                    <option value="nova-2">Deepgram Nova-2 (Conversational)</option>
+                    <option value="whisper-large-v3">Whisper Large v3</option>
                   </select>
                 </div>
                 <div>
@@ -920,10 +957,14 @@ function VoiceAgentPanel() {
                     onChange={(e) => setTtsVoice(e.target.value)}
                     className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground"
                   >
-                    <option value="voicebox-nova">Nova (Female, Neutral)</option>
-                    <option value="voicebox-orion">Orion (Male, Neutral)</option>
-                    <option value="voicebox-luna">Luna (Female, Warm)</option>
-                    <option value="voicebox-atlas">Atlas (Male, Deep)</option>
+                    <option value="aura-asteria-en">Aura Asteria (Female, American - Warm, confident)</option>
+                    <option value="aura-luna-en">Aura Luna (Female, American - Casual, conversational)</option>
+                    <option value="aura-stella-en">Aura Stella (Female, American - Cheerful, dynamic)</option>
+                    <option value="aura-athena-en">Aura Athena (Female, British - Formal, authoritative)</option>
+                    <option value="aura-orion-en">Aura Orion (Male, American - Deep, natural)</option>
+                    <option value="aura-arcas-en">Aura Arcas (Male, American - Calm, narrative)</option>
+                    <option value="aura-perseus-en">Aura Perseus (Male, American - Professional, crisp)</option>
+                    <option value="aura-angus-en">Aura Angus (Male, Irish - Energetic)</option>
                   </select>
                 </div>
                 <div>
@@ -957,12 +998,12 @@ function VoiceAgentPanel() {
             </CardHeader>
             <CardContent className="space-y-3">
               {[
-                { icon: Mic, title: "Real-time STT", desc: "Whisper Large v3 streaming transcription via WebSocket — 3s latency" },
-                { icon: Volume2, title: "Natural TTS", desc: "Voicebox voices optimized for conversational phone speech" },
+                { icon: Mic, title: "Real-time STT", desc: "Deepgram Nova-3 streaming transcription via WebSocket — <300ms latency" },
+                { icon: Volume2, title: "Natural TTS", desc: "Deepgram Aura conversational voices with sub-second time-to-first-byte" },
                 { icon: Brain, title: "LLM Reasoning", desc: "Plug in any LLM for agent reasoning and response generation" },
-                { icon: MessageSquare, title: "Turn-taking", desc: "Intelligent barge-in and end-of-turn detection via VAD" },
+                { icon: MessageSquare, title: "Turn-taking", desc: "Intelligent barge-in and end-of-turn detection via Voice Activity Detection" },
                 { icon: Target, title: "Intent Routing", desc: "Auto-detect caller intent and route to the right department" },
-                { icon: Sparkles, title: "Live Sentiment", desc: "Real-time sentiment monitoring from Whisper transcripts" },
+                { icon: Sparkles, title: "Live Sentiment", desc: "Real-time sentiment and topic monitoring from Deepgram audio intelligence" },
               ].map((item) => (
                 <div key={item.title} className="flex items-start gap-3 rounded-lg border border-border/50 bg-background/50 p-3">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-violet-500/10">
@@ -1035,8 +1076,11 @@ function AudioIntelligencePanel() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-6 border-b border-border pb-2">
-        <span className="text-sm text-muted-foreground">Audio Intelligence</span>
+      <div className="flex items-center gap-3 border-b border-border pb-2">
+        <span className="text-sm font-medium text-foreground">Deepgram Audio Intelligence (Nova-2)</span>
+        <Badge variant="outline" className="border-amber-500/30 text-amber-400 text-xs">
+          Summary, Sentiment, Intent & Topic Detection
+        </Badge>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
