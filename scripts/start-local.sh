@@ -41,7 +41,7 @@ else
 fi
 
 # The rest of the lean set, one at a time -- only the ones not already up.
-SERVICES="gateway crm sales marketing iot web agent-orchestrator"
+SERVICES="gateway crm sales marketing iot web tenant_memory agent-orchestrator"
 
 for s in $SERVICES; do
   if is_up "$s"; then
