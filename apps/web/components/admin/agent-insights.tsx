@@ -214,6 +214,7 @@ const RUN_TONE: Record<string, string> = {
   succeeded: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
   failed: "border-red-500/30 bg-red-500/10 text-red-400",
   running: "border-sky-500/30 bg-sky-500/10 text-sky-400",
+  awaiting_approval: "border-amber-500/30 bg-amber-500/10 text-amber-400",
 }
 
 function duration(run: WorkflowRunSummary) {
@@ -263,13 +264,20 @@ export function WorkflowRunHistory({ workflowId, refreshKey = 0 }: { workflowId:
             className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/40">
             {open === run.id ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
             <span className={`rounded border px-1.5 py-px text-[10px] font-semibold ${RUN_TONE[run.status] ?? "border-border"}`}>
-              {run.status}
+              {run.status.replace("_", " ")}
             </span>
             <Badge variant="outline" className="text-[10px] font-normal">{run.trigger}</Badge>
             <span className="text-muted-foreground">{formatWhen(run.started_at)}</span>
             <span className="ml-auto text-muted-foreground">{duration(run)}</span>
           </button>
-          {run.error && <p className="px-9 pb-2 text-[11px] text-red-400">{run.error}</p>}
+          {run.status === "awaiting_approval" ? (
+            <p className="px-9 pb-2 text-[11px] text-amber-400 font-medium flex items-center gap-1.5">
+              <ShieldAlert className="h-3 w-3" />
+              {run.error || "awaiting approval"}
+            </p>
+          ) : run.error ? (
+            <p className="px-9 pb-2 text-[11px] text-red-400">{run.error}</p>
+          ) : null}
           {open === run.id && (
             <div className="space-y-1 bg-muted/20 px-9 py-2">
               {!detail[run.id] ? (
