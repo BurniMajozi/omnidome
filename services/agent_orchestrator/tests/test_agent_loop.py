@@ -350,3 +350,19 @@ def test_refused_data_changing_call_is_not_captured(harness):
     ], write)
     run(agent)
     assert agents.captured_for_tests == [] and write.calls == []
+
+
+# ── M4 conversation-compaction ──────────────────────────────────────────────
+
+def test_long_history_is_summarised_before_the_turn_and_state_is_returned(harness, monkeypatch):
+    monkeypatch.setattr(agents.compaction, "THRESHOLD_TOKENS", 2000)
+    monkeypatch.setattr(agents.compaction, "KEEP_RECENT_TOKENS", 500)
+    history = [{"id": f"m{i}", "role": "user" if i % 2 == 0 else "assistant", "content": f"{i} " + "x" * 400}
+               for i in range(200)]
+    llm, agent = harness([reply("Goals: keep the customer."), reply("Here is the answer.")])
+    out = asyncio.run(agent.run("latest question", history=history))
+    assert out["content"] == "Here is the answer."
+    sent = llm.requests[1]["messages"]
+    assert sent[0]["content"].startswith("<conversation_summary>") and "Goals: keep the customer." in sent[0]["content"]
+    assert len(sent) < 40
+    assert agent.compacted and agent.compaction_update["summary"] == "Goals: keep the customer."

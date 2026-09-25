@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from services.agent_orchestrator import memory_capture, memory_context, skills_runtime, usage
+from services.agent_orchestrator import compaction, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -101,6 +101,10 @@ class Agent:
         self.skill_names: List[str] = []
         self.skills_prompt = ""
         self._skills_loaded = False
+        # Conversation compaction (spec M4): set by prepare_turn; callers that
+        # own a conversation store compaction_update on it.
+        self.compacted = False
+        self.compaction_update: Optional[Dict[str, Any]] = None
 
     def _build_messages(
         self,
@@ -156,10 +160,22 @@ class Agent:
         self.skill_names = [s.get("skill_name", "") for s in skills]
         self.skills_prompt = skills_runtime.skills_prompt(skills)
 
-    async def prepare_turn(self, user_message: str, history: Optional[List[Dict[str, str]]] = None) -> List[Dict[str, str]]:
-        """Messages for this turn with skills applied and tenant memory recalled.
-        Used by Agent.run and by every chat path that hands the turn to Hermes."""
+    async def prepare_turn(
+        self,
+        user_message: str,
+        history: Optional[List[Dict[str, Any]]] = None,
+        compaction_state: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, str]]:
+        """Messages for this turn: skills applied (M2), long history compacted
+        (M4, compaction_state = what the conversation stored last time), tenant
+        memory recalled (M1). Used by Agent.run and every chat path."""
         await self.load_skills()
+        if history:
+            tenant = str(self.tenant_id) if self.tenant_id else None
+            history, self.compaction_update, self.compacted = await compaction.compact(
+                history, compaction_state,
+                compaction.summariser_for(llm_client, self.agent_type, tenant, self.channel),
+                threshold_tokens=compaction.THRESHOLD_TOKENS, keep_tokens=compaction.KEEP_RECENT_TOKENS)
         return self._build_messages(user_message, history, await self.recall_memory(user_message))
 
     async def run(
@@ -167,6 +183,7 @@ class Agent:
         user_message: str,
         history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[uuid.UUID] = None,
+        compaction_state: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Execute the agent reasoning loop.
 
@@ -177,7 +194,7 @@ class Agent:
         - stopped_by: None, or which loop guard ended the turn (spec A2):
           "step_limit" | "empty" | "truncated"
         """
-        messages = await self.prepare_turn(user_message, history)
+        messages = await self.prepare_turn(user_message, history, compaction_state)
         tool_call_log: List[Dict[str, Any]] = []
         tool_count = 0
         empty_retries = 0

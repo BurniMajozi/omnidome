@@ -140,6 +140,28 @@ async def _persist_messages(
         )
 
 
+async def _store_compaction(session, conversation_id: uuid.UUID, update: Optional[dict]) -> None:
+    """Save a new compaction summary on the conversation (spec M4)."""
+    if not update:
+        return
+    conv = (await session.execute(
+        select(AgentConversation).where(AgentConversation.id == conversation_id)
+    )).scalar_one_or_none()
+    if conv:
+        conv.context = {**(conv.context or {}), **update}   # new dict so the JSONB change is saved
+
+
+async def _load_compaction_state(conversation_id: Optional[uuid.UUID], tenant_id) -> Optional[dict]:
+    if not conversation_id:
+        return None
+    async with get_session() as session:
+        conv = (await session.execute(
+            select(AgentConversation).where(AgentConversation.id == conversation_id,
+                                            AgentConversation.tenant_id == tenant_id)
+        )).scalar_one_or_none()
+        return dict(conv.context or {}) if conv else None
+
+
 # ---------------------------------------------------------------------------
 # GET /api/agents — List agents
 # ---------------------------------------------------------------------------
@@ -396,6 +418,7 @@ async def invoke_agent(
     safe_message = gate_in["text"]
 
     history = None
+    compaction_state = None
     if skip_db:
         if not conversation_id:
             conversation_id = uuid.uuid4()
@@ -422,10 +445,11 @@ async def invoke_agent(
                 )
                 messages = msg_result.scalars().all()
                 history = [
-                    {"role": m.role, "content": m.content or ""}
+                    {"role": m.role, "content": m.content or "", "id": str(m.id)}
                     for m in messages
                     if m.role in ("user", "assistant")
                 ]
+                compaction_state = dict(conv.context or {})
 
             # Create new conversation if not continuing
             if not conversation_id:
@@ -448,7 +472,14 @@ async def invoke_agent(
     )
 
     if settings.chat_backend == "hermes":
-        messages = await agent.prepare_turn(safe_message, history)
+        messages = await agent.prepare_turn(safe_message, history, compaction_state)
+        if not skip_db and conversation_id and agent.compaction_update:
+            try:
+                async with get_session() as session:
+                    await _store_compaction(session, conversation_id, agent.compaction_update)
+                    await session.flush()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Early compaction store failed for %s: %s", conversation_id, exc)
         messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
         content = await hermes_client.chat(messages)
         result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
@@ -457,6 +488,7 @@ async def invoke_agent(
             user_message=safe_message,
             history=history,
             conversation_id=conversation_id,
+            compaction_state=compaction_state,
         )
 
     # Guardrails post-gate on the assistant output.
@@ -484,6 +516,7 @@ async def invoke_agent(
                 tool_calls=result.get("tool_calls", []),
                 gate_verdicts=gate_verdicts,
             )
+            await _store_compaction(session, conversation_id, agent.compaction_update)
             await session.flush()
 
     return AgentInvokeResponse(
@@ -560,10 +593,23 @@ async def invoke_agent_stream(
         agent = Agent(agent_type=body.agent_type, tenant_id=tenant_id, context=body.context)
         history = body.context.get("history", [])
         full_content = ""
+        compaction_state = None
+        if not skip_db and body.conversation_id:
+            try:
+                compaction_state = await _load_compaction_state(conv_id, tenant_id)
+            except Exception as exc:  # noqa: BLE001 - compaction is an optimisation
+                logger.warning("Compaction state not loaded for %s: %s", conv_id, exc)
 
         try:
             if settings.chat_backend == "hermes":
-                messages = await agent.prepare_turn(safe_message, history)
+                messages = await agent.prepare_turn(safe_message, history, compaction_state)
+                if not skip_db and conv_id and agent.compaction_update:
+                    try:
+                        async with get_session() as session:
+                            await _store_compaction(session, conv_id, agent.compaction_update)
+                            await session.flush()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Early compaction store failed for %s: %s", conv_id, exc)
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
                 async for delta in hermes_client.chat_stream(messages):
                     full_content += delta
@@ -574,7 +620,14 @@ async def invoke_agent_stream(
             else:
                 from services.agent_orchestrator.llm import llm_client
 
-                messages = await agent.prepare_turn(safe_message, history)
+                messages = await agent.prepare_turn(safe_message, history, compaction_state)
+                if not skip_db and conv_id and agent.compaction_update:
+                    try:
+                        async with get_session() as session:
+                            await _store_compaction(session, conv_id, agent.compaction_update)
+                            await session.flush()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("Early compaction store failed for %s: %s", conv_id, exc)
                 tools_for_llm = tool_registry.to_openai_format(agent.tools)   # after skills added theirs
                 async for token in llm_client.chat_stream(
                     agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
@@ -615,6 +668,7 @@ async def invoke_agent_stream(
                     tool_calls=[],
                     gate_verdicts=gate_verdicts,
                 )
+                await _store_compaction(session, conv_id, agent.compaction_update)
                 await session.flush()
 
         yield emit(AGUIEvent(type="RUN_FINISHED", run_id=run_id, tenant_id=tenant_id, conversation_id=conv_id))
