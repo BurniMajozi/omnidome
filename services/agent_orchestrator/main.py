@@ -187,6 +187,10 @@ app.include_router(notifications_router, prefix="/api/notifications")
 
 from services.agent_orchestrator.routes.usage import router as usage_router
 app.include_router(usage_router, prefix="/api/usage")
+
+from services.agent_orchestrator.routes.memory import router as memory_router
+app.include_router(memory_router, prefix="/api/memory")
+
 app.include_router(bus_events_router, prefix="/api/events")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)
 

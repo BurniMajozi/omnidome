@@ -2,12 +2,20 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, Zap } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, Zap, Database, Sparkles } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
-import { AgentUsageStats, ModelUsageTable, ToolPolicyBadge, useLlmUsage } from "@/components/admin/agent-insights"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  AgentUsageStats,
+  MemoryManagementView,
+  ModelUsageTable,
+  OKFSkillsView,
+  ToolPolicyBadge,
+  useLlmUsage,
+} from "@/components/admin/agent-insights"
 import type { AgentInfo } from "@/lib/orchestrator-api"
 
 // ─── Display-name map ────────────────────────────────────────────────────────
@@ -170,20 +178,40 @@ export default function AgentsPage() {
             Agent Manager
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Orchestrated fleet of specialized autonomous agents, tool bindings, and operational telemetry.
+            Orchestrated fleet of specialized autonomous agents, tenant memory, and runtime OKF skills.
           </p>
         </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Search agents or capabilities..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="h-9 w-64 rounded-lg border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        </div>
       </div>
+
+      <Tabs defaultValue="agents" className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-3">
+          <TabsList className="bg-muted/60">
+            <TabsTrigger value="agents" className="gap-1.5 text-xs">
+              <Bot className="h-4 w-4" />
+              Agents &amp; Models
+            </TabsTrigger>
+            <TabsTrigger value="memory" className="gap-1.5 text-xs">
+              <Database className="h-4 w-4" />
+              Tenant Memory
+            </TabsTrigger>
+            <TabsTrigger value="skills" className="gap-1.5 text-xs">
+              <Sparkles className="h-4 w-4" />
+              OKF Skills
+            </TabsTrigger>
+          </TabsList>
+
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder="Search agents or capabilities..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="h-9 w-64 rounded-lg border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+        </div>
+
+        <TabsContent value="agents" className="space-y-6">
 
       {loading ? (
         <TabLoader />
@@ -354,6 +382,16 @@ export default function AgentsPage() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="memory">
+          <MemoryManagementView />
+        </TabsContent>
+
+        <TabsContent value="skills">
+          <OKFSkillsView />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

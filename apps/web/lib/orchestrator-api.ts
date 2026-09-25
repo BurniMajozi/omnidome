@@ -708,3 +708,129 @@ export function workflowsUsingAgent(workflows: Workflow[], agentType: string): W
     (w.definition?.nodes ?? []).some((n) => n.type === "agent_invoke" && n.config?.agent_type === agentType))
 }
 
+// ── Memory & Skills (SPEC M1-M5) ──────────────────────────────────────────
+
+export interface MemoryEntry {
+  id: string
+  tenant_id: string
+  source_type: string
+  source_id?: string | null
+  module?: string | null
+  scope_key?: string | null
+  title: string
+  content: string
+  summary?: string | null
+  visibility: string
+  importance: string
+  tags: string[]
+  metadata?: Record<string, unknown>
+  occurred_at: string
+  archived_at?: string | null
+  created_at: string
+}
+
+export interface MemorySummary {
+  id: string
+  tenant_id: string
+  scope_key: string
+  module?: string | null
+  title: string
+  summary: string
+  source_entry_ids: string[]
+  updated_at: string
+}
+
+export interface MemoryRecallResult {
+  summaries: MemorySummary[]
+  entries: MemoryEntry[]
+}
+
+export interface OKFSkill {
+  id: string
+  skill_name: string
+  description: string
+  target_agent_types: string[]
+  guidance_prompt: string
+  tools_required: string[]
+  is_active: boolean
+  created_at: string
+}
+
+export interface HousekeepingReport {
+  dry_run: boolean
+  executed_at: string
+  duplicates_count: number
+  duplicate_ids: string[]
+  low_importance_count: number
+  low_importance_ids: string[]
+  groups_rolled_up: number
+  entries_rolled_up: number
+  total_archived: number
+  rollups: Array<{
+    module: string
+    scope_key: string
+    entry_count: number
+    entry_ids: string[]
+  }>
+  new_summaries?: Array<{
+    module: string
+    scope_key: string
+    summary: string
+  }>
+}
+
+export interface CompactionStats {
+  tenant_id: string
+  compacted_conversations_count: number
+  total_compaction_runs: number
+}
+
+export const recallMemory = (q?: string, module?: string) => {
+  const params = new URLSearchParams()
+  if (q) params.set("q", q)
+  if (module) params.set("module", module)
+  return getJson<MemoryRecallResult>(`/memory/recall?${params.toString()}`)
+}
+
+export const listMemoryEntries = (module?: string, includeArchived = false) => {
+  const params = new URLSearchParams()
+  if (module) params.set("module", module)
+  if (includeArchived) params.set("include_archived", "true")
+  return getJson<{ items: MemoryEntry[] }>(`/memory/entries?${params.toString()}`).then((r) => r.items ?? [])
+}
+
+export const archiveMemoryEntry = (id: string, archived = true) =>
+  getJson<MemoryEntry>(`/memory/entries/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived }),
+  })
+
+export const listOKFSkills = (agentType?: string) => {
+  const p = agentType ? `?agent_type=${encodeURIComponent(agentType)}` : ""
+  return getJson<{ items: OKFSkill[] }>(`/memory/skills${p}`).then((r) => r.items ?? [])
+}
+
+export const createOKFSkill = (skill: { name: string; description: string; target_agent_types: string[]; guidance_prompt: string; tools_required: string[] }) =>
+  getJson<OKFSkill>("/memory/skills", { method: "POST", body: JSON.stringify(skill) })
+
+export const deactivateOKFSkill = (skillId: string) =>
+  getJson<{ status: string }>(`/memory/skills/${skillId}/deactivate`, { method: "POST" })
+
+export const transferOKFSkill = (skillId: string, targetAgentType: string) =>
+  getJson<{ status: string }>(`/memory/skills/${skillId}/transfer`, {
+    method: "POST",
+    body: JSON.stringify({ target_agent_type: targetAgentType }),
+  })
+
+export const dryRunHousekeeping = () =>
+  getJson<HousekeepingReport>("/memory/housekeeping/dry-run", { method: "POST" })
+
+export const runHousekeeping = () =>
+  getJson<HousekeepingReport>("/memory/housekeeping/run", { method: "POST" })
+
+export const getHousekeepingStatus = () =>
+  getJson<{ tenant_id: string; config: { rollup_days: number; low_importance_retention_days: number }; last_run?: HousekeepingReport | null }>("/memory/housekeeping/status")
+
+export const getCompactionStats = () =>
+  getJson<CompactionStats>("/memory/compaction/stats")
+

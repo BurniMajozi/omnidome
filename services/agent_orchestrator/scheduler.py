@@ -21,14 +21,39 @@ from services.agent_orchestrator.workflow_engine import run_workflow
 logger = logging.getLogger(__name__)
 
 LOCK_KEY = 918273645  # arbitrary constant shared by all workers
+HOUSEKEEPING_LOCK_KEY = 918273646
 TICK_SECONDS = 60
 SYSTEM_USER = "00000000-0000-0000-0000-000000000000"
+_last_housekeeping_date = None
 
 
 def _next_run(cron_expr: str, base: datetime) -> datetime:
     from croniter import croniter
 
     return croniter(cron_expr, base).get_next(datetime)
+
+
+async def _tick_housekeeping(now: datetime) -> None:
+    """Nightly memory housekeeping (spec M5): roll old memories into summaries,
+    archive duplicates and low-importance entries."""
+    global _last_housekeeping_date
+    if _last_housekeeping_date == now.date() or now.hour < 2:
+        return
+    async with session_scope() as s:
+        got = (await s.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": HOUSEKEEPING_LOCK_KEY})).scalar()
+        if not got:
+            return
+        _last_housekeeping_date = now.date()
+        logger.info("Starting nightly memory housekeeping")
+        try:
+            from services.agent_orchestrator.memory_housekeeping import run_tenant_housekeeping
+            res = await s.execute(text("SELECT DISTINCT tenant_id FROM tenant_memory_entries WHERE archived_at IS NULL"))
+            tenants = res.scalars().all()
+            for t_id in tenants:
+                await run_tenant_housekeeping(s, t_id, dry_run=False, now=now)
+            logger.info("Nightly memory housekeeping completed for %d tenants", len(tenants))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Nightly memory housekeeping failed: %s", exc)
 
 
 async def _tick() -> None:
@@ -72,8 +97,13 @@ async def _tick() -> None:
 async def scheduler_loop() -> None:
     logger.info("workflow scheduler loop started (tick=%ss)", TICK_SECONDS)
     while True:
+        now = datetime.now(timezone.utc)
         try:
             await _tick()
         except Exception:
             logger.exception("scheduler tick error")
+        try:
+            await _tick_housekeeping(now)
+        except Exception:
+            logger.exception("housekeeping tick error")
         await asyncio.sleep(TICK_SECONDS)
