@@ -81,6 +81,12 @@ class FakeRegistry:
 @pytest.fixture
 def harness(monkeypatch):
     monkeypatch.setattr(agents.usage, "ENABLED", False)   # no DB in unit tests
+    captured = []
+
+    async def capture(tenant_id, entry, key=None):
+        captured.append(entry)
+    monkeypatch.setattr(agents.memory_capture, "request", capture)
+    agents.captured_for_tests = captured
 
     def make(replies, *tools):
         llm = ScriptedLLM(replies)
@@ -319,3 +325,28 @@ def test_okf_skill_guidance_reaches_the_prompt_and_its_tool_becomes_callable(har
     assert balance.calls == [{"customer_id": "c1"}]
     assert out["content"] == "Offered the win-back discount."
     assert agent.skill_names == ["Win-back offer"]
+
+
+# ── M3 memory-capture ───────────────────────────────────────────────────────
+
+def test_executed_data_changing_call_is_captured_once_and_reads_are_not(harness):
+    read = FakeTool("support_get_tickets")
+    write = FakeTool("support_create_ticket", mutates=True, result={"success": True, "data": {"id": "t1"}})
+    llm, agent = harness([
+        reply(tool_calls=[call(read.name, {}, "a"), call(write.name, {"subject": "No signal"}, "b")]),
+        reply("Ticket logged."),
+    ], read, write)
+    run(agent)
+    entries = agents.captured_for_tests
+    assert len(entries) == 1
+    assert entries[0]["source_type"] == "agent_action" and entries[0]["metadata"]["tool"] == "support_create_ticket"
+
+
+def test_refused_data_changing_call_is_not_captured(harness):
+    write = FakeTool("support_create_ticket", mutates=True)
+    llm, agent = harness([
+        reply(tool_calls=[call(write.name, {}, "a", error="cut off")]),
+        reply("Could not create it."),
+    ], write)
+    run(agent)
+    assert agents.captured_for_tests == [] and write.calls == []

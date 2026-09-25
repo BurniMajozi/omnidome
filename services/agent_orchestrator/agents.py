@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from services.agent_orchestrator import memory_context, skills_runtime, usage
+from services.agent_orchestrator import memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -338,6 +338,10 @@ class Agent:
             logger.warning("Tool %s timed out after %ss", tool_name, timeout)
             result = {"success": False, "error": f"{tool_name} timed out after {timeout}s; try again later "
                                                  "or answer without it."}
+        # Spec M3: whatever changed data is remembered, without relying on the model.
+        if getattr(tool, "mutates", False):
+            await memory_capture.request(
+                tenant, memory_capture.tool_entry(self.agent_type, self.channel, tool_name, tool_args, result))
         return tool_name, tool_args, result
 
     async def _consult_specialist(self, tool_args: Dict[str, Any]) -> Dict[str, Any]:

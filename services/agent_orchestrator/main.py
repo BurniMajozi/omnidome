@@ -129,6 +129,9 @@ async def startup() -> None:
             # Runs workflows whose trigger_event matches incoming bus events.
             from services.agent_orchestrator.event_triggers import consumer as event_consumer
             event_consumer.start()
+            # Writes captured agent actions / workflow runs to tenant memory (spec M3).
+            from services.agent_orchestrator.memory_capture import consumer as memory_capture_consumer
+            memory_capture_consumer.start()
 
         schedule_background(run_with_db_retry(_ensure_bus_schema, logger=logger))
 

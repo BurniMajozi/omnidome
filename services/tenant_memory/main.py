@@ -155,6 +155,7 @@ async def list_memories(
     module: Optional[str] = Query(None),
     scope_key: Optional[str] = Query(None),
     source_type: Optional[str] = Query(None),
+    source_id: Optional[str] = Query(None),
     tag: Optional[str] = Query(None),
     q: Optional[str] = Query(None, min_length=2),
     include_archived: bool = Query(False),
@@ -175,6 +176,9 @@ async def list_memories(
     if source_type:
         clauses.append("source_type = :source_type")
         params["source_type"] = source_type
+    if source_id:
+        clauses.append("source_id = :source_id")
+        params["source_id"] = source_id
     if tag:
         clauses.append(":tag = any(tags)")
         params["tag"] = tag

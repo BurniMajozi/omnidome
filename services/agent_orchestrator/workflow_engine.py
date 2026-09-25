@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from services.common.db import session_scope
 from services.agent_orchestrator.models import Workflow, WorkflowRun, RunStep
+from services.agent_orchestrator import memory_capture
 from services.agent_orchestrator.agents import Agent
 
 logger = logging.getLogger(__name__)
@@ -232,4 +233,14 @@ async def run_workflow(
         run.output = data["steps"]
         run.finished_at = datetime.now(timezone.utc)
         await session.flush()
+        # Spec M3: one memory entry per finished run, queued in this transaction
+        # (savepoint: a capture problem must never lose the run itself).
+        try:
+            async with session.begin_nested():
+                await memory_capture.request_in(
+                    session, tenant_id,
+                    memory_capture.workflow_entry(wf.name, wf.id, run_id, run.status, trigger, data["steps"], final_error),
+                    key=f"workflow_run:{run_id}")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("workflow run %s: memory capture not queued: %s", run_id, exc)
         return {"run_id": str(run_id), "status": run.status, "steps": data["steps"], "error": final_error}
