@@ -62,7 +62,6 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     # Network: diagnostics can act on the line, so it runs alone.
     "network_check_coverage": _READ,
     "network_get_service_status": _READ,
-    "network_run_diagnostics": ToolPolicy(mutates=True, timeout_s=90),
     # Support
     "support_create_ticket": ToolPolicy(mutates=True, requires_approval=True),
     "support_get_tickets": _READ,
@@ -198,18 +197,18 @@ class ToolRegistry:
         # ── CRM Tools ─────────────────────────────────────────────
         self.register(Tool(
             name="crm_get_customer",
-            description="Look up a customer by ID, email, phone, or account number. Returns full customer profile.",
+            description="Search customers by name, email, phone or account number.",
             service="crm",
             method="GET",
-            endpoint="/api/customers/search",
-            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}, "account_number": {"type": "string"}}, "required": []},
+            endpoint="/customers",
+            parameters={"type": "object", "properties": {"search": {"type": "string", "description": "Name, email, phone or account number"}}, "required": ["search"]},
         ))
         self.register(Tool(
             name="crm_get_customer_360",
             description="Get full Customer 360 view including billing, support tickets, and network services.",
             service="crm",
             method="GET",
-            endpoint="/api/customers/{customer_id}",
+            endpoint="/customers/{customer_id}/360/details",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
         ))
         self.register(Tool(
@@ -217,17 +216,17 @@ class ToolRegistry:
             description="Create a new customer record.",
             service="crm",
             method="POST",
-            endpoint="/api/customers",
+            endpoint="/customers",
             parameters={"type": "object", "properties": {"first_name": {"type": "string"}, "last_name": {"type": "string"}, "email": {"type": "string"}, "phone": {"type": "string"}}, "required": ["first_name", "last_name"]},
         ))
 
         # ── Billing Tools ────────────────────────────────────────
         self.register(Tool(
             name="billing_get_balance",
-            description="Get customer's outstanding balance and latest invoice.",
+            description="List a customer's invoices with totals and amounts paid, to work out what they owe.",
             service="billing",
             method="GET",
-            endpoint="/api/customers/{customer_id}/balance",
+            endpoint="/invoices",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
         ))
         self.register(Tool(
@@ -235,7 +234,7 @@ class ToolRegistry:
             description="Get a specific invoice by ID.",
             service="billing",
             method="GET",
-            endpoint="/api/invoices/{invoice_id}",
+            endpoint="/invoices/{invoice_id}",
             parameters={"type": "object", "properties": {"invoice_id": {"type": "string"}}, "required": ["invoice_id"]},
         ))
         self.register(Tool(
@@ -243,7 +242,7 @@ class ToolRegistry:
             description="Get customer's payment history.",
             service="billing",
             method="GET",
-            endpoint="/api/customers/{customer_id}/payments",
+            endpoint="/payments",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
         ))
 
@@ -252,25 +251,17 @@ class ToolRegistry:
             name="network_check_coverage",
             description="Check fibre availability at an address.",
             service="network",
-            method="GET",
-            endpoint="/api/coverage/check",
-            parameters={"type": "object", "properties": {"address": {"type": "string"}, "latitude": {"type": "string"}, "longitude": {"type": "string"}}, "required": ["address"]},
+            method="POST",
+            endpoint="/coverage/check",
+            parameters={"type": "object", "properties": {"address": {"type": "string"}, "city": {"type": "string"}, "province": {"type": "string"}, "postal_code": {"type": "string"}}, "required": ["address"]},
         ))
         self.register(Tool(
             name="network_get_service_status",
             description="Get customer's network service status.",
             service="network",
             method="GET",
-            endpoint="/api/services/customer/{customer_id}",
+            endpoint="/services",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}}, "required": ["customer_id"]},
-        ))
-        self.register(Tool(
-            name="network_run_diagnostics",
-            description="Run remote CPE diagnostics for a customer.",
-            service="network",
-            method="POST",
-            endpoint="/api/diagnostics/run",
-            parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "service_id": {"type": "string"}}, "required": ["customer_id"]},
         ))
 
         # ── Support Tools ────────────────────────────────────────
@@ -279,7 +270,7 @@ class ToolRegistry:
             description="Create a support ticket for a customer.",
             service="support",
             method="POST",
-            endpoint="/api/tickets",
+            endpoint="/tickets",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "subject": {"type": "string"}, "description": {"type": "string"}, "priority": {"type": "string"}}, "required": ["customer_id", "subject", "description"]},
         ))
         self.register(Tool(
@@ -287,7 +278,7 @@ class ToolRegistry:
             description="Get support tickets filtered by customer, status, or priority.",
             service="support",
             method="GET",
-            endpoint="/api/tickets",
+            endpoint="/tickets",
             parameters={"type": "object", "properties": {"customer_id": {"type": "string"}, "status": {"type": "string"}, "priority": {"type": "string"}}, "required": []},
         ))
 
@@ -297,7 +288,7 @@ class ToolRegistry:
             description="Get churn predictions, optionally filtered by risk level.",
             service="retention",
             method="GET",
-            endpoint="/api/predictions",
+            endpoint="/predictions",
             parameters={"type": "object", "properties": {"risk_level": {"type": "string"}, "limit": {"type": "integer"}}, "required": []},
         ))
         self.register(Tool(
@@ -305,7 +296,7 @@ class ToolRegistry:
             description="Get active retention cases.",
             service="retention",
             method="GET",
-            endpoint="/api/cases",
+            endpoint="/cases",
             parameters={"type": "object", "properties": {"status": {"type": "string"}, "risk_level": {"type": "string"}}, "required": []},
         ))
 
@@ -315,7 +306,7 @@ class ToolRegistry:
             description="Get AI-driven executive summary with trends and recommendations.",
             service="analytics",
             method="GET",
-            endpoint="/api/executive-summary",
+            endpoint="/analytics/executive-summary",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
@@ -325,18 +316,18 @@ class ToolRegistry:
             description="Get sales pipeline summary.",
             service="sales",
             method="GET",
-            endpoint="/api/pipeline",
+            endpoint="/pipeline",
             parameters={"type": "object", "properties": {"status": {"type": "string"}}, "required": []},
         ))
 
         # ── Finance Tools ───────────────────────────────────────
         self.register(Tool(
             name="finance_get_financial_summary",
-            description="Get financial summary including revenue, expenses, and margins.",
+            description="Get the financial overview (revenue, expenses, margins) from the general ledger.",
             service="finance",
             method="GET",
-            endpoint="/api/summary",
-            parameters={"type": "object", "properties": {"period": {"type": "string"}}, "required": []},
+            endpoint="/overview",
+            parameters={"type": "object", "properties": {}, "required": []},
         ))
 
         # ── Call Center Tools ───────────────────────────────────
@@ -345,7 +336,7 @@ class ToolRegistry:
             description="Get call center health metrics and sentiment data.",
             service="call_center",
             method="GET",
-            endpoint="/api/reports/intelligence",
+            endpoint="/reports/intelligence",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
@@ -482,7 +473,7 @@ class ToolRegistry:
             description="Get real-time call center queue status, active callers waiting, and SLA health.",
             service="call_center",
             method="GET",
-            endpoint="/api/queues/dashboard",
+            endpoint="/queues/dashboard/summary",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
         self.register(Tool(
@@ -490,7 +481,7 @@ class ToolRegistry:
             description="Get call center agent statuses, active calls, and daily resolution stats.",
             service="call_center",
             method="GET",
-            endpoint="/api/agents",
+            endpoint="/agents",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
@@ -500,7 +491,7 @@ class ToolRegistry:
             description="List active broadband and VoIP plans with pricing, speeds, and router equipment.",
             service="billing",
             method="GET",
-            endpoint="/api/plans",
+            endpoint="/plans",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
         self.register(Tool(
@@ -508,7 +499,7 @@ class ToolRegistry:
             description="List combined fiber & voice packages, bundle discounts, and add-on services.",
             service="billing",
             method="GET",
-            endpoint="/api/bundles",
+            endpoint="/bundles",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
@@ -518,7 +509,7 @@ class ToolRegistry:
             description="Query employee directory, departments, and active shift rosters.",
             service="hr",
             method="GET",
-            endpoint="/api/employees",
+            endpoint="/employees",
             parameters={"type": "object", "properties": {"department": {"type": "string"}}, "required": []},
         ))
         self.register(Tool(
@@ -526,25 +517,25 @@ class ToolRegistry:
             description="Get team performance metrics, completed reviews, and attrition risk indicators.",
             service="hr",
             method="GET",
-            endpoint="/api/analytics/attrition-risk",
+            endpoint="/analytics/attrition-risk",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
         # ── Analytics & Telemetry Tools (Read-Only) ─────────────────
         self.register(Tool(
             name="analytics_get_mrr_trends",
-            description="Get MRR, ARPU, gross additions, and revenue telemetry trends.",
+            description="Get revenue broken down by plan and FNO for a period.",
             service="analytics",
             method="GET",
-            endpoint="/api/analytics/mrr-breakdown",
-            parameters={"type": "object", "properties": {}, "required": []},
+            endpoint="/analytics/revenue",
+            parameters={"type": "object", "properties": {"period": {"type": "string", "description": "7d, 30d or 90d"}}, "required": []},
         ))
         self.register(Tool(
             name="analytics_get_network_health",
-            description="Query live network uptime, active node telemetry, and latency stats.",
-            service="network",
+            description="Get network utilisation and FNO performance.",
+            service="analytics",
             method="GET",
-            endpoint="/api/nodes/summary",
+            endpoint="/analytics/network",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
@@ -632,7 +623,7 @@ class ToolRegistry:
             ] + FNO_TOOLS,
             "provisioning": [
                 "crm_get_customer", "crm_get_customer_360",
-                "network_check_coverage", "network_get_service_status", "network_run_diagnostics",
+                "network_check_coverage", "network_get_service_status",
                 "billing_get_balance", "billing_get_invoice",
                 "support_create_ticket", "support_get_tickets",
                 "memory.recall", "memory.write_entry",
@@ -649,7 +640,7 @@ class ToolRegistry:
             "support": [
                 "crm_get_customer", "crm_get_customer_360",
                 "support_create_ticket", "support_get_tickets",
-                "network_get_service_status", "network_run_diagnostics",
+                "network_get_service_status",
                 "billing_get_balance", "billing_get_invoice",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
