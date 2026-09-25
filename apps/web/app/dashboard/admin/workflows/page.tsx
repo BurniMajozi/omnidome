@@ -7,7 +7,8 @@
  * A drag-drop React-Flow canvas is a later enhancement; this gives a functional
  * editor + a read-only visual flow of the nodes.
  */
-import { useEffect, useState, useCallback } from "react"
+import { Suspense, useEffect, useState, useCallback } from "react"
+import { useSearchParams } from "next/navigation"
 import { Play, Plus, Save, Loader2, RefreshCw, Clock, Zap, History } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -113,7 +114,7 @@ function describeCron(cron: string): string {
   return `Custom: "${trimmed}" (UTC)`
 }
 
-export default function WorkflowsPage() {
+function WorkflowsView() {
   const [list, setList] = useState<WF[]>([])
   const [selected, setSelected] = useState<WF | null>(null)
   const [defText, setDefText] = useState("")
@@ -154,13 +155,14 @@ export default function WorkflowsPage() {
     setActivePreset(matched ? matched.label : cron ? "Custom Cron" : "Disabled")
   }
 
-  // Deep link from the Agent Manager: /dashboard/admin/workflows?workflow=<id>
-  const [linkedId] = useState(() =>
-    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("workflow"))
-  const [linkHandled, setLinkHandled] = useState(false)
-  if (linkedId && !linkHandled && list.length) {
+  // Deep link from the Agent Manager: /dashboard/admin/workflows?workflow=<id>.
+  // useSearchParams, not window.location: on client-side navigation the URL is
+  // not updated yet when this page first renders.
+  const linkedId = useSearchParams().get("workflow")
+  const [handledLink, setHandledLink] = useState<string | null>(null)
+  if (linkedId && handledLink !== linkedId && list.length) {
     const target = list.find((w) => w.id === linkedId)
-    setLinkHandled(true)
+    setHandledLink(linkedId)
     if (target) select(target)
   }
 
@@ -644,5 +646,13 @@ export default function WorkflowsPage() {
         )}
       </div>
     </div>
+  )
+}
+
+export default function WorkflowsPage() {
+  return (
+    <Suspense fallback={<div className="flex h-64 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}>
+      <WorkflowsView />
+    </Suspense>
   )
 }
