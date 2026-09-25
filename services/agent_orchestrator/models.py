@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -127,3 +128,32 @@ class RunStep(Base):
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_wfsteps_run", "run_id", "started_at"),)
+
+
+# ── Approval Gate (Spec A8) ─────────────────────────────────────────────────
+
+class AgentApproval(Base):
+    __tablename__ = "agent_approvals"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    agent_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    arguments: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    requested_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending | approved | rejected | expired
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    execution_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_agent_approvals_tenant_status", "tenant_id", "status", "created_at"),
+        Index("ix_agent_approvals_agent", "tenant_id", "agent_type", "status"),
+    )

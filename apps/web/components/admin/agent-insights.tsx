@@ -23,14 +23,18 @@ import {
   Plus,
   RefreshCw,
   Search,
+  ShieldAlert,
   Sparkles,
   Zap,
+  Check,
+  X,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
   archiveMemoryEntry,
+  approveApproval,
   createOKFSkill,
   deactivateOKFSkill,
   dryRunHousekeeping,
@@ -38,13 +42,16 @@ import {
   getHousekeepingStatus,
   getLlmUsage,
   getWorkflowRun,
+  listApprovals,
   listMemoryEntries,
   listOKFSkills,
   listWorkflowRuns,
   recallMemory,
+  rejectApproval,
   runHousekeeping,
   transferOKFSkill,
   type AgentUsage,
+  type ApprovalItem,
   type CompactionStats,
   type HousekeepingReport,
   type LlmUsage,
@@ -748,6 +755,287 @@ export function OKFSkillsView() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Stage 3: Agent Approvals Queue View (Spec A8) ──────────────────────────
+
+export function AgentApprovalsView({ initialAgent }: { initialAgent?: string }) {
+  const [items, setItems] = useState<ApprovalItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [statusFilter, setStatusFilter] = useState<string>("pending")
+  const [agentFilter, setAgentFilter] = useState<string>(initialAgent || "all")
+  const [rejectingId, setRejectingId] = useState<string | null>(null)
+  const [rejectReason, setRejectReason] = useState<string>("")
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const statusParam = statusFilter === "all" ? undefined : statusFilter
+      const agentParam = agentFilter === "all" ? undefined : agentFilter
+      const res = await listApprovals(statusParam, agentParam)
+      setItems(res?.items ?? [])
+    } catch {
+      setItems([])
+    } finally {
+      setLoading(false)
+    }
+  }, [statusFilter, agentFilter])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const handleApprove = async (item: ApprovalItem) => {
+    try {
+      await approveApproval(item.id)
+      setFeedback(`Approved #${item.reference}: ${item.tool_name} executed.`)
+      void load()
+    } catch (err) {
+      setFeedback(`Failed to approve: ${String(err)}`)
+    }
+    setTimeout(() => setFeedback(null), 4000)
+  }
+
+  const handleReject = async (item: ApprovalItem) => {
+    try {
+      await rejectApproval(item.id, rejectReason || "Rejected by administrator")
+      setFeedback(`Rejected #${item.reference}.`)
+      setRejectingId(null)
+      setRejectReason("")
+      void load()
+    } catch (err) {
+      setFeedback(`Failed to reject: ${String(err)}`)
+    }
+    setTimeout(() => setFeedback(null), 4000)
+  }
+
+  const pendingCount = items.filter((i) => i.status === "pending").length
+
+  return (
+    <div className="space-y-4">
+      {/* Header and Controls */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border/70 pb-3">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/15 text-amber-400">
+            <ShieldAlert className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-base font-semibold text-foreground">Action Approvals Queue</h3>
+              {pendingCount > 0 && (
+                <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 font-mono text-[11px] px-1.5">
+                  {pendingCount} Pending
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Autonomous agent tool invocations requiring human authorization (spec A8)
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Status filter tabs */}
+          <div className="flex rounded-lg border border-border bg-muted/40 p-0.5 text-xs">
+            {["pending", "approved", "rejected", "all"].map((st) => (
+              <button
+                key={st}
+                onClick={() => setStatusFilter(st)}
+                className={`px-2.5 py-1 rounded-md capitalize transition-colors ${
+                  statusFilter === st
+                    ? "bg-background text-foreground font-semibold shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {st}
+              </button>
+            ))}
+          </div>
+
+          <Button size="sm" variant="outline" onClick={() => void load()} className="h-8 gap-1.5 text-xs">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
+      </div>
+
+      {feedback && (
+        <div className="rounded-lg border border-primary/40 bg-primary/10 p-2.5 text-xs text-primary font-medium flex items-center justify-between">
+          <span>{feedback}</span>
+          <Button size="sm" variant="ghost" onClick={() => setFeedback(null)} className="h-5 px-1 text-xs">
+            Dismiss
+          </Button>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border p-10 text-center">
+          <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-400 mb-2" />
+          <p className="text-sm font-medium text-foreground">No {statusFilter !== "all" ? statusFilter : ""} approvals</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {statusFilter === "pending"
+              ? "All autonomous agent proposals have been reviewed and decided."
+              : "No approval items matched the selected filters."}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {items.map((item) => {
+            const isPending = item.status === "pending"
+            const isApproved = item.status === "approved"
+            const isRejected = item.status === "rejected"
+
+            return (
+              <div
+                key={item.id}
+                className={`rounded-xl border p-4 space-y-3 transition-colors ${
+                  isPending
+                    ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50"
+                    : isApproved
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : "border-border bg-card/60"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-xs font-semibold text-primary">
+                        #{item.reference}
+                      </span>
+                      <span className="text-sm font-semibold text-foreground">
+                        {item.title}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-mono capitalize ${
+                          isPending
+                            ? "border-amber-500/40 text-amber-400 bg-amber-500/10"
+                            : isApproved
+                            ? "border-emerald-500/40 text-emerald-400 bg-emerald-500/10"
+                            : "border-border text-muted-foreground"
+                        }`}
+                      >
+                        {item.status}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
+                        {item.category}
+                      </Badge>
+                      {item.impact && (
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] capitalize ${
+                            item.impact === "critical"
+                              ? "border-red-500/30 text-red-400"
+                              : item.impact === "high"
+                              ? "border-amber-500/30 text-amber-400"
+                              : "border-blue-500/30 text-blue-400"
+                          }`}
+                        >
+                          {item.impact}
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="text-xs text-muted-foreground">
+                      Requested by <strong className="text-foreground">{item.agentName}</strong> ({item.agent_type}) ·{" "}
+                      Tool: <code className="font-mono text-[11px] text-primary">{item.tool_name}</code> ·{" "}
+                      <span>{item.timestamp}</span>
+                    </div>
+                  </div>
+
+                  {isPending && (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Button
+                        size="sm"
+                        onClick={() => void handleApprove(item)}
+                        className="h-8 gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs shadow-xs"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        Approve &amp; Run
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setRejectingId(rejectingId === item.id ? null : item.id)}
+                        className="h-8 gap-1.5 text-xs text-destructive hover:bg-destructive/10 border-destructive/30"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Reject reason input */}
+                {rejectingId === item.id && (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 space-y-2">
+                    <span className="text-xs font-medium text-foreground">Specify reason for rejection:</span>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={rejectReason}
+                        onChange={(e) => setRejectReason(e.target.value)}
+                        placeholder="e.g. Budget exceeded, needs revised terms..."
+                        className="h-8 text-xs flex-1"
+                      />
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => void handleReject(item)}
+                        className="h-8 text-xs"
+                      >
+                        Confirm Rejection
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setRejectingId(null)}
+                        className="h-8 text-xs"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Arguments Preview */}
+                <div className="rounded-lg bg-background/80 border border-border/60 p-2.5 text-xs space-y-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Tool Arguments:
+                  </span>
+                  <pre className="font-mono text-[11px] text-foreground/90 overflow-x-auto whitespace-pre-wrap">
+                    {JSON.stringify(item.arguments, null, 2)}
+                  </pre>
+                </div>
+
+                {/* Outcome or Rejection Details */}
+                {isApproved && item.execution_result && (
+                  <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-2.5 text-xs space-y-1">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-400">
+                      Execution Outcome:
+                    </span>
+                    <pre className="font-mono text-[11px] text-foreground/90 overflow-x-auto whitespace-pre-wrap">
+                      {JSON.stringify(item.execution_result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+
+                {isRejected && item.rejection_reason && (
+                  <div className="rounded-lg bg-muted/40 border border-border p-2.5 text-xs text-muted-foreground">
+                    <strong className="text-foreground">Rejection Reason:</strong> {item.rejection_reason}
+                  </div>
+                )}
+              </div>
+            )
+          })}
         </div>
       )}
     </div>

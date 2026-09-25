@@ -71,6 +71,7 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     "analytics_get_executive_summary": _READ,
     "analytics_get_mrr_trends": _READ,
     "analytics_get_network_health": _READ,
+    "analytics.query": ToolPolicy(mutates=False, timeout_s=10, max_output_chars=8000),
     "sales_get_pipeline": _READ,
     "finance_get_financial_summary": _READ,
     "call_center_get_intelligence": _READ,
@@ -132,7 +133,17 @@ class Tool:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Execute the tool by calling the microservice API."""
+        """Execute the tool by calling the microservice API or internal handler."""
+        if self.name in ("analytics.query", "analytics_query"):
+            from services.agent_orchestrator.safe_sql import execute_safe_sql
+            return await execute_safe_sql(
+                query=tool_input.get("query") or tool_input.get("sql", ""),
+                tenant_id=tenant_id,
+                user_id=user_id,
+                timeout_s=self.timeout_s,
+                max_output_chars=self.max_output_chars,
+            )
+
         base_url = SERVICE_URLS.get(self.service, "")
         if not base_url:
             return {"success": False, "error": f"Service {self.service} not configured"}
@@ -538,6 +549,27 @@ class ToolRegistry:
             endpoint="/analytics/network",
             parameters={"type": "object", "properties": {}, "required": []},
         ))
+        self.register(Tool(
+            name="analytics.query",
+            description=(
+                "Safely query structured business data using read-only SQL (WeKnora pattern). "
+                "Allowed tables: deals, leads, contacts, customers, invoices, tickets, subscriptions, payments, lead_activities, lead_tasks. "
+                "Returns table rows, row count and columns. The query is automatically rewritten to be strictly scoped to your tenant."
+            ),
+            service="orchestrator",
+            method="POST",
+            endpoint="/api/tools/analytics/query",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "A single SELECT query in PostgreSQL syntax",
+                    }
+                },
+                "required": ["query"],
+            },
+        ))
 
         # ── Cross-Agent Orchestration Tools ──────────────────────────
         self.register(Tool(
@@ -631,6 +663,7 @@ class ToolRegistry:
             "executive": [
                 "orchestrator_consult_specialist", "orchestrator.consult_specialist",
                 "analytics_get_executive_summary", "analytics_get_mrr_trends", "analytics_get_network_health",
+                "analytics.query",
                 "finance_get_financial_summary", "sales_get_pipeline",
                 "retention_get_predictions", "retention_get_cases",
                 "call_center_get_intelligence", "call_center_get_queues",
@@ -673,6 +706,7 @@ class ToolRegistry:
             ],
             "analytics": [
                 "analytics_get_mrr_trends", "analytics_get_network_health", "analytics_get_executive_summary",
+                "analytics.query",
                 "sales_get_pipeline", "finance_get_financial_summary",
                 "retention_get_predictions", "call_center_get_intelligence",
                 "memory.recall", "memory.write_entry",

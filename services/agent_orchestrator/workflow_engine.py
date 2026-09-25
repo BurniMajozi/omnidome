@@ -115,7 +115,7 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
         agent = Agent(
             agent_type=agent_type,
             tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-            context={"user_id": user_id},
+            context={"user_id": user_id, "workflow_id": data.get("workflow_id"), "run_id": data.get("run_id")},
         )
         result = await agent.run(message)
         if result.get("unavailable"):
@@ -123,7 +123,18 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
             # apology on as if it were real output.
             return {"ok": False, "error": "AI unavailable: every configured model failed or is rate-limited",
                     "content": None}
-        return {"ok": True, "content": result.get("content"), "tool_calls": result.get("tool_calls", [])}
+        tool_calls = result.get("tool_calls", [])
+        pending_appr = next((tc["result"] for tc in tool_calls if isinstance(tc.get("result"), dict) and tc["result"].get("requires_approval")), None)
+        if pending_appr:
+            return {
+                "ok": True,
+                "awaiting_approval": True,
+                "approval_id": pending_appr.get("approval_id"),
+                "reference": pending_appr.get("reference"),
+                "content": result.get("content"),
+                "tool_calls": tool_calls,
+            }
+        return {"ok": True, "content": result.get("content"), "tool_calls": tool_calls}
 
     if ntype == "http_request":
         method = cfg.get("method", "GET").upper()
@@ -183,7 +194,7 @@ async def run_workflow(
         definition = wf.definition or {}
         nodes = {n["id"]: n for n in definition.get("nodes", [])}
         edges = definition.get("edges", [])
-        data: dict = {"input": input_data or {}, "steps": {}}
+        data: dict = {"input": input_data or {}, "steps": {}, "workflow_id": str(wf.id), "run_id": str(run_id)}
 
         incoming = {e["to"] for e in edges}
         current = next((nid for nid, n in nodes.items() if n.get("type") == "trigger"), None) \
@@ -207,7 +218,10 @@ async def run_workflow(
                 out = await _run_node(node, data, tenant_id, user_id)
                 data["steps"][current] = out
                 step.output = out
-                step.status = "succeeded" if out.get("ok", True) else "failed"
+                if out.get("awaiting_approval"):
+                    step.status = "awaiting_approval"
+                else:
+                    step.status = "succeeded" if out.get("ok", True) else "failed"
                 if not out.get("ok", True):
                     final_error = out.get("error")
             except Exception as exc:  # noqa: BLE001
@@ -217,7 +231,7 @@ async def run_workflow(
             step.finished_at = datetime.now(timezone.utc)
             await session.flush()
 
-            if step.status == "failed" or node.get("type") == "end":
+            if step.status in ("failed", "awaiting_approval") or node.get("type") == "end":
                 break
 
             outgoing = [e for e in edges if e["from"] == current]
@@ -228,8 +242,13 @@ async def run_workflow(
             else:
                 current = outgoing[0]["to"] if outgoing else None
 
-        run.status = "failed" if final_error else "succeeded"
-        run.error = final_error
+        waiting = next((s for s in data["steps"].values() if isinstance(s, dict) and s.get("awaiting_approval")), None)
+        if waiting:
+            run.status = "awaiting_approval"
+            run.error = f"awaiting approval #{waiting.get('reference')}"
+        else:
+            run.status = "failed" if final_error else "succeeded"
+            run.error = final_error
         run.output = data["steps"]
         run.finished_at = datetime.now(timezone.utc)
         await session.flush()

@@ -72,6 +72,8 @@ class AgentInfo(BaseModel):
     # Models used when this agent runs its own loop (MCP specialist, workflows):
     # OPENROUTER_MODEL then OPENROUTER_FALLBACK_MODELS.
     specialist_models: List[str] = []
+    # Tables this agent is allowed to query via safe-sql (spec A9).
+    sql_table_allowlist: List[str] = []
 
 
 # ── Conversation ─────────────────────────────────────────────────────────

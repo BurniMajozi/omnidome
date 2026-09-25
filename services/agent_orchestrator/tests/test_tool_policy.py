@@ -26,7 +26,7 @@ def test_policies_are_applied_to_the_registered_tools():
 
 def test_reads_are_not_mutations():
     for name in ("crm_get_customer", "memory.recall", "support_get_tickets",
-                 "fno_intelligence.web_intel_competitor_analysis"):
+                 "fno_intelligence.web_intel_competitor_analysis", "analytics.query"):
         assert TOOL_POLICIES[name].mutates is False
 
 

@@ -126,12 +126,18 @@ async def startup() -> None:
                 # LLM usage tracing tables (spec A7).
                 from services.agent_orchestrator.usage import ensure_schema as ensure_usage_schema
                 await ensure_usage_schema(s)
+                # Agent approvals tables (spec A8).
+                from services.agent_orchestrator.approvals import ensure_schema as ensure_approvals_schema
+                await ensure_approvals_schema(s)
             # Runs workflows whose trigger_event matches incoming bus events.
             from services.agent_orchestrator.event_triggers import consumer as event_consumer
             event_consumer.start()
             # Writes captured agent actions / workflow runs to tenant memory (spec M3).
             from services.agent_orchestrator.memory_capture import consumer as memory_capture_consumer
             memory_capture_consumer.start()
+            # Executes approved tool calls idempotently upon approval decision (spec A8).
+            from services.agent_orchestrator.approvals import consumer as approvals_consumer
+            approvals_consumer.start()
 
         schedule_background(run_with_db_retry(_ensure_bus_schema, logger=logger))
 
@@ -190,6 +196,9 @@ app.include_router(usage_router, prefix="/api/usage")
 
 from services.agent_orchestrator.routes.memory import router as memory_router
 app.include_router(memory_router, prefix="/api/memory")
+
+from services.agent_orchestrator.routes.approvals import router as approvals_router
+app.include_router(approvals_router, prefix="/api/approvals")
 
 app.include_router(bus_events_router, prefix="/api/events")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)

@@ -250,7 +250,7 @@ class Agent:
 
             executed_calls = []
             for batch in plan_batches(raw_tool_calls, self._is_read_call):
-                outcomes = await asyncio.gather(*(self._execute_call(tc, call_counts, tenant) for tc in batch))
+                outcomes = await asyncio.gather(*(self._execute_call(tc, call_counts, tenant, conversation_id=conversation_id) for tc in batch))
                 for tc, (tool_name, tool_args, tool_result) in zip(batch, outcomes):
                     executed_calls.append({
                         "id": tc.get("id", ""),
@@ -309,7 +309,13 @@ class Agent:
             content = STEP_LIMIT_FALLBACK
         return done(content, stopped_by=stopped_by, unavailable=bool(result.get("unavailable")))
 
-    async def _execute_call(self, tc: Dict[str, Any], call_counts: Dict[str, int], tenant: Optional[str]):
+    async def _execute_call(
+        self,
+        tc: Dict[str, Any],
+        call_counts: Dict[str, int],
+        tenant: Optional[str],
+        conversation_id: Optional[uuid.UUID] = None,
+    ):
         """Run one tool call with the A1/A2 guards. Returns (name, args, result)."""
         tool_name = tc.get("name", "")
         # Spec A1: repaired arguments only. A call whose arguments could not be
@@ -344,6 +350,30 @@ class Agent:
         enriched_args = dict(tool_args)
         if "customer_id" in self.context and "customer_id" not in enriched_args:
             enriched_args["customer_id"] = self.context["customer_id"]
+
+        # Spec A8: tools requiring approval do NOT execute directly.
+        if getattr(tool, "requires_approval", False):
+            from services.agent_orchestrator.approvals import request_approval_standalone
+            conv_id = conversation_id or self.context.get("conversation_id")
+            run_id = self.context.get("run_id")
+            user_id = str(self.context.get("user_id", ""))
+            appr = await request_approval_standalone(
+                tenant_id=tenant,
+                agent_type=self.agent_type,
+                tool_name=tool_name,
+                arguments=enriched_args,
+                conversation_id=conv_id,
+                run_id=run_id,
+                requested_by=user_id or self.agent_type,
+            )
+            return tool_name, tool_args, {
+                "success": True,
+                "requires_approval": True,
+                "approval_id": appr["id"],
+                "reference": appr["reference"],
+                "message": appr["message"],
+            }
+
         timeout = getattr(tool, "timeout_s", None) or DEFAULT_TOOL_TIMEOUT_S
         try:
             result = await asyncio.wait_for(

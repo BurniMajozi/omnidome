@@ -37,6 +37,8 @@ export interface AgentInfo {
   tool_policies?: ToolPolicyInfo[]
   /** Models the agent's own loop uses (MCP specialist, workflows): primary then fallbacks. */
   specialist_models?: string[]
+  /** Allowlisted tables for the safe SQL tool (spec A9). */
+  sql_table_allowlist?: string[]
 }
 
 export interface ToolPolicyInfo {
@@ -833,4 +835,54 @@ export const getHousekeepingStatus = () =>
 
 export const getCompactionStats = () =>
   getJson<CompactionStats>("/memory/compaction/stats")
+
+// ── Approval Gate (Spec A8) ────────────────────────────────────────────────
+
+export interface ApprovalItem {
+  id: string
+  reference: string
+  tenant_id: string
+  agent: string
+  agent_type: string
+  tool_name: string
+  arguments: Record<string, unknown>
+  conversation_id?: string | null
+  run_id?: string | null
+  requested_by?: string | null
+  status: "pending" | "approved" | "rejected" | "expired"
+  rejection_reason?: string | null
+  execution_result?: Record<string, unknown> | null
+  executed_at?: string | null
+  expires_at: string
+  decided_at?: string | null
+  decided_by?: string | null
+  created_at: string
+  timestamp: string
+  title: string
+  agentName: string
+  agentIcon: string
+  impact: "critical" | "high" | "medium"
+  category: string
+  summary: string
+  context: string
+}
+
+export const listApprovals = (status?: string, agent?: string) => {
+  const params = new URLSearchParams()
+  if (status) params.set("status", status)
+  if (agent) params.set("agent", agent)
+  return getJson<{ items: ApprovalItem[]; pending_count: number }>(`/approvals?${params.toString()}`)
+}
+
+export const approveApproval = (id: string, notes?: string) =>
+  getJson<ApprovalItem>(`/approvals/${id}/approve`, {
+    method: "POST",
+    body: JSON.stringify({ notes }),
+  })
+
+export const rejectApproval = (id: string, reason?: string) =>
+  getJson<ApprovalItem>(`/approvals/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
 

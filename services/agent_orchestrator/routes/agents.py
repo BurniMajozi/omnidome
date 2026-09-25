@@ -185,6 +185,8 @@ async def list_agents():
 
     def _info(agent_type: str, description: str) -> AgentInfo:
         agent = Agent(agent_type)
+        from services.agent_orchestrator.safe_sql import get_allowlist_for_agent
+        allowlist = sorted(list(get_allowlist_for_agent(agent_type))) if "analytics.query" in agent.available_tool_names else []
         return AgentInfo(
             agent_type=agent_type,
             description=description,
@@ -196,6 +198,7 @@ async def list_agents():
                 for t in agent.tools
             ],
             specialist_models=specialist_models,
+            sql_table_allowlist=allowlist,
         )
 
     return [

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   ShieldAlert,
   CheckCircle,
@@ -19,21 +19,22 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
+import { listApprovals, approveApproval, rejectApproval, ApprovalItem } from "@/lib/orchestrator-api"
 
 export interface ExecutiveApprovalItem {
   id: string
   title: string
-  agent: "executive" | "retention" | "support" | "provisioning" | "customer_facing"
+  agent: "executive" | "retention" | "support" | "provisioning" | "customer_facing" | string
   agentName: string
   agentIcon: string
   impact: "critical" | "high" | "medium"
-  category: "Retention Save" | "Pricing Strategy" | "Outage Compensation" | "Network Provisioning" | "Compliance Alert"
+  category: "Retention Save" | "Pricing Strategy" | "Outage Compensation" | "Network Provisioning" | "Compliance Alert" | string
   summary: string
   context: string
   estimatedRoi?: string
   targetCount?: number
   timestamp: string
-  status: "pending" | "approved" | "dismissed"
+  status: "pending" | "approved" | "dismissed" | "rejected" | "expired"
 }
 
 const DEFAULT_APPROVAL_ITEMS: ExecutiveApprovalItem[] = [
@@ -99,24 +100,69 @@ const DEFAULT_APPROVAL_ITEMS: ExecutiveApprovalItem[] = [
 ]
 
 export function ExecutiveApprovalQueue() {
-  const [items, setItems] = useState<ExecutiveApprovalItem[]>(DEFAULT_APPROVAL_ITEMS)
+  const [items, setItems] = useState<ExecutiveApprovalItem[]>([])
+  const [loading, setLoading] = useState(true)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
+
+  const loadApprovals = async () => {
+    try {
+      const res = await listApprovals("pending")
+      if (res && Array.isArray(res.items)) {
+        if (res.items.length > 0) {
+          setItems(res.items.map((i: ApprovalItem) => ({
+            id: i.id,
+            title: i.title || `${i.agent_type}: ${i.tool_name}`,
+            agent: i.agent || i.agent_type,
+            agentName: i.agentName || i.agent_type,
+            agentIcon: i.agentIcon || "🤖",
+            impact: i.impact || "medium",
+            category: i.category || "General",
+            summary: i.summary || `${i.agent_type} requested to run ${i.tool_name}`,
+            context: i.context || "Action submitted for executive authorization",
+            timestamp: i.timestamp || "recent",
+            status: i.status === "pending" ? "pending" : "dismissed",
+          })))
+        } else {
+          setItems([])
+        }
+      }
+    } catch {
+      // Fallback to default demo items if orchestrator unavailable
+      setItems(DEFAULT_APPROVAL_ITEMS)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadApprovals()
+  }, [])
 
   const pendingItems = items.filter((i) => i.status === "pending")
 
-  const handleApprove = (item: ExecutiveApprovalItem) => {
+  const handleApprove = async (item: ExecutiveApprovalItem) => {
     setItems((prev) =>
       prev.map((i) => (i.id === item.id ? { ...i, status: "approved" as const } : i)),
     )
     setActionFeedback(`Approved & executed: "${item.title}". Action dispatched via ${item.agentName}.`)
+    try {
+      await approveApproval(item.id)
+    } catch {
+      // Ignore if demo id or already approved
+    }
     setTimeout(() => setActionFeedback(null), 4000)
   }
 
-  const handleDismiss = (id: string) => {
+  const handleDismiss = async (id: string) => {
     setItems((prev) =>
       prev.map((i) => (i.id === id ? { ...i, status: "dismissed" as const } : i)),
     )
     setActionFeedback("Proposal dismissed.")
+    try {
+      await rejectApproval(id, "Dismissed by executive")
+    } catch {
+      // Ignore if demo id or already handled
+    }
     setTimeout(() => setActionFeedback(null), 3000)
   }
 

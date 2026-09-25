@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, Zap, Database, Sparkles } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, ShieldAlert, Zap, Database, Sparkles } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  AgentApprovalsView,
   AgentUsageStats,
   MemoryManagementView,
   ModelUsageTable,
@@ -198,6 +199,10 @@ export default function AgentsPage() {
               <Sparkles className="h-4 w-4" />
               OKF Skills
             </TabsTrigger>
+            <TabsTrigger value="approvals" className="gap-1.5 text-xs">
+              <ShieldAlert className="h-4 w-4 text-amber-500" />
+              Pending Approvals
+            </TabsTrigger>
           </TabsList>
 
           <div className="flex items-center gap-2">
@@ -325,6 +330,32 @@ export default function AgentsPage() {
                         )}
                       </div>
                     </div>
+
+                    {/* Safe SQL Allowlist (spec A9) */}
+                    {(agent.sql_table_allowlist ?? []).length > 0 && (
+                      <div className="rounded-lg bg-background/60 border border-border/60 p-2 text-xs space-y-1">
+                        <div className="flex items-center justify-between text-muted-foreground font-medium">
+                          <span className="flex items-center gap-1.5 text-primary text-[11px]">
+                            <Database className="h-3 w-3" />
+                            Safe SQL Allowlist (A9)
+                          </span>
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            {agent.sql_table_allowlist?.length} tables
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {agent.sql_table_allowlist?.map((tbl) => (
+                            <Badge
+                              key={tbl}
+                              variant="outline"
+                              className="text-[10px] font-mono py-0 px-1 text-primary border-primary/30 bg-primary/5"
+                            >
+                              {tbl}
+                            </Badge>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </CardContent>
                 </div>
 
@@ -390,6 +421,10 @@ export default function AgentsPage() {
 
         <TabsContent value="skills">
           <OKFSkillsView />
+        </TabsContent>
+
+        <TabsContent value="approvals">
+          <AgentApprovalsView />
         </TabsContent>
       </Tabs>
     </div>
