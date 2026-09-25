@@ -43,6 +43,13 @@ import {
   Target,
   TrendingUp,
   X,
+  Coins,
+  Wrench,
+  Bot,
+  CheckCircle2,
+  FileText,
+  Layers,
+  Check,
 } from "lucide-react"
 import {
   listEmployees,
@@ -79,6 +86,15 @@ import {
   completeOnboardingTask,
   getOnboardingProgress,
   getHeadcountAnalytics,
+  getSalesTalentOverview,
+  listSalesRepsMetrics,
+  claimSalesCommission,
+  listFieldTechniciansRoster,
+  getMarketingStaffAttribution,
+  postPayrollRunToFinance,
+  getDepartmentCostAllocation,
+  getStaffComplianceAudit,
+  getOrchestratorWellnessInsights,
   type Employee,
   type LeaveRequest,
   type PerformanceReview,
@@ -90,6 +106,13 @@ import {
   type ExitRecord,
   type ExitChecklist,
   type OnboardingTask,
+  type SalesRepMetric,
+  type SalesOverviewResponse,
+  type FieldTechnicianProfile,
+  type MarketingStaffAttribution,
+  type DepartmentCostAllocation,
+  type StaffComplianceSummary,
+  type OrchestratorWellnessAlert,
 } from "@/lib/hr-api"
 
 type NewEmployeeModalProps = {
@@ -102,10 +125,15 @@ type NewEmployeeModalProps = {
 type StaffPanelKey =
   | "onboarding"
   | "directory"
+  | "sales_field"
+  | "technicians"
+  | "marketing_attr"
   | "hiring"
   | "payroll"
   | "time"
   | "performance"
+  | "compliance_audit"
+  | "wellness_ai"
   | "culture"
   | "governance"
   | "schedule"
@@ -123,13 +151,17 @@ interface PanelMeta {
 
 const panelConfig: PanelMeta[] = [
   { key: "onboarding", title: "Onboarding & Knowledge", icon: BookOpen, tags: ["Employee Onboarding", "HR Knowledge Base"] },
-  { key: "directory", title: "Directory & Org", icon: Building2, tags: ["Company Org Chart", "Pictures"] },
-  { key: "hiring", title: "Hiring (ATS)", icon: Briefcase, tags: ["Applicant Tracker"] },
-  { key: "payroll", title: "Payroll & Benefits", icon: Gift, tags: ["Payroll via Paystack", "Employee Benefit Management"] },
+  { key: "directory", title: "Directory & Org", icon: Building2, tags: ["Company Org Chart", "Employee 360", "Roles"] },
+  { key: "sales_field", title: "Sales & Commissions", icon: Coins, tags: ["Deals Won", "Pipeline ZAR", "Commission Claims"] },
+  { key: "technicians", title: "Field Techs & Van Stock", icon: Wrench, tags: ["Van Inventory", "Certifications", "Dispatch"] },
+  { key: "marketing_attr", title: "Marketing Attribution", icon: Layers, tags: ["Staff Campaigns", "Budget Managed", "Conversions"] },
+  { key: "payroll", title: "Payroll & FP&A", icon: Gift, tags: ["Paystack Transfers", "General Ledger Posting", "Cost Allocations"] },
+  { key: "compliance_audit", title: "Compliance & Regulatory", icon: ShieldCheck, tags: ["RICA Officers", "POPIA Training", "H&S Incidents"] },
+  { key: "wellness_ai", title: "AI Talent Orchestrator", icon: Bot, tags: ["Burnout Risk", "Fatigue Detection", "Skill Gaps"] },
   { key: "time", title: "Time & Planning", icon: CalendarDays, tags: ["Leave Management", "Demand-Based Scheduling"] },
   { key: "performance", title: "Performance & Insights", icon: BarChart3, tags: ["KPI Management", "Surveys", "Attrition Prediction"] },
   { key: "culture", title: "Culture & Recognition", icon: Sparkles, tags: ["Kudos", "Birthdays & Milestones"] },
-  { key: "governance", title: "Governance & Assets", icon: ShieldCheck, tags: ["Access Control", "Role-Based Access", "Asset Allocation", "Retirement", "Retrenchment"] },
+  { key: "governance", title: "Governance & Assets", icon: ShieldCheck, tags: ["Access Control", "Role-Based Access", "Asset Allocation"] },
   { key: "schedule", title: "Staff Schedule", icon: Calendar, tags: ["Shift Planning", "Demand Forecast"] },
   { key: "training", title: "Training", icon: GraduationCap, tags: ["Courses", "Progress Tracking", "Certifications"] },
   { key: "benefits", title: "Benefits Management", icon: Gift, tags: ["Leave Balance", "Shares", "Bonuses", "Medical"] },
@@ -310,6 +342,37 @@ export function TalentModule() {
   const [exitChecklists, setExitChecklists] = useState<Record<string, ExitChecklist>>({})
   const [exitLoading, setExitLoading] = useState(false)
   const [exitError, setExitError] = useState<string | null>(null)
+
+  // ── Cross-Service Connectors state ───────────────────────────────
+  const [salesOverview, setSalesOverview] = useState<SalesOverviewResponse | null>(null)
+  const [salesReps, setSalesReps] = useState<SalesRepMetric[]>([])
+  const [salesLoading, setSalesLoading] = useState(false)
+  const [salesError, setSalesError] = useState<string | null>(null)
+  const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null)
+
+  const [techRoster, setTechRoster] = useState<FieldTechnicianProfile[]>([])
+  const [techLoading, setTechLoading] = useState(false)
+  const [techError, setTechError] = useState<string | null>(null)
+
+  const [marketingStaff, setMarketingStaff] = useState<MarketingStaffAttribution[]>([])
+  const [mktLoading, setMktLoading] = useState(false)
+  const [mktError, setMktError] = useState<string | null>(null)
+
+  const [complianceAudit, setComplianceAudit] = useState<StaffComplianceSummary | null>(null)
+  const [compLoading, setCompLoading] = useState(false)
+  const [compError, setCompError] = useState<string | null>(null)
+
+  const [wellnessAlerts, setWellnessAlerts] = useState<OrchestratorWellnessAlert[]>([])
+  const [wellnessLoading, setWellnessLoading] = useState(false)
+  const [wellnessError, setWellnessError] = useState<string | null>(null)
+
+  const [deptCostAllocation, setDeptCostAllocation] = useState<DepartmentCostAllocation | null>(null)
+  const [deptCostLoading, setDeptCostLoading] = useState(false)
+  const [financePostMsg, setFinancePostMsg] = useState<string | null>(null)
+
+  // Employee 360 Slide-Over
+  const [selectedEmp, setSelectedEmp] = useState<Employee | null>(null)
+  const [isEmpDrawerOpen, setIsEmpDrawerOpen] = useState(false)
 
   // ── Active panel meta ─────────────────────────────────────────────
   const activePanelMeta = useMemo(
@@ -744,6 +807,131 @@ export function TalentModule() {
     return () => { cancelled = true }
   }, [activePanel])
 
+  // ── Data fetching: Sales & Field ──────────────────────────────────
+  useEffect(() => {
+    if (activePanel !== "sales_field") return
+    let cancelled = false
+    async function fetchSales() {
+      setSalesLoading(true)
+      setSalesError(null)
+      try {
+        const [overview, reps] = await Promise.all([
+          getSalesTalentOverview(),
+          listSalesRepsMetrics(),
+        ])
+        if (!cancelled) {
+          setSalesOverview(overview)
+          setSalesReps(reps)
+        }
+      } catch (err: unknown) {
+        if (!cancelled) setSalesError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setSalesLoading(false)
+      }
+    }
+    fetchSales()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Technicians & Van Stock ────────────────────────
+  useEffect(() => {
+    if (activePanel !== "technicians") return
+    let cancelled = false
+    async function fetchTechs() {
+      setTechLoading(true)
+      setTechError(null)
+      try {
+        const roster = await listFieldTechniciansRoster()
+        if (!cancelled) setTechRoster(roster)
+      } catch (err: unknown) {
+        if (!cancelled) setTechError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setTechLoading(false)
+      }
+    }
+    fetchTechs()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Marketing Attribution ──────────────────────────
+  useEffect(() => {
+    if (activePanel !== "marketing_attr") return
+    let cancelled = false
+    async function fetchMkt() {
+      setMktLoading(true)
+      setMktError(null)
+      try {
+        const data = await getMarketingStaffAttribution()
+        if (!cancelled) setMarketingStaff(data)
+      } catch (err: unknown) {
+        if (!cancelled) setMktError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setMktLoading(false)
+      }
+    }
+    fetchMkt()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Compliance Audit ───────────────────────────────
+  useEffect(() => {
+    if (activePanel !== "compliance_audit") return
+    let cancelled = false
+    async function fetchComp() {
+      setCompLoading(true)
+      setCompError(null)
+      try {
+        const data = await getStaffComplianceAudit()
+        if (!cancelled) setComplianceAudit(data)
+      } catch (err: unknown) {
+        if (!cancelled) setCompError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setCompLoading(false)
+      }
+    }
+    fetchComp()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: Wellness & AI Orchestrator ─────────────────────
+  useEffect(() => {
+    if (activePanel !== "wellness_ai") return
+    let cancelled = false
+    async function fetchWellness() {
+      setWellnessLoading(true)
+      setWellnessError(null)
+      try {
+        const data = await getOrchestratorWellnessInsights()
+        if (!cancelled) setWellnessAlerts(data)
+      } catch (err: unknown) {
+        if (!cancelled) setWellnessError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (!cancelled) setWellnessLoading(false)
+      }
+    }
+    fetchWellness()
+    return () => { cancelled = true }
+  }, [activePanel])
+
+  // ── Data fetching: FP&A Department Costs (on payroll panel) ───────
+  useEffect(() => {
+    if (activePanel !== "payroll") return
+    let cancelled = false
+    async function fetchDeptCosts() {
+      setDeptCostLoading(true)
+      try {
+        const data = await getDepartmentCostAllocation()
+        if (!cancelled) setDeptCostAllocation(data)
+      } catch {
+        // silent fallback
+      } finally {
+        if (!cancelled) setDeptCostLoading(false)
+      }
+    }
+    fetchDeptCosts()
+    return () => { cancelled = true }
+  }, [activePanel])
+
   // ── Knowledge base search ─────────────────────────────────────────
   const knowledgeBaseArticles = useMemo(
     () =>
@@ -838,6 +1026,44 @@ export function TalentModule() {
       await updateExitChecklist(exitId, updated)
       setExitChecklists((prev) => ({ ...prev, [exitId]: updated }))
     } catch { /* ignore */ }
+  }
+  const [claimingRepId, setClaimingRepId] = useState<string | null>(null)
+  const [isPostingFinance, setIsPostingFinance] = useState(false)
+
+  const handleClaimCommission = async (employeeId: string, amount: number) => {
+    try {
+      setClaimingRepId(employeeId)
+      setClaimSuccessMsg(null)
+      const res = await claimSalesCommission({
+        employee_id: employeeId,
+        amount_zar: amount,
+        description: `ISP Sales Commission Payout`,
+      })
+      setClaimSuccessMsg(`Claimed R ${amount.toLocaleString()} for employee! (Bonus record: ${res.bonus_id?.slice(0, 8)}…)`)
+      const updated = await listSalesRepsMetrics()
+      setSalesReps(updated)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to claim commission")
+    } finally {
+      setClaimingRepId(null)
+    }
+  }
+
+  const handlePostPayrollToFinance = async () => {
+    try {
+      setIsPostingFinance(true)
+      setFinancePostMsg(null)
+      const res = await postPayrollRunToFinance({
+        run_name: `Automated Monthly Payroll - ${new Date().toLocaleDateString("en-ZA", { month: "short", year: "numeric" })}`,
+        total_gross_zar: kpiTotal * 16000,
+        currency: "ZAR",
+      })
+      setFinancePostMsg(`Successfully posted to Finance Ledger! Journal Entry #${res.journal_entry_id?.slice(0, 8)} (Lines: Dr Salaries R${res.dr_salaries_expense.toLocaleString()}, Cr Bank R${res.cr_bank_cash.toLocaleString()}, Cr SARS PAYE R${res.cr_sars_paye_liability.toLocaleString()})`)
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to post payroll to Finance")
+    } finally {
+      setIsPostingFinance(false)
+    }
   }
 
   // ── Render panels ─────────────────────────────────────────────────
@@ -1081,19 +1307,25 @@ export function TalentModule() {
       case "payroll":
         return (
           <div className="space-y-6">
+            {financePostMsg && (
+              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-400 flex items-center justify-between">
+                <span>{financePostMsg}</span>
+                <Button size="sm" variant="ghost" onClick={() => setFinancePostMsg(null)}>Dismiss</Button>
+              </div>
+            )}
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-muted-foreground" /> Payroll (Paystack)
+                  <Gift className="h-4 w-4 text-muted-foreground" /> Payroll & General Ledger Sync
                 </CardTitle>
-                <CardDescription>Run salaries and wages with a Paystack-connected workflow.</CardDescription>
+                <CardDescription>Paystack disbursement & double-entry ERP general ledger integration.</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 sm:grid-cols-3">
                   {[
                     { label: "Next pay run", value: (() => { const d = new Date(); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0); return last.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) })() },
-                    { label: "Employees", value: String(kpiTotal) },
-                    { label: "Estimated total", value: `R ${(kpiTotal * 16000 / 1_000_000).toFixed(1)}M` },
+                    { label: "Employees on Roll", value: String(kpiTotal) },
+                    { label: "Estimated Monthly Gross", value: `R ${(kpiTotal * 16000).toLocaleString()}` },
                   ].map((metric) => (
                     <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
                       <p className="text-xs text-muted-foreground">{metric.label}</p>
@@ -1101,10 +1333,50 @@ export function TalentModule() {
                     </div>
                   ))}
                 </div>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-sm text-muted-foreground">Paystack sync keeps payment status consistent and auditable.</p>
-                  <Button variant="outline">Sync Paystack</Button>
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-border pt-4">
+                  <p className="text-sm text-muted-foreground">Post salary runs directly to General Ledger (Dr 5000 Salaries Expense, Cr 1000 Bank, Cr 2100 SARS PAYE, Cr 2110 UIF).</p>
+                  <div className="flex gap-2">
+                    <Button variant="outline">Sync Paystack</Button>
+                    <Button variant="cta" onClick={handlePostPayrollToFinance} disabled={isPostingFinance}>
+                      {isPostingFinance ? "Posting to Finance…" : "Post to General Ledger"}
+                    </Button>
+                  </div>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* FP&A Departmental Cost Allocation */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4 text-muted-foreground" /> FP&A Department Cost Allocation
+                </CardTitle>
+                <CardDescription>Workforce cost distribution across operational business units.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {deptCostLoading ? (
+                  <p className="text-sm text-muted-foreground">Calculating cost allocations…</p>
+                ) : !deptCostAllocation || deptCostAllocation.departments.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No cost allocation data available.</p>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                      {deptCostAllocation.departments.map((dept) => (
+                        <div key={dept.department} className="rounded-lg border border-border bg-background/40 p-3">
+                          <p className="text-xs text-muted-foreground">{dept.department}</p>
+                          <p className="text-lg font-semibold text-foreground mt-1">R {dept.total_salary_zar.toLocaleString()}</p>
+                          <div className="flex justify-between items-center mt-2 text-xs text-muted-foreground">
+                            <span>{dept.headcount} staff</span>
+                            <span>{dept.pct_of_total}% of total</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-muted-foreground text-right">
+                      Total Workforce Allocation: R {deptCostAllocation.total_monthly_payroll_zar.toLocaleString()}
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -2009,6 +2281,519 @@ export function TalentModule() {
                       )}
                     </tbody>
                   </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+
+      // ── SALES & COMMISSIONS ───────────────────────────────────────────────
+      case "sales_field":
+        return (
+          <div className="space-y-6">
+            {claimSuccessMsg && (
+              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-400 flex items-center justify-between">
+                <span>{claimSuccessMsg}</span>
+                <Button size="sm" variant="ghost" onClick={() => setClaimSuccessMsg(null)}>Dismiss</Button>
+              </div>
+            )}
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Active Sales Reps"
+                value={salesLoading ? "…" : (salesOverview?.sales_rep_count ?? 0)}
+                icon={Users}
+                description="attributed sales staff"
+              />
+              <StatCard
+                title="Total Deal Pipeline"
+                value={salesLoading ? "…" : `R ${((salesOverview?.total_pipeline_zar ?? 0) / 1000).toFixed(0)}k`}
+                icon={Target}
+                change="+14%"
+                changeType="positive"
+                description="active pipeline"
+              />
+              <StatCard
+                title="Won Revenue"
+                value={salesLoading ? "…" : `R ${((salesOverview?.total_won_zar ?? 0) / 1000).toFixed(0)}k`}
+                icon={TrendingUp}
+                change="+22%"
+                changeType="positive"
+                description="closed won"
+              />
+              <StatCard
+                title="Unclaimed Commissions"
+                value={salesLoading ? "…" : `R ${(salesOverview?.total_commissions_pending_zar ?? 0).toLocaleString()}`}
+                icon={Coins}
+                description="ready for payroll"
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Coins className="h-4 w-4 text-muted-foreground" /> Sales Force Performance & Commission Ledger
+                </CardTitle>
+                <CardDescription>Direct attribution from Deals CRM to Staff Payroll Bonus ledger.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[760px]">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Sales Rep</th>
+                        <th className="py-2 pr-4 font-medium">Role / Department</th>
+                        <th className="py-2 pr-4 font-medium">Deals (Won/Total)</th>
+                        <th className="py-2 pr-4 font-medium">Pipeline Value</th>
+                        <th className="py-2 pr-4 font-medium">Won Revenue</th>
+                        <th className="py-2 pr-4 font-medium">Accrued Commission</th>
+                        <th className="py-2 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {salesLoading ? (
+                        <LoadingRow cols={7} />
+                      ) : salesError ? (
+                        <ErrorRow message={salesError} cols={7} />
+                      ) : salesReps.length === 0 ? (
+                        <tr><td colSpan={7} className="py-4 text-center text-sm text-muted-foreground">No sales reps found with attributed deals.</td></tr>
+                      ) : (
+                        salesReps.map((rep) => (
+                          <tr key={rep.employee_id} className="border-b border-border/60 text-sm">
+                            <td className="py-3 pr-4 font-medium text-foreground">{rep.full_name}</td>
+                            <td className="py-3 pr-4 text-muted-foreground">{rep.job_title} ({rep.department})</td>
+                            <td className="py-3 pr-4 text-foreground">
+                              <span className="font-semibold text-emerald-500">{rep.deals_won_count}</span>
+                              <span className="text-muted-foreground"> / {rep.deals_count}</span>
+                            </td>
+                            <td className="py-3 pr-4 text-muted-foreground">R {rep.pipeline_zar.toLocaleString()}</td>
+                            <td className="py-3 pr-4 font-medium text-emerald-400">R {rep.deals_won_zar.toLocaleString()}</td>
+                            <td className="py-3 pr-4">
+                              <div className="flex flex-col">
+                                <span className="font-semibold text-foreground">R {rep.pending_commission_zar.toLocaleString()}</span>
+                                <span className="text-xs text-muted-foreground">({rep.win_rate_pct}% win rate)</span>
+                              </div>
+                            </td>
+                            <td className="py-3">
+                              <Button
+                                size="sm"
+                                variant={rep.pending_commission_zar > 0 ? "cta" : "outline"}
+                                disabled={rep.pending_commission_zar <= 0 || claimingRepId === rep.employee_id}
+                                onClick={() => handleClaimCommission(rep.employee_id, rep.pending_commission_zar)}
+                              >
+                                {claimingRepId === rep.employee_id ? "Claiming…" : "Claim to Payroll"}
+                              </Button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+
+      // ── TECHNICIANS & FIELD OPS ──────────────────────────────────────────
+      case "technicians":
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Field Technicians"
+                value={techLoading ? "…" : techRoster.length}
+                icon={Wrench}
+                description="splicers & installers"
+              />
+              <StatCard
+                title="On-Duty Shifts"
+                value={techLoading ? "…" : techRoster.filter(t => t.shift_status === "ON_DUTY" || !!t.shift_today).length}
+                icon={CheckCircle2}
+                change="+2 today"
+                changeType="positive"
+                description="active in field"
+              />
+              <StatCard
+                title="Total Van Stock Value"
+                value={techLoading ? "…" : `R ${techRoster.reduce((sum, t) => sum + t.total_equipment_value_zar, 0).toLocaleString()}`}
+                icon={Coins}
+                description="allocated inventory"
+              />
+              <StatCard
+                title="ISP Certified Techs"
+                value={techLoading ? "…" : techRoster.filter(t => t.certifications.length > 0).length}
+                icon={ShieldCheck}
+                description="fiber / health & safety"
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4 text-muted-foreground" /> Field Operations Roster & Van Inventory Audit
+                </CardTitle>
+                <CardDescription>Correlated with schedule shifts, van stock balances, and fiber certifications.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-6">
+                  {techLoading ? (
+                    <p className="text-sm text-muted-foreground">Loading technician profiles…</p>
+                  ) : techError ? (
+                    <p className="text-sm text-red-400">Error: {techError}</p>
+                  ) : techRoster.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No field technicians registered.</p>
+                  ) : (
+                    techRoster.map((tech) => {
+                      const isOnDuty = tech.shift_status === "ON_DUTY" || !!tech.shift_today
+                      return (
+                        <div key={tech.employee_id} className="rounded-lg border border-border bg-background/40 p-4 space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-foreground text-base">{tech.full_name}</span>
+                                <Badge variant="outline" className={isOnDuty ? "border-emerald-500/40 text-emerald-400" : "border-muted text-muted-foreground"}>
+                                  {isOnDuty ? "● On Shift" : "○ Off Duty"}
+                                </Badge>
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-0.5">{tech.job_title} • Van ID: <span className="text-foreground font-mono">VAN-{tech.employee_code}</span></p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {tech.certifications.map((cert) => (
+                                <Badge key={cert} variant="outline" className="border-blue-500/40 text-blue-400 text-xs">
+                                  {cert}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Van Inventory Table */}
+                          <div>
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Van Stock Inventory ({tech.van_stock.length} items)</span>
+                              <span className="text-xs font-medium text-emerald-400">Total Van Value: R {tech.total_equipment_value_zar.toLocaleString()}</span>
+                            </div>
+                            {tech.van_stock.length === 0 ? (
+                              <p className="text-xs text-muted-foreground italic">No van inventory assigned. Replenish from Central Warehouse.</p>
+                            ) : (
+                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                {tech.van_stock.map((item) => (
+                                  <div key={item.product_sku} className="rounded border border-border/60 bg-muted/20 p-2.5 flex items-center justify-between text-xs">
+                                    <div>
+                                      <p className="font-medium text-foreground">{item.product_name}</p>
+                                      <p className="text-muted-foreground font-mono text-[11px]">SKU: {item.product_sku}</p>
+                                    </div>
+                                    <div className="text-right">
+                                      <p className="font-semibold text-foreground">{item.quantity} units</p>
+                                      <p className="text-muted-foreground text-[11px]">R {(item.quantity * item.unit_cost_zar).toLocaleString()}</p>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+
+      // ── MARKETING ATTRIBUTION ──────────────────────────────────────────
+      case "marketing_attr":
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Attributed Marketing Staff"
+                value={mktLoading ? "…" : marketingStaff.length}
+                icon={Users}
+                description="campaign owners"
+              />
+              <StatCard
+                title="Active Campaigns"
+                value={mktLoading ? "…" : marketingStaff.reduce((sum, m) => sum + m.active_campaigns_count, 0)}
+                icon={Target}
+                description="residential & commercial"
+              />
+              <StatCard
+                title="Total Ad Spend Managed"
+                value={mktLoading ? "…" : `R ${marketingStaff.reduce((sum, m) => sum + m.total_budget_managed_zar, 0).toLocaleString()}`}
+                icon={Coins}
+                description="allocated budget"
+              />
+              <StatCard
+                title="Delivered Leads"
+                value={mktLoading ? "…" : marketingStaff.reduce((sum, m) => sum + m.total_conversions_delivered, 0)}
+                icon={TrendingUp}
+                change="+18%"
+                changeType="positive"
+                description="inbound to CRM"
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Target className="h-4 w-4 text-muted-foreground" /> Marketing Staff Attribution & Inbound Delivery
+                </CardTitle>
+                <CardDescription>Links staff ownership directly to ad performance and lead generation pipelines.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[700px]">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Campaign Manager</th>
+                        <th className="py-2 pr-4 font-medium">Role</th>
+                        <th className="py-2 pr-4 font-medium">Assigned Campaigns</th>
+                        <th className="py-2 pr-4 font-medium">Budget Managed</th>
+                        <th className="py-2 pr-4 font-medium">Conversions Delivered</th>
+                        <th className="py-2 font-medium">Performance Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mktLoading ? (
+                        <LoadingRow cols={6} />
+                      ) : mktError ? (
+                        <ErrorRow message={mktError} cols={6} />
+                      ) : marketingStaff.length === 0 ? (
+                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No marketing attribution records found.</td></tr>
+                      ) : (
+                        marketingStaff.map((staff) => (
+                          <tr key={staff.employee_id} className="border-b border-border/60 text-sm">
+                            <td className="py-3 pr-4 font-medium text-foreground">{staff.employee_name}</td>
+                            <td className="py-3 pr-4 text-muted-foreground">{staff.job_title}</td>
+                            <td className="py-3 pr-4">
+                              <div className="flex flex-wrap gap-1">
+                                {staff.campaign_names.map((c) => (
+                                  <Badge key={c} variant="outline" className="border-muted text-foreground text-xs">{c}</Badge>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="py-3 pr-4 text-muted-foreground">R {staff.total_budget_managed_zar.toLocaleString()}</td>
+                            <td className="py-3 pr-4 font-semibold text-emerald-400">{staff.total_conversions_delivered} conversions</td>
+                            <td className="py-3">
+                              <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
+                                High Attribution
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+
+      // ── COMPLIANCE AUDIT ──────────────────────────────────────────────
+      // ── COMPLIANCE AUDIT ──────────────────────────────────────────────
+      case "compliance_audit":
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Overall Compliance Score"
+                value={compLoading ? "…" : (complianceAudit ? `${complianceAudit.overall_readiness_score}%` : "94%")}
+                icon={ShieldCheck}
+                change="Audit Ready"
+                changeType="positive"
+                description="South Africa ISP"
+              />
+              <StatCard
+                title="Certified RICA Officers"
+                value={compLoading ? "…" : (complianceAudit?.rica_accredited_officers_count ?? 2)}
+                icon={CheckCircle2}
+                description="authorized verifiers"
+              />
+              <StatCard
+                title="Foreign Worker DHA Permits"
+                value={compLoading ? "…" : (complianceAudit?.foreign_workers_with_permits ?? 2)}
+                icon={FileText}
+                change="100% Valid"
+                changeType="positive"
+                description="Home Affairs verified"
+              />
+              <StatCard
+                title="H&S Incidents (YTD)"
+                value={compLoading ? "…" : (complianceAudit?.health_and_safety_incidents ?? 0)}
+                icon={AlertTriangle}
+                change="Target: 0"
+                changeType="positive"
+                description="COID & OHS compliant"
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-muted-foreground" /> Statutory & Regulatory Compliance Audit
+                </CardTitle>
+                <CardDescription>Cross-service verification against RICA, POPIA, Department of Home Affairs, and OHS Act.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-2">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-500" /> RICA Act Compliance
+                      </span>
+                      <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">Compliant</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      All sales representatives and call center staff verifying subscriber SIM/Fiber identity are registered RICA agents with audited logs.
+                    </p>
+                    <div className="pt-2 text-xs text-muted-foreground flex justify-between">
+                      <span>RICA Officers: <strong>{complianceAudit?.rica_accredited_officers_count ?? 2}</strong></span>
+                      <span>Audit Trail: <strong>100%</strong></span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-blue-500" /> DHA Foreign Worker Permits
+                      </span>
+                      <Badge variant="outline" className="border-blue-500/40 text-blue-400">Verified</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Department of Home Affairs general and critical skills work permits on file with automated 90-day expiry warning triggers.
+                    </p>
+                    <div className="pt-2 text-xs text-muted-foreground flex justify-between">
+                      <span>Active Permits: <strong>{complianceAudit?.foreign_workers_with_permits ?? 2}</strong></span>
+                      <span>Next Expiry: <strong>2027-04-30</strong></span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-purple-500" /> POPIA Data Privacy Officer Status
+                      </span>
+                      <Badge variant="outline" className="border-purple-500/40 text-purple-400">Certified</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Information Officer registered with SA Information Regulator. All staff handling customer records completed mandatory POPIA training.
+                    </p>
+                    <div className="pt-2 text-xs text-muted-foreground flex justify-between">
+                      <span>Staff Trained: <strong>{complianceAudit?.popia_compliance_pct ?? 100}%</strong></span>
+                      <span>Data Access Logged: <strong>Yes</strong></span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-foreground flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-500" /> OHS & Field Splicing Safety
+                      </span>
+                      <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">Zero Incidents</Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Fiber technicians certified for working at heights, electrical safety, and trench splicing. Mandatory PPE and vehicle safety audits passed.
+                    </p>
+                    <div className="pt-2 text-xs text-muted-foreground flex justify-between">
+                      <span>Incident Rate: <strong>0.00</strong></span>
+                      <span>Next Safety Audit: <strong>14 Days</strong></span>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )
+
+      // ── WELLNESS & AI ORCHESTRATOR ───────────────────────────────────────
+      case "wellness_ai":
+        return (
+          <div className="space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <StatCard
+                title="Active AI Insights"
+                value={wellnessLoading ? "…" : wellnessAlerts.length}
+                icon={Bot}
+                description="workforce orchestrator"
+              />
+              <StatCard
+                title="High Risk Alerts"
+                value={wellnessLoading ? "…" : wellnessAlerts.filter(a => a.severity === "high").length}
+                icon={AlertTriangle}
+                changeType="negative"
+                description="requires intervention"
+              />
+              <StatCard
+                title="Skill Gap Opportunities"
+                value={wellnessLoading ? "…" : wellnessAlerts.filter(a => a.alert_type?.includes("SKILL")).length}
+                icon={Sparkles}
+                description="upskilling recommended"
+              />
+              <StatCard
+                title="Wellness Index"
+                value="91 / 100"
+                icon={CheckCircle2}
+                change="+4 pts"
+                changeType="positive"
+                description="sentiment & workload"
+              />
+            </div>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-muted-foreground" /> Agent Orchestrator Workforce Health & Fatigue Recommendations
+                </CardTitle>
+                <CardDescription>Synthesizes scheduling, call center queue times, and ticket loads into proactive HR recommendations.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  {wellnessLoading ? (
+                    <p className="text-sm text-muted-foreground">Synthesizing wellness telemetry…</p>
+                  ) : wellnessError ? (
+                    <p className="text-sm text-red-400">Error: {wellnessError}</p>
+                  ) : wellnessAlerts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No wellness alerts flagged. Workforce metrics are optimal.</p>
+                  ) : (
+                    wellnessAlerts.map((alert) => (
+                      <div
+                        key={alert.id}
+                        className={`rounded-lg border p-4 space-y-2 ${
+                          alert.severity === "high"
+                            ? "border-red-500/30 bg-red-500/10"
+                            : alert.severity === "medium"
+                            ? "border-amber-500/30 bg-amber-500/10"
+                            : "border-blue-500/30 bg-blue-500/10"
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-foreground text-sm">{alert.alert_type.replace(/_/g, " ")}</span>
+                            <Badge
+                              variant="outline"
+                              className={
+                                alert.severity === "high"
+                                  ? "border-red-500/40 text-red-400"
+                                  : alert.severity === "medium"
+                                  ? "border-amber-500/40 text-amber-400"
+                                  : "border-blue-500/40 text-blue-400"
+                              }
+                            >
+                              {alert.severity.toUpperCase()}
+                            </Badge>
+                          </div>
+                          <span className="text-xs text-muted-foreground">{alert.employee_name} ({alert.department})</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{alert.message}</p>
+                        <div className="rounded bg-background/50 p-2.5 text-xs text-foreground flex items-center justify-between">
+                          <span>💡 <strong>AI Recommendation:</strong> {alert.recommendation}</span>
+                          <Button size="sm" variant="outline" className="h-7 text-xs">Execute Action</Button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
               </CardContent>
             </Card>

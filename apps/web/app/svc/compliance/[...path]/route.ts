@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 
 const COMPLIANCE_SERVICE_URL =
   process.env.COMPLIANCE_SERVICE_URL || "http://compliance:8019"
+const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const DEV_USER_ID = "00000000-0000-0000-0000-000000000002"
 
 async function proxy(
   req: NextRequest,
@@ -15,10 +17,14 @@ async function proxy(
     const url = `${COMPLIANCE_SERVICE_URL}/${apiPath}${searchParams ? `?${searchParams}` : ""}`
 
     const headers: Record<string, string> = {}
-    for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles"]) {
+    for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions"]) {
       const value = req.headers.get(header)
       if (value) headers[header] = value
     }
+
+    if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
+    if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
+    if (!headers["x-roles"]) headers["x-roles"] = "org_admin,compliance_officer"
 
     const init: RequestInit = { method, headers, cache: "no-store" }
     if (method !== "GET" && method !== "HEAD") {

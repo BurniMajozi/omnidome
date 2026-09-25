@@ -20,12 +20,14 @@ from services.hr.database import (
     PayrollProfile, PayrollRun, Payslip,
 )
 from services.hr import paystack as ps
+from services.hr.cross_service import router as cross_service_router
 
 app = FastAPI(title="OmniDome HR Service", version="0.2.0")
 guard = EntitlementGuard(module_id="hr")
 logger = logging.getLogger("hr")
 
 configure_production(app)
+app.include_router(cross_service_router)
 
 
 @app.get("/health", tags=["Health"])

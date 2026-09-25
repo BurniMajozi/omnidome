@@ -1,0 +1,67 @@
+import { NextRequest, NextResponse } from "next/server"
+
+const HR_SERVICE_URL = process.env.HR_SERVICE_URL || "http://hr:8009"
+const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
+const ALLOW_DEV_HEADERS = process.env.HR_PROXY_ALLOW_DEV_HEADERS !== "false"
+
+async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const { path } = await params
+  const pathStr = path.join("/")
+  const url = new URL(`${HR_SERVICE_URL}/${pathStr}`)
+
+  request.nextUrl.searchParams.forEach((value, key) => {
+    url.searchParams.set(key, value)
+  })
+
+  const headers = new Headers()
+  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
+    const value = request.headers.get(header)
+    if (value) headers.set(header, value)
+  }
+
+  if (ALLOW_DEV_HEADERS) {
+    if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
+    if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
+    if (!headers.has("x-roles")) headers.set("x-roles", "org_admin,org_user")
+    if (!headers.has("x-permissions")) headers.set("x-permissions", "hr.read,hr.write,hr.admin,payroll.read,payroll.write")
+  }
+
+  try {
+    const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
+    const res = await fetch(url.toString(), {
+      method: request.method,
+      headers,
+      body,
+    })
+    const contentType = res.headers.get("content-type") || "application/json"
+    const data = await res.text()
+    const noBody = res.status === 204 || res.status === 205 || res.status === 304
+    return new NextResponse(noBody ? null : data, {
+      status: res.status,
+      headers: { "Content-Type": contentType },
+    })
+  } catch (err) {
+    return NextResponse.json({ error: "HR service unreachable", details: String(err) }, { status: 502 })
+  }
+}
+
+export function GET(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}
+
+export function POST(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}
+
+export function PUT(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}
+
+export function PATCH(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}
+
+export function DELETE(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+  return proxy(request, ctx)
+}

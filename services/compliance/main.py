@@ -103,6 +103,10 @@ app.include_router(funding_router, prefix="/api/v1")
 # Document Understanding: Upload, Fetch, OCR, Extract
 app.include_router(documents_router, prefix="/api/v1")
 
+# Cross-Service Connectors: Sales SLA, Technician Safety, Finance, POPIA, RICA, Orchestrator
+from services.compliance.cross_service import router as cross_service_router
+app.include_router(cross_service_router, prefix="/api/v1")
+
 
 # ── Health ──────────────────────────────────────────────────────────────
 

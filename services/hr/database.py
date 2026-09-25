@@ -29,6 +29,8 @@ class Employee(Base):
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
     email: Mapped[Optional[str]] = mapped_column(String(200))
     phone: Mapped[Optional[str]] = mapped_column(String(20))
+    # Link to auth / portal user (optional)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     # Link to call center agent (optional — only for employees who are also CC agents)
     call_center_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

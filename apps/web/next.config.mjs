@@ -48,7 +48,7 @@ const nextConfig = {
       // (route handler — NOT a rewrite — so long STT/TTS model-load waits
       // don't hit the rewrite proxy's connection limits / ECONNRESET).
       { source: '/svc/support/:path*', destination: `${process.env.SUPPORT_SERVICE_URL || 'http://support:8008'}/:path*` },
-      { source: '/svc/hr/:path*', destination: `${process.env.HR_SERVICE_URL || 'http://hr:8009'}/:path*` },
+      // /svc/hr is handled by app/svc/hr/[...path]/route.ts (route handler with tenant headers)
       // NOTE: ANALYTICS_SERVICE_URL (8011) has no service in docker-compose.yaml —
       // it's legacy/unwired, so there is no Docker hostname to fall back to. Left on
       // localhost intentionally; remove this route (or add the service) when resolved.

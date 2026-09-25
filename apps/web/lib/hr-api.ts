@@ -464,3 +464,154 @@ export const getAttritionRisk = () =>
 
 export const getHeadcountAnalytics = () =>
   fetchHR<unknown>("/analytics/headcount")
+
+// ── Cross-Service Connectors (Sales, Technicians, Marketing, Finance, Compliance, Orchestrator) ──
+
+export interface SalesRepMetric {
+  employee_id: string
+  employee_code: string
+  full_name: string
+  job_title: string
+  department: string
+  deals_count: number
+  deals_won_count: number
+  deals_won_zar: number
+  pipeline_zar: number
+  pending_commission_zar: number
+  earned_commission_zar: number
+  win_rate_pct: number
+}
+
+export interface SalesOverviewResponse {
+  sales_rep_count: number
+  total_pipeline_zar: number
+  total_won_zar: number
+  total_commissions_pending_zar: number
+  total_commissions_paid_zar: number
+  top_performers: SalesRepMetric[]
+}
+
+export interface VanStockItem {
+  product_sku: string
+  product_name: string
+  quantity: number
+  safety_stock: number
+  status: string
+  unit_cost_zar: number
+}
+
+export interface FieldTechnicianProfile {
+  employee_id: string
+  employee_code: string
+  full_name: string
+  job_title: string
+  department: string
+  shift_today?: string
+  shift_status?: string
+  certifications: string[]
+  van_stock: VanStockItem[]
+  total_equipment_value_zar: number
+  installations_completed: number
+  active_work_orders: number
+}
+
+export interface MarketingStaffAttribution {
+  employee_id: string
+  employee_name: string
+  job_title: string
+  active_campaigns_count: number
+  total_budget_managed_zar: number
+  total_conversions_delivered: number
+  campaign_names: string[]
+}
+
+export interface DepartmentCostItem {
+  department: string
+  headcount: number
+  total_salary_zar: number
+  pct_of_total: number
+}
+
+export interface DepartmentCostAllocation {
+  total_active_headcount: number
+  total_monthly_payroll_zar: number
+  departments: DepartmentCostItem[]
+}
+
+export interface StaffComplianceSummary {
+  total_staff: number
+  popia_certified_count: number
+  popia_compliance_pct: number
+  rica_accredited_officers_count: number
+  rica_verifications_completed: number
+  health_and_safety_incidents: number
+  foreign_workers_with_permits: number
+  expiring_permits_count: number
+  bcea_leave_compliance_pct: number
+  overall_readiness_score: number
+}
+
+export interface OrchestratorWellnessAlert {
+  id: string
+  employee_name: string
+  department: string
+  alert_type: string
+  severity: string
+  message: string
+  recommendation: string
+}
+
+export const getSalesTalentOverview = () =>
+  fetchHR<SalesOverviewResponse>("/cross-service/sales/overview")
+
+export const listSalesRepsMetrics = () =>
+  fetchHR<SalesRepMetric[]>("/cross-service/sales/reps")
+
+export const claimSalesCommission = (data: {
+  employee_id: string
+  commission_id?: string
+  amount_zar?: number
+  bonus_period?: string
+  description?: string
+}) =>
+  fetchHR<{ status: string; bonus_id?: string; benefit_id?: string; message: string }>("/cross-service/sales/commissions/claim-to-payroll", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const listFieldTechniciansRoster = () =>
+  fetchHR<FieldTechnicianProfile[]>("/cross-service/technicians/roster")
+
+export const getMarketingStaffAttribution = () =>
+  fetchHR<MarketingStaffAttribution[]>("/cross-service/marketing/attribution")
+
+export const postPayrollRunToFinance = (data?: {
+  payroll_run_id?: string
+  run_name?: string
+  total_gross_zar?: number
+  currency?: string
+  reference_prefix?: string
+}) =>
+  fetchHR<{
+    status: string
+    journal_entry_id: string
+    reference: string
+    dr_salaries_expense: number
+    cr_bank_cash: number
+    cr_sars_paye_liability: number
+    cr_uif_liability?: number
+    message: string
+  }>("/cross-service/finance/post-payroll-run", {
+    method: "POST",
+    body: JSON.stringify(data || {}),
+  })
+
+export const getDepartmentCostAllocation = () =>
+  fetchHR<DepartmentCostAllocation>("/cross-service/finance/department-cost-allocation")
+
+export const getStaffComplianceAudit = () =>
+  fetchHR<StaffComplianceSummary>("/cross-service/compliance/audit")
+
+export const getOrchestratorWellnessInsights = () =>
+  fetchHR<OrchestratorWellnessAlert[]>("/cross-service/orchestrator/wellness")
+

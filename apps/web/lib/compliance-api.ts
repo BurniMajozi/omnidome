@@ -676,3 +676,248 @@ export async function getDocumentStats() {
     total_size_bytes: number
   }>(`/documents/stats/summary?tenant_id=${await getTenantId()}`)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CROSS-SERVICE INTEGRATION CLIENT: Full South African Telecom Ecosystem
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface ComplianceContractSlaItem {
+  contract_id: number
+  contract_number: string
+  title: string
+  counterparty: string
+  contract_type: string
+  status: string
+  annual_value_zar: number
+  effective_date: string
+  expiry_date: string
+  days_to_expiry: number
+  uptime_sla_pct: number
+  mttr_target_hours: number
+  fica_status: string
+}
+
+export interface SalesContractsSlaResponse {
+  total_contracts: number
+  active_contracts_count: number
+  total_portfolio_value_zar: number
+  expiring_soon_count: number
+  average_sla_uptime_pct: number
+  fica_verified_pct: number
+  contracts: ComplianceContractSlaItem[]
+}
+
+export interface VetCustomerFicaInput {
+  company_name: string
+  registration_number: string
+  director_name: string
+  director_id_number: string
+  vat_number?: string
+  physical_address?: string
+  contact_email?: string
+}
+
+export interface VetCustomerFicaResult {
+  status: string
+  fica_certificate_id: string
+  verification_status: string
+  company_name: string
+  registration_number: string
+  director_validated: boolean
+  aml_sanctions_clear: boolean
+  cipc_registered: boolean
+  timestamp: string
+  message: string
+}
+
+export interface FleetVehicleItem {
+  id: number
+  registration_number: string
+  vehicle_type: string
+  assigned_technician_name: string
+  make_model: string
+  license_disc_expiry: string
+  days_to_license_expiry: number
+  roadworthy_status: string
+  tracking_unit_active: boolean
+  last_safety_inspection: string
+}
+
+export interface SafetyIncidentItem {
+  id: number
+  incident_number: string
+  incident_type: string
+  severity: string
+  incident_date: string
+  description: string
+  status: string
+  coida_reported: boolean
+}
+
+export interface TechnicianSafetyAuditResponse {
+  total_fleet_vehicles: number
+  roadworthy_compliant_count: number
+  expiring_license_discs_30d: number
+  zero_incident_streak_days: number
+  coida_reportable_accidents_ytd: number
+  working_at_heights_certified_count: number
+  optical_laser_safety_certified_count: number
+  vehicles: FleetVehicleItem[]
+  recent_incidents: SafetyIncidentItem[]
+}
+
+export interface LogHsIncidentInput {
+  incident_type: string
+  severity: string
+  description: string
+  incident_date?: string
+  employee_involved?: string
+  location?: string
+}
+
+export interface LogHsIncidentResult {
+  status: string
+  incident_number: string
+  coida_reporting_required: boolean
+  statutory_form: string
+  investigation_due_date: string
+  message: string
+}
+
+export interface StatutoryTaxObligation {
+  tax_type: string
+  period: string
+  due_date: string
+  status: string
+  amount_payable_zar: number
+  reference_number: string
+}
+
+export interface StatutoryStatusResponse {
+  cipc_annual_returns_status: string
+  cipc_next_filing_deadline: string
+  sars_tax_clearance_status: string
+  sars_pin_expiry: string
+  bbbee_contributor_level: string
+  bbbee_procurement_recognition_pct: number
+  bbbee_valid_until: string
+  popia_statutory_liability_mitigation_score_pct: number
+  tax_obligations: StatutoryTaxObligation[]
+}
+
+export interface DsarItem {
+  id: number
+  request_number: string
+  request_type: string
+  requester_name: string
+  requester_email: string
+  status: string
+  received_date: string
+  due_date: string
+  days_remaining: number
+}
+
+export interface PopiaAuditResponse {
+  voice_recording_consent_rate_pct: number
+  total_calls_monitored_month: number
+  active_dsar_requests_count: number
+  overdue_dsar_count: number
+  registered_information_officer: string
+  regulator_registration_number: string
+  open_data_breaches_count: number
+  requests: DsarItem[]
+}
+
+export interface CreateDsarInput {
+  request_type: string
+  requester_name: string
+  requester_email: string
+  requester_phone?: string
+  description: string
+}
+
+export interface CreateDsarResult {
+  status: string
+  request_number: string
+  statutory_response_deadline: string
+  days_allowed: number
+  message: string
+}
+
+export interface RicaSubscriberAuditResponse {
+  total_active_subscribers: number
+  verified_subscribers_count: number
+  verified_pct: number
+  unverified_quarantine_count: number
+  sa_smart_id_verified_count: number
+  foreign_passport_permit_count: number
+  green_barcode_book_count: number
+  biometric_smileid_verified_pct: number
+  average_audit_latency_ms: number
+}
+
+export interface ComplianceAlertItem {
+  id: string
+  category: string
+  severity: string
+  title: string
+  description: string
+  deadline?: string
+  recommended_action: string
+}
+
+export interface ExecutiveComplianceSummaryResponse {
+  overall_compliance_score: number
+  audit_readiness_level: string
+  critical_statutory_deadlines_30d: number
+  pillars_assessed_count: number
+  icasa_regulatory_alerts_count: number
+  alerts: ComplianceAlertItem[]
+}
+
+// ── Cross-Service Connector Methods ──────────────────────────────────────────
+
+export async function getComplianceSalesSla(): Promise<SalesContractsSlaResponse> {
+  return fetchCompliance<SalesContractsSlaResponse>("/cross-service/sales/contracts-sla")
+}
+
+export async function vetCustomerFica(payload: VetCustomerFicaInput): Promise<VetCustomerFicaResult> {
+  return fetchCompliance<VetCustomerFicaResult>("/cross-service/sales/vet-customer-fica", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getTechnicianFleetSafety(): Promise<TechnicianSafetyAuditResponse> {
+  return fetchCompliance<TechnicianSafetyAuditResponse>("/cross-service/technicians/fleet-safety")
+}
+
+export async function logTechnicianSafetyIncident(payload: LogHsIncidentInput): Promise<LogHsIncidentResult> {
+  return fetchCompliance<LogHsIncidentResult>("/cross-service/technicians/incident-log", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getFinanceStatutoryStatus(): Promise<StatutoryStatusResponse> {
+  return fetchCompliance<StatutoryStatusResponse>("/cross-service/finance/statutory-status")
+}
+
+export async function getCallCenterPopiaAudit(): Promise<PopiaAuditResponse> {
+  return fetchCompliance<PopiaAuditResponse>("/cross-service/call-center/popia-audit")
+}
+
+export async function createCallCenterDsar(payload: CreateDsarInput): Promise<CreateDsarResult> {
+  return fetchCompliance<CreateDsarResult>("/cross-service/call-center/dsar-log", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getRicaSubscriberAudit(): Promise<RicaSubscriberAuditResponse> {
+  return fetchCompliance<RicaSubscriberAuditResponse>("/cross-service/rica/subscriber-audit")
+}
+
+export async function getExecutiveComplianceSummary(): Promise<ExecutiveComplianceSummaryResponse> {
+  return fetchCompliance<ExecutiveComplianceSummaryResponse>("/cross-service/orchestrator/executive-summary")
+}
