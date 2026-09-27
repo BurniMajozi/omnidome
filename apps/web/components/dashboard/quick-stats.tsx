@@ -66,7 +66,16 @@ export function QuickStats() {
     try {
       const data = await salesApi.getPipelineOverview()
       if (Array.isArray(data) && data.length > 0) {
-        setPipelineOverview(data)
+        // Coerce numerics: the API serializes NUMERIC/Decimal as strings,
+        // and summing strings concatenates ("0" + "19889.00" + ...) instead
+        // of adding. Normalize once here so every consumer below sees numbers.
+        setPipelineOverview(
+          data.map((s) => ({
+            ...s,
+            total_value_zar: Number(s.total_value_zar) || 0,
+            deal_count: Number(s.deal_count) || 0,
+          }))
+        )
       }
     } catch {
       // Fallback

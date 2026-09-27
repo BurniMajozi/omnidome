@@ -151,7 +151,11 @@ class PipelineOverviewStage(BaseModel):
     probability: int
     sort_order: int
     deal_count: int
-    total_value_zar: Decimal
+    # float, not Decimal: Pydantic v2 serializes Decimal as a JSON string,
+    # which silently breaks numeric consumers (e.g. dashboard sums that
+    # concatenate "0" + "19889.00" + ... instead of adding). Display total —
+    # float precision is fine here.
+    total_value_zar: float
 
 
 class DealCreate(BaseModel):
@@ -1044,7 +1048,7 @@ async def get_pipeline_overview(
         overview.append(PipelineOverviewStage(
             id=stage.id, name=stage.name, probability=stage.probability,
             sort_order=stage.sort_order, deal_count=t["deal_count"],
-            total_value_zar=Decimal(str(t["total_value"])),
+            total_value_zar=float(t["total_value"] or 0),
         ))
     return overview
 
