@@ -59,7 +59,7 @@ export async function GET() {
   try {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 1500)
-    const checkRes = await fetch(`${PRESENTON_SERVICE_URL}/health`, {
+    const checkRes = await fetch(`${PRESENTON_SERVICE_URL}/`, {
       signal: controller.signal,
       cache: "no-store",
     }).catch(() => null)
