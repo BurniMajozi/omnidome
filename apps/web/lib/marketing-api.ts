@@ -400,7 +400,7 @@ export interface CommentAutomationCreate {
 }
 
 export interface EmailBatchSendInput {
-  campaign_id: string
+  campaign_id?: string
   subject: string
   body_html: string
   recipients: string[]
@@ -424,6 +424,60 @@ export interface EmailTemplateCreate {
   subject: string
   body_html: string
   category?: string
+}
+
+export interface EmailTemplateUpdate {
+  name?: string
+  subject?: string
+  body_html?: string
+  category?: string
+}
+
+export interface JourneyStep {
+  id: string
+  type: "trigger" | "template" | "delay" | "condition" | "action"
+  title: string
+  template_id?: string
+  template_name?: string
+  delay_hours?: number
+  condition?: string
+  action_type?: string
+  stats?: {
+    entered: number
+    completed: number
+    open_rate?: number
+    click_rate?: number
+  }
+}
+
+export interface EmailJourney {
+  id: string
+  tenant_id?: string
+  name: string
+  description?: string
+  trigger_type: string
+  status: "active" | "draft" | "paused"
+  steps: JourneyStep[]
+  total_enrolled?: number
+  total_completed?: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface EmailJourneyCreate {
+  name: string
+  description?: string
+  trigger_type: string
+  status?: "active" | "draft" | "paused"
+  steps: JourneyStep[]
+}
+
+export interface EmailJourneyUpdate {
+  name?: string
+  description?: string
+  trigger_type?: string
+  status?: "active" | "draft" | "paused"
+  steps?: JourneyStep[]
 }
 
 // Audiences (SPEC-marketing-audiences.md): homes audiences carry target areas
@@ -842,10 +896,53 @@ export const sendEmailBatch = (data: EmailBatchSendInput) =>
 export const listEmailTemplates = () =>
   fetchMarketing<EmailTemplate[]>("/templates")
 
+export const getEmailTemplate = (id: string) =>
+  fetchMarketing<EmailTemplate>(`/templates/${id}`)
+
 export const createEmailTemplate = (data: EmailTemplateCreate) =>
   fetchMarketing<EmailTemplate>("/templates", {
     method: "POST",
     body: JSON.stringify(data),
+  })
+
+export const updateEmailTemplate = (id: string, data: EmailTemplateUpdate) =>
+  fetchMarketing<EmailTemplate>(`/templates/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const deleteEmailTemplate = (id: string) =>
+  fetchMarketing<void>(`/templates/${id}`, {
+    method: "DELETE",
+  })
+
+export const listEmailJourneys = () =>
+  fetchMarketing<EmailJourney[]>("/email/journeys")
+
+export const getEmailJourney = (id: string) =>
+  fetchMarketing<EmailJourney>(`/email/journeys/${id}`)
+
+export const createEmailJourney = (data: EmailJourneyCreate) =>
+  fetchMarketing<EmailJourney>("/email/journeys", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateEmailJourney = (id: string, data: EmailJourneyUpdate) =>
+  fetchMarketing<EmailJourney>(`/email/journeys/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const deleteEmailJourney = (id: string) =>
+  fetchMarketing<void>(`/email/journeys/${id}`, {
+    method: "DELETE",
+  })
+
+export const triggerEmailJourney = (id: string, data?: { contact_email?: string }) =>
+  fetchMarketing<{ status: string; journey_id: string; enrolled_contact: string; message: string }>("/email/journeys/" + id + "/trigger", {
+    method: "POST",
+    body: JSON.stringify(data || {}),
   })
 
 export const listAudienceSegments = (type?: AudienceType) =>

@@ -31,6 +31,11 @@ class Employee(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(20))
     # Link to auth / portal user (optional)
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    # Link to manager / supervisor (Org Chart hierarchy)
+    manager_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    # South African statutory identification
+    id_number: Mapped[Optional[str]] = mapped_column(String(30))
+    tax_number: Mapped[Optional[str]] = mapped_column(String(30))
     # Link to call center agent (optional — only for employees who are also CC agents)
     call_center_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
@@ -266,8 +271,15 @@ class Payslip(Base):
         PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), index=True
     )
     gross: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    basic_salary: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    commission: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    allowances: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     tax: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # PAYE
+    tax_rebate: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
+    annual_taxable: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     uif: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # UIF employee portion
+    uif_employer: Mapped[float] = mapped_column(Numeric(14, 2), default=0) # UIF employer portion
+    sdl: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # Skills Development Levy
     other_deductions: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     net: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), default="ZAR")

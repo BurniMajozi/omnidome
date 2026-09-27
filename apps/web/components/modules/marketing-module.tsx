@@ -22,8 +22,11 @@ import {
   Hash, AtSign, Mail as MailIcon, Phone, Star, ThumbsUp, MessageCircle,
   Instagram, Twitter, Facebook, Linkedin, Youtube, Video, FileText, Copy, ShoppingBag, X,
   Upload, Sparkles, LayoutGrid, List, Check, MoreVertical, Paperclip, ChevronDown, ShieldCheck,
-  Shield, CreditCard, ArrowUpDown,
+  Shield, CreditCard, ArrowUpDown, Layers, Workflow,
 } from "lucide-react"
+import { EmailTemplatesTab } from "./marketing/email-templates-tab"
+import { EmailComposeTab } from "./marketing/email-compose-tab"
+import { EmailJourneyTab } from "./marketing/email-journey-tab"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
@@ -47,6 +50,7 @@ import {
 } from "@/lib/marketing-api"
 import { salesApi } from "@/lib/sales-api"
 import { MarketingAudiences } from "./marketing-audiences"
+import { StaffAttributionTab } from "./marketing/staff-attribution-tab"
 
 const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
 
@@ -103,11 +107,12 @@ type MarketingTab =
   | "inbox-messages" | "inbox-comments" | "inbox-reviews" | "inbox-contacts"
   | "analytics"
   | "whatsapp-overview" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups" | "whatsapp-conversions" | "whatsapp-broadcasts" | "whatsapp-contacts"
-  | "email-templates" | "email-compose"
+  | "email-templates" | "email-compose" | "email-journeys"
   | "sms-senders"
   | "team-users"
   | "ads" | "automations" | "traditional"
   | "platform-usage" | "platform-keys" | "platform-offboard"
+  | "staff-attribution"
 
 type IconType = React.ComponentType<{ className?: string }>
 type NavLeaf = { key: MarketingTab; label: string; icon: IconType }
@@ -158,8 +163,9 @@ const MARKETING_NAV: NavEntry[] = [
   },
   {
     id: "email", label: "Email", icon: Mail, children: [
-      { key: "email-templates", label: "Templates", icon: FileText },
-      { key: "email-compose", label: "Compose", icon: Send },
+      { key: "email-templates", label: "Templates & Builder", icon: FileText },
+      { key: "email-compose", label: "Campaigns", icon: Send },
+      { key: "email-journeys", label: "Templates Journey", icon: Workflow },
     ],
   },
   {
@@ -176,6 +182,7 @@ const MARKETING_NAV: NavEntry[] = [
       { key: "platform-offboard", label: "Offboarding", icon: Trash2 },
     ],
   },
+  { key: "staff-attribution", label: "Staff Attribution", icon: Layers },
 ]
 
 export function MarketingModule() {
@@ -281,9 +288,17 @@ export function MarketingModule() {
           {activeTab === "whatsapp-groups" && <WhatsAppTab view="groups" />}
           {activeTab === "whatsapp-conversions" && <WhatsAppTab view="conversions" />}
           {activeTab === "whatsapp-broadcasts" && <WhatsAppTab view="broadcasts" />}
-          {activeTab === "whatsapp-contacts" && <WhatsAppTab view="contacts" />}
-          {activeTab === "email-templates" && <EmailTemplatesTab />}
+          {activeTab === "email-templates" && (
+            <EmailTemplatesTab
+              onOpenComposerWithTemplate={() => setActiveTab("email-compose")}
+            />
+          )}
           {activeTab === "email-compose" && <EmailComposeTab />}
+          {activeTab === "email-journeys" && (
+            <EmailJourneyTab
+              onOpenTemplateInBuilder={() => setActiveTab("email-templates")}
+            />
+          )}
           {activeTab === "sms-senders" && <SmsSenderIdsTab />}
           {activeTab === "team-users" && <TeamUsersTab />}
           {activeTab === "ads" && <AdsTab />}
@@ -292,6 +307,7 @@ export function MarketingModule() {
           {activeTab === "platform-keys" && <ApiKeysTab />}
           {activeTab === "platform-offboard" && <OffboardTab />}
           {activeTab === "traditional" && <TraditionalTab />}
+          {activeTab === "staff-attribution" && <StaffAttributionTab />}
         </div>
       </div>
     </div>
@@ -891,218 +907,8 @@ function ConnectionsTab() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EMAIL TABS (templates + compose/send over the marketing email backend)
+// EMAIL TABS & JOURNEYS (Modularized in ./marketing/email-templates-tab, etc.)
 // ═══════════════════════════════════════════════════════════════════════════════
-
-function EmailTemplatesTab() {
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [loading, setLoading] = useState(true)
-  const [showCreate, setShowCreate] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [draft, setDraft] = useState({ name: "", subject: "", body_html: "", category: "" })
-
-  const load = async () => {
-    setLoading(true)
-    try {
-      setTemplates((await listEmailTemplates()) || [])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load templates")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
-
-  const handleCreate = async () => {
-    if (!draft.name || !draft.subject) return
-    setError(null)
-    try {
-      await createEmailTemplate(draft)
-      setShowCreate(false)
-      setDraft({ name: "", subject: "", body_html: "", category: "" })
-      load()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create template")
-    }
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{templates.length} email templates</p>
-        <Button size="sm" onClick={() => setShowCreate(!showCreate)}>
-          <Plus className="mr-2 h-4 w-4" /> New Template
-        </Button>
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
-          <p className="text-sm text-red-400">{error}</p>
-        </div>
-      )}
-
-      {showCreate && (
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle className="text-sm">Create Email Template</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Input placeholder="Template name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-            <Input placeholder="Subject line" value={draft.subject} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} />
-            <Input placeholder="Category (optional)" value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} />
-            <Textarea placeholder="HTML body…" value={draft.body_html} onChange={(e) => setDraft({ ...draft, body_html: e.target.value })} rows={6} className="resize-none font-mono text-xs" />
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleCreate}>Save Template</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {loading ? (
-        <div className="py-12 text-center text-muted-foreground">Loading…</div>
-      ) : templates.length === 0 ? (
-        <div className="py-12 text-center text-muted-foreground">No email templates yet</div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {templates.map((t) => (
-            <Card key={t.id} className="border-border bg-card">
-              <CardContent className="p-4">
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <p className="truncate font-medium text-foreground">{t.name}</p>
-                  {t.category && <Badge variant="outline" className="border-border text-muted-foreground">{t.category}</Badge>}
-                </div>
-                <p className="truncate text-sm text-muted-foreground">{t.subject}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function EmailComposeTab() {
-  const [campaigns, setCampaigns] = useState<any[]>([])
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [campaignId, setCampaignId] = useState("")
-  const [subject, setSubject] = useState("")
-  const [bodyHtml, setBodyHtml] = useState("")
-  const [recipientsRaw, setRecipientsRaw] = useState("")
-  const [fromName, setFromName] = useState("")
-  const [fromEmail, setFromEmail] = useState("")
-  const [sending, setSending] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    listCampaigns().then((c) => setCampaigns((c || []).filter((x: any) => (x.channel || "").toLowerCase() === "email" || true))).catch(() => {})
-    listEmailTemplates().then((t) => setTemplates(t || [])).catch(() => {})
-  }, [])
-
-  const recipients = useMemo(
-    () => recipientsRaw.split(/[\s,;]+/).map((r) => r.trim()).filter((r) => r.includes("@")),
-    [recipientsRaw],
-  )
-
-  const applyTemplate = (id: string) => {
-    const t = templates.find((x) => x.id === id)
-    if (t) { setSubject(t.subject); setBodyHtml(t.body_html) }
-  }
-
-  const handleSend = async () => {
-    if (!campaignId || !subject || recipients.length === 0) return
-    setSending(true)
-    setResult(null)
-    setError(null)
-    try {
-      const res = await sendEmailBatch({
-        campaign_id: campaignId,
-        subject,
-        body_html: bodyHtml,
-        recipients,
-        from_name: fromName || undefined,
-        from_email: fromEmail || undefined,
-      })
-      if (!res.ok) {
-        setError(res.error || "Failed to send email")
-      } else if (res.data?.status === "failed") {
-        setError(`Delivery failed for all ${recipients.length} recipient(s). Check the provider configuration.`)
-      } else if (res.data?.status === "partial") {
-        setResult(`Sent with some failures — ${recipients.length} recipient(s) attempted. See batch report.`)
-      } else {
-        setResult(`Sent ${recipients.length} email(s).`)
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to send email")
-    } finally {
-      setSending(false)
-    }
-  }
-
-  return (
-    <div className="max-w-2xl space-y-4">
-      <div>
-        <h3 className="text-base font-semibold text-foreground">Compose Email</h3>
-        <p className="text-sm text-muted-foreground">Send a batch to a recipient list, tied to a campaign for tracking.</p>
-      </div>
-
-      <div className="flex items-start gap-2 rounded-lg border border-border bg-card/40 p-3">
-        <Bell className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-        <p className="text-xs text-muted-foreground">
-          Emails are delivered through the configured provider (SendGrid or SMTP) and tracked
-          (delivered / opened / clicked via the email webhook). If no provider is configured the send is rejected.
-        </p>
-      </div>
-
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
-        </div>
-      )}
-      {result && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
-          <CheckCircle className="h-4 w-4 shrink-0 text-emerald-500" /><p className="text-sm text-emerald-500">{result}</p>
-        </div>
-      )}
-
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-foreground">Campaign</label>
-          <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-            <option value="">Select a campaign…</option>
-            {campaigns.map((c: any) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </div>
-
-        {templates.length > 0 && (
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-foreground">Start from template (optional)</label>
-            <select onChange={(e) => applyTemplate(e.target.value)} className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-              <option value="">None</option>
-              {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          </div>
-        )}
-
-        <Input placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />
-        <div className="grid grid-cols-2 gap-3">
-          <Input placeholder="From name (optional)" value={fromName} onChange={(e) => setFromName(e.target.value)} />
-          <Input placeholder="From email (optional)" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} />
-        </div>
-        <Textarea placeholder="HTML body…" value={bodyHtml} onChange={(e) => setBodyHtml(e.target.value)} rows={6} className="resize-none font-mono text-xs" />
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-foreground">Recipients</label>
-          <Textarea placeholder="Comma, space or newline separated email addresses" value={recipientsRaw} onChange={(e) => setRecipientsRaw(e.target.value)} rows={3} className="resize-none" />
-          <p className="mt-1 text-xs text-muted-foreground">{recipients.length} valid recipient(s)</p>
-        </div>
-        <Button onClick={handleSend} disabled={sending || !campaignId || !subject || recipients.length === 0}>
-          {sending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" /> Queuing…</> : <><Send className="mr-2 h-4 w-4" /> Send Email</>}
-        </Button>
-      </div>
-    </div>
-  )
-}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PLATFORM TABS — usage/cost, scoped API keys, offboarding

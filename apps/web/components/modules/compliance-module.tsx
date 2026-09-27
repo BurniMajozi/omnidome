@@ -51,6 +51,7 @@ import {
   type SafetyIncidentItem, type DsarItem,
 } from "@/lib/compliance-api"
 import DocumentUploadZone from "@/components/modules/document-upload-zone"
+import { StatutoryPayrollAdminView } from "./compliance/statutory-payroll-admin-view"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR SYSTEM
@@ -491,7 +492,7 @@ export default function ComplianceModule() {
           <TabsTrigger value="overview" className="gap-1.5"><Activity className="h-4 w-4" /> Overview</TabsTrigger>
           <TabsTrigger value="contracts" className="gap-1.5"><FileText className="h-4 w-4" /> Commercial SLAs</TabsTrigger>
           <TabsTrigger value="fleet_safety" className="gap-1.5"><Truck className="h-4 w-4" /> Fleet & Safety</TabsTrigger>
-          <TabsTrigger value="statutory" className="gap-1.5"><Landmark className="h-4 w-4" /> Statutory Treasury</TabsTrigger>
+          <TabsTrigger value="statutory" className="gap-1.5"><Landmark className="h-4 w-4" /> PAYE & Statutory</TabsTrigger>
           <TabsTrigger value="popia_rica" className="gap-1.5"><ShieldCheck className="h-4 w-4" /> POPIA & RICA</TabsTrigger>
           <TabsTrigger value="executive_ai" className="gap-1.5"><Zap className="h-4 w-4" /> Executive Copilot</TabsTrigger>
           <TabsTrigger value="regulatory" className="gap-1.5"><Scale className="h-4 w-4" /> Regulatory</TabsTrigger>
@@ -1098,86 +1099,18 @@ export default function ComplianceModule() {
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
-        {/* 3. STATUTORY TREASURY & FINANCE TAB                              */}
+        {/* 3. STATUTORY TREASURY & PAYE/UIF TAB                              */}
         {/* ════════════════════════════════════════════════════════════════ */}
-        <TabsContent value="statutory" className="space-y-4">
-          <SectionHeader
-            icon={<Landmark className="h-5 w-5 text-emerald-400" />}
-            title="Statutory Treasury & Corporate Governance"
-            subtitle="CIPC annual returns, SARS Tax Clearance (TCC), B-BBEE level 1 contributor, statutory returns"
-          />
+        <TabsContent value="statutory" className="space-y-6">
+          {/* Section 7 Statutory Payroll Administration, SARS EMP201 & DEL UIF Compliance */}
+          <StatutoryPayrollAdminView />
 
-          {/* Statutory KPIs */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground">CIPC Corporate Status</p>
-              <p className="text-xl font-bold text-emerald-400 mt-1">In Good Standing</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Next return: {statutoryStatus?.cipc_next_filing_deadline ?? "2027-02-28"}</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground">SARS Tax Clearance</p>
-              <p className="text-xl font-bold text-emerald-400 mt-1">TCC Compliant PIN</p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Valid until: {statutoryStatus?.sars_pin_expiry ?? "2027-05-15"}</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground">B-BBEE Contributor</p>
-              <p className="text-xl font-bold text-foreground mt-1">
-                {statutoryStatus?.bbbee_contributor_level ?? "Level 1 Contributor"}
-              </p>
-              <p className="text-[11px] text-emerald-400 mt-0.5">{statutoryStatus?.bbbee_procurement_recognition_pct ?? 135}% Procurement recognition</p>
-            </Card>
-            <Card className="p-3">
-              <p className="text-xs text-muted-foreground">POPIA Liability Shield</p>
-              <p className="text-xl font-bold text-cyan-400 mt-1">
-                {statutoryStatus?.popia_statutory_liability_mitigation_score_pct ?? 98.5}%
-              </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">Regulator registration active</p>
-            </Card>
-          </div>
-
-          {/* Tax Obligations Schedule */}
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-sm">SARS Statutory Tax Obligations & General Ledger Reconciliations</CardTitle>
-                  <CardDescription className="text-xs">VAT201, EMP201 (PAYE, UIF, SDL), and Corporate Income Tax return filings.</CardDescription>
-                </div>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                  Zero Tax Arrears
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                {(statutoryStatus?.tax_obligations ?? [
-                  { tax_type: "VAT201 (Value-Added Tax)", period: "2026-08", due_date: "2026-09-25", status: "PAID", amount_payable_zar: 142500, reference_number: "SARS-VAT-9428" },
-                  { tax_type: "EMP201 (PAYE/UIF/SDL)", period: "2026-08", due_date: "2026-09-07", status: "PAID", amount_payable_zar: 89400, reference_number: "SARS-EMP-8812" },
-                ]).map((t, idx) => (
-                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-border/50 bg-background/40 gap-2">
-                    <div className="flex items-center gap-3">
-                      <div className="rounded bg-emerald-500/10 p-2">
-                        <Landmark className="h-4 w-4 text-emerald-400" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">{t.tax_type}</p>
-                        <p className="text-xs text-muted-foreground">Filing Ref: <span className="font-mono text-primary">{t.reference_number}</span> · Period: {t.period}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-4 sm:justify-end">
-                      <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Amount Disbursed</p>
-                        <p className="text-sm font-semibold text-foreground">R {t.amount_payable_zar.toLocaleString()}</p>
-                      </div>
-                      <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 font-mono text-xs">
-                        {t.status}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          <div className="pt-4 border-t border-border/40 space-y-4">
+            <SectionHeader
+              icon={<Landmark className="h-5 w-5 text-emerald-400" />}
+              title="CIPC Corporate Standing & B-BBEE Governance"
+              subtitle="CIPC annual returns, corporate registration artifacts, and B-BBEE Level 1 Contributor scorecard"
+            />
 
           {/* Corporate Verification Artifacts */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1233,7 +1166,8 @@ export default function ComplianceModule() {
               </CardContent>
             </Card>
           </div>
-        </TabsContent>
+        </div>
+      </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* 4. POPIA & RICA SUBSCRIBER CENTER TAB                            */}

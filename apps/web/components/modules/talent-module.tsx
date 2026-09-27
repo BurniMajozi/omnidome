@@ -86,15 +86,11 @@ import {
   completeOnboardingTask,
   getOnboardingProgress,
   getHeadcountAnalytics,
-  getSalesTalentOverview,
-  listSalesRepsMetrics,
-  claimSalesCommission,
-  listFieldTechniciansRoster,
-  getMarketingStaffAttribution,
   postPayrollRunToFinance,
   getDepartmentCostAllocation,
   getStaffComplianceAudit,
   getOrchestratorWellnessInsights,
+  executeOrchestratorAction,
   type Employee,
   type LeaveRequest,
   type PerformanceReview,
@@ -106,14 +102,24 @@ import {
   type ExitRecord,
   type ExitChecklist,
   type OnboardingTask,
-  type SalesRepMetric,
-  type SalesOverviewResponse,
-  type FieldTechnicianProfile,
-  type MarketingStaffAttribution,
   type DepartmentCostAllocation,
   type StaffComplianceSummary,
   type OrchestratorWellnessAlert,
 } from "@/lib/hr-api"
+import { OnboardingKbView } from "./talent/onboarding-kb-view"
+import { OrgChartView } from "./talent/org-chart-view"
+import { PayrollPayslipsView } from "./talent/payroll-payslips-view"
+import { PimDirectoryView } from "./talent/pim-directory-view"
+import { LeaveJourneyView } from "./talent/leave-journey-view"
+import { ReportsAnalyticsView } from "./talent/reports-analytics-view"
+import { BenefitsPortalView } from "./talent/benefits-portal-view"
+import { TalentAtsView } from "./talent/talent-ats-view"
+import { TalentSchedulingView } from "./talent/talent-scheduling-view"
+import { ServiceSchedulingView } from "./service/service-scheduling-view"
+import { TalentTrainingView } from "./talent/talent-training-view"
+import { TalentDisciplinaryView } from "./talent/talent-disciplinary-view"
+import { TalentCultureView } from "./talent/talent-culture-view"
+import { TalentExitView } from "./talent/talent-exit-view"
 
 type NewEmployeeModalProps = {
   isOpen: boolean
@@ -123,24 +129,22 @@ type NewEmployeeModalProps = {
 // ── Panel type & config ──────────────────────────────────────────────
 
 type StaffPanelKey =
-  | "onboarding"
   | "directory"
-  | "sales_field"
-  | "technicians"
-  | "marketing_attr"
-  | "hiring"
-  | "payroll"
   | "time"
-  | "performance"
-  | "compliance_audit"
+  | "reporting"
+  | "org_chart"
+  | "onboarding"
+  | "payroll"
   | "wellness_ai"
-  | "culture"
-  | "governance"
+  | "performance"
+  | "hiring"
   | "schedule"
   | "training"
   | "benefits"
   | "disciplinary"
   | "exit"
+  | "culture"
+  | "compliance_audit"
 
 interface PanelMeta {
   key: StaffPanelKey
@@ -150,23 +154,21 @@ interface PanelMeta {
 }
 
 const panelConfig: PanelMeta[] = [
-  { key: "onboarding", title: "Onboarding & Knowledge", icon: BookOpen, tags: ["Employee Onboarding", "HR Knowledge Base"] },
-  { key: "directory", title: "Directory & Org", icon: Building2, tags: ["Company Org Chart", "Employee 360", "Roles"] },
-  { key: "sales_field", title: "Sales & Commissions", icon: Coins, tags: ["Deals Won", "Pipeline ZAR", "Commission Claims"] },
-  { key: "technicians", title: "Field Techs & Van Stock", icon: Wrench, tags: ["Van Inventory", "Certifications", "Dispatch"] },
-  { key: "marketing_attr", title: "Marketing Attribution", icon: Layers, tags: ["Staff Campaigns", "Budget Managed", "Conversions"] },
-  { key: "payroll", title: "Payroll & FP&A", icon: Gift, tags: ["Paystack Transfers", "General Ledger Posting", "Cost Allocations"] },
-  { key: "compliance_audit", title: "Compliance & Regulatory", icon: ShieldCheck, tags: ["RICA Officers", "POPIA Training", "H&S Incidents"] },
-  { key: "wellness_ai", title: "AI Talent Orchestrator", icon: Bot, tags: ["Burnout Risk", "Fatigue Detection", "Skill Gaps"] },
-  { key: "time", title: "Time & Planning", icon: CalendarDays, tags: ["Leave Management", "Demand-Based Scheduling"] },
-  { key: "performance", title: "Performance & Insights", icon: BarChart3, tags: ["KPI Management", "Surveys", "Attrition Prediction"] },
-  { key: "culture", title: "Culture & Recognition", icon: Sparkles, tags: ["Kudos", "Birthdays & Milestones"] },
-  { key: "governance", title: "Governance & Assets", icon: ShieldCheck, tags: ["Access Control", "Role-Based Access", "Asset Allocation"] },
-  { key: "schedule", title: "Staff Schedule", icon: Calendar, tags: ["Shift Planning", "Demand Forecast"] },
-  { key: "training", title: "Training", icon: GraduationCap, tags: ["Courses", "Progress Tracking", "Certifications"] },
-  { key: "benefits", title: "Benefits Management", icon: Gift, tags: ["Leave Balance", "Shares", "Bonuses", "Medical"] },
-  { key: "disciplinary", title: "Disciplinary Actions", icon: AlertTriangle, tags: ["Warnings", "Suspensions", "Dismissals"] },
-  { key: "exit", title: "Staff Exit", icon: LogOut, tags: ["Resignation", "Termination", "Retirement", "Checklist"] },
+  { key: "reporting", title: "Workforce Analysis", icon: BarChart3, tags: ["Staff Pipeline", "Sentiment Analysis", "Attrition"] },
+  { key: "culture", title: "Culture & Strategy", icon: Sparkles, tags: ["Strategy & OKRs", "5 Core Values", "Kudos Wall", "LLM Orchestrator"] },
+  { key: "org_chart", title: "Hierarchical Org Structure", icon: Building2, tags: ["Zoom Controls", "Dynamic Sizing", "Direct Reports"] },
+  { key: "performance", title: "Performance & Objectives", icon: Target, tags: ["KPI Tracker", "Competencies", "Attrition Risk"] },
+  { key: "onboarding", title: "Knowledge & Onboarding", icon: BookOpen, tags: ["Checklists", "Markdown RAG Search"] },
+  { key: "wellness_ai", title: "AI Talent Orchestrator", icon: Bot, tags: ["Burnout Risk", "Fatigue Detection", "Actions"] },
+  { key: "time", title: "Leave Journey & Approvals", icon: CalendarDays, tags: ["BCEA 21-Day Annual", "Live Approvals", "ZAR Liability"] },
+  { key: "schedule", title: "Staff Shift Scheduling", icon: Calendar, tags: ["Service Operations Driven", "24h Demand History", "Interactive Roster", "Broker Costs"] },
+  { key: "training", title: "Training & Development", icon: GraduationCap, tags: ["Crash-Proof LMS", "FOA/MikroTik Certs", "Bursary Tracker"] },
+  { key: "benefits", title: "Benefits & Care Corner", icon: Gift, tags: ["Provident Fund", "Medical Aid Options", "Employee Support"] },
+  { key: "directory", title: "Personnel Directory (PIM)", icon: Users, tags: ["Employee 360", "Add Employee", "31-Module Matrix"] },
+  { key: "payroll", title: "Payroll & Payslip Designer", icon: Gift, tags: ["SARS PAYE", "Custom Earnings/Deductions", "Live Preview"] },
+  { key: "disciplinary", title: "Disciplinary & Grievances", icon: AlertTriangle, tags: ["Incident Wizard", "Hearings", "Whistleblower Complaints"] },
+  { key: "exit", title: "Staff Exit & Deactivation", icon: LogOut, tags: ["Zero-Trust IT Revocation", "Asset Recovery", "Clearances"] },
+  { key: "compliance_audit", title: "Labor Compliance Audit", icon: ShieldCheck, tags: ["BCEA Hours", "RICA Agents", "OHS Act"] },
 ]
 
 // ── Small components ─────────────────────────────────────────────────
@@ -255,7 +257,7 @@ function StatCard({ title, value, change, changeType, icon: Icon, description }:
 // ── Main component ───────────────────────────────────────────────────
 
 export function TalentModule() {
-  const [activePanel, setActivePanel] = useState<StaffPanelKey>("onboarding")
+  const [activePanel, setActivePanel] = useState<StaffPanelKey>("reporting")
   const [knowledgeQuery, setKnowledgeQuery] = useState("")
 
   // ── KPI / analytics state ─────────────────────────────────────────
@@ -344,20 +346,6 @@ export function TalentModule() {
   const [exitError, setExitError] = useState<string | null>(null)
 
   // ── Cross-Service Connectors state ───────────────────────────────
-  const [salesOverview, setSalesOverview] = useState<SalesOverviewResponse | null>(null)
-  const [salesReps, setSalesReps] = useState<SalesRepMetric[]>([])
-  const [salesLoading, setSalesLoading] = useState(false)
-  const [salesError, setSalesError] = useState<string | null>(null)
-  const [claimSuccessMsg, setClaimSuccessMsg] = useState<string | null>(null)
-
-  const [techRoster, setTechRoster] = useState<FieldTechnicianProfile[]>([])
-  const [techLoading, setTechLoading] = useState(false)
-  const [techError, setTechError] = useState<string | null>(null)
-
-  const [marketingStaff, setMarketingStaff] = useState<MarketingStaffAttribution[]>([])
-  const [mktLoading, setMktLoading] = useState(false)
-  const [mktError, setMktError] = useState<string | null>(null)
-
   const [complianceAudit, setComplianceAudit] = useState<StaffComplianceSummary | null>(null)
   const [compLoading, setCompLoading] = useState(false)
   const [compError, setCompError] = useState<string | null>(null)
@@ -400,6 +388,7 @@ export function TalentModule() {
         const empData = await listEmployees()
         if (cancelled) return
         setKpiTotal(empData.length)
+        setEmployeesDir(empData)
 
         // Derive department headcount
         const deptCounts: Record<string, number> = {}
@@ -465,23 +454,23 @@ export function TalentModule() {
   }, [])
 
   // ── Data fetching: Directory ──────────────────────────────────────
-  useEffect(() => {
-    if (activePanel !== "directory") return
-    let cancelled = false
-    async function fetchDir() {
-      setDirLoading(true)
-      setDirError(null)
-      try {
-        const data = await listEmployees()
-        if (!cancelled) setEmployeesDir(data)
-      } catch (err: unknown) {
-        if (!cancelled) setDirError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setDirLoading(false)
-      }
+  const fetchDir = async () => {
+    setDirLoading(true)
+    setDirError(null)
+    try {
+      const data = await listEmployees()
+      setEmployeesDir(data)
+    } catch (err: unknown) {
+      setDirError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setDirLoading(false)
     }
-    fetchDir()
-    return () => { cancelled = true }
+  }
+
+  useEffect(() => {
+    if (activePanel === "directory" || activePanel === "onboarding" || activePanel === "org_chart" || activePanel === "time" || activePanel === "reporting") {
+      fetchDir()
+    }
   }, [activePanel])
 
   // ── Data fetching: Onboarding ─────────────────────────────────────
@@ -510,31 +499,29 @@ export function TalentModule() {
   }, [activePanel])
 
   // ── Data fetching: Time / leave ───────────────────────────────────
+  const fetchLeave = async () => {
+    setLeaveLoading(true)
+    setLeaveError(null)
+    try {
+      const emps = await listEmployees()
+      const allLeaves: LeaveRequest[] = []
+      for (const emp of emps.slice(0, 20)) {
+        try {
+          const leaves = await listLeaveRequests(emp.id)
+          allLeaves.push(...leaves)
+        } catch { /* skip individual failures */ }
+      }
+      setLeaveRequests(allLeaves)
+    } catch (err: unknown) {
+      setLeaveError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLeaveLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (activePanel !== "time") return
-    let cancelled = false
-    async function fetchLeave() {
-      setLeaveLoading(true)
-      setLeaveError(null)
-      try {
-        const emps = await listEmployees()
-        if (cancelled) return
-        const allLeaves: LeaveRequest[] = []
-        for (const emp of emps.slice(0, 20)) {
-          try {
-            const leaves = await listLeaveRequests(emp.id)
-            if (!cancelled) allLeaves.push(...leaves)
-          } catch { /* skip individual failures */ }
-        }
-        if (!cancelled) setLeaveRequests(allLeaves)
-      } catch (err: unknown) {
-        if (!cancelled) setLeaveError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setLeaveLoading(false)
-      }
-    }
     fetchLeave()
-    return () => { cancelled = true }
   }, [activePanel])
 
   // ── Data fetching: Performance ────────────────────────────────────
@@ -574,38 +561,7 @@ export function TalentModule() {
     return () => { cancelled = true }
   }, [activePanel])
 
-  // ── Data fetching: Governance / benefits ──────────────────────────
-  useEffect(() => {
-    if (activePanel !== "governance") return
-    let cancelled = false
-    async function fetchGov() {
-      setGovLoading(true)
-      setGovError(null)
-      try {
-        const data = await listBenefits()
-        if (!cancelled) setGovernanceBenefits(data)
-        try {
-          const attr = await getAttritionRisk()
-          if (!cancelled && attr && typeof attr === "object" && "departments" in attr) {
-            setAttritionRisk((attr as { departments: { dept: string; risk: string; note: string }[] }).departments)
-          } else if (!cancelled) {
-            setAttritionRisk([])
-          }
-        } catch { if (!cancelled) setAttritionRisk([]) }
-        if (!cancelled) setRoles([
-          { role: "HR Admin", access: "Full HR + policies" },
-          { role: "Manager", access: "Team leave + reviews" },
-          { role: "Employee", access: "Profile + leave requests" },
-        ])
-      } catch (err: unknown) {
-        if (!cancelled) setGovError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setGovLoading(false)
-      }
-    }
-    fetchGov()
-    return () => { cancelled = true }
-  }, [activePanel])
+
 
   // ── Data fetching: Schedule ───────────────────────────────────────
   useEffect(() => {
@@ -807,72 +763,6 @@ export function TalentModule() {
     return () => { cancelled = true }
   }, [activePanel])
 
-  // ── Data fetching: Sales & Field ──────────────────────────────────
-  useEffect(() => {
-    if (activePanel !== "sales_field") return
-    let cancelled = false
-    async function fetchSales() {
-      setSalesLoading(true)
-      setSalesError(null)
-      try {
-        const [overview, reps] = await Promise.all([
-          getSalesTalentOverview(),
-          listSalesRepsMetrics(),
-        ])
-        if (!cancelled) {
-          setSalesOverview(overview)
-          setSalesReps(reps)
-        }
-      } catch (err: unknown) {
-        if (!cancelled) setSalesError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setSalesLoading(false)
-      }
-    }
-    fetchSales()
-    return () => { cancelled = true }
-  }, [activePanel])
-
-  // ── Data fetching: Technicians & Van Stock ────────────────────────
-  useEffect(() => {
-    if (activePanel !== "technicians") return
-    let cancelled = false
-    async function fetchTechs() {
-      setTechLoading(true)
-      setTechError(null)
-      try {
-        const roster = await listFieldTechniciansRoster()
-        if (!cancelled) setTechRoster(roster)
-      } catch (err: unknown) {
-        if (!cancelled) setTechError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setTechLoading(false)
-      }
-    }
-    fetchTechs()
-    return () => { cancelled = true }
-  }, [activePanel])
-
-  // ── Data fetching: Marketing Attribution ──────────────────────────
-  useEffect(() => {
-    if (activePanel !== "marketing_attr") return
-    let cancelled = false
-    async function fetchMkt() {
-      setMktLoading(true)
-      setMktError(null)
-      try {
-        const data = await getMarketingStaffAttribution()
-        if (!cancelled) setMarketingStaff(data)
-      } catch (err: unknown) {
-        if (!cancelled) setMktError(err instanceof Error ? err.message : String(err))
-      } finally {
-        if (!cancelled) setMktLoading(false)
-      }
-    }
-    fetchMkt()
-    return () => { cancelled = true }
-  }, [activePanel])
-
   // ── Data fetching: Compliance Audit ───────────────────────────────
   useEffect(() => {
     if (activePanel !== "compliance_audit") return
@@ -912,6 +802,21 @@ export function TalentModule() {
     fetchWellness()
     return () => { cancelled = true }
   }, [activePanel])
+
+  const [executingAlertId, setExecutingAlertId] = useState<string | null>(null)
+  const [wellnessActionMsg, setWellnessActionMsg] = useState<{ id: string; message: string; auditLogId?: string } | null>(null)
+
+  const handleExecuteWellnessAction = async (alertId: string, alertType: string) => {
+    try {
+      setExecutingAlertId(alertId)
+      const res = await executeOrchestratorAction(alertId, alertType)
+      setWellnessActionMsg({ id: alertId, message: res.message || res.action })
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to execute orchestrator action")
+    } finally {
+      setExecutingAlertId(null)
+    }
+  }
 
   // ── Data fetching: FP&A Department Costs (on payroll panel) ───────
   useEffect(() => {
@@ -1027,27 +932,7 @@ export function TalentModule() {
       setExitChecklists((prev) => ({ ...prev, [exitId]: updated }))
     } catch { /* ignore */ }
   }
-  const [claimingRepId, setClaimingRepId] = useState<string | null>(null)
   const [isPostingFinance, setIsPostingFinance] = useState(false)
-
-  const handleClaimCommission = async (employeeId: string, amount: number) => {
-    try {
-      setClaimingRepId(employeeId)
-      setClaimSuccessMsg(null)
-      const res = await claimSalesCommission({
-        employee_id: employeeId,
-        amount_zar: amount,
-        description: `ISP Sales Commission Payout`,
-      })
-      setClaimSuccessMsg(`Claimed R ${amount.toLocaleString()} for employee! (Bonus record: ${res.bonus_id?.slice(0, 8)}…)`)
-      const updated = await listSalesRepsMetrics()
-      setSalesReps(updated)
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to claim commission")
-    } finally {
-      setClaimingRepId(null)
-    }
-  }
 
   const handlePostPayrollToFinance = async () => {
     try {
@@ -1071,445 +956,63 @@ export function TalentModule() {
     switch (activePanel) {
       // ── ONBOARDING ────────────────────────────────────────────────
       case "onboarding":
-        return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <IdCard className="h-4 w-4 text-muted-foreground" /> Onboarding checklist
-                </CardTitle>
-                <CardDescription>Track the first 30 days with owners and statuses.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Task</th>
-                        <th className="py-2 pr-4 font-medium">Owner</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {onboardingLoading ? (
-                        <LoadingRow cols={4} />
-                      ) : onboardingError ? (
-                        <ErrorRow message={onboardingError} cols={4} />
-                      ) : onboardingTasks.length === 0 ? (
-                        <tr><td colSpan={4} className="py-4 text-center text-sm text-muted-foreground">No onboarding tasks found.</td></tr>
-                      ) : (
-                        onboardingTasks.map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.task_name}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.owner_department}</td>
-                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                            <td className="py-3">
-                              {row.status !== "Done" ? (
-                                <Button size="sm" variant="outline" onClick={() => handleCompleteTask(row.id)}>Complete</Button>
-                              ) : (
-                                <Button size="sm" variant="ghost">View</Button>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <Button size="sm" variant="outline" onClick={async () => {
-                    try {
-                      const emps = await listEmployees()
-                      if (emps.length === 0) return
-                      await createOnboardingTask({ employee_id: emps[0].id, task_name: "New task", owner_department: "HR" })
-                      const tasks = await getOnboardingTasks(emps[0].id)
-                      setOnboardingTasks(tasks)
-                    } catch { /* ignore */ }
-                  }}>Add task</Button>
-                  <Button size="sm" variant="ghost" onClick={async () => {
-                    try {
-                      const emps = await listEmployees()
-                      if (emps.length === 0) return
-                      await bulkCreateOnboardingTasks(emps[0].id, [
-                        { task_name: "Setup workstation", owner_department: "IT" },
-                        { task_name: "Compliance training", owner_department: "HR" },
-                      ])
-                      const tasks = await getOnboardingTasks(emps[0].id)
-                      setOnboardingTasks(tasks)
-                    } catch { /* ignore */ }
-                  }}>Bulk add</Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BookOpen className="h-4 w-4 text-muted-foreground" /> HR knowledge base
-                </CardTitle>
-                <CardDescription>Search and publish policies, guides, and templates.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="w-full sm:max-w-sm">
-                    <Input value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} placeholder="Search articles…" />
-                  </div>
-                  <Button variant="outline">New article</Button>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {knowledgeBaseArticles.map((article) => (
-                    <div key={article.title} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                      <div>
-                        <p className="font-medium text-foreground">{article.title}</p>
-                        <p className="text-xs text-muted-foreground">{article.category} · Updated {article.updated}</p>
-                      </div>
-                      <Button size="sm" variant="ghost">Open</Button>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
+        return <OnboardingKbView employees={employeesDir} />
 
       // ── DIRECTORY ─────────────────────────────────────────────────
       case "directory":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Building2 className="h-4 w-4 text-muted-foreground" /> Company org chart
-                </CardTitle>
-                <CardDescription>A living structure that updates with hires, moves, and exits.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {departmentStaff.map((node) => (
-                    <div key={node.department} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="card-title">{node.department}</p>
-                      <p className="mt-2 text-sm text-muted-foreground">{node.count} people</p>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" /> Employee directory
-                </CardTitle>
-                <CardDescription>Profiles, pictures, and current team/role assignments.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee</th>
-                        <th className="py-2 pr-4 font-medium">Department</th>
-                        <th className="py-2 pr-4 font-medium">Role</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dirLoading ? (
-                        <LoadingRow cols={5} />
-                      ) : dirError ? (
-                        <ErrorRow message={dirError} cols={5} />
-                      ) : employeesDir.length === 0 ? (
-                        <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No employees found.</td></tr>
-                      ) : (
-                        employeesDir.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.full_name}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.department}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.job_title}</td>
-                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                            <td className="py-3"><Button size="sm" variant="outline">Open</Button></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <PimDirectoryView
+            employees={employeesDir}
+            loading={dirLoading}
+            error={dirError}
+            onRefresh={fetchDir}
+          />
         )
 
-      // ── HIRING ──────────────────────────────────────────────────────
-      case "hiring":
+      // ── ORG CHART ──────────────────────────────────────────────────
+      case "org_chart":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Briefcase className="h-4 w-4 text-muted-foreground" /> Applicant tracker (ATS)
-                </CardTitle>
-                <CardDescription>Move candidates through stages with clear ownership.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-4">
-                  {[
-                    { label: "Screen", value: candidates.filter(c => c.stage === "Screen").length },
-                    { label: "Interview", value: candidates.filter(c => c.stage === "Interview").length },
-                    { label: "Offer", value: candidates.filter(c => c.stage === "Offer").length },
-                    { label: "Hired", value: candidates.filter(c => c.stage === "Hired").length },
-                  ].map((metric) => (
-                    <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-xs text-muted-foreground">{metric.label}</p>
-                      <p className="mt-1 text-2xl font-semibold text-foreground">{metric.value}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-5 overflow-x-auto">
-                  <table className="w-full min-w-[680px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Candidate</th>
-                        <th className="py-2 pr-4 font-medium">Role</th>
-                        <th className="py-2 pr-4 font-medium">Stage</th>
-                        <th className="py-2 pr-4 font-medium">Score</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {hiringLoading ? (
-                        <LoadingRow cols={5} />
-                      ) : hiringError ? (
-                        <ErrorRow message={hiringError} cols={5} />
-                      ) : candidates.length === 0 ? (
-                        <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No candidates found.</td></tr>
-                      ) : (
-                        candidates.map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.name}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.role}</td>
-                            <td className="py-3 pr-4"><Badge variant="outline" className="border-muted text-muted-foreground">{row.stage}</Badge></td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.score}</td>
-                            <td className="py-3"><Button size="sm" variant="outline">Review</Button></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="space-y-6 min-w-0 w-full max-w-full overflow-hidden">
+            <OrgChartView employees={employeesDir} onRefresh={fetchDir} />
           </div>
         )
 
-      // ── PAYROLL ──────────────────────────────────────────────────────────
+      // ── HIRING / ATS ───────────────────────────────────────────────
+      case "hiring":
+        return <TalentAtsView />
+
+      // ── PAYROLL ───────────────────────────────────────────────────
       case "payroll":
         return (
-          <div className="space-y-6">
-            {financePostMsg && (
-              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-400 flex items-center justify-between">
-                <span>{financePostMsg}</span>
-                <Button size="sm" variant="ghost" onClick={() => setFinancePostMsg(null)}>Dismiss</Button>
-              </div>
-            )}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-muted-foreground" /> Payroll & General Ledger Sync
-                </CardTitle>
-                <CardDescription>Paystack disbursement & double-entry ERP general ledger integration.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { label: "Next pay run", value: (() => { const d = new Date(); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0); return last.toLocaleDateString("en-ZA", { day: "numeric", month: "short" }) })() },
-                    { label: "Employees on Roll", value: String(kpiTotal) },
-                    { label: "Estimated Monthly Gross", value: `R ${(kpiTotal * 16000).toLocaleString()}` },
-                  ].map((metric) => (
-                    <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-xs text-muted-foreground">{metric.label}</p>
-                      <p className="mt-1 text-lg font-semibold text-foreground">{metric.value}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-t border-border pt-4">
-                  <p className="text-sm text-muted-foreground">Post salary runs directly to General Ledger (Dr 5000 Salaries Expense, Cr 1000 Bank, Cr 2100 SARS PAYE, Cr 2110 UIF).</p>
-                  <div className="flex gap-2">
-                    <Button variant="outline">Sync Paystack</Button>
-                    <Button variant="cta" onClick={handlePostPayrollToFinance} disabled={isPostingFinance}>
-                      {isPostingFinance ? "Posting to Finance…" : "Post to General Ledger"}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* FP&A Departmental Cost Allocation */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BarChart3 className="h-4 w-4 text-muted-foreground" /> FP&A Department Cost Allocation
-                </CardTitle>
-                <CardDescription>Workforce cost distribution across operational business units.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {deptCostLoading ? (
-                  <p className="text-sm text-muted-foreground">Calculating cost allocations…</p>
-                ) : !deptCostAllocation || deptCostAllocation.departments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No cost allocation data available.</p>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                      {deptCostAllocation.departments.map((dept) => (
-                        <div key={dept.department} className="rounded-lg border border-border bg-background/40 p-3">
-                          <p className="text-xs text-muted-foreground">{dept.department}</p>
-                          <p className="text-lg font-semibold text-foreground mt-1">R {dept.total_salary_zar.toLocaleString()}</p>
-                          <div className="flex justify-between items-center mt-2 text-xs text-muted-foreground">
-                            <span>{dept.headcount} staff</span>
-                            <span>{dept.pct_of_total}% of total</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted-foreground text-right">
-                      Total Workforce Allocation: R {deptCostAllocation.total_monthly_payroll_zar.toLocaleString()}
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-muted-foreground" /> Employee benefit management
-                </CardTitle>
-                <CardDescription>Track enrollment and employer contributions.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Benefit</th>
-                        <th className="py-2 pr-4 font-medium">Enrolled</th>
-                        <th className="py-2 pr-4 font-medium">Employer share</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {payrollLoading ? (
-                        <LoadingRow cols={4} />
-                      ) : payrollError ? (
-                        <ErrorRow message={payrollError} cols={4} />
-                      ) : payrollBenefits.length === 0 ? (
-                        <tr><td colSpan={4} className="py-4 text-center text-sm text-muted-foreground">No benefit records found.</td></tr>
-                      ) : (
-                        // Group by benefit type
-                        (() => {
-                          const byType: Record<string, number> = {}
-                          payrollBenefits.forEach(b => { byType[b.benefit_type] = (byType[b.benefit_type] || 0) + 1 })
-                          return Object.entries(byType).map(([benefit, enrolled]) => (
-                            <tr key={benefit} className="border-b border-border/60 text-sm">
-                              <td className="py-3 pr-4 text-foreground">{benefit}</td>
-                              <td className="py-3 pr-4 text-muted-foreground">{enrolled}</td>
-                              <td className="py-3 pr-4 text-muted-foreground">Employer funded</td>
-                              <td className="py-3"><Button size="sm" variant="outline">Manage</Button></td>
-                            </tr>
-                          ))
-                        })()
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <PayrollPayslipsView
+            deptCostAllocation={deptCostAllocation}
+            deptCostLoading={deptCostLoading}
+            kpiTotal={kpiTotal}
+          />
         )
 
       // ── TIME / LEAVE ──────────────────────────────────────────────
       case "time":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4 text-muted-foreground" /> Leave management
-                </CardTitle>
-                <CardDescription>Requests, approvals, and balances in one queue.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Dates</th>
-                        <th className="py-2 pr-4 font-medium">Type</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {leaveLoading ? (
-                        <LoadingRow cols={5} />
-                      ) : leaveError ? (
-                        <ErrorRow message={leaveError} cols={5} />
-                      ) : leaveRequests.length === 0 ? (
-                        <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No leave requests found.</td></tr>
-                      ) : (
-                        leaveRequests.map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.start_date} – {row.end_date}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.leave_type}</td>
-                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                            <td className="py-3">
-                              {row.status === "pending" || row.status === "Pending" ? (
-                                <div className="flex flex-wrap gap-2">
-                                  <Button size="sm" variant="outline" onClick={() => handleApproveLeave(row.id)}>Approve</Button>
-                                  <Button size="sm" variant="ghost" onClick={() => handleDeclineLeave(row.id)}>Decline</Button>
-                                </div>
-                              ) : (
-                                <Button size="sm" variant="outline">View</Button>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+          <LeaveJourneyView
+            employees={employeesDir}
+            leaveRequests={leaveRequests}
+            loading={leaveLoading}
+            error={leaveError}
+            onRefresh={() => {
+              fetchDir()
+              void fetchLeave()
+            }}
+          />
+        )
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4 text-muted-foreground" /> Staff scheduling (based on demand)
-                </CardTitle>
-                <CardDescription>Plan coverage using expected demand and required staffing.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {[
-                    { label: "Today demand", value: (demandForecast?.[0]?.gap ?? 0) > 0 ? "High" : "Covered" },
-                    { label: "Required coverage", value: demandForecast ? `${demandForecast[0]?.required_staff ?? "\u2014"} agents` : "28 agents" },
-                    { label: "Scheduled", value: demandForecast ? `${demandForecast[0]?.scheduled_staff ?? "\u2014"} agents` : "26 agents" },
-                  ].map((metric) => (
-                    <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="text-xs text-muted-foreground">{metric.label}</p>
-                      <p className="mt-1 text-lg font-semibold text-foreground">{metric.value}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
-                  Create shift templates, then allocate staff based on predicted demand per channel (calls, tickets, walk-ins).
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+      // ── PIM REPORTS & STATUTORY ANALYTICS ──────────────────────────
+      case "reporting":
+        return (
+          <ReportsAnalyticsView
+            employees={employeesDir}
+            kpiTotal={kpiTotal}
+          />
         )
 
       // ── PERFORMANCE ───────────────────────────────────────────────
@@ -1641,957 +1144,71 @@ export function TalentModule() {
                 </div>
               )
 
-      // ── CULTURE ──────────────────────────────────────────────────────────
+      // ── CULTURE & RECOGNITION ──────────────────────────────────────
       case "culture":
-        return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-muted-foreground" /> Kudos (recognition programme)
-                </CardTitle>
-                <CardDescription>Recognize wins and reinforce the culture you want.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {cultureLoading ? (
-                    <p className="text-sm text-muted-foreground">Loading kudos…</p>
-                  ) : cultureError ? (
-                    <p className="text-sm text-red-400">Error: {cultureError}</p>
-                  ) : kudos.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No kudos yet. Be the first to send one!</p>
-                  ) : (
-                    kudos.map((kudo) => (
-                      <div key={kudo.id} className="rounded-lg border border-border bg-background/40 p-4">
-                        <p className="text-sm text-foreground">
-                          <span className="font-semibold">{kudo.to}</span> — {kudo.note}
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">From {kudo.from}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="mt-4 flex justify-end">
-                  <Button variant="outline">Send kudos</Button>
-                </div>
-              </CardContent>
-            </Card>
+        return <TalentCultureView employees={employeesDir} />
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-muted-foreground" /> Birthdays & milestones
-                </CardTitle>
-                <CardDescription>Celebrate consistently with a single calendar view.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {cultureLoading ? (
-                    <p className="col-span-2 text-sm text-muted-foreground">Loading milestones…</p>
-                  ) : cultureError ? (
-                    <p className="col-span-2 text-sm text-red-400">Error: {cultureError}</p>
-                  ) : milestones.length === 0 ? (
-                    <p className="col-span-2 text-sm text-muted-foreground">No upcoming milestones.</p>
-                  ) : (
-                    milestones.map((item) => (
-                      <div key={item.id} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                        <div>
-                          <p className="font-medium text-foreground">{item.name}</p>
-                          <p className="text-xs text-muted-foreground">{item.event}</p>
-                        </div>
-                        <Badge variant="outline" className="border-muted text-muted-foreground">{item.date}</Badge>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
 
-      // ── GOVERNANCE ──────────────────────────────────────────────────────────
-      case "governance":
-        return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-muted-foreground" /> Access control & RBAC
-                </CardTitle>
-                <CardDescription>Control who can see and do what across HR workflows.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  {govLoading ? (
-                    <p className="col-span-3 text-sm text-muted-foreground">Loading roles…</p>
-                  ) : govError ? (
-                    <p className="col-span-3 text-sm text-red-400">Error: {govError}</p>
-                  ) : (
-                    roles.map((row) => (
-                      <div key={row.role} className="rounded-lg border border-border bg-background/40 p-4">
-                        <p className="font-semibold text-foreground">{row.role}</p>
-                        <p className="mt-1 text-sm text-muted-foreground">{row.access}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="mt-4 flex justify-end">
-                  <Button variant="outline">Manage roles</Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Laptop className="h-4 w-4 text-muted-foreground" /> Asset / benefit allocation
-                </CardTitle>
-                <CardDescription>Track laptops, vehicles, and assigned equipment via benefits API.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[700px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Benefit Type</th>
-                        <th className="py-2 pr-4 font-medium">Created</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {govLoading ? (
-                        <LoadingRow cols={4} />
-                      ) : govError ? (
-                        <ErrorRow message={govError} cols={4} />
-                      ) : governanceBenefits.length === 0 ? (
-                        <tr><td colSpan={4} className="py-4 text-center text-sm text-muted-foreground">No benefit records found.</td></tr>
-                      ) : (
-                        governanceBenefits.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.benefit_type}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.created_at?.slice(0, 10) ?? "—"}</td>
-                            <td className="py-3"><Button size="sm" variant="outline">Open</Button></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Retirement & retrenchment</CardTitle>
-                <CardDescription>Lifecycle tracking with checklists and approvals.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {[
-                    { flow: "Retirement", note: "Collect documents and finalize benefits" },
-                    { flow: "Retrenchment", note: "Approvals, notices, and asset return" },
-                  ].map((item) => (
-                    <div key={item.flow} className="rounded-lg border border-border bg-background/40 p-4">
-                      <p className="font-semibold text-foreground">{item.flow}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
-                      <div className="mt-3">
-                        <Button size="sm" variant="outline">Open checklist</Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Attrition prediction</CardTitle>
-                <CardDescription>Early signals across departments.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3">
-                  {attritionRisk.length === 0 ? (
-                    <p className="col-span-full text-sm text-muted-foreground">No attrition risk data available. Run analytics to populate.</p>
-                  ) : (
-                    attritionRisk.map((row) => (
-                      <div key={row.dept} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                        <div>
-                          <p className="font-medium text-foreground">{row.dept}</p>
-                          <p className="text-xs text-muted-foreground">{row.note}</p>
-                        </div>
-                        <Badge variant="outline" className={statusColor(row.risk)}>{row.risk}</Badge>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
-                  Combine surveys, absence, performance, and scheduling load to flag retention risk.
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
 
       // ── SCHEDULE ──────────────────────────────────────────────────
-      case "schedule": {
+      case "schedule":
         return (
-          <div className="space-y-6">
-            {/* Demand forecast summary */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Calendar className="h-4 w-4 text-muted-foreground" /> Demand forecast
-                </CardTitle>
-                <CardDescription>Required vs scheduled staff for upcoming days.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                {schedLoading ? (
-                  <p className="text-sm text-muted-foreground">Loading forecast…</p>
-                ) : demandForecast && demandForecast.length > 0 ? (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-xs text-muted-foreground">
-                          <th className="py-2 px-3 text-left">Date</th>
-                          <th className="py-2 px-3 text-right">Required</th>
-                          <th className="py-2 px-3 text-right">Scheduled</th>
-                          <th className="py-2 px-3 text-right">Gap</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {demandForecast.slice(0, 7).map((row) => (
-                          <tr key={row.date} className="border-b border-border/50">
-                            <td className="py-2 px-3 text-foreground">{row.date}</td>
-                            <td className="py-2 px-3 text-right text-foreground">{row.required_staff}</td>
-                            <td className="py-2 px-3 text-right text-foreground">{row.scheduled_staff}</td>
-                            <td className={`py-2 px-3 text-right ${row.gap > 0 ? "text-red-400" : "text-emerald-400"}`}>{row.gap > 0 ? `+${row.gap}` : row.gap}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="grid gap-4 sm:grid-cols-3">
-                    {[
-                      { label: "Next 7 days", value: "No data yet" },
-                      { label: "Required staff/day", value: "—" },
-                      { label: "Scheduled staff/day", value: "—" },
-                    ].map((m) => (
-                      <div key={m.label} className="rounded-lg border border-border bg-background/40 p-4">
-                        <p className="text-xs text-muted-foreground">{m.label}</p>
-                        <p className="mt-1 text-lg font-semibold text-foreground">{m.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Schedule list */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <CalendarDays className="h-4 w-4 text-muted-foreground" /> Staff schedules
-                </CardTitle>
-                <CardDescription>Shift assignments by date and department.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleCreateSchedule}>New schedule</Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Date</th>
-                        <th className="py-2 pr-4 font-medium">Shift</th>
-                        <th className="py-2 pr-4 font-medium">Department</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {schedLoading ? (
-                        <LoadingRow cols={6} />
-                      ) : schedError ? (
-                        <ErrorRow message={schedError} cols={6} />
-                      ) : schedules.length === 0 ? (
-                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No schedules found.</td></tr>
-                      ) : (
-                        schedules.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.schedule_date}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.shift_start} – {row.shift_end}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.department}</td>
-                            <td className="py-3 pr-4">
-                              <Badge variant="outline" className={row.status === "CONFIRMED" ? "border-emerald-500/40 text-emerald-500" : "border-amber-500/40 text-amber-500"}>
-                                {row.status === "CONFIRMED" ? "Confirmed" : row.status ?? "Scheduled"}
-                              </Badge>
-                            </td>
-                            <td className="py-3">
-                              <div className="flex flex-wrap gap-2">
-                                {row.status !== "CONFIRMED" && (
-                                  <Button size="sm" variant="outline" onClick={() => handleConfirmSchedule(row.id)}>Confirm</Button>
-                                )}
-                                <Button size="sm" variant="ghost" onClick={() => handleDeleteSchedule(row.id)}>Delete</Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3.5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2.5 text-xs text-cyan-200">
+                <Sparkles className="h-4 w-4 text-cyan-400 shrink-0" />
+                <span>
+                  <strong>Operational Synergy:</strong> Staff Shift Scheduling is coupled directly to the <strong>Service Panel</strong> where 24h subscriber ticket volumes, MTTR/FTR skill tags, and call center demand drive human and broker rostering.
+                </span>
+              </div>
+            </div>
+            <ServiceSchedulingView />
           </div>
         )
-      }
 
-      // ── TRAINING ──────────────────────────────────────────────────
+      // ── TRAINING & DEVELOPMENT ────────────────────────────────────
       case "training":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <GraduationCap className="h-4 w-4 text-muted-foreground" /> Training courses
-                </CardTitle>
-                <CardDescription>Manage courses, categories, and mandatory requirements.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleCreateCourse}>New course</Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Title</th>
-                        <th className="py-2 pr-4 font-medium">Category</th>
-                        <th className="py-2 pr-4 font-medium">Duration (hrs)</th>
-                        <th className="py-2 pr-4 font-medium">Mandatory</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {trainingLoading ? (
-                        <LoadingRow cols={5} />
-                      ) : trainingError ? (
-                        <ErrorRow message={trainingError} cols={5} />
-                      ) : trainingCourses.length === 0 ? (
-                        <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No training courses found.</td></tr>
-                      ) : (
-                        trainingCourses.map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.title}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.category}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.duration_hours ?? "—"}</td>
-                            <td className="py-3 pr-4">
-                              <Badge variant="outline" className={row.mandatory ? "border-red-500/40 text-red-400" : "border-muted text-muted-foreground"}>
-                                {row.mandatory ? "Yes" : "No"}
-                              </Badge>
-                            </td>
-                            <td className="py-3"><Button size="sm" variant="outline">Edit</Button></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Users className="h-4 w-4 text-muted-foreground" /> Employee training progress
-                </CardTitle>
-                <CardDescription>Enrollment and completion tracking.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleEnrollEmployee}>Enroll employee</Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Course ID</th>
-                        <th className="py-2 pr-4 font-medium">Progress</th>
-                        <th className="py-2 pr-4 font-medium">Score</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {trainingLoading ? (
-                        <LoadingRow cols={6} />
-                      ) : trainingError ? (
-                        <ErrorRow message={trainingError} cols={6} />
-                      ) : trainingEnrollments.length === 0 ? (
-                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No enrollments found.</td></tr>
-                      ) : (
-                        trainingEnrollments.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.course_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.progress_pct}%</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.score ?? "—"}</td>
-                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                            <td className="py-3">
-                              <Button size="sm" variant="outline" onClick={async () => {
-                                try {
-                                  await updateTrainingProgress(row.id, Math.min(row.progress_pct + 25, 100))
-                                  setTrainingEnrollments((prev) => prev.map((e) => e.id === row.id ? { ...e, progress_pct: Math.min(e.progress_pct + 25, 100) } : e))
-                                } catch { /* ignore */ }
-                              }}>Update</Button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <TalentTrainingView
+            employees={employeesDir}
+            courses={trainingCourses}
+            enrollments={trainingEnrollments}
+            loading={trainingLoading}
+            error={trainingError}
+            onRefresh={() => {
+              void listTrainingCourses().then(setTrainingCourses)
+            }}
+          />
         )
 
-      // ── BENEFITS ──────────────────────────────────────────────────
-      case "benefits": {
-        // Group benefits by type
-        const benefitsByType: Record<string, Benefit[]> = {}
-        benefitsList.forEach((b) => {
-          if (!benefitsByType[b.benefit_type]) benefitsByType[b.benefit_type] = []
-          benefitsByType[b.benefit_type].push(b)
-        })
+      // ── BENEFITS MANAGEMENT ───────────────────────────────────────
+      case "benefits":
+        return <BenefitsPortalView employees={employeesDir} />
 
-        return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Gift className="h-4 w-4 text-muted-foreground" /> Benefits overview
-                </CardTitle>
-                <CardDescription>Enrollment by type: leave, shares, bonuses, medical, pension.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleCreateBenefit}>New enrollment</Button>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {benefitsLoading ? (
-                    <p className="col-span-full text-sm text-muted-foreground">Loading benefits…</p>
-                  ) : benefitsError ? (
-                    <p className="col-span-full text-sm text-red-400">Error: {benefitsError}</p>
-                  ) : Object.keys(benefitsByType).length === 0 ? (
-                    <p className="col-span-full text-sm text-muted-foreground">No benefit enrollments found.</p>
-                  ) : (
-                    Object.entries(benefitsByType).map(([type, items]) => (
-                      <div key={type} className="rounded-lg border border-border bg-background/40 p-4">
-                        <p className="text-sm font-semibold text-foreground capitalize">{type}</p>
-                        <p className="mt-1 text-2xl font-bold text-foreground">{items.length}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">enrolled</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Benefit enrollments</CardTitle>
-                <CardDescription>Detailed list of all benefit records.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[600px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Type</th>
-                        <th className="py-2 pr-4 font-medium">Created</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {benefitsLoading ? (
-                        <LoadingRow cols={4} />
-                      ) : benefitsError ? (
-                        <ErrorRow message={benefitsError} cols={4} />
-                      ) : benefitsList.length === 0 ? (
-                        <tr><td colSpan={4} className="py-4 text-center text-sm text-muted-foreground">No benefits found.</td></tr>
-                      ) : (
-                        benefitsList.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4 text-muted-foreground capitalize">{row.benefit_type}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.created_at?.slice(0, 10) ?? "—"}</td>
-                            <td className="py-3"><Button size="sm" variant="outline">View</Button></td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-      }
-
-      // ── DISCIPLINARY ──────────────────────────────────────────────
+      // ── DISCIPLINARY & GRIEVANCES ─────────────────────────────────
       case "disciplinary":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-muted-foreground" /> Disciplinary actions
-                </CardTitle>
-                <CardDescription>Warnings, suspensions, and dismissals tracking.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleCreateDisciplinary}>New action</Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Type</th>
-                        <th className="py-2 pr-4 font-medium">Incident Date</th>
-                        <th className="py-2 pr-4 font-medium">Description</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {disciplinaryLoading ? (
-                        <LoadingRow cols={6} />
-                      ) : disciplinaryError ? (
-                        <ErrorRow message={disciplinaryError} cols={6} />
-                      ) : disciplinaryActions.length === 0 ? (
-                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No disciplinary actions found.</td></tr>
-                      ) : (
-                        disciplinaryActions.slice(0, 50).map((row) => (
-                          <tr key={row.id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                            <td className="py-3 pr-4">
-                              <Badge variant="outline" className={
-                                row.action_type === "DISMISSAL" ? "border-red-500/40 text-red-400" :
-                                row.action_type === "SUSPENSION" ? "border-orange-500/40 text-orange-400" :
-                                row.action_type === "FINAL_WARNING" ? "border-amber-500/40 text-amber-500" :
-                                "border-muted text-muted-foreground"
-                              }>{row.action_type}</Badge>
-                            </td>
-                            <td className="py-3 pr-4 text-muted-foreground">{row.incident_date}</td>
-                            <td className="py-3 pr-4 text-muted-foreground max-w-[200px] truncate">{row.description}</td>
-                            <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                            <td className="py-3">
-                              {row.status !== "Resolved" && (
-                                <Button size="sm" variant="outline" onClick={() => handleResolveDisciplinary(row.id)}>Resolve</Button>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <TalentDisciplinaryView
+            employees={employeesDir}
+            actions={disciplinaryActions}
+            onRefresh={() => {
+              void listDisciplinary().then(setDisciplinaryActions)
+            }}
+          />
         )
 
-      // ── EXIT ──────────────────────────────────────────────────────
+      // ── STAFF EXIT & OFFBOARDING ──────────────────────────────────
       case "exit":
         return (
-          <div className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <LogOut className="h-4 w-4 text-muted-foreground" /> Staff exit records
-                </CardTitle>
-                <CardDescription>Resignations, terminations, and retirement tracking.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-3 flex justify-end">
-                  <Button size="sm" variant="outline" onClick={handleCreateExit}>New exit record</Button>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Employee ID</th>
-                        <th className="py-2 pr-4 font-medium">Type</th>
-                        <th className="py-2 pr-4 font-medium">Notice Date</th>
-                        <th className="py-2 pr-4 font-medium">Last Working Day</th>
-                        <th className="py-2 pr-4 font-medium">Status</th>
-                        <th className="py-2 font-medium">Checklist</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {exitLoading ? (
-                        <LoadingRow cols={6} />
-                      ) : exitError ? (
-                        <ErrorRow message={exitError} cols={6} />
-                      ) : exitRecords.length === 0 ? (
-                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No exit records found.</td></tr>
-                      ) : (
-                        exitRecords.slice(0, 50).map((row) => {
-                          const cl = exitChecklists[row.id]
-                          return (
-                            <tr key={row.id} className="border-b border-border/60 text-sm">
-                              <td className="py-3 pr-4 text-foreground">{row.employee_id.slice(0, 8)}…</td>
-                              <td className="py-3 pr-4">
-                                <Badge variant="outline" className={
-                                  row.exit_type === "Termination" ? "border-red-500/40 text-red-400" :
-                                  row.exit_type === "Retirement" ? "border-blue-500/40 text-blue-400" :
-                                  "border-muted text-muted-foreground"
-                                }>{row.exit_type}</Badge>
-                              </td>
-                              <td className="py-3 pr-4 text-muted-foreground">{row.notice_date}</td>
-                              <td className="py-3 pr-4 text-muted-foreground">{row.last_working_date}</td>
-                              <td className="py-3 pr-4"><StatusBadge status={row.status} /></td>
-                              <td className="py-3">
-                                <div className="flex flex-wrap gap-1">
-                                  <Button size="sm" variant={cl?.exit_interview_done ? "secondary" : "ghost"} onClick={() => handleUpdateExitChecklist(row.id, "exit_interview_done")}>
-                                    {cl?.exit_interview_done ? "✓" : "○"} Interview
-                                  </Button>
-                                  <Button size="sm" variant={cl?.assets_returned ? "secondary" : "ghost"} onClick={() => handleUpdateExitChecklist(row.id, "assets_returned")}>
-                                    {cl?.assets_returned ? "✓" : "○"} Assets
-                                  </Button>
-                                  <Button size="sm" variant={cl?.access_revoked ? "secondary" : "ghost"} onClick={() => handleUpdateExitChecklist(row.id, "access_revoked")}>
-                                    {cl?.access_revoked ? "✓" : "○"} Access
-                                  </Button>
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+          <TalentExitView
+            employees={employeesDir}
+            exits={exitRecords}
+            onRefresh={() => {
+              void listExits().then(setExitRecords)
+            }}
+          />
         )
 
-      // ── SALES & COMMISSIONS ───────────────────────────────────────────────
-      case "sales_field":
-        return (
-          <div className="space-y-6">
-            {claimSuccessMsg && (
-              <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-sm text-emerald-400 flex items-center justify-between">
-                <span>{claimSuccessMsg}</span>
-                <Button size="sm" variant="ghost" onClick={() => setClaimSuccessMsg(null)}>Dismiss</Button>
-              </div>
-            )}
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                title="Active Sales Reps"
-                value={salesLoading ? "…" : (salesOverview?.sales_rep_count ?? 0)}
-                icon={Users}
-                description="attributed sales staff"
-              />
-              <StatCard
-                title="Total Deal Pipeline"
-                value={salesLoading ? "…" : `R ${((salesOverview?.total_pipeline_zar ?? 0) / 1000).toFixed(0)}k`}
-                icon={Target}
-                change="+14%"
-                changeType="positive"
-                description="active pipeline"
-              />
-              <StatCard
-                title="Won Revenue"
-                value={salesLoading ? "…" : `R ${((salesOverview?.total_won_zar ?? 0) / 1000).toFixed(0)}k`}
-                icon={TrendingUp}
-                change="+22%"
-                changeType="positive"
-                description="closed won"
-              />
-              <StatCard
-                title="Unclaimed Commissions"
-                value={salesLoading ? "…" : `R ${(salesOverview?.total_commissions_pending_zar ?? 0).toLocaleString()}`}
-                icon={Coins}
-                description="ready for payroll"
-              />
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Coins className="h-4 w-4 text-muted-foreground" /> Sales Force Performance & Commission Ledger
-                </CardTitle>
-                <CardDescription>Direct attribution from Deals CRM to Staff Payroll Bonus ledger.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[760px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Sales Rep</th>
-                        <th className="py-2 pr-4 font-medium">Role / Department</th>
-                        <th className="py-2 pr-4 font-medium">Deals (Won/Total)</th>
-                        <th className="py-2 pr-4 font-medium">Pipeline Value</th>
-                        <th className="py-2 pr-4 font-medium">Won Revenue</th>
-                        <th className="py-2 pr-4 font-medium">Accrued Commission</th>
-                        <th className="py-2 font-medium">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {salesLoading ? (
-                        <LoadingRow cols={7} />
-                      ) : salesError ? (
-                        <ErrorRow message={salesError} cols={7} />
-                      ) : salesReps.length === 0 ? (
-                        <tr><td colSpan={7} className="py-4 text-center text-sm text-muted-foreground">No sales reps found with attributed deals.</td></tr>
-                      ) : (
-                        salesReps.map((rep) => (
-                          <tr key={rep.employee_id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 font-medium text-foreground">{rep.full_name}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{rep.job_title} ({rep.department})</td>
-                            <td className="py-3 pr-4 text-foreground">
-                              <span className="font-semibold text-emerald-500">{rep.deals_won_count}</span>
-                              <span className="text-muted-foreground"> / {rep.deals_count}</span>
-                            </td>
-                            <td className="py-3 pr-4 text-muted-foreground">R {rep.pipeline_zar.toLocaleString()}</td>
-                            <td className="py-3 pr-4 font-medium text-emerald-400">R {rep.deals_won_zar.toLocaleString()}</td>
-                            <td className="py-3 pr-4">
-                              <div className="flex flex-col">
-                                <span className="font-semibold text-foreground">R {rep.pending_commission_zar.toLocaleString()}</span>
-                                <span className="text-xs text-muted-foreground">({rep.win_rate_pct}% win rate)</span>
-                              </div>
-                            </td>
-                            <td className="py-3">
-                              <Button
-                                size="sm"
-                                variant={rep.pending_commission_zar > 0 ? "cta" : "outline"}
-                                disabled={rep.pending_commission_zar <= 0 || claimingRepId === rep.employee_id}
-                                onClick={() => handleClaimCommission(rep.employee_id, rep.pending_commission_zar)}
-                              >
-                                {claimingRepId === rep.employee_id ? "Claiming…" : "Claim to Payroll"}
-                              </Button>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-
-      // ── TECHNICIANS & FIELD OPS ──────────────────────────────────────────
-      case "technicians":
-        return (
-          <div className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                title="Field Technicians"
-                value={techLoading ? "…" : techRoster.length}
-                icon={Wrench}
-                description="splicers & installers"
-              />
-              <StatCard
-                title="On-Duty Shifts"
-                value={techLoading ? "…" : techRoster.filter(t => t.shift_status === "ON_DUTY" || !!t.shift_today).length}
-                icon={CheckCircle2}
-                change="+2 today"
-                changeType="positive"
-                description="active in field"
-              />
-              <StatCard
-                title="Total Van Stock Value"
-                value={techLoading ? "…" : `R ${techRoster.reduce((sum, t) => sum + t.total_equipment_value_zar, 0).toLocaleString()}`}
-                icon={Coins}
-                description="allocated inventory"
-              />
-              <StatCard
-                title="ISP Certified Techs"
-                value={techLoading ? "…" : techRoster.filter(t => t.certifications.length > 0).length}
-                icon={ShieldCheck}
-                description="fiber / health & safety"
-              />
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Wrench className="h-4 w-4 text-muted-foreground" /> Field Operations Roster & Van Inventory Audit
-                </CardTitle>
-                <CardDescription>Correlated with schedule shifts, van stock balances, and fiber certifications.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-6">
-                  {techLoading ? (
-                    <p className="text-sm text-muted-foreground">Loading technician profiles…</p>
-                  ) : techError ? (
-                    <p className="text-sm text-red-400">Error: {techError}</p>
-                  ) : techRoster.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No field technicians registered.</p>
-                  ) : (
-                    techRoster.map((tech) => {
-                      const isOnDuty = tech.shift_status === "ON_DUTY" || !!tech.shift_today
-                      return (
-                        <div key={tech.employee_id} className="rounded-lg border border-border bg-background/40 p-4 space-y-4">
-                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-semibold text-foreground text-base">{tech.full_name}</span>
-                                <Badge variant="outline" className={isOnDuty ? "border-emerald-500/40 text-emerald-400" : "border-muted text-muted-foreground"}>
-                                  {isOnDuty ? "● On Shift" : "○ Off Duty"}
-                                </Badge>
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5">{tech.job_title} • Van ID: <span className="text-foreground font-mono">VAN-{tech.employee_code}</span></p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              {tech.certifications.map((cert) => (
-                                <Badge key={cert} variant="outline" className="border-blue-500/40 text-blue-400 text-xs">
-                                  {cert}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Van Inventory Table */}
-                          <div>
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Van Stock Inventory ({tech.van_stock.length} items)</span>
-                              <span className="text-xs font-medium text-emerald-400">Total Van Value: R {tech.total_equipment_value_zar.toLocaleString()}</span>
-                            </div>
-                            {tech.van_stock.length === 0 ? (
-                              <p className="text-xs text-muted-foreground italic">No van inventory assigned. Replenish from Central Warehouse.</p>
-                            ) : (
-                              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                                {tech.van_stock.map((item) => (
-                                  <div key={item.product_sku} className="rounded border border-border/60 bg-muted/20 p-2.5 flex items-center justify-between text-xs">
-                                    <div>
-                                      <p className="font-medium text-foreground">{item.product_name}</p>
-                                      <p className="text-muted-foreground font-mono text-[11px]">SKU: {item.product_sku}</p>
-                                    </div>
-                                    <div className="text-right">
-                                      <p className="font-semibold text-foreground">{item.quantity} units</p>
-                                      <p className="text-muted-foreground text-[11px]">R {(item.quantity * item.unit_cost_zar).toLocaleString()}</p>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-
-      // ── MARKETING ATTRIBUTION ──────────────────────────────────────────
-      case "marketing_attr":
-        return (
-          <div className="space-y-6">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard
-                title="Attributed Marketing Staff"
-                value={mktLoading ? "…" : marketingStaff.length}
-                icon={Users}
-                description="campaign owners"
-              />
-              <StatCard
-                title="Active Campaigns"
-                value={mktLoading ? "…" : marketingStaff.reduce((sum, m) => sum + m.active_campaigns_count, 0)}
-                icon={Target}
-                description="residential & commercial"
-              />
-              <StatCard
-                title="Total Ad Spend Managed"
-                value={mktLoading ? "…" : `R ${marketingStaff.reduce((sum, m) => sum + m.total_budget_managed_zar, 0).toLocaleString()}`}
-                icon={Coins}
-                description="allocated budget"
-              />
-              <StatCard
-                title="Delivered Leads"
-                value={mktLoading ? "…" : marketingStaff.reduce((sum, m) => sum + m.total_conversions_delivered, 0)}
-                icon={TrendingUp}
-                change="+18%"
-                changeType="positive"
-                description="inbound to CRM"
-              />
-            </div>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Target className="h-4 w-4 text-muted-foreground" /> Marketing Staff Attribution & Inbound Delivery
-                </CardTitle>
-                <CardDescription>Links staff ownership directly to ad performance and lead generation pipelines.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[700px]">
-                    <thead>
-                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                        <th className="py-2 pr-4 font-medium">Campaign Manager</th>
-                        <th className="py-2 pr-4 font-medium">Role</th>
-                        <th className="py-2 pr-4 font-medium">Assigned Campaigns</th>
-                        <th className="py-2 pr-4 font-medium">Budget Managed</th>
-                        <th className="py-2 pr-4 font-medium">Conversions Delivered</th>
-                        <th className="py-2 font-medium">Performance Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {mktLoading ? (
-                        <LoadingRow cols={6} />
-                      ) : mktError ? (
-                        <ErrorRow message={mktError} cols={6} />
-                      ) : marketingStaff.length === 0 ? (
-                        <tr><td colSpan={6} className="py-4 text-center text-sm text-muted-foreground">No marketing attribution records found.</td></tr>
-                      ) : (
-                        marketingStaff.map((staff) => (
-                          <tr key={staff.employee_id} className="border-b border-border/60 text-sm">
-                            <td className="py-3 pr-4 font-medium text-foreground">{staff.employee_name}</td>
-                            <td className="py-3 pr-4 text-muted-foreground">{staff.job_title}</td>
-                            <td className="py-3 pr-4">
-                              <div className="flex flex-wrap gap-1">
-                                {staff.campaign_names.map((c) => (
-                                  <Badge key={c} variant="outline" className="border-muted text-foreground text-xs">{c}</Badge>
-                                ))}
-                              </div>
-                            </td>
-                            <td className="py-3 pr-4 text-muted-foreground">R {staff.total_budget_managed_zar.toLocaleString()}</td>
-                            <td className="py-3 pr-4 font-semibold text-emerald-400">{staff.total_conversions_delivered} conversions</td>
-                            <td className="py-3">
-                              <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                                High Attribution
-                              </Badge>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )
-
-      // ── COMPLIANCE AUDIT ──────────────────────────────────────────────
       // ── COMPLIANCE AUDIT ──────────────────────────────────────────────
       case "compliance_audit":
         return (
@@ -2787,10 +1404,28 @@ export function TalentModule() {
                           <span className="text-xs text-muted-foreground">{alert.employee_name} ({alert.department})</span>
                         </div>
                         <p className="text-xs text-muted-foreground">{alert.message}</p>
-                        <div className="rounded bg-background/50 p-2.5 text-xs text-foreground flex items-center justify-between">
+                        <div className="rounded bg-background/50 p-2.5 text-xs text-foreground flex items-center justify-between gap-3">
                           <span>💡 <strong>AI Recommendation:</strong> {alert.recommendation}</span>
-                          <Button size="sm" variant="outline" className="h-7 text-xs">Execute Action</Button>
+                          <Button
+                            size="sm"
+                            variant="cta"
+                            className="h-7 text-xs flex-shrink-0"
+                            disabled={executingAlertId === alert.id || wellnessActionMsg?.id === alert.id}
+                            onClick={() => handleExecuteWellnessAction(alert.id, alert.alert_type)}
+                          >
+                            {executingAlertId === alert.id
+                              ? "Executing…"
+                              : wellnessActionMsg?.id === alert.id
+                              ? "Executed ✓"
+                              : "Execute Action"}
+                          </Button>
                         </div>
+                        {wellnessActionMsg?.id === alert.id && (
+                          <div className="rounded bg-emerald-500/10 border border-emerald-500/30 p-2 text-xs text-emerald-400 flex items-center gap-1.5">
+                            <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />
+                            <span>{wellnessActionMsg.message}</span>
+                          </div>
+                        )}
                       </div>
                     ))
                   )}
@@ -2848,12 +1483,6 @@ export function TalentModule() {
         icon={<UserCog className="h-5 w-5" />}
         title="Talent & HR"
         subtitle="Employee management, onboarding, performance, and workforce planning"
-        actions={
-          <>
-            <Button variant="outline" size="sm" onClick={handleExport}><Download className="h-3.5 w-3.5" />Export</Button>
-            <Button variant="cta" size="sm" onClick={handleNewEmployee}><Plus className="h-3.5 w-3.5" />New Employee</Button>
-          </>
-        }
       />
 
       {/* KPI Cards */}
@@ -2893,33 +1522,42 @@ export function TalentModule() {
       </div>
 
       {/* Left panel navigation + active panel */}
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr] items-start">
-        <Card>
-          <CardHeader>
-            <CardTitle>Staff Dome panels</CardTitle>
-            <CardDescription>Select a panel to work inside it.</CardDescription>
+      <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)] items-start w-full max-w-full min-w-0 overflow-hidden">
+        <Card className="border-border bg-card/80 shadow-sm shrink-0">
+          <CardHeader className="pb-3 border-b border-border/50">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-base font-semibold flex items-center gap-2">
+                <span className="h-2 w-2 rounded-full bg-cyan-500 shadow-sm" />
+                Talent Operations
+              </CardTitle>
+              <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px] font-semibold bg-cyan-500/10">
+                OmniDome HCM
+              </Badge>
+            </div>
+            <CardDescription className="text-xs">Human Capital & Statutory Modules.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-full justify-between">
+                <Button variant="outline" className="w-full justify-between border-border/80 hover:border-cyan-500/50">
                   <span className="flex items-center gap-2">
-                    <activePanelMeta.icon className="h-4 w-4 text-muted-foreground" />
-                    {activePanelMeta.title}
+                    <activePanelMeta.icon className="h-4 w-4 text-cyan-400" />
+                    <span className="font-medium text-foreground">{activePanelMeta.title}</span>
                   </span>
                   <ChevronDown className="h-4 w-4 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-[280px]">
                 {panelConfig.map((panel) => (
-                  <DropdownMenuItem key={panel.key} onClick={() => setActivePanel(panel.key)}>
+                  <DropdownMenuItem key={panel.key} onClick={() => setActivePanel(panel.key)} className="gap-2">
+                    <panel.icon className="h-4 w-4 text-muted-foreground" />
                     {panel.title}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
 
-            <div className="mt-4 space-y-2">
+            <div className="mt-4 space-y-1">
               {panelConfig.map((panel) => {
                 const isActive = panel.key === activePanel
                 const Icon = panel.icon
@@ -2928,19 +1566,24 @@ export function TalentModule() {
                     key={panel.key}
                     type="button"
                     variant={isActive ? "secondary" : "ghost"}
-                    className="w-full justify-start gap-2"
+                    className={`w-full justify-start gap-2.5 text-xs font-medium h-9 transition-colors ${
+                      isActive
+                        ? "bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-semibold hover:bg-cyan-500/20"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                    }`}
                     onClick={() => setActivePanel(panel.key)}
                   >
-                    <Icon className="h-4 w-4 text-muted-foreground" />
+                    <Icon className={`h-4 w-4 ${isActive ? "text-cyan-400" : "text-muted-foreground"}`} />
                     <span className="flex-1 text-left">{panel.title}</span>
+                    {isActive && <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />}
                   </Button>
                 )
               })}
             </div>
 
-            <div className="mt-5 rounded-lg border border-border bg-background/40 p-4">
-              <p className="text-xs font-medium text-muted-foreground mb-2">Included</p>
-              <div className="flex flex-wrap gap-2">
+            <div className="mt-5 rounded-lg border border-border/70 bg-background/40 p-3.5">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">Active Module Scope</p>
+              <div className="flex flex-wrap gap-1.5">
                 {activePanelMeta.tags.map((tag) => (
                   <PanelTag key={tag}>{tag}</PanelTag>
                 ))}
@@ -2949,55 +1592,8 @@ export function TalentModule() {
           </CardContent>
         </Card>
 
-        <div>
+        <div className="min-w-0 w-full max-w-full overflow-hidden">
           {renderActivePanel()}
-
-          {/* Keep staffing/turnover visuals available within Staff Dome */}
-          <div className="mt-6 grid gap-6 lg:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Headcount by department</CardTitle>
-                <CardDescription>Visibility into org distribution.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={departmentStaff} layout="vertical">
-                      <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                      <XAxis type="number" tick={{ fill: "#737373", fontSize: 12 }} />
-                      <YAxis type="category" dataKey="department" tick={{ fill: "#737373", fontSize: 12 }} width={80} />
-                      <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
-                      <Bar dataKey="count" fill="#60a5fa" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Turnover by department</CardTitle>
-                <CardDescription>Where churn concentrates.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={turnoverData}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        dataKey="value"
-                        nameKey="department"
-                      />
-                      <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
         </div>
       </div>
     </div>

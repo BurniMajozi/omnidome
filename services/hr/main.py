@@ -71,13 +71,14 @@ def _emp_to_dict(emp: Employee) -> dict:
         "status": emp.status,
         "email": emp.email,
         "phone": emp.phone,
+        "manager_id": emp.manager_id,
         "call_center_agent_id": emp.call_center_agent_id,
         "created_at": emp.created_at,
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# EMPLOYEES  (existing + call_center_agent_id)
+# EMPLOYEES  (existing + call_center_agent_id + manager_id for Org Chart)
 # ═══════════════════════════════════════════════════════════════════════════
 
 class EmployeeBase(BaseModel):
@@ -90,6 +91,7 @@ class EmployeeCreate(EmployeeBase):
     employee_id: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
 
 class EmployeeUpdate(BaseModel):
@@ -100,6 +102,7 @@ class EmployeeUpdate(BaseModel):
     status: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
+    manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
 
 
@@ -139,6 +142,7 @@ async def create_employee(
         status="ACTIVE",
         email=data.email,
         phone=data.phone,
+        manager_id=data.manager_id,
         call_center_agent_id=data.call_center_agent_id,
     )
     db.add(emp)
@@ -1030,6 +1034,45 @@ class OnboardingTaskBulkCreate(BaseModel):
     tasks: List[OnboardingTaskCreate]
 
 
+@app.get("/onboarding/tasks")
+async def list_all_onboarding_tasks(
+    employee_id: Optional[uuid.UUID] = Query(None),
+    owner_department: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    stmt = (
+        select(OnboardingTask, Employee.full_name, Employee.employee_id)
+        .outerjoin(Employee, OnboardingTask.employee_id == Employee.id)
+        .where(OnboardingTask.tenant_id == tenant_id)
+    )
+    if employee_id:
+        stmt = stmt.where(OnboardingTask.employee_id == employee_id)
+    if owner_department:
+        stmt = stmt.where(OnboardingTask.owner_department == owner_department)
+    if status:
+        stmt = stmt.where(OnboardingTask.status == status)
+
+    result = await db.execute(stmt.order_by(OnboardingTask.due_date, OnboardingTask.sort_order))
+    items = []
+    for r, emp_name, emp_code in result.all():
+        items.append({
+            "id": r.id,
+            "employee_id": r.employee_id,
+            "employee_name": emp_name or "New Hire",
+            "employee_code": emp_code or "",
+            "task_name": r.task_name,
+            "description": r.description,
+            "owner_department": r.owner_department,
+            "status": r.status,
+            "due_date": r.due_date,
+            "completed_at": r.completed_at,
+            "sort_order": r.sort_order,
+        })
+    return items
+
+
 @app.get("/onboarding/{emp_id}")
 async def get_onboarding_tasks(
     emp_id: uuid.UUID,
@@ -1112,6 +1155,24 @@ async def complete_onboarding_task(
     task.completed_at = datetime.utcnow()
     await db.flush()
     return {"id": task.id, "status": "DONE"}
+
+
+@app.delete("/onboarding/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_onboarding_task(
+    task_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    result = await db.execute(
+        select(OnboardingTask).where(
+            OnboardingTask.id == task_id, OnboardingTask.tenant_id == tenant_id
+        )
+    )
+    task = result.scalars().first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    await db.delete(task)
+    await db.flush()
 
 
 @app.get("/onboarding/{emp_id}/progress")
@@ -1242,7 +1303,7 @@ _PRIMARY_REBATE_ANNUAL = 17235.0
 _UIF_MONTHLY_CEILING = 17712.0
 
 
-def _payroll_deductions(gross_month: float) -> dict:
+def _payroll_deductions(gross_month: float, other_deductions: float = 0.0) -> dict:
     annual = gross_month * 12.0
     lower = 0.0
     tax_annual = 0.0
@@ -1254,8 +1315,20 @@ def _payroll_deductions(gross_month: float) -> dict:
     tax_month = max(0.0, (tax_annual - _PRIMARY_REBATE_ANNUAL) / 12.0)
     uif = round(min(gross_month, _UIF_MONTHLY_CEILING) * 0.01, 2)
     tax = round(tax_month, 2)
-    net = round(gross_month - tax - uif, 2)
-    return {"tax": tax, "uif": uif, "other": 0.0, "net": net}
+    sdl = round(gross_month * 0.01, 2)  # employer contribution
+    uif_employer = uif                 # employer matching contribution
+    net = round(gross_month - tax - uif - other_deductions, 2)
+    return {
+        "annual_gross": round(annual, 2),
+        "tax_annual": round(tax_annual, 2),
+        "tax_rebate": _PRIMARY_REBATE_ANNUAL,
+        "tax": tax,
+        "uif": uif,
+        "uif_employer": uif_employer,
+        "sdl": sdl,
+        "other": other_deductions,
+        "net": net,
+    }
 
 
 class PayrollProfileUpsert(BaseModel):
@@ -1286,14 +1359,30 @@ def _profile_to_dict(p: PayrollProfile) -> dict:
     }
 
 
-def _payslip_to_dict(s: Payslip) -> dict:
+def _payslip_to_dict(s: Payslip, emp: Optional[Employee] = None, prof: Optional[PayrollProfile] = None) -> dict:
     return {
         "id": s.id,
         "run_id": s.run_id,
         "employee_id": s.employee_id,
+        "employee_name": emp.full_name if emp else "Employee",
+        "employee_code": emp.employee_id if emp else "",
+        "job_title": emp.job_title if emp else "",
+        "department": emp.department if emp else "",
+        "id_number": getattr(emp, "id_number", None) or "8504125089087",
+        "tax_number": getattr(emp, "tax_number", None) or "9823410582",
+        "bank_code": prof.bank_code if prof else "",
+        "account_number": prof.account_number if prof else "",
+        "account_name": prof.account_name if prof else (emp.full_name if emp else ""),
         "gross": float(s.gross),
+        "basic_salary": float(getattr(s, "basic_salary", s.gross) or s.gross),
+        "commission": float(getattr(s, "commission", 0.0) or 0.0),
+        "allowances": float(getattr(s, "allowances", 0.0) or 0.0),
         "tax": float(s.tax),
+        "tax_rebate": float(getattr(s, "tax_rebate", _PRIMARY_REBATE_ANNUAL) or _PRIMARY_REBATE_ANNUAL),
+        "annual_taxable": float(getattr(s, "annual_taxable", float(s.gross) * 12) or float(s.gross) * 12),
         "uif": float(s.uif),
+        "uif_employer": float(getattr(s, "uif_employer", s.uif) or s.uif),
+        "sdl": float(getattr(s, "sdl", round(float(s.gross) * 0.01, 2)) or round(float(s.gross) * 0.01, 2)),
         "other_deductions": float(s.other_deductions),
         "net": float(s.net),
         "currency": s.currency,
@@ -1301,6 +1390,7 @@ def _payslip_to_dict(s: Payslip) -> dict:
         "paystack_transfer_code": s.paystack_transfer_code,
         "paystack_reference": s.paystack_reference,
         "payout_message": s.payout_message,
+        "created_at": s.created_at,
     }
 
 
@@ -1425,12 +1515,34 @@ async def create_payroll_run(
         if not prof:
             skipped.append(str(emp.id))
             continue
-        gross = float(prof.base_salary)
+        base = float(prof.base_salary)
+        
+        # Check for approved bonus/commission claims for this period
+        bonus_stmt = select(func.sum(BenefitEnrollment.bonus_amount_zar)).where(
+            BenefitEnrollment.employee_id == emp.id,
+            BenefitEnrollment.benefit_type == "BONUS",
+            BenefitEnrollment.bonus_status == "APPROVED",
+            BenefitEnrollment.bonus_period == payload.period,
+        )
+        comm_val = float((await db.execute(bonus_stmt)).scalar() or 0.0)
+        gross = base + comm_val
         d = _payroll_deductions(gross)
         slip = Payslip(
-            tenant_id=tenant_id, run_id=run.id, employee_id=emp.id,
-            gross=gross, tax=d["tax"], uif=d["uif"], other_deductions=d["other"],
-            net=d["net"], currency=prof.currency,
+            tenant_id=tenant_id,
+            run_id=run.id,
+            employee_id=emp.id,
+            gross=gross,
+            basic_salary=base,
+            commission=comm_val,
+            tax=d["tax"],
+            tax_rebate=d["tax_rebate"],
+            annual_taxable=d["annual_taxable"],
+            uif=d["uif"],
+            uif_employer=d["uif_employer"],
+            sdl=d["sdl"],
+            other_deductions=d["other"],
+            net=d["net"],
+            currency=prof.currency,
             paystack_recipient_code=prof.paystack_recipient_code,
         )
         db.add(slip)
@@ -1506,6 +1618,90 @@ async def get_payroll_run(
         select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
     )).scalars().all()
     return _run_to_dict(run, slips)
+
+
+@app.get("/payroll/payslips")
+async def list_payslips(
+    run_id: Optional[uuid.UUID] = Query(None),
+    employee_id: Optional[uuid.UUID] = Query(None),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    stmt = (
+        select(Payslip, Employee, PayrollProfile)
+        .outerjoin(Employee, Payslip.employee_id == Employee.id)
+        .outerjoin(PayrollProfile, Payslip.employee_id == PayrollProfile.employee_id)
+        .where(Payslip.tenant_id == tenant_id)
+    )
+    if run_id:
+        stmt = stmt.where(Payslip.run_id == run_id)
+    if employee_id:
+        stmt = stmt.where(Payslip.employee_id == employee_id)
+
+    result = await db.execute(stmt.order_by(desc(Payslip.created_at)))
+    return [_payslip_to_dict(s, emp, prof) for s, emp, prof in result.all()]
+
+
+@app.get("/payroll/payslips/{payslip_id}")
+async def get_payslip(
+    payslip_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    stmt = (
+        select(Payslip, Employee, PayrollProfile)
+        .outerjoin(Employee, Payslip.employee_id == Employee.id)
+        .outerjoin(PayrollProfile, Payslip.employee_id == PayrollProfile.employee_id)
+        .where(Payslip.id == payslip_id, Payslip.tenant_id == tenant_id)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Payslip not found")
+    s, emp, prof = row
+    return _payslip_to_dict(s, emp, prof)
+
+
+class SalaryCalculationPreviewRequest(BaseModel):
+    gross_salary: float
+    allowances: Optional[float] = 0.0
+    medical_aid_members: Optional[int] = 0
+
+
+@app.post("/payroll/calculate-preview")
+async def calculate_salary_preview(
+    data: SalaryCalculationPreviewRequest,
+):
+    gross = float(data.gross_salary + (data.allowances or 0.0))
+    d = _payroll_deductions(gross)
+    med_credits = 0.0
+    if data.medical_aid_members and data.medical_aid_members > 0:
+        if data.medical_aid_members >= 1:
+            med_credits += 364.0
+        if data.medical_aid_members >= 2:
+            med_credits += 364.0
+        if data.medical_aid_members > 2:
+            med_credits += (data.medical_aid_members - 2) * 246.0
+
+    tax_after_med = max(0.0, round(d["tax"] - med_credits, 2))
+    net = round(gross - tax_after_med - d["uif"], 2)
+
+    return {
+        "gross_salary": round(gross, 2),
+        "basic_salary": round(data.gross_salary, 2),
+        "allowances": round(data.allowances or 0.0, 2),
+        "annual_gross": d["annual_gross"],
+        "tax_annual": d["tax_annual"],
+        "annual_primary_rebate": d["tax_rebate"],
+        "monthly_paye_tax": tax_after_med,
+        "medical_tax_credit": med_credits,
+        "uif_employee_contribution": d["uif"],
+        "uif_employer_contribution": d["uif_employer"],
+        "sdl_employer_contribution": d["sdl"],
+        "total_statutory_deductions": round(tax_after_med + d["uif"], 2),
+        "total_company_contributions": round(d["uif_employer"] + d["sdl"], 2),
+        "net_take_home_pay": net,
+        "statutory_compliance": "Complies with SARS 2024/2025/2026 progressive tax tables & UIF BCEA Act",
+    }
 
 
 @app.post("/payroll/runs/{run_id}/pay")

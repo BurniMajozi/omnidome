@@ -66,7 +66,17 @@ const navItems = [
     ],
   },
   // Not in the requested order — kept at the bottom so it isn't lost.
-  { icon: BarChart3, label: "Analytics & AI", href: "#analytics", section: "analytics" },
+  {
+    icon: BarChart3,
+    label: "Analytics & AI",
+    href: "#analytics",
+    section: "analytics",
+    children: [
+      { label: "Overview & Metrics", target: "overview" },
+      { label: "Presenton AI Studio", target: "presentations" },
+      { label: "Website Performance", target: "web-analytics" },
+    ],
+  },
 ]
 
 interface SidebarProps {
@@ -79,6 +89,7 @@ interface SidebarProps {
   activeSubSections?: {
     retention?: string
     portal?: string
+    analytics?: string
   }
 }
 
@@ -97,6 +108,7 @@ export function Sidebar({
   const [retentionOpen, setRetentionOpen] = useState(true)
   const [portalOpen, setPortalOpen] = useState(true)
   const [adminOpen, setAdminOpen] = useState(true)
+  const [analyticsOpen, setAnalyticsOpen] = useState(true)
   const visibleNavItems = navItems.filter((item) => {
     // Items with real routes (not hash anchors) are always visible
     if (item.href.startsWith("/")) return true
@@ -166,13 +178,23 @@ export function Sidebar({
           const isActive = activeSection === section
           const hasChildren = Array.isArray(item.children) && item.children.length > 0
           const isOpen =
-            section === "retention" ? retentionOpen : section === "portal" ? portalOpen : section === "admin" ? adminOpen : false
+            section === "retention"
+              ? retentionOpen
+              : section === "portal"
+                ? portalOpen
+                : section === "admin"
+                  ? adminOpen
+                  : section === "analytics"
+                    ? analyticsOpen
+                    : false
           const activeChild =
             section === "retention"
               ? activeSubSections?.retention
               : section === "portal"
                 ? activeSubSections?.portal
-                : undefined
+                : section === "analytics"
+                  ? activeSubSections?.analytics
+                  : undefined
           return (
             <div key={item.label} className="space-y-1">
               <div className="flex items-center gap-1">
@@ -194,6 +216,7 @@ export function Sidebar({
                     if (section === "retention") setRetentionOpen(true)
                     if (section === "portal") setPortalOpen(true)
                     if (section === "admin") setAdminOpen(true)
+                    if (section === "analytics") setAnalyticsOpen(true)
                     onMobileClose()
                   }}
                   title={isCollapsed ? item.label : undefined}
@@ -228,6 +251,7 @@ export function Sidebar({
                       if (section === "retention") setRetentionOpen((prev) => !prev)
                       if (section === "portal") setPortalOpen((prev) => !prev)
                       if (section === "admin") setAdminOpen((prev) => !prev)
+                      if (section === "analytics") setAnalyticsOpen((prev) => !prev)
                     }}
                     title="Toggle section"
                   >

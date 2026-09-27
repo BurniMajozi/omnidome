@@ -921,3 +921,175 @@ export async function getRicaSubscriberAudit(): Promise<RicaSubscriberAuditRespo
 export async function getExecutiveComplianceSummary(): Promise<ExecutiveComplianceSummaryResponse> {
   return fetchCompliance<ExecutiveComplianceSummaryResponse>("/cross-service/orchestrator/executive-summary")
 }
+
+// ── Statutory Payroll, SARS EMP201, UIF & Labor Compliance ───────────────────
+
+export interface Emp201ReturnItem {
+  id?: number
+  period: string
+  due_date: string
+  paye_zar: number
+  uif_zar: number
+  sdl_zar: number
+  total_payable_zar: number
+  status: string
+  prn: string
+  submission_date?: string
+  sars_receipt_number?: string
+}
+
+export interface StatutoryPayrollSummaryResponse {
+  period: string
+  total_employees: number
+  gross_remuneration_zar: number
+  paye_withheld_zar: number
+  uif_employee_zar: number
+  uif_employer_zar: number
+  sdl_zar: number
+  total_emp201_liability_zar: number
+  net_salaries_disbursed_zar: number
+  sars_tcc_pin: string
+  sars_tcc_status: string
+  sars_prn: string
+  emp501_reconciliation_status: string
+  emp501_variance_zar: number
+  recent_emp201_returns: Emp201ReturnItem[]
+}
+
+export interface FileEmp201Input {
+  period: string
+  amount_paye: number
+  amount_uif: number
+  amount_sdl: number
+  payment_method?: string
+  notes?: string
+}
+
+export interface FileEmp201Result {
+  status: string
+  period: string
+  prn: string
+  total_paid_zar: number
+  sars_receipt_number: string
+  message: string
+  submitted_at: string
+}
+
+export interface UifDeclarationItem {
+  employee_id: string
+  employee_code: string
+  full_name: string
+  id_number: string
+  tax_number: string
+  department: string
+  job_title: string
+  gross_remuneration_zar: number
+  uif_remuneration_zar: number
+  hours_worked_month: number
+  employee_uif_zar: number
+  employer_uif_zar: number
+  total_uif_zar: number
+  employment_status: string
+  uif_declaration_status: string
+}
+
+export interface UifDeclarationsResponse {
+  period: string
+  uif_employer_reference: string
+  total_contributors: number
+  total_monthly_remittance_zar: number
+  ufiling_batch_reference: string
+  ufiling_status: string
+  last_submission_date: string
+  employees: UifDeclarationItem[]
+}
+
+export interface SubmitUifInput {
+  period: string
+  declarer_name: string
+  notes?: string
+}
+
+export interface SubmitUifResult {
+  status: string
+  period: string
+  batch_reference: string
+  acknowledgment_receipt: string
+  contributors_declared: number
+  total_uif_zar: number
+  message: string
+}
+
+export interface IssueUi27Input {
+  employee_id: string
+  reason_for_claim: string
+  last_day_worked: string
+}
+
+export interface IssueUi27Result {
+  certificate_number: string
+  employee_name: string
+  id_number: string
+  employer_uif_ref: string
+  remuneration_received_zar: number
+  claim_reason: string
+  issue_date: string
+  authorized_signatory: string
+  message: string
+}
+
+export interface LaborAuditFinding {
+  standard: string
+  category: string
+  compliant: boolean
+  status_label: string
+  details: string
+  remediation?: string | null
+}
+
+export interface LaborComplianceAuditResponse {
+  overall_labor_score: number
+  bcea_readiness_status: string
+  normal_hours_compliant_pct: number
+  overtime_compliant_pct: number
+  mandatory_leave_accrual_compliant_pct: number
+  psira_security_grading_compliant_pct: number
+  total_active_staff: number
+  psira_registered_officers: number
+  audit_findings: LaborAuditFinding[]
+}
+
+export async function getPayrollStatutorySummary(period?: string): Promise<StatutoryPayrollSummaryResponse> {
+  const query = period ? `?period=${encodeURIComponent(period)}` : ""
+  return fetchCompliance<StatutoryPayrollSummaryResponse>(`/cross-service/payroll-statutory/summary${query}`)
+}
+
+export async function fileEmp201Declaration(payload: FileEmp201Input): Promise<FileEmp201Result> {
+  return fetchCompliance<FileEmp201Result>("/cross-service/payroll-statutory/emp201/file", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getUifDeclarations(period?: string): Promise<UifDeclarationsResponse> {
+  const query = period ? `?period=${encodeURIComponent(period)}` : ""
+  return fetchCompliance<UifDeclarationsResponse>(`/cross-service/payroll-statutory/uif/declarations${query}`)
+}
+
+export async function submitUifDeclaration(payload: SubmitUifInput): Promise<SubmitUifResult> {
+  return fetchCompliance<SubmitUifResult>("/cross-service/payroll-statutory/uif/submit", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function issueUi27Certificate(payload: IssueUi27Input): Promise<IssueUi27Result> {
+  return fetchCompliance<IssueUi27Result>("/cross-service/payroll-statutory/uif/ui27-certificate", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getLaborComplianceAudit(): Promise<LaborComplianceAuditResponse> {
+  return fetchCompliance<LaborComplianceAuditResponse>("/cross-service/payroll-statutory/labor-audit")
+}

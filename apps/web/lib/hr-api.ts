@@ -46,9 +46,15 @@ export interface Employee {
   hire_date: string
   email?: string
   phone?: string
+  manager_id?: string | null
+  id_number?: string
+  tax_number?: string
   status: string
   created_at: string
   updated_at?: string
+  financial_limit?: number
+  is_agent?: boolean
+  llm_model?: string
 }
 
 export interface EmployeeCreate {
@@ -59,6 +65,13 @@ export interface EmployeeCreate {
   hire_date: string
   email?: string
   phone?: string
+  manager_id?: string | null
+  id_number?: string
+  tax_number?: string
+  status?: string
+  financial_limit?: number
+  is_agent?: boolean
+  llm_model?: string
 }
 
 export interface LeaveRequest {
@@ -136,7 +149,8 @@ export interface TrainingCourse {
   category: string
   duration_hours?: number
   mandatory?: boolean
-  created_at: string
+  passing_score?: number
+  created_at?: string
 }
 
 export interface TrainingCourseCreate {
@@ -145,6 +159,7 @@ export interface TrainingCourseCreate {
   category: string
   duration_hours?: number
   mandatory?: boolean
+  passing_score?: number
 }
 
 export interface TrainingEnrollment {
@@ -221,6 +236,8 @@ export interface ExitChecklist {
 export interface OnboardingTask {
   id: string
   employee_id: string
+  employee_name?: string
+  employee_code?: string
   task_name: string
   description?: string
   owner_department: string
@@ -245,6 +262,99 @@ export interface OnboardingTaskBulkItem {
   owner_department: string
   due_date?: string
   sort_order?: number
+}
+
+export interface KnowledgeArticle {
+  id: string
+  tenant_id?: string
+  title: string
+  content: string
+  category: string
+  tags: string[]
+  is_published: boolean
+  created_at?: string
+  snippet?: string
+}
+
+export interface CommissionRule {
+  id: string
+  tenant_id?: string
+  tier_name: string
+  product_name: string
+  department: string
+  min_deals: number
+  max_deals?: number | null
+  rate_percent: number
+  min_threshold_zar: number
+  is_active: boolean
+  sort_order?: number
+  description?: string
+  created_at?: string
+}
+
+export interface CommissionRecord {
+  id: string
+  tenant_id?: string
+  employee_id?: string
+  employee_name?: string
+  employee_code?: string
+  deal_name?: string
+  product_name?: string
+  amount_zar: number
+  rate_percent: number
+  status: string
+  created_at?: string
+}
+
+export interface PayslipRecord {
+  id: string
+  run_id: string
+  employee_id: string
+  employee_name: string
+  employee_code: string
+  job_title: string
+  department: string
+  id_number?: string
+  tax_number?: string
+  bank_code?: string
+  account_number?: string
+  account_name?: string
+  gross: number
+  basic_salary: number
+  commission: number
+  allowances: number
+  tax: number
+  tax_rebate: number
+  annual_taxable: number
+  uif: number
+  uif_employer: number
+  sdl: number
+  other_deductions: number
+  net: number
+  currency: string
+  payout_status: string
+  paystack_transfer_code?: string
+  paystack_reference?: string
+  payout_message?: string
+  created_at: string
+}
+
+export interface SalaryPreviewResult {
+  gross_salary: number
+  basic_salary: number
+  allowances: number
+  annual_gross: number
+  tax_annual: number
+  annual_primary_rebate: number
+  monthly_paye_tax: number
+  medical_tax_credit: number
+  uif_employee_contribution: number
+  uif_employer_contribution: number
+  sdl_employer_contribution: number
+  total_statutory_deductions: number
+  total_company_contributions: number
+  net_take_home_pay: number
+  statutory_compliance: string
 }
 
 // ── API methods ──────────────────────────────────────────────────────
@@ -432,6 +542,14 @@ export const getExitChecklist = (exitId: string) =>
   fetchHR<ExitChecklist>(`/exits/${exitId}/checklist`)
 
 // Onboarding
+export const listAllOnboardingTasks = (params?: { employee_id?: string; owner_department?: string; status?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.employee_id) q.set("employee_id", params.employee_id)
+  if (params?.owner_department) q.set("owner_department", params.owner_department)
+  if (params?.status) q.set("status", params.status)
+  return fetchHR<OnboardingTask[]>(`/onboarding/tasks?${q}`)
+}
+
 export const getOnboardingTasks = (empId: string) =>
   fetchHR<OnboardingTask[]>(`/onboarding/${empId}`)
 
@@ -453,6 +571,11 @@ export const bulkCreateOnboardingTasks = (
 export const completeOnboardingTask = (taskId: string) =>
   fetchHR<{ status: string }>(`/onboarding/tasks/${taskId}/complete`, {
     method: "PUT",
+  })
+
+export const deleteOnboardingTask = (taskId: string) =>
+  fetchHR<{ status?: string }>(`/onboarding/tasks/${taskId}`, {
+    method: "DELETE",
   })
 
 export const getOnboardingProgress = (empId: string) =>
@@ -614,4 +737,136 @@ export const getStaffComplianceAudit = () =>
 
 export const getOrchestratorWellnessInsights = () =>
   fetchHR<OrchestratorWellnessAlert[]>("/cross-service/orchestrator/wellness")
+
+export const executeOrchestratorAction = (alertId: string, actionType?: string, overrideNotes?: string) =>
+  fetchHR<{ status: string; alert_id: string; action: string; employee_name: string; message: string }>(
+    `/cross-service/orchestrator/wellness/${alertId}/execute`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action_type: actionType, override_notes: overrideNotes }),
+    }
+  )
+
+// ── Knowledge Base (Markdown, Search, Categories) ─────────────────────
+
+export const listKnowledgeArticles = (params?: { q?: string; category?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.q) q.set("q", params.q)
+  if (params?.category) q.set("category", params.category)
+  return fetchHR<KnowledgeArticle[]>(`/cross-service/knowledge-base?${q}`)
+}
+
+export const getKnowledgeArticle = (id: string) =>
+  fetchHR<KnowledgeArticle>(`/cross-service/knowledge-base/${id}`)
+
+export const createKnowledgeArticle = (data: { title: string; content: string; category?: string; tags?: string[]; is_published?: boolean }) =>
+  fetchHR<KnowledgeArticle>("/cross-service/knowledge-base", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateKnowledgeArticle = (id: string, data: Partial<KnowledgeArticle>) =>
+  fetchHR<{ id: string; status: string }>(`/cross-service/knowledge-base/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const deleteKnowledgeArticle = (id: string) =>
+  fetchHR<{ status?: string }>(`/cross-service/knowledge-base/${id}`, {
+    method: "DELETE",
+  })
+
+// ── Commission Rules & Transactions Journey ───────────────────────────
+
+export const listCommissionRules = (params?: { department?: string; product_name?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.department) q.set("department", params.department)
+  if (params?.product_name) q.set("product_name", params.product_name)
+  return fetchHR<CommissionRule[]>(`/cross-service/sales/commissions/rules?${q}`)
+}
+
+export const createCommissionRule = (data: {
+  tier_name: string
+  product_name?: string
+  department?: string
+  rate_percent: number
+  min_threshold_zar?: number
+  min_deals?: number
+  max_deals?: number | null
+  description?: string
+}) =>
+  fetchHR<CommissionRule>("/cross-service/sales/commissions/rules", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateCommissionRule = (id: string, data: Partial<CommissionRule>) =>
+  fetchHR<{ id: string; status: string }>(`/cross-service/sales/commissions/rules/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const deleteCommissionRule = (id: string) =>
+  fetchHR<{ status?: string }>(`/cross-service/sales/commissions/rules/${id}`, {
+    method: "DELETE",
+  })
+
+export const listCommissionLedger = (params?: { status?: string; employee_id?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.status) q.set("status", params.status)
+  if (params?.employee_id) q.set("employee_id", params.employee_id)
+  return fetchHR<CommissionRecord[]>(`/cross-service/sales/commissions/ledger?${q}`)
+}
+
+export const createCommissionRecord = (data: {
+  employee_id?: string
+  deal_name?: string
+  product_name?: string
+  amount_zar: number
+  rate_percent?: number
+  status?: string
+}) =>
+  fetchHR<CommissionRecord>("/cross-service/sales/commissions/ledger", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateCommissionStatus = (commId: string, status: string) =>
+  fetchHR<{ id: string; status: string }>(`/cross-service/sales/commissions/ledger/${commId}/status?status=${encodeURIComponent(status)}`, {
+    method: "PUT",
+  })
+
+export const deleteCommissionRecord = (commId: string) =>
+  fetchHR<{ status?: string }>(`/cross-service/sales/commissions/ledger/${commId}`, {
+    method: "DELETE",
+  })
+
+// ── Payroll & Detailed Payslips (SARS PAYE & UIF) ─────────────────────
+
+export const listPayslips = (params?: { run_id?: string; employee_id?: string }) => {
+  const q = new URLSearchParams()
+  if (params?.run_id) q.set("run_id", params.run_id)
+  if (params?.employee_id) q.set("employee_id", params.employee_id)
+  return fetchHR<PayslipRecord[]>(`/payroll/payslips?${q}`)
+}
+
+export const getPayslip = (payslipId: string) =>
+  fetchHR<PayslipRecord>(`/payroll/payslips/${payslipId}`)
+
+export const calculateSalaryPreview = (data: {
+  gross_salary: number
+  allowances?: number
+  medical_aid_members?: number
+}) =>
+  fetchHR<SalaryPreviewResult>("/payroll/calculate-preview", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const updateReportingLine = (employeeId: string, managerId: string | null) =>
+  fetchHR<Employee>(`/employees/${employeeId}`, {
+    method: "PUT",
+    body: JSON.stringify({ manager_id: managerId }),
+  })
+
 

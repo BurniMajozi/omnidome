@@ -38,6 +38,7 @@ import {
   Package,
   Building2,
   Phone,
+  Coins,
 } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { Button } from "@/components/ui/button"
@@ -58,6 +59,15 @@ import { SalesLeadSources } from "./sales-lead-sources"
 import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales-leads-tab"
 import { LeadActionsMenu, LeadPanel, type LeadPanelMode } from "./sales-lead-actions"
 import { LeadWarmingRules } from "./sales-lead-warming"
+import { SalesCommissionsView } from "./talent/sales-commissions-view"
+import {
+  getSalesTalentOverview,
+  listSalesRepsMetrics,
+  listEmployees,
+  type SalesOverviewResponse,
+  type SalesRepMetric,
+  type Employee,
+} from "@/lib/hr-api"
 
 const defaultSalesData = [
   { month: "Jan", revenue: 450000, deals: 12 },
@@ -428,8 +438,40 @@ export function SalesModule() {
   // ── Lead Management & Channel Sales State ─────────────────────────
   const [leads, setLeads] = useState<SalesLead[]>([])
   const [loadingLeads, setLoadingLeads] = useState(false)
-  const [activeTab, setActiveTab] = useState<"pipeline" | "channels" | "leads" | "ai-engine">("pipeline")
+  const [activeTab, setActiveTab] = useState<"pipeline" | "channels" | "leads" | "ai-engine" | "commissions">("pipeline")
   const [pipelineRefreshCounter, setPipelineRefreshCounter] = useState(0)
+
+  // ── Sales Commissions State ──────────────────────────────────────────
+  const [salesOverview, setSalesOverview] = useState<SalesOverviewResponse | null>(null)
+  const [salesReps, setSalesReps] = useState<SalesRepMetric[]>([])
+  const [salesLoading, setSalesLoading] = useState(false)
+  const [salesError, setSalesError] = useState<string | null>(null)
+  const [salesEmployees, setSalesEmployees] = useState<Employee[]>([])
+
+  const fetchSalesCommissions = useCallback(async () => {
+    setSalesLoading(true)
+    setSalesError(null)
+    try {
+      const [overview, reps, emps] = await Promise.all([
+        getSalesTalentOverview().catch(() => null),
+        listSalesRepsMetrics().catch(() => []),
+        listEmployees().catch(() => []),
+      ])
+      setSalesOverview(overview)
+      setSalesReps(reps)
+      setSalesEmployees(emps)
+    } catch (err: unknown) {
+      setSalesError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSalesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === "commissions") {
+      void fetchSalesCommissions()
+    }
+  }, [activeTab, fetchSalesCommissions])
 
   // Unified Deal & Lead Modal State (includes Contact Details & Product Selection)
   const [dealModalOpen, setDealModalOpen] = useState(false)
@@ -492,7 +534,7 @@ export function SalesModule() {
     return () => window.removeEventListener("omnidome:open-lead", onOpen)
   }, [])
 
-  const switchTab = (tab: "pipeline" | "channels" | "leads" | "ai-engine") => {
+  const switchTab = (tab: "pipeline" | "channels" | "leads" | "ai-engine" | "commissions") => {
     if (tab === "leads" && staleRef.current.leads) {
       staleRef.current.leads = false
       void loadLeads()
@@ -645,6 +687,13 @@ export function SalesModule() {
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 AI Lead Warming & Automations
+              </TabsTrigger>
+              <TabsTrigger
+                value="commissions"
+                className="text-xs font-semibold gap-1.5"
+              >
+                <Coins className="h-3.5 w-3.5 text-amber-400" />
+                Sales & Commissions
               </TabsTrigger>
             </TabsList>
 
@@ -896,6 +945,20 @@ export function SalesModule() {
 
           {/* Real lead sources: FNO passed homes → geo segments (SPEC-geo-segments.md) */}
           <SalesLeadSources />
+        </div>
+      )}
+
+      {/* ── TAB 5: Sales & Commission Management ── */}
+      {activeTab === "commissions" && (
+        <div className="space-y-6">
+          <SalesCommissionsView
+            salesOverview={salesOverview}
+            salesReps={salesReps}
+            salesLoading={salesLoading}
+            salesError={salesError}
+            employees={salesEmployees}
+            onRefreshSales={fetchSalesCommissions}
+          />
         </div>
       )}
 

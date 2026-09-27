@@ -24,12 +24,15 @@ import {
     PolarAngleAxis,
     PolarRadiusAxis,
 } from "recharts"
-import { BarChart3, TrendingUp, Brain, Activity, MousePointerClick, Clock } from "lucide-react"
+import { BarChart3, TrendingUp, Brain, Activity, MousePointerClick, Clock, Sparkles, Presentation, Play } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { analyticsApi } from "@/lib/analytics/api"
 import type { ClickPoint, PageLoadPoint } from "@/lib/analytics/api"
 import { useEffect, useState, useCallback } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { PresentonStudio } from "./analytics/presenton-studio"
 
 // Revenue trend data
 const defaultRevenueTrendData = [
@@ -316,7 +319,11 @@ const tableColumns = [
 
 const COLORS = ["#4ade80", "#f97316", "#ef4444"]
 
-export function AnalyticsModule() {
+interface AnalyticsModuleProps {
+    activeTabOverride?: string
+}
+
+export function AnalyticsModule({ activeTabOverride }: AnalyticsModuleProps = {}) {
     const { data } = useModuleData("analytics", {
         flashcardKPIs: defaultFlashcardKPIs,
         activities: defaultActivities,
@@ -326,10 +333,21 @@ export function AnalyticsModule() {
         tableData: defaultTableData,
     })
 
+    const [activeView, setActiveView] = useState<"metrics" | "presenton" | "web">("metrics")
     const [days, setDays] = useState(30)
     const [clicks, setClicks] = useState<ClickPoint[]>([])
     const [pageLoad, setPageLoad] = useState<PageLoadPoint[]>([])
     const [analyticsLoading, setAnalyticsLoading] = useState(true)
+
+    useEffect(() => {
+        if (activeTabOverride === "presentations" || activeTabOverride === "presenton") {
+            setActiveView("presenton")
+        } else if (activeTabOverride === "web-analytics" || activeTabOverride === "web") {
+            setActiveView("web")
+        } else if (activeTabOverride === "overview" || activeTabOverride === "metrics") {
+            setActiveView("metrics")
+        }
+    }, [activeTabOverride])
 
     const loadAnalytics = useCallback(async () => {
         setAnalyticsLoading(true)
@@ -357,19 +375,79 @@ export function AnalyticsModule() {
     )
 
     return (
-        <ModuleLayout
-            title="Analytics & AI Insights"
-        icon={<BarChart3 className="h-5 w-5" />}
-        subtitle="Revenue analytics, AI insights, and platform-wide performance metrics"
-            flashcardKPIs={flashcardKPIs}
-            activities={data.activities ?? defaultActivities}
-            issues={data.issues ?? defaultIssues}
-            summary="AI analytics engine processed 2,560 insights this month with 74% actioned within 24 hours. Revenue is trending 18% above forecast driven by VAS attach rate improvements. Usage-to-billing sync shows 97.5% accuracy with 3 orphaned RADIUS accounts flagged for review. Proactive health monitoring has improved FCR by 15% as technicians are dispatched before customers call."
-            tasks={data.tasks ?? defaultTasks}
-            aiRecommendations={data.aiRecommendations ?? defaultAIRecommendations}
-            tableData={data.tableData ?? defaultTableData}
-            tableColumns={tableColumns}
-        >
+        <div className="space-y-6">
+            {/* Top Navigation Tabs */}
+            <div className="flex flex-wrap items-center justify-between border-b border-border/80 pb-3 gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Button
+                        variant={activeView === "metrics" ? "default" : "outline"}
+                        size="sm"
+                        className="h-8 gap-2 text-xs font-semibold"
+                        onClick={() => setActiveView("metrics")}
+                    >
+                        <BarChart3 className="h-3.5 w-3.5" />
+                        Executive Metrics & Health
+                    </Button>
+
+                    <Button
+                        variant={activeView === "presenton" ? "default" : "outline"}
+                        size="sm"
+                        className={`h-8 gap-2 text-xs font-semibold ${
+                            activeView === "presenton"
+                                ? "bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white border-0 shadow-md"
+                                : "border-violet-500/40 text-violet-400 hover:bg-violet-950/20"
+                        }`}
+                        onClick={() => setActiveView("presenton")}
+                    >
+                        <Sparkles className="h-3.5 w-3.5 text-violet-300 animate-pulse" />
+                        Presenton AI Studio
+                        <Badge variant="outline" className="text-[9px] py-0 px-1 border-violet-400 text-violet-200 bg-violet-500/20">
+                            Slide Generator
+                        </Badge>
+                    </Button>
+
+                    <Button
+                        variant={activeView === "web" ? "default" : "outline"}
+                        size="sm"
+                        className="h-8 gap-2 text-xs font-semibold"
+                        onClick={() => setActiveView("web")}
+                    >
+                        <Activity className="h-3.5 w-3.5" />
+                        Website Performance
+                    </Button>
+                </div>
+            </div>
+
+            {/* View 1: Presenton Studio */}
+            {activeView === "presenton" && (
+                <PresentonStudio onBackToOverview={() => setActiveView("metrics")} />
+            )}
+
+            {/* View 2: Executive Metrics & Health */}
+            {activeView !== "presenton" && (
+                <ModuleLayout
+                    title="Analytics & AI Insights"
+                    icon={<BarChart3 className="h-5 w-5" />}
+                    subtitle="Revenue analytics, AI insights, and platform-wide performance metrics"
+                    headerActions={
+                        <Button
+                            size="sm"
+                            onClick={() => setActiveView("presenton")}
+                            className="h-8 gap-1.5 text-xs bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold shadow-sm"
+                        >
+                            <Sparkles className="h-3.5 w-3.5" />
+                            Create Presentation
+                        </Button>
+                    }
+                    flashcardKPIs={flashcardKPIs}
+                    activities={data.activities ?? defaultActivities}
+                    issues={data.issues ?? defaultIssues}
+                    summary="AI analytics engine processed 2,560 insights this month with 74% actioned within 24 hours. Revenue is trending 18% above forecast driven by VAS attach rate improvements. Usage-to-billing sync shows 97.5% accuracy with 3 orphaned RADIUS accounts flagged for review. Proactive health monitoring has improved FCR by 15% as technicians are dispatched before customers call."
+                    tasks={data.tasks ?? defaultTasks}
+                    aiRecommendations={data.aiRecommendations ?? defaultAIRecommendations}
+                    tableData={data.tableData ?? defaultTableData}
+                    tableColumns={tableColumns}
+                >
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Revenue & Subscriber Trend */}
                 <div className="surface-card p-6">
@@ -631,6 +709,8 @@ export function AnalyticsModule() {
                 )}
             </div>
 
-</ModuleLayout>
+                </ModuleLayout>
+            )}
+        </div>
     )
 }

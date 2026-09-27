@@ -19,12 +19,19 @@ import {
   listLeadScores,
   type Campaign, type Contact, type Broadcast, type BroadcastStats, type LeadScore,
 } from "@/lib/marketing-demo-api"
+import { EmailTemplatesTab } from "@/components/modules/marketing/email-templates-tab"
+import { EmailJourneyTab } from "@/components/modules/marketing/email-journey-tab"
 
 const ZAR = (n?: number | null) => (n == null ? "—" : "R " + Number(n).toLocaleString("en-ZA"))
-const TABS = ["prospects", "campaigns", "whatsapp", "leads"] as const
+const TABS = ["prospects", "campaigns", "email", "journeys", "whatsapp", "leads"] as const
 type Tab = (typeof TABS)[number]
 const TAB_LABEL: Record<Tab, string> = {
-  prospects: "Prospects & Segments", campaigns: "Campaigns", whatsapp: "WhatsApp", leads: "Leads",
+  prospects: "Prospects & Segments",
+  campaigns: "Campaigns",
+  email: "Email & Templates",
+  journeys: "Templates Journey",
+  whatsapp: "WhatsApp",
+  leads: "Leads",
 }
 
 const PROSPECT_TEMPLATE = `name,phone,email,segment
@@ -102,6 +109,8 @@ export default function MarketingPage() {
         {tab === "campaigns" && (
           <CampaignsTab campaigns={campaigns} segments={segments} reload={reloadAll} setError={setError} />
         )}
+        {tab === "email" && <EmailTemplatesTab />}
+        {tab === "journeys" && <EmailJourneyTab />}
         {tab === "whatsapp" && (
           <WhatsAppTab broadcasts={broadcasts} contactCount={contacts.length} reload={reloadAll} setError={setError} />
         )}

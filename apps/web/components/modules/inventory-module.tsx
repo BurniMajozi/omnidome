@@ -22,6 +22,7 @@ import {
 import { Package, Warehouse, Truck, AlertTriangle } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 import { PurchasingSection } from "./purchasing-section"
+import { FieldTechVanStockView } from "./inventory/field-tech-van-stock"
 
 // Stock levels by category
 const defaultStockByCategoryData = [
@@ -429,6 +430,10 @@ export function InventoryModule() {
 
             <div className="mt-6">
                 <PurchasingSection />
+            </div>
+
+            <div className="mt-8 pt-6 border-t border-border/50">
+                <FieldTechVanStockView />
             </div>
         </ModuleLayout>
     )

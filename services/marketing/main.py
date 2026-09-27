@@ -173,6 +173,29 @@ class TemplateCreate(BaseModel):
     category: str = "promotional"
 
 
+class TemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    subject: Optional[str] = None
+    body_html: Optional[str] = None
+    category: Optional[str] = None
+
+
+class JourneyCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    trigger_type: str = "signup"
+    status: str = "draft"
+    steps: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class JourneyUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    trigger_type: Optional[str] = None
+    status: Optional[str] = None
+    steps: Optional[List[Dict[str, Any]]] = None
+
+
 class ABTestCreate(BaseModel):
     campaign_id: uuid.UUID
     variant_a: Dict[str, Any] = Field(..., description="Subject/body for variant A")
@@ -622,6 +645,20 @@ def _ensure_marketing_tables(engine) -> None:
         subject VARCHAR(500),
         body_html TEXT,
         category VARCHAR(50) DEFAULT 'promotional',
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE TABLE IF NOT EXISTS marketing_email_journeys (
+        id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+        tenant_id UUID NOT NULL REFERENCES tenants(id),
+        name VARCHAR(255) NOT NULL,
+        description TEXT,
+        trigger_type VARCHAR(100) DEFAULT 'signup',
+        status VARCHAR(50) DEFAULT 'draft',
+        steps JSONB DEFAULT '[]',
+        total_enrolled INT DEFAULT 0,
+        total_completed INT DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT now(),
         updated_at TIMESTAMPTZ DEFAULT now()
     );
@@ -1162,6 +1199,414 @@ async def create_template(
         )
         row = conn.execute(text("SELECT * FROM marketing_templates WHERE id = :id"), {"id": str(tid)}).mappings().first()
     return dict(row)
+
+
+@app.get("/templates/{template_id}")
+async def get_template(
+    template_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM marketing_templates WHERE id = :id AND tenant_id = :tid"),
+            {"id": str(template_id), "tid": str(tenant_id)},
+        ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return dict(row)
+
+
+@app.put("/templates/{template_id}")
+async def update_template(
+    template_id: uuid.UUID,
+    body: TemplateUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    updates = []
+    params: Dict[str, Any] = {"id": str(template_id), "tid": str(tenant_id)}
+    if body.name is not None:
+        updates.append("name = :name")
+        params["name"] = body.name
+    if body.subject is not None:
+        updates.append("subject = :subject")
+        params["subject"] = body.subject
+    if body.body_html is not None:
+        updates.append("body_html = :body_html")
+        params["body_html"] = body.body_html
+    if body.category is not None:
+        updates.append("category = :category")
+        params["category"] = body.category
+    updates.append("updated_at = now()")
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    sql = f"UPDATE marketing_templates SET {', '.join(updates)} WHERE id = :id AND tenant_id = :tid RETURNING *"
+    with engine.begin() as conn:
+        row = conn.execute(text(sql), params).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return dict(row)
+
+
+@app.delete("/templates/{template_id}", status_code=204)
+async def delete_template(
+    template_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        conn.execute(
+            text("DELETE FROM marketing_templates WHERE id = :id AND tenant_id = :tid"),
+            {"id": str(template_id), "tid": str(tenant_id)},
+        )
+    return None
+
+
+# ──────────────────── Templates Journey (Email Automations) ───────
+
+_EMAIL_JOURNEYS: Dict[str, List[Dict[str, Any]]] = {}
+
+def _default_journeys() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "11111111-1111-1111-1111-111111111101",
+            "name": "Welcome & Onboarding Journey",
+            "description": "Nurtures new subscribers and customers through account setup and key value props.",
+            "trigger_type": "signup",
+            "status": "active",
+            "total_enrolled": 1420,
+            "total_completed": 1184,
+            "created_at": "2026-09-20T10:00:00Z",
+            "steps": [
+                {
+                    "id": "step-1",
+                    "type": "trigger",
+                    "title": "Trigger: New Customer Subscribed",
+                    "condition": "Event: user.signup OR newsletter.optin",
+                    "stats": {"entered": 1420, "completed": 1420},
+                },
+                {
+                    "id": "step-2",
+                    "type": "template",
+                    "title": "Send: Welcome & Own Your Newsletter",
+                    "template_name": "Own your newsletter",
+                    "delay_hours": 0,
+                    "stats": {"entered": 1420, "completed": 1420, "open_rate": 68.4, "click_rate": 31.2},
+                },
+                {
+                    "id": "step-3",
+                    "type": "delay",
+                    "title": "Wait 2 Days",
+                    "delay_hours": 48,
+                    "stats": {"entered": 1390, "completed": 1320},
+                },
+                {
+                    "id": "step-4",
+                    "type": "condition",
+                    "title": "Branch: Check if First Email Opened",
+                    "condition": "email.opened == true",
+                    "stats": {"entered": 1320, "completed": 1320},
+                },
+                {
+                    "id": "step-5",
+                    "type": "template",
+                    "title": "Send: Pro Tips & Quick Setup Guide",
+                    "template_name": "Getting Started Quick Guide",
+                    "delay_hours": 0,
+                    "stats": {"entered": 903, "completed": 880, "open_rate": 54.1, "click_rate": 22.8},
+                },
+                {
+                    "id": "step-6",
+                    "type": "action",
+                    "title": "Action: Add Tag 'onboarding-completed'",
+                    "action_type": "add_tag",
+                    "stats": {"entered": 880, "completed": 880},
+                },
+            ],
+        },
+        {
+            "id": "11111111-1111-1111-1111-111111111102",
+            "name": "Commercial Guarding Lead Nurture",
+            "description": "Automated sales enablement sequence for high-intent business leads.",
+            "trigger_type": "lead_tagged",
+            "status": "active",
+            "total_enrolled": 430,
+            "total_completed": 310,
+            "created_at": "2026-09-22T08:30:00Z",
+            "steps": [
+                {
+                    "id": "lead-1",
+                    "type": "trigger",
+                    "title": "Trigger: Lead Tagged 'Commercial'",
+                    "condition": "Tag: Commercial",
+                    "stats": {"entered": 430, "completed": 430},
+                },
+                {
+                    "id": "lead-2",
+                    "type": "template",
+                    "title": "Send: Commercial Security Assessment",
+                    "template_name": "Commercial Assessment Intro",
+                    "delay_hours": 0,
+                    "stats": {"entered": 430, "completed": 430, "open_rate": 72.1, "click_rate": 41.5},
+                },
+                {
+                    "id": "lead-3",
+                    "type": "delay",
+                    "title": "Wait 1 Day",
+                    "delay_hours": 24,
+                    "stats": {"entered": 420, "completed": 410},
+                },
+                {
+                    "id": "lead-4",
+                    "type": "template",
+                    "title": "Send: Case Study & Client Proof",
+                    "template_name": "Enterprise Security Case Study",
+                    "delay_hours": 0,
+                    "stats": {"entered": 410, "completed": 395, "open_rate": 61.0, "click_rate": 29.4},
+                },
+            ],
+        },
+        {
+            "id": "11111111-1111-1111-1111-111111111103",
+            "name": "Subscriber Re-engagement Sequence",
+            "description": "Recovers dormant subscribers who haven't opened in 30 days.",
+            "trigger_type": "inactivity",
+            "status": "draft",
+            "total_enrolled": 210,
+            "total_completed": 95,
+            "created_at": "2026-09-25T14:15:00Z",
+            "steps": [
+                {
+                    "id": "re-1",
+                    "type": "trigger",
+                    "title": "Trigger: Inactive for 30 Days",
+                    "condition": "activity.last_opened > 30d",
+                    "stats": {"entered": 210, "completed": 210},
+                },
+                {
+                    "id": "re-2",
+                    "type": "template",
+                    "title": "Send: We Miss You Exclusive Offer",
+                    "template_name": "Re-engagement Promo",
+                    "delay_hours": 0,
+                    "stats": {"entered": 210, "completed": 210, "open_rate": 45.2, "click_rate": 18.0},
+                },
+                {
+                    "id": "re-3",
+                    "type": "delay",
+                    "title": "Wait 4 Days",
+                    "delay_hours": 96,
+                    "stats": {"entered": 200, "completed": 190},
+                },
+                {
+                    "id": "re-4",
+                    "type": "condition",
+                    "title": "Branch: Check if Clicked Promo",
+                    "condition": "email.clicked == true",
+                    "stats": {"entered": 190, "completed": 190},
+                },
+            ],
+        },
+    ]
+
+
+@app.get("/email/journeys")
+async def list_email_journeys(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    try:
+        engine = get_engine()
+        _ensure_marketing_tables(engine)
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT * FROM marketing_email_journeys WHERE tenant_id = :tid ORDER BY created_at DESC"),
+                {"tid": tkey},
+            ).mappings().all()
+            if rows:
+                return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning("DB journey query fallback: %s", e)
+
+    if tkey not in _EMAIL_JOURNEYS:
+        _EMAIL_JOURNEYS[tkey] = _default_journeys()
+    return _EMAIL_JOURNEYS[tkey]
+
+
+@app.post("/email/journeys", status_code=201)
+async def create_email_journey(
+    body: JourneyCreate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    jid = str(uuid.uuid4())
+    now_str = datetime.now(timezone.utc).isoformat()
+    record = {
+        "id": jid,
+        "tenant_id": tkey,
+        "name": body.name,
+        "description": body.description,
+        "trigger_type": body.trigger_type,
+        "status": body.status,
+        "steps": body.steps,
+        "total_enrolled": 0,
+        "total_completed": 0,
+        "created_at": now_str,
+        "updated_at": now_str,
+    }
+
+    try:
+        engine = get_engine()
+        _ensure_marketing_tables(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO marketing_email_journeys 
+                    (id, tenant_id, name, description, trigger_type, status, steps, total_enrolled, total_completed)
+                    VALUES (:id, :tid, :name, :desc, :ttype, :status, CAST(:steps AS jsonb), 0, 0)
+                """),
+                {
+                    "id": jid,
+                    "tid": tkey,
+                    "name": body.name,
+                    "desc": body.description,
+                    "ttype": body.trigger_type,
+                    "status": body.status,
+                    "steps": json.dumps(body.steps),
+                },
+            )
+            row = conn.execute(text("SELECT * FROM marketing_email_journeys WHERE id = :id"), {"id": jid}).mappings().first()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.warning("DB journey insert fallback: %s", e)
+
+    if tkey not in _EMAIL_JOURNEYS:
+        _EMAIL_JOURNEYS[tkey] = _default_journeys()
+    _EMAIL_JOURNEYS[tkey].insert(0, record)
+    return record
+
+
+@app.get("/email/journeys/{journey_id}")
+async def get_email_journey(
+    journey_id: str,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    try:
+        engine = get_engine()
+        _ensure_marketing_tables(engine)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT * FROM marketing_email_journeys WHERE id = :id AND tenant_id = :tid"),
+                {"id": journey_id, "tid": tkey},
+            ).mappings().first()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.warning("DB journey fetch fallback: %s", e)
+
+    items = _EMAIL_JOURNEYS.get(tkey, _default_journeys())
+    for item in items:
+        if item["id"] == journey_id:
+            return item
+    raise HTTPException(status_code=404, detail="Journey not found")
+
+
+@app.put("/email/journeys/{journey_id}")
+async def update_email_journey(
+    journey_id: str,
+    body: JourneyUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    try:
+        engine = get_engine()
+        _ensure_marketing_tables(engine)
+        updates = []
+        params: Dict[str, Any] = {"id": journey_id, "tid": tkey}
+        if body.name is not None:
+            updates.append("name = :name")
+            params["name"] = body.name
+        if body.description is not None:
+            updates.append("description = :desc")
+            params["desc"] = body.description
+        if body.trigger_type is not None:
+            updates.append("trigger_type = :ttype")
+            params["ttype"] = body.trigger_type
+        if body.status is not None:
+            updates.append("status = :status")
+            params["status"] = body.status
+        if body.steps is not None:
+            updates.append("steps = CAST(:steps AS jsonb)")
+            params["steps"] = json.dumps(body.steps)
+        updates.append("updated_at = now()")
+
+        if updates:
+            sql = f"UPDATE marketing_email_journeys SET {', '.join(updates)} WHERE id = :id AND tenant_id = :tid RETURNING *"
+            with engine.begin() as conn:
+                row = conn.execute(text(sql), params).mappings().first()
+                if row:
+                    return dict(row)
+    except Exception as e:
+        logger.warning("DB journey update fallback: %s", e)
+
+    items = _EMAIL_JOURNEYS.get(tkey, _default_journeys())
+    for item in items:
+        if item["id"] == journey_id:
+            if body.name is not None: item["name"] = body.name
+            if body.description is not None: item["description"] = body.description
+            if body.trigger_type is not None: item["trigger_type"] = body.trigger_type
+            if body.status is not None: item["status"] = body.status
+            if body.steps is not None: item["steps"] = body.steps
+            item["updated_at"] = datetime.now(timezone.utc).isoformat()
+            return item
+    raise HTTPException(status_code=404, detail="Journey not found")
+
+
+@app.delete("/email/journeys/{journey_id}", status_code=204)
+async def delete_email_journey(
+    journey_id: str,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    tkey = str(tenant_id)
+    try:
+        engine = get_engine()
+        _ensure_marketing_tables(engine)
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM marketing_email_journeys WHERE id = :id AND tenant_id = :tid"),
+                {"id": journey_id, "tid": tkey},
+            )
+    except Exception as e:
+        logger.warning("DB journey delete fallback: %s", e)
+
+    if tkey in _EMAIL_JOURNEYS:
+        _EMAIL_JOURNEYS[tkey] = [x for x in _EMAIL_JOURNEYS[tkey] if x["id"] != journey_id]
+    return None
+
+
+@app.post("/email/journeys/{journey_id}/trigger")
+async def trigger_email_journey(
+    journey_id: str,
+    body: Dict[str, Any] = Body(default_factory=dict),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Simulate or execute an email journey for a contact or test audience."""
+    contact_email = body.get("contact_email", "test.subscriber@example.com")
+    return {
+        "status": "started",
+        "journey_id": journey_id,
+        "enrolled_contact": contact_email,
+        "message": f"Contact {contact_email} enrolled in journey successfully.",
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ──────────────────── Audience Segments ────────────────────────

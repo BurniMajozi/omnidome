@@ -1,0 +1,5 @@
+UPDATE employees SET manager_id = 'f4bc688f-c46a-4411-8a18-7fa4597dbfcb' WHERE id IN ('8cd16bd4-be17-4dfd-8f4b-62f0ea6eb227', '3d73ae3e-3ccb-4cbf-8999-f01b5db2778c', 'c70d0c37-22ee-4ced-a4f4-492219a166c3', '80082856-2502-4d28-85ec-33338386b048', 'bbedb1a3-38e6-4c9a-b20f-14ffc3db0135', '84218006-0d55-414a-8170-77f944368557');
+UPDATE employees SET manager_id = '8cd16bd4-be17-4dfd-8f4b-62f0ea6eb227' WHERE id IN ('d106f655-4904-47f1-b379-a9efc841321c', '1358d709-980c-41a9-a7ba-21b9921b70e6', 'f8aff16d-5bb2-4880-be78-58c992b2229a', 'ec4eb966-5a5a-4539-9d68-3e921cb34f1a', '58181727-db1c-4e9b-a8fd-ad53b804ce58');
+UPDATE employees SET manager_id = '3d73ae3e-3ccb-4cbf-8999-f01b5db2778c' WHERE id IN ('7044d2f3-af56-430a-83f1-aef0f2c226e2');
+UPDATE employees SET manager_id = '80082856-2502-4d28-85ec-33338386b048' WHERE id IN ('14c67d36-78d2-4d5e-90ef-88c4c9705c5b');
+UPDATE employees SET manager_id = 'bbedb1a3-38e6-4c9a-b20f-14ffc3db0135' WHERE id IN ('edf52bb5-77f4-4b08-860f-f8dda9512cf8', '6feea72a-5bae-41ab-b4d8-37ab77644cf4');

@@ -60,6 +60,7 @@ export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [retentionTab, setRetentionTab] = useState<string | null>(null)
   const [portalTab, setPortalTab] = useState<string | null>(null)
+  const [analyticsTab, setAnalyticsTab] = useState<string | null>(null)
   const [entitlements, setEntitlements] = useState(DEFAULT_ENTITLEMENTS)
   const [authChecked, setAuthChecked] = useState(false)
 
@@ -172,7 +173,7 @@ export default function Dashboard() {
         case "portal":
           return <PortalModule activeTabOverride={portalTab ?? undefined} />
         case "analytics":
-          return <AnalyticsModule />
+          return <AnalyticsModule activeTabOverride={analyticsTab ?? undefined} />
         case "inventory":
           return <InventoryModule />
         case "iot":
@@ -195,9 +196,15 @@ export default function Dashboard() {
     if (section === "retention") {
       setRetentionTab(target)
       setPortalTab(null)
+      setAnalyticsTab(null)
     } else if (section === "portal") {
       setPortalTab(target)
       setRetentionTab(null)
+      setAnalyticsTab(null)
+    } else if (section === "analytics") {
+      setAnalyticsTab(target)
+      setRetentionTab(null)
+      setPortalTab(null)
     }
     setSidebarOpen(false)
   }
@@ -206,6 +213,7 @@ export default function Dashboard() {
     setActiveSection(section)
     if (section !== "retention") setRetentionTab(null)
     if (section !== "portal") setPortalTab(null)
+    if (section !== "analytics") setAnalyticsTab(null)
   }
 
   if (!authChecked) {
@@ -251,16 +259,17 @@ export default function Dashboard() {
         activeSubSections={{
           retention: retentionTab ?? undefined,
           portal: portalTab ?? undefined,
+          analytics: analyticsTab ?? undefined,
         }}
       />
 
       {/* Main Content */}
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0 w-full max-w-full">
         <Header
           title={sectionTitles[resolvedSection] || "Dashboard"}
           onMenuToggle={() => setSidebarOpen((prev) => !prev)}
         />
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6">{renderModule()}</main>
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 min-w-0 w-full max-w-full">{renderModule()}</main>
       </div>
 
       {/* Agent Chat Right Panel */}

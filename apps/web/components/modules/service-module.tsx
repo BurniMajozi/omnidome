@@ -1,7 +1,11 @@
 "use client"
 
-import type { JSX } from "react"
+import React, { useState, type JSX } from "react"
 import { ModuleLayout } from "./module-layout"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { ServiceSchedulingView } from "./service/service-scheduling-view"
+import { ServiceComplaintsRadar } from "./service/service-complaints-radar"
 import {
   BarChart,
   Bar,
@@ -17,7 +21,7 @@ import {
   Pie,
   Cell,
 } from "recharts"
-import { Headset, Clock, CheckCircle, AlertCircle } from "lucide-react"
+import { Headset, Clock, CheckCircle, AlertCircle, Radio, Flame, Sparkles } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
 
 const defaultTicketTrend = [
@@ -324,6 +328,8 @@ const defaultTableColumns = [
 ]
 
 export function ServiceModule() {
+  const [activeTab, setActiveTab] = useState<"operations" | "scheduling" | "complaints">("operations")
+
   const { data } = useModuleData("service", {
     ticketTrend: defaultTicketTrend,
     ticketsByPriority: defaultTicketsByPriority,
@@ -358,105 +364,169 @@ export function ServiceModule() {
   }))
 
   return (
-    <ModuleLayout
-      title="Service"
-        icon={<Headset className="h-5 w-5" />}
-        subtitle="Tickets, SLAs, field service, and customer satisfaction scores"
-      flashcardKPIs={flashcardKPIsWithIcons}
-      activities={activities}
-      issues={issues}
-      summary={summary}
-      tasks={tasks}
-      aiRecommendations={aiRecommendations}
-      tableData={tableData}
-      tableColumns={tableColumns}
-    >
-      {/* Charts */}
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* Ticket Trend */}
-        <div className="surface-card p-5">
-          <h3 className="section-title mb-4">Daily Ticket Activity</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={ticketTrend}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                <XAxis dataKey="day" tick={{ fill: "#737373", fontSize: 12 }} />
-                <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#262626",
-                    border: "1px solid #404040",
-                    borderRadius: "8px",
-                    color: "#fff",
-                  }}
-                />
-                <Legend />
-                <Bar dataKey="open" fill="#ef4444" name="Open" />
-                <Bar dataKey="resolved" fill="#4ade80" name="Resolved" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+    <div className="space-y-6">
+      {/* Service Top Navigation Tabs */}
+      <div className="flex flex-wrap items-center justify-between border-b border-border/80 pb-3 gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant={activeTab === "operations" ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-2 text-xs font-semibold"
+            onClick={() => setActiveTab("operations")}
+          >
+            <Headset className="h-3.5 w-3.5" />
+            Service Operations & Tickets
+          </Button>
 
-        {/* Tickets by Priority */}
-        <div className="surface-card p-5">
-          <h3 className="section-title mb-4">Tickets by Priority</h3>
-          <div className="h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={ticketsByPriority}
-                  cx="50%"
-                  cy="50%"
-                  labelLine={false}
-                  label={({ name, value }) => `${name}: ${value}`}
-                  outerRadius={80}
-                  fill="#4ade80"
-                  dataKey="value"
-                >
-                  {ticketsByPriority.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.fill} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: "#262626",
-                    border: "1px solid #404040",
-                    borderRadius: "8px",
-                    color: "#fff",
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+          <Button
+            variant={activeTab === "scheduling" ? "default" : "outline"}
+            size="sm"
+            className={`h-8 gap-2 text-xs font-semibold ${
+              activeTab === "scheduling"
+                ? "bg-cyan-600 hover:bg-cyan-500 text-white"
+                : "border-cyan-500/40 text-cyan-400 hover:bg-cyan-950/20"
+            }`}
+            onClick={() => setActiveTab("scheduling")}
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Staff Demand & Shift Rostering
+            <Badge variant="outline" className="text-[9px] py-0 px-1 border-cyan-400 text-cyan-300">
+              SLA Driver
+            </Badge>
+          </Button>
+
+          <Button
+            variant={activeTab === "complaints" ? "default" : "outline"}
+            size="sm"
+            className={`h-8 gap-2 text-xs font-semibold ${
+              activeTab === "complaints"
+                ? "bg-red-600 hover:bg-red-500 text-white"
+                : "border-red-500/40 text-red-400 hover:bg-red-950/20"
+            }`}
+            onClick={() => setActiveTab("complaints")}
+          >
+            <Radio className="h-3.5 w-3.5 text-red-400 animate-pulse" />
+            External Complaints & Sentiment Radar
+            <Badge variant="outline" className="text-[9px] py-0 px-1 border-red-400 text-red-300">
+              Live Scraper
+            </Badge>
+          </Button>
         </div>
       </div>
 
-      {/* Resolution Time by Priority */}
-      <div className="surface-card p-5">
-        <h3 className="section-title mb-4">Avg Resolution Time by Priority</h3>
-        <div className="h-64">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={resolutionTime}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-              <XAxis dataKey="priority" tick={{ fill: "#737373", fontSize: 12 }} />
-              <YAxis
-                label={{ value: "Hours", angle: -90, position: "insideLeft", fill: "#737373" }}
-                tick={{ fill: "#737373", fontSize: 12 }}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#262626",
-                  border: "1px solid #404040",
-                  borderRadius: "8px",
-                  color: "#fff",
-                }}
-              />
-              <Line type="monotone" dataKey="time" stroke="#60a5fa" strokeWidth={2} name="Resolution Time (hrs)" />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-    </ModuleLayout>
+      {/* Tab 1: Service Operations & Tickets */}
+      {activeTab === "operations" && (
+        <ModuleLayout
+          title="Service"
+          icon={<Headset className="h-5 w-5" />}
+          subtitle="Tickets, SLAs, field service, and customer satisfaction scores"
+          flashcardKPIs={flashcardKPIsWithIcons}
+          activities={activities}
+          issues={issues}
+          summary={summary}
+          tasks={tasks}
+          aiRecommendations={aiRecommendations}
+          tableData={tableData}
+          tableColumns={tableColumns}
+        >
+          {/* Charts */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* Ticket Trend */}
+            <div className="surface-card p-5">
+              <h3 className="section-title mb-4">Daily Ticket Activity</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={ticketTrend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                    <XAxis dataKey="day" tick={{ fill: "#737373", fontSize: 12 }} />
+                    <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#262626",
+                        border: "1px solid #404040",
+                        borderRadius: "8px",
+                        color: "#fff",
+                      }}
+                    />
+                    <Legend />
+                    <Bar dataKey="open" fill="#ef4444" name="Open" />
+                    <Bar dataKey="resolved" fill="#4ade80" name="Resolved" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Tickets by Priority */}
+            <div className="surface-card p-5">
+              <h3 className="section-title mb-4">Tickets by Priority</h3>
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={ticketsByPriority}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, value }) => `${name}: ${value}`}
+                      outerRadius={80}
+                      fill="#4ade80"
+                      dataKey="value"
+                    >
+                      {ticketsByPriority.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.fill} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "#262626",
+                        border: "1px solid #404040",
+                        borderRadius: "8px",
+                        color: "#fff",
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          </div>
+
+          {/* Resolution Time by Priority */}
+          <div className="surface-card p-5">
+            <h3 className="section-title mb-4">Avg Resolution Time by Priority</h3>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={resolutionTime}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                  <XAxis dataKey="priority" tick={{ fill: "#737373", fontSize: 12 }} />
+                  <YAxis
+                    label={{ value: "Hours", angle: -90, position: "insideLeft", fill: "#737373" }}
+                    tick={{ fill: "#737373", fontSize: 12 }}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#262626",
+                      border: "1px solid #404040",
+                      borderRadius: "8px",
+                      color: "#fff",
+                    }}
+                  />
+                  <Line type="monotone" dataKey="time" stroke="#60a5fa" strokeWidth={2} name="Resolution Time (hrs)" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </ModuleLayout>
+      )}
+
+      {/* Tab 2: Staff Demand & Shift Rostering (Moved from Talent to Service) */}
+      {activeTab === "scheduling" && (
+        <ServiceSchedulingView />
+      )}
+
+      {/* Tab 3: Customer Experience & External Complaints Radar */}
+      {activeTab === "complaints" && (
+        <ServiceComplaintsRadar />
+      )}
+    </div>
   )
 }
