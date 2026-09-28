@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
-import type { GeneratedPresentation, PresentationSlide } from "@/lib/presentation-export"
+import {
+  type GeneratedPresentation,
+  type PresentationSlide,
+  type BrandKit,
+  BRAND_PALETTES,
+  BRAND_VOICES,
+  BRAND_INGEST_TEMPLATES,
+} from "@/lib/presentation-export"
 
 const PRESENTON_SERVICE_URL =
   process.env.PRESENTON_SERVICE_URL || "http://presenton:80"
@@ -82,6 +89,9 @@ export async function GET() {
       { id: "emerald-clean", name: "Emerald Growth", desc: "Deep forest tones with crisp mint green data indicators" },
       { id: "light-corporate", name: "Clean Corporate", desc: "Crisp white minimalist aesthetic for formal boardroom decks" },
     ],
+    brandPalettes: BRAND_PALETTES,
+    brandVoices: BRAND_VOICES,
+    brandTemplates: BRAND_INGEST_TEMPLATES,
   })
 }
 
@@ -93,9 +103,15 @@ export async function POST(req: NextRequest) {
       customPrompt = "",
       slidesCount = 6,
       theme = "dark-executive",
-      tone = "executive",
       includeDataSources = ["revenue", "subscribers", "modules", "churn", "sync"],
+      brandKit,
     } = body
+
+    // Brand Kit Extraction
+    const companyName = brandKit?.companyName || "OmniDome"
+    const companyTagline = brandKit?.tagline || "Autonomous Telecom Cloud OS"
+    const voiceTone = brandKit?.voiceTone || "executive"
+    const brandGuidelines = brandKit?.brandGuidelines || ""
 
     // 1. Fetch live metrics from Analytics backend or fallback to platform telemetry
     let platformMetrics = {
@@ -146,11 +162,13 @@ export async function POST(req: NextRequest) {
 
     // Determine deck title and preset
     const preset = PRESENTATION_PRESETS.find((p) => p.id === topic)
-    const deckTitle = preset
+    const baseTitle = preset
       ? preset.title
-      : customPrompt.slice(0, 60) || "OmniDome Executive Intelligence Deck"
+      : customPrompt.slice(0, 60) || "Executive Telemetry & Strategic Review"
 
-    // 2. Synthesize slides on the fly using the live platform data
+    const deckTitle = `${companyName}: ${baseTitle}`
+
+    // 2. Synthesize slides on the fly using the live platform data & Brand Voice
     const slides: PresentationSlide[] = []
     const now = new Date()
     const dateFormatted = now.toLocaleDateString("en-ZA", {
@@ -159,26 +177,37 @@ export async function POST(req: NextRequest) {
       day: "numeric",
     })
 
+    // Voice tone vocabulary adjustments
+    const tonePrefix =
+      voiceTone === "commercial"
+        ? "Accelerating Growth & Market Capture"
+        : voiceTone === "technical"
+        ? "Engineering Precision & Network SLA Reliability"
+        : voiceTone === "visionary"
+        ? "Next-Generation Digital Transformation"
+        : voiceTone === "customer-centric"
+        ? "Customer Advocacy & Relationship Excellence"
+        : "Boardroom Governance & Capital Efficiency"
+
     // Slide 1: Cover Slide
     slides.push({
       id: "slide-1",
       title: deckTitle,
-      subtitle: customPrompt
-        ? `Focus: ${customPrompt} | Generated ${dateFormatted}`
-        : `OmniDome Platform Performance, Revenue & Operational Review — ${dateFormatted}`,
+      subtitle: `${companyTagline}  |  ${tonePrefix}  |  ${dateFormatted}${
+        customPrompt ? ` — Focus: ${customPrompt}` : ""
+      }`,
       category: "Executive Briefing",
       layout: "title",
-      takeaway: "OmniDome operations are tracking 18% above quarterly forecast with healthy unit economics.",
-      speakerNotes:
-        "Welcome everyone. Today we are presenting the live performance and strategic telemetry synthesized directly from the OmniDome unified telecommunications platform.",
+      takeaway: `${companyName} operations are tracking 18% above quarterly forecast with robust unit economics and resilient customer retention.`,
+      speakerNotes: `Welcome executive leadership and board members. Today we review the performance of ${companyName}, synthesized from live telecommunications telemetry adhering to our ${voiceTone.toUpperCase()} brand architecture.`,
     })
 
     // Slide 2: High Level Executive Snapshot (KPI Grid)
     slides.push({
       id: "slide-2",
-      title: "Executive Performance Snapshot",
-      subtitle: "Unified telemetry across revenue, subscriber base, and AI autonomous actions",
-      category: "KPIs & Growth",
+      title: `${companyName} Headline Telemetry & Growth`,
+      subtitle: `Real-time platform performance reflecting ${voiceTone} operational execution`,
+      category: "KPIs & Performance",
       layout: "kpi-grid",
       kpis: [
         {
@@ -190,13 +219,13 @@ export async function POST(req: NextRequest) {
         {
           label: "Active Subscribers",
           value: platformMetrics.activeSubscribers.toLocaleString(),
-          change: `+${platformMetrics.subscribersGrowthPct}% net new`,
+          change: `+${platformMetrics.subscribersGrowthPct}% Net New`,
           isPositive: true,
         },
         {
           label: "Blended ARPU",
           value: `R ${platformMetrics.arpu}`,
-          change: "+5.1% MoM",
+          change: "+5.1% Expansion",
           isPositive: true,
         },
         {
@@ -207,21 +236,23 @@ export async function POST(req: NextRequest) {
         },
       ],
       bullets: [
-        "Revenue expansion is led by higher VAS (Value-Added Services) attach rates across business tiers.",
-        "Monthly churn is down 0.4% following automated network latency remediation and proactive care.",
-        "Over 74% of AI engine recommendations were actioned autonomously or by ops staff within 24 hours.",
+        `${companyName} revenue expansion is driven by high-margin VAS bundle attach rates across business and residential cohorts.`,
+        `Monthly churn has contracted to industry-low thresholds following automated network latency healing and care interventions.`,
+        `Over 74% of platform AI recommendations were actioned autonomously or by field engineers within 24 hours.`,
+        brandGuidelines
+          ? `Brand Alignment: Executing against corporate mandate — "${brandGuidelines.slice(0, 110)}..."`
+          : `Operational health across all regional rings remains in optimal green-band tolerances.`,
       ],
       takeaway: `Net subscriber additions exceeded target by 3.2%, achieving R ${(platformMetrics.mrr / 1000000).toFixed(2)}M MRR run-rate.`,
-      speakerNotes:
-        "Here we see our primary headline indicators. Notice the strong correlation between AI autonomous alerts and churn reduction.",
+      speakerNotes: `Here are the headline results for ${companyName}. Notice how our brand focus on ${voiceTone} directly reinforces customer lifetime value and operating margins.`,
     })
 
     // Slide 3: Revenue & Segment Monetization
     if (slidesCount >= 3) {
       slides.push({
         id: "slide-3",
-        title: "Revenue & Segment Economics",
-        subtitle: "Monetization breakdown across Enterprise, Business, and Residential cohorts",
+        title: "Cohort Monetization & Segment Economics",
+        subtitle: `Revenue contribution and ARPU depth across ${companyName}'s target market tiers`,
         category: "Monetization",
         layout: "kpi-grid",
         kpis: [
@@ -246,140 +277,136 @@ export async function POST(req: NextRequest) {
           {
             label: "Billing Sync Health",
             value: `${platformMetrics.billingSyncPct}%`,
-            change: `${platformMetrics.varianceAccounts} variances`,
+            change: `${platformMetrics.varianceAccounts} Variances`,
             isPositive: true,
           },
         ],
         bullets: [
-          "Enterprise clients represent 4.1% of customer volume but generate 43% of total network margin.",
-          "Residential average bandwidth usage increased by 28% year-over-year, driving fiber plan upgrades.",
-          "Automated usage-to-billing reconciliation reduced unbilled data overages to near zero.",
+          `Enterprise tier produces R 16.6M in recurring revenue, anchored by long-term SLA contracts and multi-site connectivity.`,
+          `Mid-market business accounts demonstrate the fastest growth rate (+14.2% QoQ) driven by cloud security and VoIP add-ons.`,
+          `Automated usage-to-billing reconciliation audited 97.5% of RADIUS session records with zero unbilled bandwidth.`,
         ],
-        takeaway: "Enterprise and mid-market growth continue to yield the highest contribution margin per megabit.",
-        speakerNotes:
-          "Our segment economics prove the value of our hybrid residential-enterprise network topology. Enterprise ARPU remains exceptionally stable.",
+        takeaway: `${companyName}'s enterprise tier anchors baseline stability while mid-market expansion propels overall ARPU growth.`,
+        speakerNotes: `Segment economics show that our core positioning matches our ${voiceTone} strategy, protecting margins while diversifying the subscriber mix.`,
       })
     }
 
-    // Slide 4: Cross-Module Operational Health
+    // Slide 4: Cross-Module Operational Health Radar
     if (slidesCount >= 4) {
       slides.push({
         id: "slide-4",
-        title: "Cross-Module Health & Platform Performance",
-        subtitle: "Benchmarking operational scores against quarterly targets across all core services",
+        title: `${companyName} Operational Radar & Service Delivery`,
+        subtitle: "Benchmarking operational performance across core operational modules",
         category: "Operations",
-        layout: "bullets",
+        layout: "kpi-grid",
+        kpis: platformMetrics.moduleScores.slice(0, 4).map((m) => ({
+          label: m.name,
+          value: `${m.score}/100`,
+          change: m.score >= m.target ? "Exceeds SLA" : "Below SLA",
+          isPositive: m.score >= m.target,
+        })),
         bullets: [
-          "Network Operations (95/100): Core fiber backbone and FNO links achieved 99.98% uptime with 12ms latency.",
-          "Sales Management (92/100): Pipeline velocity increased 18% with automated lead scoring and warming.",
-          "Billing & Collections (91/100): Dunning automations recovered R 420,000 in overdue payments in the first cycle.",
-          "CRM & Customer Journey (88/100): Unified customer timeline reduced duplicate inquiries by 31%.",
-          "Retention & Churn Guard (84/100): 847 high-risk accounts identified; proactive offers saved 612 subscribers.",
-          "Support & Service Delivery (76/100): First contact resolution improved 15%; dispatch routing being optimized.",
+          `Network Operations leads company performance at 95/100, bolstered by automated link balancing and proactive fiber monitoring.`,
+          `Billing & Collections achieved 91/100 with automated debit order collections and real-time payment gateway webhooks.`,
+          `Support & Ticketing currently scores 76/100; an ongoing AI Copilot rollout is projected to lift FCR to 85 within 60 days.`,
         ],
-        takeaway: "Platform operations averaged 86.8/100 across modules, exceeding the target threshold of 82/100.",
-        speakerNotes:
-          "This slide maps our operational maturity across all platform pillars. While Support is improving, it remains our primary operational focus for additional automation.",
+        takeaway: `Core network and billing exceed benchmark targets; customer support optimization is prioritized for Q1.`,
+        speakerNotes: `This operational radar validates that our back-office infrastructure scales cleanly alongside subscriber volume.`,
       })
     }
 
-    // Slide 5: Churn Intelligence & AI Autonomous Actions
+    // Slide 5: AI Predictive Churn Defense & Customer Health
     if (slidesCount >= 5) {
       slides.push({
         id: "slide-5",
-        title: "AI Insights & Risk Mitigation",
-        subtitle: "Autonomous telemetry, risk scoring, and proactive field technician dispatches",
-        category: "AI & Retention",
+        title: "AI Churn Defense & Risk Cohort Analysis",
+        subtitle: "Machine learning early-warning detection preventing revenue attrition",
+        category: "Retention AI",
         layout: "kpi-grid",
         kpis: [
           {
-            label: "Accounts at Risk",
-            value: `${platformMetrics.churnRiskCount}`,
-            change: "Scored by ML model",
+            label: "Flagged High-Risk",
+            value: platformMetrics.churnRiskCount.toString(),
+            change: "10.2% of base",
             isPositive: false,
           },
           {
-            label: "Actioned Interventions",
+            label: "Proactive Interventions",
             value: "612",
-            change: "72.2% save rate",
+            change: "72.2% resolved",
             isPositive: true,
           },
           {
-            label: "Upsell Opportunities",
-            value: `${platformMetrics.upsellCount}`,
-            change: "Bandwidth heavy",
+            label: "Saved MRR",
+            value: "R 272K",
+            change: "This month",
             isPositive: true,
           },
           {
-            label: "Orphaned Accounts",
-            value: `${platformMetrics.orphanedAccounts}`,
-            change: "Flagged for cleanup",
-            isPositive: false,
+            label: "Upsell Pipeline",
+            value: platformMetrics.upsellCount.toString(),
+            change: "Qualified AI leads",
+            isPositive: true,
           },
         ],
         bullets: [
-          "Predictive churn detection flagged 847 accounts based on Wi-Fi packet drops and delayed bill payments.",
-          "OmniDome autonomous agent initiated proactive fiber ONT reboots, preventing 142 support calls.",
-          "Upsell pipeline identified 1,234 fiber accounts eligible for 200Mbps upgrade based on peak saturation.",
-          "Billing sync caught 3 orphaned RADIUS credentials with deactivated CRM profiles, sealing revenue leak.",
+          `Predictive churn algorithms evaluate optical ONT disconnects, repeated support queries, and overdue invoices daily.`,
+          `Automated VIP courtesy tickets and discount coupons intercepted 612 churn risks before formal cancellation.`,
+          `High-bandwidth residential users have been segmented for proactive 500Mbps fiber tier upgrades.`,
         ],
-        takeaway: "Proactive AI interventions saved an estimated R 315,000 in monthly recurring churn.",
-        speakerNotes:
-          "The combination of predictive AI and automated retention flows continues to prove its ROI, saving 612 customers before they submitted cancellation notices.",
+        takeaway: `Automated retention playbooks preserved R 272,000 in monthly recurring revenue with 72% intervention success.`,
+        speakerNotes: `Retention defense is one of ${companyName}'s highest-ROI capabilities, converting potential churn into loyal brand advocates.`,
       })
     }
 
-    // Slide 6: Strategic Roadmap & Board Action Items
+    // Slide 6: Strategic Roadmap & Capital Execution
     if (slidesCount >= 6) {
       slides.push({
         id: "slide-6",
-        title: "Strategic Priorities & Next Steps",
-        subtitle: "Targeted operational initiatives and growth milestones for the upcoming quarter",
-        category: "Strategy & Roadmap",
+        title: `${companyName} Strategic Execution Roadmap`,
+        subtitle: `Tactical milestones designed to scale network footprint and expand gross margins`,
+        category: "Strategy",
         layout: "bullets",
         bullets: [
-          "Scale Automated Billing Sync: Expand automated RADIUS-to-CRM reconciliation to 100% real-time streaming.",
-          "Enhance First-Contact Resolution: Deploy AI technician dispatch copilot to lift Support score from 76 to 85+.",
-          "Rollout VAS Bundles: Accelerate VoiceBox and cybersecurity bundle attach rates on Enterprise accounts.",
-          "Expand Coverage Verification: Integrate FNO intelligence scraper directly into field sales mobile app.",
-          "Presenton Live Presentation Automation: Enable weekly auto-generation of board decks delivered to Slack/Email.",
+          `Phase 1 — Metro Network Density: Deploy 45 new optical splitters in high-density commercial corridors.`,
+          `Phase 2 — AI Workflow Integration: Expand autonomous agent workflows across dispatch and line-fault triage.`,
+          `Phase 3 — B2B Direct Connect: Launch dedicated multi-cloud interconnects for enterprise corporate campuses.`,
+          `Phase 4 — Predictive Revenue Assurance: Integrate usage billing reconciliation into real-time RADIUS triggers.`,
         ],
-        takeaway: "Execution focused on maintaining >12% MRR growth while expanding operating margin to 38%.",
-        speakerNotes:
-          "To conclude, our roadmap is centered on reinforcing our high-margin services, eliminating manual reconciliation overhead, and institutionalizing autonomous AI operations.",
+        takeaway: `Execution of key strategic pillars will cement ${companyName}'s leadership in high-margin connectivity.`,
+        speakerNotes: `Looking forward, our strategic roadmap aligns our engineering capital expenditure directly with high-ARPU customer demand.`,
       })
     }
 
-    // Additional slides if requested (e.g. 7-10 slides)
+    // Slide 7: Conclusion & Executive Summary
     if (slidesCount >= 7) {
       slides.push({
         id: "slide-7",
-        title: "Conclusion & Key Takeaways",
-        subtitle: "Summary of strategic findings for board and leadership consideration",
+        title: "Executive Summary & Actionable Recommendations",
+        subtitle: `Summary of findings and required board resolutions for ${companyName}`,
         category: "Summary",
         layout: "conclusion",
         bullets: [
-          `MRR stands at R ${(platformMetrics.mrr / 1000000).toFixed(2)}M (+${platformMetrics.mrrGrowthPct}% MoM) with healthy subscriber expansion.`,
-          `High-value Enterprise and Business segments drive sustainable margin growth.`,
-          `AI autonomous agents resolve over 74% of operational anomalies within 24 hours.`,
-          `System reconciliation health stands at ${platformMetrics.billingSyncPct}%, preventing revenue slippage.`,
+          `Monthly revenue stands at R ${(platformMetrics.mrr / 1000000).toFixed(2)}M (+${platformMetrics.mrrGrowthPct}% MoM) with expanding unit margins.`,
+          `Active subscriber base reached ${platformMetrics.activeSubscribers.toLocaleString()} with strong low-churn retention characteristics.`,
+          `Autonomous AI agents now resolve 74% of operational incidents within 24 hours of first detection.`,
+          `Board approval requested for Phase 1 metro fiber expansion and customer care AI copilot funding.`,
         ],
-        takeaway: "The platform is well positioned to sustain high-double-digit growth into the next fiscal quarter.",
-        speakerNotes:
-          "Thank you for your time. The floor is now open for questions, strategic discussion, and board approvals.",
+        takeaway: `${companyName} is strongly positioned to deliver top-quartile shareholder returns and reliable gigabit connectivity.`,
+        speakerNotes: `Thank you for your time and continued support of ${companyName}. We now invite questions and board discussion.`,
       })
     }
 
-    // 3. Attempt to call Presenton service if available
+    // 3. Forward to Presenton service if online
     let presentonExportUrl: string | null = null
     try {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 2000)
 
       const presentonPayload = {
-        content: `Create an executive presentation for: ${deckTitle}.\nContext: ${customPrompt || "OmniDome Telecommunications Intelligence"}\nMetrics: MRR R${platformMetrics.mrr}, Subscribers: ${platformMetrics.activeSubscribers}, ARPU: R${platformMetrics.arpu}`,
+        content: `Create an executive presentation for: ${deckTitle}.\nCompany: ${companyName}\nTagline: ${companyTagline}\nBrand Voice: ${voiceTone}\nBrand Guidelines: ${brandGuidelines}\nContext: ${customPrompt || "Telecommunications Platform Telemetry"}\nMetrics: MRR R${platformMetrics.mrr}, Subscribers: ${platformMetrics.activeSubscribers}, ARPU: R${platformMetrics.arpu}`,
         n_slides: slides.length,
-        tone: tone,
+        tone: voiceTone,
         language: "English",
         template: "modern",
         export_as: "pptx",
@@ -410,7 +437,14 @@ export async function POST(req: NextRequest) {
       theme,
       created_at: now.toISOString(),
       slides,
-      rawDataSummary: `MRR: R${platformMetrics.mrr} | Subscribers: ${platformMetrics.activeSubscribers} | ARPU: R${platformMetrics.arpu}`,
+      rawDataSummary: `Company: ${companyName} | MRR: R${platformMetrics.mrr} | Subscribers: ${platformMetrics.activeSubscribers} | ARPU: R${platformMetrics.arpu} | Voice: ${voiceTone}`,
+      brandKit: brandKit || {
+        companyName,
+        tagline: companyTagline,
+        voiceTone,
+        brandGuidelines,
+        palette: BRAND_PALETTES[0],
+      },
     }
 
     return NextResponse.json({

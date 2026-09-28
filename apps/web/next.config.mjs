@@ -1,3 +1,9 @@
+import path from 'path'
+import { fileURLToPath } from 'url'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
@@ -65,6 +71,35 @@ const nextConfig = {
       // (route handler — NOT a rewrite — so long TTS generation waits
       // don't hit the rewrite proxy's connection limits / ECONNRESET).
     ]
+  },
+  webpack: (config, { webpack, isServer }) => {
+    config.plugins.push(
+      new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+        resource.request = resource.request.replace(/^node:/, '')
+      })
+    )
+    if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'pptxgenjs': path.resolve(__dirname, 'node_modules/pptxgenjs/dist/pptxgen.bundle.js'),
+      }
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        https: false,
+        http: false,
+        path: false,
+        os: false,
+        stream: false,
+        buffer: false,
+        url: false,
+        util: false,
+        child_process: false,
+      }
+    }
+    return config
   },
 }
 
