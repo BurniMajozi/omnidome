@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # ── Agent Invocation ─────────────────────────────────────────────────────
 
 class AgentInvokeRequest(BaseModel):
-    agent_type: str = Field(..., description="Agent type: customer_facing, retention, provisioning, executive, support, call_center, products, talent, analytics, assistant")
+    agent_type: str = Field(default="auto", description="Agent type: auto (orchestrator decides), customer_facing, retention, provisioning, executive, support, call_center, products, talent, analytics, assistant")
     message: Optional[str] = Field(None, min_length=1)
     prompt: Optional[str] = None
     context: Dict[str, Any] = Field(default_factory=dict)

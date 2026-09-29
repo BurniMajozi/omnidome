@@ -14,6 +14,7 @@ rsync -av "$SRC/services/communication/" /home/benedict/omnidome/services/commun
 rsync -av "$SRC/services/hr/" /home/benedict/omnidome/services/hr/
 rsync -av "$SRC/services/agent_orchestrator/" /home/benedict/omnidome/services/agent_orchestrator/
 rsync -av "$SRC/services/sales/" /home/benedict/omnidome/services/sales/
+rsync -av "$SRC/services/lifecycle/" /home/benedict/omnidome/services/lifecycle/ 2>/dev/null || true
 cp "$SRC/docker-compose.yaml" /home/benedict/omnidome/docker-compose.yaml
 cp "$SRC/docker-compose.local.yml" /home/benedict/omnidome/docker-compose.local.yml
 

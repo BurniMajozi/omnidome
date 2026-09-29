@@ -342,6 +342,12 @@ export interface PaymentReceiptCreate {
 // ── Agent catalog ────────────────────────────────────────────────────────
 
 export const AGENT_CATALOG: Record<string, { name: string; description: string; icon: string; color: string }> = {
+  auto: {
+    name: "OmniDome Orchestrator",
+    description: "Smart Intent Router. Automatically analyzes your request and routes to the best specialist agent.",
+    icon: "🧠",
+    color: "violet",
+  },
   customer_facing: {
     name: "DomeBot",
     description: "Customer-facing assistant. Handles balances, invoices, coverage checks, ticket creation.",

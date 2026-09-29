@@ -54,7 +54,6 @@ def get_async_session_factory():
     return _async_session_factory
 
 
-@asynccontextmanager
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     factory = get_async_session_factory()
     async with factory() as session:

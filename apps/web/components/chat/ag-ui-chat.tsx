@@ -30,6 +30,10 @@ import {
   Trash2,
   Clock,
   MessageSquare,
+  Eye,
+  Code,
+  Maximize2,
+  Minimize2,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -69,6 +73,8 @@ interface AGUIMessage {
   isStreaming?: boolean
   toolCalls?: ToolCallEvent[]
   memoryWrites?: { correlationId?: string; status?: string }[]
+  routedAgent?: string
+  routedAgentName?: string
 }
 
 export interface Artifact {
@@ -86,6 +92,7 @@ export interface Segment {
 type AgentType = keyof typeof AGENT_CATALOG
 
 const AGENT_LIST = [
+  { type: "auto" as AgentType, name: "OmniDome Orchestrator", icon: "🧠", description: "Smart routing. Automatically analyzes your request and dispatches to the best specialist agent." },
   { type: "customer_facing" as AgentType, name: "DomeBot", icon: "🤖", description: "Customer-facing assistant. Handles balances, invoices, coverage checks, ticket creation." },
   { type: "executive" as AgentType, name: "InsightDome", icon: "📊", description: "Executive briefings. MRR, churn, ARPU, pipeline, financial summaries." },
   { type: "retention" as AgentType, name: "ChurnGuard", icon: "🛡️", description: "Autonomous churn prediction and retention risk scores." },
@@ -199,6 +206,207 @@ function parseMessage(msgId: string, content: string): { segments: Segment[]; ar
   if (last < content.length) segments.push({ type: "text", value: content.slice(last) })
   if (segments.length === 0) segments.push({ type: "text", value: content })
   return { segments, artifacts }
+}
+
+// ── Markdown & Table Formatter Component ─────────────────────────────────
+
+function renderInlineMarkdown(text: string): React.ReactNode[] {
+  const tokens: React.ReactNode[] = []
+  const regex = /(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      tokens.push(text.slice(lastIndex, match.index))
+    }
+    const token = match[0]
+    if (token.startsWith("`") && token.endsWith("`")) {
+      tokens.push(
+        <code key={match.index} className="px-1.5 py-0.5 rounded bg-muted/80 text-[11px] font-mono text-cyan-300 border border-border/50">
+          {token.slice(1, -1)}
+        </code>
+      )
+    } else if (token.startsWith("**") && token.endsWith("**")) {
+      tokens.push(
+        <strong key={match.index} className="font-semibold text-foreground">
+          {token.slice(2, -2)}
+        </strong>
+      )
+    } else if (token.startsWith("*") && token.endsWith("*")) {
+      tokens.push(
+        <em key={match.index} className="italic text-foreground/90">
+          {token.slice(1, -1)}
+        </em>
+      )
+    } else if (token.startsWith("[")) {
+      const linkMatch = token.match(/\[([^\]]+)\]\(([^)]+)\)/)
+      if (linkMatch) {
+        tokens.push(
+          <a key={match.index} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">
+            {linkMatch[1]}
+          </a>
+        )
+      } else {
+        tokens.push(token)
+      }
+    }
+    lastIndex = regex.lastIndex
+  }
+  if (lastIndex < text.length) {
+    tokens.push(text.slice(lastIndex))
+  }
+  return tokens
+}
+
+export function FormattedMarkdown({ content }: { content: string }) {
+  if (!content) return null
+  const lines = content.split("\n")
+  const elements: React.ReactNode[] = []
+  let i = 0
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    // Table detection: line starts and ends with '|'
+    if (line.trim().startsWith("|") && line.trim().endsWith("|")) {
+      const tableLines: string[] = []
+      while (i < lines.length && lines[i].trim().startsWith("|") && lines[i].trim().endsWith("|")) {
+        tableLines.push(lines[i].trim())
+        i++
+      }
+      if (tableLines.length >= 2) {
+        const parseRow = (rowStr: string) =>
+          rowStr.slice(1, -1).split("|").map((c) => c.trim())
+        const headerCells = parseRow(tableLines[0])
+        const hasDivider = tableLines[1].includes("---")
+        const bodyLines = hasDivider ? tableLines.slice(2) : tableLines.slice(1)
+
+        elements.push(
+          <div key={`table-${i}`} className="overflow-x-auto my-2.5 rounded-md border border-border bg-card/60">
+            <table className="w-full text-xs text-left border-collapse">
+              <thead>
+                <tr className="bg-muted/40 font-semibold border-b border-border">
+                  {headerCells.map((hc, idx) => (
+                    <th key={idx} className="px-3 py-2 text-foreground font-semibold">
+                      {renderInlineMarkdown(hc)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/60">
+                {bodyLines.map((rowStr, rIdx) => {
+                  const cells = parseRow(rowStr)
+                  return (
+                    <tr key={rIdx} className={rIdx % 2 === 1 ? "bg-muted/10 hover:bg-muted/20" : "hover:bg-muted/20"}>
+                      {cells.map((cell, cIdx) => (
+                        <td key={cIdx} className="px-3 py-2 text-foreground/90 align-top">
+                          {renderInlineMarkdown(cell)}
+                        </td>
+                      ))}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+        continue
+      }
+    }
+
+    // Headings
+    if (line.startsWith("# ")) {
+      elements.push(
+        <h2 key={i} className="text-base font-bold text-foreground mt-3 mb-1.5 pb-1 border-b border-border/40">
+          {renderInlineMarkdown(line.slice(2))}
+        </h2>
+      )
+      i++
+      continue
+    }
+    if (line.startsWith("## ")) {
+      elements.push(
+        <h3 key={i} className="text-sm font-bold text-cyan-400 mt-2.5 mb-1 flex items-center gap-1.5">
+          {renderInlineMarkdown(line.slice(3))}
+        </h3>
+      )
+      i++
+      continue
+    }
+    if (line.startsWith("### ")) {
+      elements.push(
+        <h4 key={i} className="text-xs font-semibold text-foreground mt-2 mb-0.5">
+          {renderInlineMarkdown(line.slice(4))}
+        </h4>
+      )
+      i++
+      continue
+    }
+
+    // Blockquote
+    if (line.startsWith("> ")) {
+      elements.push(
+        <blockquote key={i} className="border-l-2 border-cyan-500/50 pl-2.5 my-1.5 italic text-xs text-muted-foreground bg-cyan-500/5 py-1 rounded-r">
+          {renderInlineMarkdown(line.slice(2))}
+        </blockquote>
+      )
+      i++
+      continue
+    }
+
+    // Bullet lists
+    if (line.trim().startsWith("- ") || line.trim().startsWith("* ")) {
+      const listItems: string[] = []
+      while (i < lines.length && (lines[i].trim().startsWith("- ") || lines[i].trim().startsWith("* "))) {
+        listItems.push(lines[i].trim().slice(2))
+        i++
+      }
+      elements.push(
+        <ul key={`ul-${i}`} className="list-disc list-inside space-y-1 my-1.5 text-xs text-foreground/90 pl-1">
+          {listItems.map((item, idx) => (
+            <li key={idx} className="leading-relaxed">
+              {renderInlineMarkdown(item)}
+            </li>
+          ))}
+        </ul>
+      )
+      continue
+    }
+
+    // Numbered lists
+    if (/^\d+\.\s/.test(line.trim())) {
+      const listItems: string[] = []
+      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+        listItems.push(lines[i].trim().replace(/^\d+\.\s/, ""))
+        i++
+      }
+      elements.push(
+        <ol key={`ol-${i}`} className="list-decimal list-inside space-y-1 my-1.5 text-xs text-foreground/90 pl-1">
+          {listItems.map((item, idx) => (
+            <li key={idx} className="leading-relaxed">
+              {renderInlineMarkdown(item)}
+            </li>
+          ))}
+        </ol>
+      )
+      continue
+    }
+
+    // Regular line / paragraph
+    if (line.trim().length > 0) {
+      elements.push(
+        <p key={i} className="my-1 text-xs leading-relaxed text-foreground/95">
+          {renderInlineMarkdown(line)}
+        </p>
+      )
+    } else {
+      elements.push(<div key={i} className="h-1" />)
+    }
+    i++
+  }
+
+  return <div className="space-y-0.5 text-xs">{elements}</div>
 }
 
 function formatInitials(name?: string) {
@@ -315,8 +523,12 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const [messages, setMessages] = useState<AGUIMessage[]>([])
   const [inputValue, setInputValue] = useState(initialDraft || "")
   const [isSending, setIsSending] = useState(false)
-  const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "customer_facing")
+  const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "auto")
   const [showAgentPicker, setShowAgentPicker] = useState(false)
+  const [panelSize, setPanelSize] = useState<"compact" | "wide" | "expanded">("compact")
+  const [customArtifacts, setCustomArtifacts] = useState<Record<string, Artifact>>({})
+  const [artifactViewMode, setArtifactViewMode] = useState<"preview" | "code">("preview")
+  const [artifactRevisionPrompt, setArtifactRevisionPrompt] = useState("")
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [context] = useState<Record<string, unknown>>(initialContext || {})
@@ -551,8 +763,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       segmentsByMsg[msg.id] = segments
       for (const a of artifacts) artifactsById[a.id] = a
     }
+    for (const [id, a] of Object.entries(customArtifacts)) {
+      artifactsById[id] = a
+    }
     return { segmentsByMsg, artifactsById }
-  }, [messages])
+  }, [messages, customArtifacts])
 
   // Auto-open newest artifact
   useEffect(() => {
@@ -688,11 +903,12 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
   // ── Send message via AG-UI streaming ───────────────────────────────────
 
-  const handleSendMessage = async () => {
-    if (!inputValue.trim() || isSending) return
+  const handleSendMessage = async (textOverride?: string) => {
+    const rawText = textOverride !== undefined ? textOverride : inputValue
+    if (!rawText.trim() || isSending) return
     setError(null)
 
-    const messageText = inputValue
+    const messageText = rawText.trim()
 
     const userMessage: AGUIMessage = {
       id: Date.now().toString(),
@@ -711,7 +927,9 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     }
 
     setMessages((prev) => [...prev, userMessage, streamingMessage])
-    setInputValue("")
+    if (textOverride === undefined) {
+      setInputValue("")
+    }
     setIsSending(true)
     setStreamState({ runId: "", status: "running", content: "", toolCalls: [], memoryWrites: [] })
 
@@ -737,6 +955,19 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 next.status = "running"
                 if (event.conversation_id) {
                   setConversationId(event.conversation_id)
+                }
+                const routedType = event.data?.agent_type as string | undefined
+                const autoRouted = event.data?.auto_routed as boolean | undefined
+                if (routedType && (autoRouted || selectedAgent === "auto")) {
+                  const routedAgentObj = AGENT_LIST.find((a) => a.type === routedType)
+                  const routedName = routedAgentObj ? routedAgentObj.name : routedType
+                  setMessages((prevMsgs) =>
+                    prevMsgs.map((m) =>
+                      m.id === assistantId
+                        ? { ...m, routedAgent: routedType, routedAgentName: routedName }
+                        : m,
+                    ),
+                  )
                 }
                 break
 
@@ -868,6 +1099,15 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     }
   }
 
+  const handleReviseArtifact = async () => {
+    if (!active || !artifactRevisionPrompt.trim() || isSending) return
+    const instructions = artifactRevisionPrompt.trim()
+    setArtifactRevisionPrompt("")
+    const currentCode = artifactValue(active)
+    const prompt = `Please revise the artifact "${active.title}" based on these instructions:\n"${instructions}"\n\nCurrent artifact content:\n\`\`\`${active.lang}\n${currentCode}\n\`\`\``
+    await handleSendMessage(prompt)
+  }
+
   // ── Render ─────────────────────────────────────────────────────────────
 
   if (!isOpen) return null
@@ -876,7 +1116,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     <div
       className={cn(
         "fixed inset-y-0 right-0 z-50 flex flex-row border-l border-border bg-card shadow-2xl transition-all duration-300",
-        canvasOpen ? "w-full max-w-4xl lg:w-[940px]" : "w-full sm:w-[440px] max-w-lg",
+        panelSize === "expanded"
+          ? "w-full max-w-[100vw] sm:w-[94vw] lg:w-[90vw] xl:w-[85vw]"
+          : canvasOpen
+          ? "w-full sm:w-[720px] md:w-[880px] lg:w-[1040px] xl:w-[1140px] max-w-[96vw]"
+          : "w-full sm:w-[480px] md:w-[520px] max-w-xl",
       )}
     >
       {/* Left Chat Column */}
@@ -939,6 +1183,17 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 <span>Canvas ({allArtifacts.length})</span>
               </Button>
             )}
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setPanelSize((prev) => (prev === "expanded" ? "compact" : "expanded"))}
+              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+              title={panelSize === "expanded" ? "Restore Size" : "Expand to Full Screen"}
+            >
+              {panelSize === "expanded" ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+            </Button>
+
             <Button variant="ghost" size="icon" onClick={onClose} className="h-8 w-8 text-muted-foreground hover:text-foreground">
               <X className="h-4 w-4" />
             </Button>
@@ -1143,12 +1398,16 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
                     {message.role === "assistant" ? (
                       <div className="space-y-2">
+                        {message.routedAgent && (
+                          <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-cyan-400 font-medium bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-0.5 rounded-full w-fit">
+                            <Sparkles className="h-3 w-3 text-cyan-400 shrink-0" />
+                            <span>Orchestrated to <strong>{message.routedAgentName || message.routedAgent}</strong></span>
+                          </div>
+                        )}
                         {segments.map((seg, i) => {
                           if (seg.type === "text") {
                             return seg.value.trim() ? (
-                              <p key={i} className="whitespace-pre-wrap leading-relaxed">
-                                {seg.value.trim()}
-                              </p>
+                              <FormattedMarkdown key={i} content={seg.value.trim()} />
                             ) : null
                           }
                           const art = artifactsById[seg.value]
@@ -1157,7 +1416,10 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                             <button
                               key={i}
                               type="button"
-                              onClick={() => setActiveArtifact(art.id)}
+                              onClick={() => {
+                                setActiveArtifact(art.id)
+                                setArtifactViewMode("preview")
+                              }}
                               className={cn(
                                 "flex w-full items-center gap-2 rounded-md border px-3 py-2 text-left transition-colors my-1.5",
                                 activeArtifact === art.id
@@ -1201,6 +1463,31 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                         ) : (
                           <Copy className="h-3.5 w-3.5" />
                         )}
+                      </Button>
+
+                      {/* Open in Canvas button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 text-muted-foreground hover:text-cyan-400"
+                        onClick={() => {
+                          const customId = `art-${message.id}`
+                          const isHtml = message.content.trim().startsWith("<")
+                          setCustomArtifacts((prev) => ({
+                            ...prev,
+                            [customId]: {
+                              id: customId,
+                              msgId: message.id,
+                              title: `Response Artifact (${message.id.slice(0, 6)})`,
+                              lang: isHtml ? "html" : "markdown",
+                              code: message.content,
+                            },
+                          }))
+                          setActiveArtifact(customId)
+                        }}
+                        title="Open in Canvas"
+                      >
+                        <FileCode2 className="h-3.5 w-3.5" />
                       </Button>
 
                       {/* Thumbs Up button */}
@@ -1516,6 +1803,31 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             <Badge variant="outline" className="text-[10px] uppercase font-mono px-1.5 py-0 bg-background/50">
               {active.lang}
             </Badge>
+
+            {/* View Mode Toggle: Preview vs Code */}
+            <div className="flex items-center gap-1 border border-border/80 rounded-md p-0.5 bg-background/50 ml-2">
+              <Button
+                size="sm"
+                variant={artifactViewMode === "preview" ? "secondary" : "ghost"}
+                className={cn("h-6 px-2 text-[11px] gap-1", artifactViewMode === "preview" ? "text-cyan-400 font-semibold" : "text-muted-foreground")}
+                onClick={() => setArtifactViewMode("preview")}
+                title="Visual formatted preview"
+              >
+                <Eye className="h-3 w-3" />
+                <span>Preview</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={artifactViewMode === "code" ? "secondary" : "ghost"}
+                className={cn("h-6 px-2 text-[11px] gap-1", artifactViewMode === "code" ? "text-cyan-400 font-semibold" : "text-muted-foreground")}
+                onClick={() => setArtifactViewMode("code")}
+                title="Edit raw code or markdown"
+              >
+                <Code className="h-3 w-3" />
+                <span>Code</span>
+              </Button>
+            </div>
+
             <div className="ml-auto flex items-center gap-1">
               <Button size="icon" variant="ghost" className="h-7 w-7" onClick={copyActive} title="Copy code">
                 {copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
@@ -1554,15 +1866,72 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             </div>
           )}
 
-          {/* Editable canvas textarea */}
-          <div className="relative flex-1 p-2">
-            <textarea
-              value={artifactValue(active)}
-              onChange={(e) => setArtifactEdits((prev) => ({ ...prev, [active.id]: e.target.value }))}
-              className="h-full w-full resize-none rounded-lg border border-border bg-card p-3 font-mono text-xs text-foreground focus:border-primary/50 focus:outline-none custom-scrollbar"
-              placeholder="Artifact content..."
-              spellCheck={false}
-            />
+          {/* Canvas content: Preview or Code */}
+          <div className="relative flex-1 min-h-0 p-3 overflow-hidden">
+            {artifactViewMode === "preview" ? (
+              active.lang === "html" || active.code.includes("<!DOCTYPE") || active.code.includes("<html") ? (
+                <iframe
+                  title={active.title}
+                  srcDoc={artifactValue(active)}
+                  sandbox="allow-scripts"
+                  className="h-full w-full rounded-lg border border-border bg-white"
+                />
+              ) : (
+                <div className="h-full w-full overflow-y-auto rounded-lg border border-border bg-card/60 p-4 text-xs leading-relaxed text-foreground custom-scrollbar">
+                  <FormattedMarkdown content={artifactValue(active)} />
+                </div>
+              )
+            ) : (
+              <textarea
+                value={artifactValue(active)}
+                onChange={(e) => setArtifactEdits((prev) => ({ ...prev, [active.id]: e.target.value }))}
+                className="h-full w-full resize-none rounded-lg border border-border bg-card p-3 font-mono text-xs text-foreground focus:border-primary/50 focus:outline-none custom-scrollbar"
+                placeholder="Artifact content..."
+                spellCheck={false}
+              />
+            )}
+          </div>
+
+          {/* Interactive Direct & Revise Action Bar */}
+          <div className="border-t border-border p-3 bg-secondary/30 flex flex-col gap-2">
+            <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
+              <span className="flex items-center gap-1.5 text-cyan-400">
+                <Sparkles className="h-3.5 w-3.5" />
+                Direct & Revise Artifact
+              </span>
+              <span className="text-[10px] text-muted-foreground/70">
+                AI Orchestrator updates this artifact
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={artifactRevisionPrompt}
+                onChange={(e) => setArtifactRevisionPrompt(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault()
+                    handleReviseArtifact()
+                  }
+                }}
+                placeholder="e.g. Add a pricing tier comparison, or make the email friendlier..."
+                className="flex-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-cyan-500/60"
+                disabled={isSending}
+              />
+              <Button
+                size="sm"
+                onClick={handleReviseArtifact}
+                disabled={!artifactRevisionPrompt.trim() || isSending}
+                className="h-7 text-xs gap-1.5 bg-cyan-600 hover:bg-cyan-500 text-white shrink-0"
+              >
+                {isSending ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3" />
+                )}
+                Revise
+              </Button>
+            </div>
           </div>
         </div>
       )}

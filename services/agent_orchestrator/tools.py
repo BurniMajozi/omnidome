@@ -843,6 +843,9 @@ class ToolRegistry:
             ] + FNO_TOOLS,
         }
 
+        if agent_type in ("auto", "orchestrator", "master"):
+            return list(self._tools.values())
+
         allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, AGENT_TOOL_PERMISSIONS.get("customer_facing", []))
         return [t for t in self._tools.values() if t.name in allowed]
 

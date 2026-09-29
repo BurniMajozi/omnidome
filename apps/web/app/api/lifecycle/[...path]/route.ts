@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server"
 const LIFECYCLE_SERVICE_URL =
   process.env.LIFECYCLE_SERVICE_URL || "http://lifecycle:8018"
 
+const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
+
 type Context = { params: Promise<{ path: string[] }> }
 
 async function proxy(req: NextRequest, { params }: Context): Promise<NextResponse> {
@@ -23,6 +26,14 @@ async function proxy(req: NextRequest, { params }: Context): Promise<NextRespons
     if (authHeader) headers["Authorization"] = authHeader
     const tenantHeader = req.headers.get("x-tenant-id")
     if (tenantHeader) headers["x-tenant-id"] = tenantHeader
+    const userHeader = req.headers.get("x-user-id")
+    if (userHeader) headers["x-user-id"] = userHeader
+    const rolesHeader = req.headers.get("x-roles")
+    if (rolesHeader) headers["x-roles"] = rolesHeader
+
+    if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
+    if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
+    if (!headers["x-roles"]) headers["x-roles"] = "platform_admin,org_admin"
 
     const init: RequestInit = { method: req.method, headers }
     if (req.method !== "GET" && req.method !== "HEAD") {

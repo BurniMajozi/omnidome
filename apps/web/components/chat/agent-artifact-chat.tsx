@@ -57,6 +57,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { FormattedMarkdown } from "@/components/chat/ag-ui-chat"
 
 const DEFAULT_TEAM_USERS = [
   { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
@@ -67,6 +68,7 @@ const DEFAULT_TEAM_USERS = [
 ]
 
 const AVAILABLE_AGENTS = [
+  { id: "auto", name: "OmniDome Orchestrator", icon: "🧠", role: "Smart Intent Router", description: "Automatically analyzes your request and dispatches to the best specialist agent" },
   { id: "customer_facing", name: "DomeBot", icon: "🤖", role: "Customer & Ops", description: "Handles balances, invoices, coverage checks, ticket creation" },
   { id: "executive", name: "InsightDome", icon: "📊", role: "Executive & Finance", description: "MRR, churn, ARPU, executive summaries & pipeline metrics" },
   { id: "retention", name: "ChurnGuard", icon: "🛡️", role: "Retention & Churn", description: "Predicts customer churn risk and retention playbooks" },
@@ -173,7 +175,7 @@ export function AgentArtifactChat({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedModel, setSelectedModel] = useState(CLAUDE_MODELS[0].id)
-  const [selectedAgent, setSelectedAgent] = useState("customer_facing")
+  const [selectedAgent, setSelectedAgent] = useState("auto")
   const [bypassPermissions, setBypassPermissions] = useState(false)
   const [isRecording, setIsRecording] = useState(false)
   const [history, setHistory] = useState<{ role: string; content: string }[]>([])
@@ -676,9 +678,7 @@ export function AgentArtifactChat({
                   {segments.map((seg, i) => {
                     if (seg.type === "text") {
                       return seg.value.trim() ? (
-                        <p key={i} className="whitespace-pre-wrap">
-                          {seg.value.trim()}
-                        </p>
+                        <FormattedMarkdown key={i} content={seg.value.trim()} />
                       ) : null
                     }
                     const art = artifactsById[seg.value]

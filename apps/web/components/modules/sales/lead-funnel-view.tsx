@@ -48,6 +48,7 @@ import {
   type LeadFunnelResponse,
   SALES_CHANNELS,
 } from "@/lib/sales-api"
+import { TraditionalFunnel, type FunnelTierData } from "./traditional-funnel"
 
 interface LeadFunnelViewProps {
   onSelectChannelFilter?: (channel: string) => void
@@ -199,6 +200,99 @@ export function LeadFunnelView({
         revenue: Number(c.won_value_zar) || 0,
         color: CHANNEL_METADATA[c.channel]?.color || "#94a3b8",
       }))
+  }, [data])
+
+  // Traditional Inverted Funnel Tiers (Top leads -> Mid pipeline -> Closing -> Won)
+  const funnelTiers: FunnelTierData[] = useMemo(() => {
+    if (!data) return []
+
+    const total = data.totals?.total_leads || 1
+    const stages = data.overall_funnel || []
+
+    const countFor = (stageNames: string[]) =>
+      stages
+        .filter((s) => stageNames.includes(s.stage))
+        .reduce((sum, s) => sum + s.count, 0)
+
+    const valFor = (stageNames: string[]) =>
+      stages
+        .filter((s) => stageNames.includes(s.stage))
+        .reduce((sum, s) => sum + (Number(s.value_zar) || 0), 0)
+
+    const topCount = countFor(["NEW", "CONTACTED"])
+    const midCount = countFor(["QUALIFIED", "Prospecting"])
+    const closeCount = countFor(["Proposal", "Negotiation"])
+    const wonCount = data.totals?.won_leads || countFor(["Closed Won"])
+
+    const getChannelSegmentsFor = (stageNames: string[], tierTotal: number) => {
+      if (!data.channels) return []
+      return data.channels
+        .map((ch) => {
+          const chCount = stageNames.reduce(
+            (sum, st) => sum + (ch.stage_counts?.[st] || 0),
+            0
+          )
+          const meta = CHANNEL_METADATA[ch.channel] || {
+            label: ch.channel_label,
+            color: "#94a3b8",
+          }
+          return {
+            channel: ch.channel,
+            label: meta.label,
+            count: chCount,
+            color: meta.color,
+            pctOfTier: tierTotal > 0 ? Math.round((chCount / tierTotal) * 100) : 0,
+          }
+        })
+        .filter((seg) => seg.count > 0)
+        .sort((a, b) => b.count - a.count)
+    }
+
+    return [
+      {
+        id: "top-tier",
+        name: "Top of Funnel: Captured Inbound Leads",
+        stageCategory: "top",
+        count: topCount,
+        valueZar: valFor(["NEW", "CONTACTED"]),
+        pctOfTotal: Math.round((topCount / total) * 100),
+        description: "Raw prospects sitting in NEW or Contacted stages awaiting discovery and warming",
+        channels: getChannelSegmentsFor(["NEW", "CONTACTED"], topCount),
+      },
+      {
+        id: "mid-tier",
+        name: "Mid Funnel: Qualified Pipeline in Progress",
+        stageCategory: "mid",
+        count: midCount,
+        valueZar: valFor(["QUALIFIED", "Prospecting"]),
+        pctOfTotal: Math.round((midCount / total) * 100),
+        conversionFromPrev: topCount > 0 ? Math.round((midCount / topCount) * 100) : 0,
+        description: "Qualified opportunities being actively worked on by field agents and telesales",
+        channels: getChannelSegmentsFor(["QUALIFIED", "Prospecting"], midCount),
+      },
+      {
+        id: "closing-tier",
+        name: "Decision Stage: Proposals & Negotiations",
+        stageCategory: "closing",
+        count: closeCount,
+        valueZar: valFor(["Proposal", "Negotiation"]),
+        pctOfTotal: Math.round((closeCount / total) * 100),
+        conversionFromPrev: midCount > 0 ? Math.round((closeCount / midCount) * 100) : 0,
+        description: "Formal packages quoted, SLA evaluations, and pricing terms under review",
+        channels: getChannelSegmentsFor(["Proposal", "Negotiation"], closeCount),
+      },
+      {
+        id: "won-tier",
+        name: "Bottom of Funnel: Closed Won & Subscribed",
+        stageCategory: "won",
+        count: wonCount,
+        valueZar: Number(data.totals?.won_value_zar) || 0,
+        pctOfTotal: Math.round((wonCount / total) * 100),
+        conversionFromPrev: closeCount > 0 ? Math.round((wonCount / closeCount) * 100) : (total > 0 ? Math.round((wonCount / total) * 100) : 0),
+        description: "Signed contracts provisioned as live active subscribers",
+        channels: getChannelSegmentsFor(["Closed Won"], wonCount),
+      },
+    ]
   }, [data])
 
   return (
@@ -462,126 +556,100 @@ export function LeadFunnelView({
         </CardContent>
       </Card>
 
-      {/* ── Channel Comparison Grid & Detailed Breakdown ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Channel Volume Bar Chart */}
-        <Card className="border-border bg-card lg:col-span-2 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold flex items-center justify-between">
-              <span>Channel Lead Volume & Won Performance</span>
-              <Badge variant="outline" className="text-xs font-mono">
-                {activeChannels.length} active channels
+      {/* ── Visual Traditional Pipeline Funnel (Inverted Trapezoid Stages) ── */}
+      <Card className="border-border bg-card shadow-sm">
+        <CardHeader className="pb-2">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base font-bold text-foreground flex items-center gap-2">
+                <Target className="h-5 w-5 text-emerald-400" />
+                Pipeline Conversion Funnel
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Visual progression from initial inbound leads &rarr; active pipeline &rarr; closed won deals by channel attribution
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs font-mono border-emerald-500/30 text-emerald-400">
+                {data?.totals?.total_leads ?? 0} Inbound Leads
               </Badge>
-            </CardTitle>
-            <CardDescription className="text-xs">
-              Comparing incoming leads, active deals, and closed won wins per acquisition channel
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-72 w-full pt-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={channelChartData}
-                  margin={{ top: 10, right: 10, left: 0, bottom: 25 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                  <XAxis
-                    dataKey="name"
-                    tick={{ fill: "#a1a1aa", fontSize: 11 }}
-                    interval={0}
-                    angle={-15}
-                    textAnchor="end"
-                  />
-                  <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#18181b",
-                      border: "1px solid #3f3f46",
-                      borderRadius: "8px",
-                      color: "#fff",
-                      fontSize: "12px",
-                    }}
-                    formatter={(val: number, name: string) => [
-                      name === "revenue" ? zar(val) : val,
-                      name === "won"
-                        ? "Closed Won"
-                        : name === "pipeline"
-                        ? "In Pipeline"
-                        : name === "total"
-                        ? "Total Leads"
-                        : name,
-                    ]}
-                  />
-                  <Legend wrapperStyle={{ fontSize: "11px", paddingTop: "10px" }} />
-                  <Bar dataKey="won" name="Closed Won" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="pipeline" name="In Pipeline" stackId="a" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <Badge variant="outline" className="text-xs font-mono border-purple-500/30 text-purple-400">
+                {zar(data?.totals?.total_pipeline_value_zar ?? 0)} Pipeline
+              </Badge>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </CardHeader>
+        <CardContent className="pt-2">
+          <TraditionalFunnel
+            tiers={funnelTiers}
+            totalLeads={data?.totals?.total_leads ?? 0}
+            totalPipelineZar={Number(data?.totals?.total_pipeline_value_zar) || 0}
+            wonLeads={data?.totals?.won_leads ?? 0}
+            wonRevenueZar={Number(data?.totals?.won_value_zar) || 0}
+            onSelectChannel={(ch) => setSelectedChannel(ch)}
+            onSelectTier={(tierId) => {
+              if (onNavigateToLeads) onNavigateToLeads()
+            }}
+          />
+        </CardContent>
+      </Card>
 
-        {/* Lead Share by Channel Donut */}
-        <Card className="border-border bg-card shadow-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Channel Volume Share</CardTitle>
-            <CardDescription className="text-xs">
-              Lead distribution percentage across active channels
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="h-56 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={channelChartData}
-                    dataKey="total"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={55}
-                    outerRadius={80}
-                    paddingAngle={3}
-                  >
-                    {channelChartData.map((entry, index) => (
-                      <Cell key={`slice-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#18181b",
-                      border: "1px solid #3f3f46",
-                      borderRadius: "8px",
-                      color: "#fff",
-                      fontSize: "12px",
-                    }}
-                    formatter={(val: number) => [`${val} Leads`, "Volume"]}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="space-y-1.5 pt-3 border-t border-border/60">
-              {channelChartData.slice(0, 5).map((ch) => (
-                <div key={ch.channel} className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="h-2 w-2 rounded-full shrink-0"
-                      style={{ backgroundColor: ch.color }}
-                    />
-                    <span className="text-muted-foreground truncate max-w-[130px]">
-                      {ch.name}
-                    </span>
-                  </div>
-                  <span className="font-mono font-medium text-foreground">
-                    {ch.total} leads ({ch.conversion}%)
-                  </span>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* ── Channel Lead Volume & Won Performance Bar Chart ── */}
+      <Card className="border-border bg-card shadow-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-semibold flex items-center justify-between">
+            <span>Channel Lead Volume & Won Performance</span>
+            <Badge variant="outline" className="text-xs font-mono">
+              {activeChannels.length} active channels
+            </Badge>
+          </CardTitle>
+          <CardDescription className="text-xs">
+            Comparing incoming leads, active deals, and closed won wins per acquisition channel
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="h-72 w-full pt-4">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={channelChartData}
+                margin={{ top: 10, right: 10, left: 0, bottom: 25 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                <XAxis
+                  dataKey="name"
+                  tick={{ fill: "#a1a1aa", fontSize: 11 }}
+                  interval={0}
+                  angle={-15}
+                  textAnchor="end"
+                />
+                <YAxis tick={{ fill: "#a1a1aa", fontSize: 11 }} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: "#18181b",
+                    border: "1px solid #3f3f46",
+                    borderRadius: "8px",
+                    color: "#fff",
+                    fontSize: "12px",
+                  }}
+                  formatter={(val: number, name: string) => [
+                    name === "revenue" ? zar(val) : val,
+                    name === "won"
+                      ? "Closed Won"
+                      : name === "pipeline"
+                      ? "In Pipeline"
+                      : name === "total"
+                      ? "Total Leads"
+                      : name,
+                  ]}
+                />
+                <Legend wrapperStyle={{ fontSize: "11px", paddingTop: "10px" }} />
+                <Bar dataKey="won" name="Closed Won" stackId="a" fill="#10b981" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="pipeline" name="In Pipeline" stackId="a" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* ── Channel Deep-Dive Cards ── */}
       <div>

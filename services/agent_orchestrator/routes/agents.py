@@ -39,47 +39,61 @@ router = APIRouter()
 # Each entry: (agent_type, keyword_patterns)
 # Checked in priority order; first match wins.
 _INTENT_ROUTES: list[tuple[str, list[str]]] = [
+    # 1. Creative drafting, editing & revisions -> OmniAssist
+    ("assistant", [
+        "draft", "write an email", "write a", "compose", "revise", "rewrite",
+        "create a template", "proposal draft", "document draft", "canvas",
+    ]),
+    # 2. Executive, revenue, pipeline, forecasting, C-suite insights -> InsightBot
     ("executive", [
         "executive", "briefing", "summary", "mrr", "arr", "arpu", "churn rate",
         "revenue", "pipeline", "forecast", "financial summary", "kpi",
         "performance", "scorecard", "strategy", "board", "c-suite",
         "quarterly", "monthly report", "insights", "variance", "target",
-        "closed won", "win rate", "deals closed",
+        "closed won", "win rate", "deal", "lead", "access to",
     ]),
+    # 3. Retention & churn prevention -> ChurnGuard
     ("retention", [
         "churn", "at risk", "retention", "save customer", "cancel",
         "downgrade", "loyalty", "winback", "risk score", "churn predict",
     ]),
+    # 4. Technical support & tickets -> SupportBot
     ("support", [
         "ticket", "escalat", "fault", "outage", "diagnostic", "troubleshoot",
         "complaint", "sla", "resolve", "incident", "issue",
     ]),
+    # 5. Call center queues & agent metrics -> CallBot
     ("call_center", [
         "call center", "call centre", "queue", "wait time", "agent metrics",
         "call volume", "abandon rate", "aht", "average handle",
     ]),
+    # 6. Coverage feasibility, RICA, installation & provisioning -> ProvisionBot
     ("provisioning", [
-        "provision", "onboard", "activate", "install", "rica",
-        "coverage check", "new customer", "signup", "sign up",
+        "coverage", "feasibility", "provision", "onboard", "activate",
+        "install", "rica", "check coverage", "new customer", "signup", "sign up",
     ]),
+    # 7. HR, payroll, leave & staff wellness -> StaffBot
     ("talent", [
         "employee", "staff", "hr ", "human resource", "leave", "payroll",
         "hiring", "recruit", "attrition", "wellness", "overtime",
         "schedule", "shift", "training", "onboarding task",
     ]),
+    # 8. Safe SQL queries & data exploration -> MetricBot
     ("analytics", [
         "analytics", "sql", "query", "data", "metric", "trend",
         "network health", "conversion", "funnel",
     ]),
+    # 9. Fibre plans, bundles & pricing catalog -> ProductBot
     ("products", [
-        "product", "plan", "bundle", "pricing", "fibre", "package",
+        "product", "plan", "bundle", "pricing", "package",
         "catalogue", "catalog",
     ]),
+    # 10. Billing balances, invoices & payments -> DomeBot
     ("customer_facing", [
         "balance", "invoice", "payment", "account", "customer",
-        "billing", "coverage", "service status",
+        "billing", "service status",
     ]),
-    # assistant is the catch-all
+    # assistant is the default fallback
 ]
 
 
@@ -507,13 +521,23 @@ async def invoke_agent(
     conversation_id = body.conversation_id
     skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
 
+    # Intent-based auto routing if agent_type is 'auto' or unspecified
+    effective_agent_type = body.agent_type
+    if effective_agent_type in ("auto", "orchestrator", "router", ""):
+        effective_agent_type = _classify_agent(body.message or "")
+        logger.info(
+            "Orchestrator auto-routed prompt to specialist agent '%s' for message: %s",
+            effective_agent_type,
+            (body.message or "")[:60],
+        )
+
     # Guardrails pre-gate on the inbound user message (before any DB/agent work
     # so a blocked input leaves no stray conversation or LLM call behind).
     policy = settings.guardrails_policy
     gate_in = run_gate(body.message, policy)
     if gate_in["action"] == "block":
         error_msg = gate_in.get("error", "Input blocked by security guardrails")
-        logger.warning("Security gate blocked input for agent %s: %s", body.agent_type, error_msg)
+        logger.warning("Security gate blocked input for agent %s: %s", effective_agent_type, error_msg)
         raise HTTPException(
             status_code=422,
             detail={
@@ -562,7 +586,7 @@ async def invoke_agent(
             if not conversation_id:
                 conv = AgentConversation(
                     tenant_id=ctx.tenant_id,
-                    agent_type=body.agent_type,
+                    agent_type=effective_agent_type,
                     channel="api",
                     context=body.context,
                 )
@@ -573,7 +597,7 @@ async def invoke_agent(
     # Run the agent (outside the DB session to avoid long-held locks)
     tenant_id = body.tenant_id or ctx.tenant_id
     agent = Agent(
-        agent_type=body.agent_type,
+        agent_type=effective_agent_type,
         tenant_id=tenant_id,
         context=body.context,
     )
@@ -626,7 +650,7 @@ async def invoke_agent(
             await _persist_messages(
                 session=session,
                 conversation_id=conversation_id,
-                agent_type=body.agent_type,
+                agent_type=effective_agent_type,
                 user_message=safe_message,
                 assistant_content=final_content,
                 tool_calls=result.get("tool_calls", []),
@@ -639,7 +663,7 @@ async def invoke_agent(
         conversation_id=conversation_id,
         message=final_content,
         tool_calls=result.get("tool_calls", []),
-        agent_type=body.agent_type,
+        agent_type=effective_agent_type,
     )
 
 
@@ -659,6 +683,16 @@ async def invoke_agent_stream(
 
     skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
 
+    # Intent-based auto routing if agent_type is 'auto' or unspecified
+    effective_agent_type = body.agent_type
+    if effective_agent_type in ("auto", "orchestrator", "router", ""):
+        effective_agent_type = _classify_agent(body.message or "")
+        logger.info(
+            "Orchestrator stream auto-routed prompt to specialist agent '%s' for message: %s",
+            effective_agent_type,
+            (body.message or "")[:60],
+        )
+
     async def _ensure_conversation() -> uuid.UUID:
         if conversation_id:
             return conversation_id
@@ -667,7 +701,7 @@ async def invoke_agent_stream(
         async with get_session() as session:
             conv = AgentConversation(
                 tenant_id=tenant_id,
-                agent_type=body.agent_type,
+                agent_type=effective_agent_type,
                 channel="api",
                 context=body.context,
             )
@@ -703,11 +737,33 @@ async def invoke_agent_stream(
             run_id=run_id,
             tenant_id=tenant_id,
             conversation_id=conv_id,
-            data={"agent_type": body.agent_type},
+            data={
+                "agent_type": effective_agent_type,
+                "auto_routed": body.agent_type in ("auto", "orchestrator", "router", ""),
+            },
         ))
 
-        agent = Agent(agent_type=body.agent_type, tenant_id=tenant_id, context=body.context)
+        agent = Agent(agent_type=effective_agent_type, tenant_id=tenant_id, context=body.context)
         history = body.context.get("history", [])
+        if not skip_db and conv_id:
+            try:
+                async with get_session() as session:
+                    msg_stmt = (
+                        select(AgentMessage)
+                        .where(AgentMessage.conversation_id == conv_id)
+                        .order_by(AgentMessage.created_at.asc())
+                    )
+                    msg_res = await session.execute(msg_stmt)
+                    db_messages = msg_res.scalars().all()
+                    if db_messages:
+                        history = [
+                            {"role": m.role, "content": m.content or "", "id": str(m.id)}
+                            for m in db_messages
+                            if m.role in ("user", "assistant")
+                        ]
+            except Exception as exc:
+                logger.warning("Failed to load message history for conversation %s: %s", conv_id, exc)
+
         full_content = ""
         compaction_state = None
         if not skip_db and body.conversation_id:
@@ -727,7 +783,7 @@ async def invoke_agent_stream(
                             await session.flush()
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("Early compaction store failed for %s: %s", conv_id, exc)
-                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(effective_agent_type, tenant_id, body.context, agent.skills_prompt)})
                 async for delta in hermes_client.chat_stream(messages):
                     full_content += delta
                     yield emit(AGUIEvent(
@@ -827,7 +883,7 @@ async def invoke_agent_stream(
                 await _persist_messages(
                     session=session,
                     conversation_id=conv_id,
-                    agent_type=body.agent_type,
+                    agent_type=effective_agent_type,
                     user_message=safe_message,
                     assistant_content=full_content,
                     tool_calls=executed_tool_calls,

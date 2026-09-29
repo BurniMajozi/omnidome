@@ -740,6 +740,8 @@ def get_tools_for_agent(agent_type: str) -> List[Tool]:
     Uses the agent_tool_map from config.settings. Supports exact tool names
     and prefix wildcards (e.g., 'crm.*' matches all crm tools).
     """
+    if agent_type in ("auto", "orchestrator", "master"):
+        return list(ALL_TOOLS)
     import fnmatch
     tool_names = settings.agent_tool_map.get(agent_type, [])
     result = []

@@ -47,6 +47,8 @@ DEFAULT_ALLOWLIST: Set[str] = {
 }
 
 AGENT_TABLE_ALLOWLISTS: Dict[str, Set[str]] = {
+    "auto": DEFAULT_ALLOWLIST,
+    "orchestrator": DEFAULT_ALLOWLIST,
     "executive": DEFAULT_ALLOWLIST,
     "analytics": DEFAULT_ALLOWLIST,
     "sales": {"deals", "leads", "contacts", "customers", "lead_activities", "lead_tasks"},

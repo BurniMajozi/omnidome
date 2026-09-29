@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useMemo } from "react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area,
@@ -8,7 +8,7 @@ import {
 import {
   Users, TrendingUp, TrendingDown, AlertTriangle, DollarSign,
   ArrowRight, Filter, Activity, Target, RefreshCw, ChevronRight,
-  UserPlus, UserMinus, Zap,
+  UserPlus, UserMinus, Zap, Layers, CheckCircle2,
 } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +18,8 @@ import { lifecycleApi } from "@/lib/lifecycle-api"
 import type {
   DashboardData, CustomerLifecycle, LifecycleEvent, LifecycleStage, FunnelData,
 } from "@/lib/lifecycle-api"
+import { salesApi, type LeadFunnelResponse } from "@/lib/sales-api"
+import { TraditionalFunnel, type FunnelTierData } from "@/components/modules/sales/traditional-funnel"
 import { supabase, getSessionSafe } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899", "#8b5cf6"]
@@ -32,6 +34,20 @@ const STAGE_COLORS: Record<string, string> = {
   "At Risk": "#f97316",
   "Churned": "#ef4444",
   "Reactivated": "#14b8a6",
+}
+
+const CHANNEL_COLORS: Record<string, string> = {
+  MARKETING: "#e03131",
+  INBOUND_EMAIL: "#60a5fa",
+  CALL_CENTER_INBOUND: "#34d399",
+  CALL_CENTER_OUTBOUND: "#fbbf24",
+  PORTAL_WEBSITE: "#a78bfa",
+  FIELD_SALES: "#f87171",
+  WALK_IN: "#38bdf8",
+  REFERRAL: "#ec4899",
+  COMPANY_SEARCH: "#14b8a6",
+  TENDER: "#f59e0b",
+  OTHER: "#94a3b8",
 }
 
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -72,6 +88,7 @@ export function LifecycleDashboard() {
   const [lifecycles, setLifecycles] = useState<CustomerLifecycle[]>([])
   const [events, setEvents] = useState<LifecycleEvent[]>([])
   const [stages, setStages] = useState<LifecycleStage[]>([])
+  const [salesFunnel, setSalesFunnel] = useState<LeadFunnelResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [filterStage, setFilterStage] = useState<string>("all")
   const [days, setDays] = useState(30)
@@ -93,7 +110,7 @@ export function LifecycleDashboard() {
   const loadData = useCallback(async () => {
     const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
     setLoading(true)
-    const [dashData, lcData, evData, stData] = await Promise.all([
+    const [dashData, lcData, evData, stData, funnelData] = await Promise.all([
       safe(lifecycleApi.getDashboard(tenantId, days)),
       safe(lifecycleApi.listLifecycles(tenantId, {
         stage: filterStage === "all" ? undefined : filterStage,
@@ -101,11 +118,13 @@ export function LifecycleDashboard() {
       })),
       safe(lifecycleApi.listEvents(tenantId, undefined, 20)),
       safe(lifecycleApi.ensureStages(tenantId)),
+      safe(salesApi.getLeadFunnel({ days })),
     ])
     if (dashData) setDashboard(dashData)
     setLifecycles(lcData?.lifecycles ?? [])
     setEvents(evData?.events ?? [])
     setStages(stData?.stages ?? [])
+    if (funnelData) setSalesFunnel(funnelData)
     setLoading(false)
   }, [tenantId, days, filterStage])
 
@@ -134,6 +153,157 @@ export function LifecycleDashboard() {
     { name: "Active", value: (dashboard.revenue.active_customers || 0) - (dashboard.risk.at_risk_count || 0), fill: "#4ade80" },
     { name: "At Risk", value: dashboard.risk.at_risk_count || 0, fill: "#f97316" },
   ] : []
+
+  // Traditional Inverted Funnel Tiers (Top leads -> Mid pipeline -> Closing -> Won)
+  const funnelTiers: FunnelTierData[] = useMemo(() => {
+    // If salesFunnel data is available, compute tiers matching channels
+    if (salesFunnel && salesFunnel.overall_funnel && salesFunnel.overall_funnel.length > 0) {
+      const stages = salesFunnel.overall_funnel
+      const countFor = (stageNames: string[]) =>
+        stages
+          .filter((s) => stageNames.includes(s.stage))
+          .reduce((sum, s) => sum + s.count, 0)
+
+      const valFor = (stageNames: string[]) =>
+        stages
+          .filter((s) => stageNames.includes(s.stage))
+          .reduce((sum, s) => sum + (Number(s.value_zar) || 0), 0)
+
+      const topCount = countFor(["NEW", "CONTACTED"])
+      const midCount = countFor(["QUALIFIED", "Prospecting"])
+      const closeCount = countFor(["Proposal", "Negotiation"])
+      const wonCount = Math.max(
+        salesFunnel.totals?.won_leads || countFor(["Closed Won"]),
+        dashboard?.revenue?.active_customers || 0
+      )
+      const wonVal = Math.max(
+        Number(salesFunnel.totals?.won_value_zar) || 0,
+        dashboard?.revenue?.total_mrr ? dashboard.revenue.total_mrr * 12 : 0
+      )
+
+      const total = topCount + midCount + closeCount + wonCount || 1
+
+      const getChannelSegmentsFor = (stageNames: string[], tierTotal: number) => {
+        if (!salesFunnel.channels) return []
+        return salesFunnel.channels
+          .map((ch) => {
+            const chCount = stageNames.reduce(
+              (sum, st) => sum + (ch.stage_counts?.[st] || 0),
+              0
+            )
+            const color = CHANNEL_COLORS[ch.channel] || "#94a3b8"
+            return {
+              channel: ch.channel,
+              label: ch.channel_label || ch.channel,
+              count: chCount,
+              color,
+              pctOfTier: tierTotal > 0 ? Math.round((chCount / tierTotal) * 100) : 0,
+            }
+          })
+          .filter((seg) => seg.count > 0)
+          .sort((a, b) => b.count - a.count)
+      }
+
+      return [
+        {
+          id: "top-tier",
+          name: "Top of Funnel: Captured Inbound Leads",
+          stageCategory: "top",
+          count: topCount,
+          valueZar: valFor(["NEW", "CONTACTED"]),
+          pctOfTotal: Math.round((topCount / total) * 100),
+          description: "Raw prospects sitting in NEW or Contacted stages awaiting discovery and warming",
+          channels: getChannelSegmentsFor(["NEW", "CONTACTED"], topCount),
+        },
+        {
+          id: "mid-tier",
+          name: "Mid Funnel: Qualified Pipeline in Progress",
+          stageCategory: "mid",
+          count: midCount,
+          valueZar: valFor(["QUALIFIED", "Prospecting"]),
+          pctOfTotal: Math.round((midCount / total) * 100),
+          conversionFromPrev: topCount > 0 ? Math.round((midCount / topCount) * 100) : 0,
+          description: "Qualified opportunities being actively worked on by field agents and telesales",
+          channels: getChannelSegmentsFor(["QUALIFIED", "Prospecting"], midCount),
+        },
+        {
+          id: "closing-tier",
+          name: "Decision Stage: Proposals & Negotiations",
+          stageCategory: "closing",
+          count: closeCount,
+          valueZar: valFor(["Proposal", "Negotiation"]),
+          pctOfTotal: Math.round((closeCount / total) * 100),
+          conversionFromPrev: midCount > 0 ? Math.round((closeCount / midCount) * 100) : 0,
+          description: "Formal packages quoted, SLA evaluations, and pricing terms under review",
+          channels: getChannelSegmentsFor(["Proposal", "Negotiation"], closeCount),
+        },
+        {
+          id: "won-tier",
+          name: "Bottom of Funnel: Won & Active Subscribers",
+          stageCategory: "won",
+          count: wonCount,
+          valueZar: wonVal,
+          pctOfTotal: Math.round((wonCount / total) * 100),
+          conversionFromPrev: closeCount > 0 ? Math.round((wonCount / closeCount) * 100) : (total > 0 ? Math.round((wonCount / total) * 100) : 0),
+          description: "Signed contracts provisioned as live active subscribers",
+          channels: getChannelSegmentsFor(["Closed Won"], wonCount),
+        },
+      ]
+    }
+
+    // Fallback: build tiers from dashboard.stages
+    const leadCount = dashboard?.stages?.Lead?.count || 0
+    const qualCount = dashboard?.stages?.Qualified?.count || 0
+    const propCount = dashboard?.stages?.Proposal?.count || 0
+    const activeCount = (dashboard?.stages?.Active?.count || 0) + (dashboard?.stages?.Converted?.count || 0)
+    const total = leadCount + qualCount + propCount + activeCount || 1
+
+    return [
+      {
+        id: "top-tier",
+        name: "Top of Funnel: Captured Inbound Leads",
+        stageCategory: "top",
+        count: leadCount,
+        valueZar: dashboard?.stages?.Lead?.mrr || 0,
+        pctOfTotal: Math.round((leadCount / total) * 100),
+        description: "Prospects entered through campaigns, inbound, referral & partners",
+        channels: [],
+      },
+      {
+        id: "mid-tier",
+        name: "Mid Funnel: Qualified Pipeline in Progress",
+        stageCategory: "mid",
+        count: qualCount,
+        valueZar: dashboard?.stages?.Qualified?.mrr || 0,
+        pctOfTotal: Math.round((qualCount / total) * 100),
+        conversionFromPrev: leadCount > 0 ? Math.round((qualCount / leadCount) * 100) : 0,
+        description: "Opportunities with verified coverage, budget, and authority",
+        channels: [],
+      },
+      {
+        id: "closing-tier",
+        name: "Decision Stage: Proposals & Pricing",
+        stageCategory: "closing",
+        count: propCount,
+        valueZar: dashboard?.stages?.Proposal?.mrr || 0,
+        pctOfTotal: Math.round((propCount / total) * 100),
+        conversionFromPrev: qualCount > 0 ? Math.round((propCount / qualCount) * 100) : 0,
+        description: "Formal proposals out with prospective clients",
+        channels: [],
+      },
+      {
+        id: "won-tier",
+        name: "Bottom of Funnel: Active Subscribers",
+        stageCategory: "won",
+        count: activeCount,
+        valueZar: dashboard?.revenue?.total_mrr || 0,
+        pctOfTotal: Math.round((activeCount / total) * 100),
+        conversionFromPrev: propCount > 0 ? Math.round((activeCount / propCount) * 100) : 0,
+        description: "Active subscribers deployed and generating MRR",
+        channels: [],
+      },
+    ]
+  }, [salesFunnel, dashboard])
 
   const stageList = [
     "Lead", "Qualified", "Proposal", "Converted", "Onboarding",
@@ -362,69 +532,248 @@ export function LifecycleDashboard() {
 
         {/* --- FUNNEL TAB --- */}
         <TabsContent value="funnel" className="space-y-6 mt-4">
-          {/* Visual stage pipeline */}
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Target className="h-4 w-4 text-primary" />
-                Lifecycle Funnel
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {stageList.filter(s => {
-                  if (!dashboard) return true
-                  const data = dashboard.stages[s]
-                  return !data || data.count > 0 || s === "Active"
-                }).map((stageName) => {
-                  const data = dashboard?.stages[stageName]
-                  const count = data?.count || 0
-                  const mrr = data?.mrr || 0
-                  const color = STAGE_COLORS[stageName] || "#888"
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* ── Left Side: Customer Lifecycle Progression & Journey Graph (6 cols) ── */}
+            <div className="lg:col-span-6 space-y-4">
+              <Card className="border-border bg-card shadow-sm">
+                <CardHeader className="pb-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <Target className="h-5 w-5 text-primary" />
+                        Customer Lifecycle Journey
+                      </CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Progression from acquisition &rarr; conversion &rarr; retention &rarr; risk management
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="text-xs font-mono border-emerald-500/30 text-emerald-400">
+                      {dashboard?.revenue?.active_customers ?? 0} Live Subscribers
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Journey Phase Flow Header */}
+                  <div className="p-3 rounded-xl border border-border/80 bg-secondary/20">
+                    <div className="flex items-center justify-between gap-1 overflow-x-auto text-[11px] font-medium text-muted-foreground pb-1">
+                      <div className="flex items-center gap-1 text-blue-400 shrink-0">
+                        <UserPlus className="h-3.5 w-3.5" />
+                        <span>Acquisition</span>
+                      </div>
+                      <ArrowRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                      <div className="flex items-center gap-1 text-purple-400 shrink-0">
+                        <TrendingUp className="h-3.5 w-3.5" />
+                        <span>Conversion</span>
+                      </div>
+                      <ArrowRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                      <div className="flex items-center gap-1 text-emerald-400 shrink-0">
+                        <Users className="h-3.5 w-3.5" />
+                        <span>Retention</span>
+                      </div>
+                      <ArrowRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                      <div className="flex items-center gap-1 text-amber-400 shrink-0">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        <span>Risk</span>
+                      </div>
+                      <ArrowRight className="h-3 w-3 text-muted-foreground/60 shrink-0" />
+                      <div className="flex items-center gap-1 text-red-400 shrink-0">
+                        <UserMinus className="h-3.5 w-3.5" />
+                        <span>Churn</span>
+                      </div>
+                    </div>
+                  </div>
 
-                  return (
-                    <div
-                      key={stageName}
-                      className="flex flex-col items-center rounded-xl border border-border bg-secondary/30 p-3 min-w-[100px]"
-                      style={{ borderColor: `${color}40` }}
-                    >
-                      <div className="h-3 w-3 rounded-full mb-2" style={{ backgroundColor: color }} />
-                      <p className="text-sm font-medium text-foreground">{stageName}</p>
-                      <p className="text-lg font-bold" style={{ color }}>{count}</p>
-                      <p className="text-xs text-muted-foreground">{formatZAR(mrr)}</p>
-                      <Badge
-                        variant="outline"
-                        className="mt-1 text-xs"
-                        style={{ borderColor: `${color}60`, color }}
-                      >
-                        {data ? `${data.avg_health.toFixed(0)}% health` : "—"}
+                  {/* Lifecycle Phase Milestones */}
+                  <div className="space-y-2.5">
+                    {/* Phase 1: Acquisition */}
+                    <div className="p-3 rounded-xl border border-blue-500/20 bg-blue-950/10 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 font-bold text-xs">
+                          1
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            Acquisition Phase
+                            <Badge variant="outline" className="text-[10px] border-blue-500/30 text-blue-400">
+                              Lead & Qualified
+                            </Badge>
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Capturing inbound interest, discovery calls & qualification
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-base font-bold text-blue-400 font-mono">
+                          {(dashboard?.stages?.Lead?.count || 0) + (dashboard?.stages?.Qualified?.count || 0)} accounts
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {formatZAR((dashboard?.stages?.Lead?.mrr || 0) + (dashboard?.stages?.Qualified?.mrr || 0))} pipeline
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Phase 2: Conversion */}
+                    <div className="p-3 rounded-xl border border-purple-500/20 bg-purple-950/10 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-lg bg-purple-500/20 flex items-center justify-center text-purple-400 font-bold text-xs">
+                          2
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            Conversion Phase
+                            <Badge variant="outline" className="text-[10px] border-purple-500/30 text-purple-400">
+                              Proposal & Converted
+                            </Badge>
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Formal pricing proposals, negotiation & agreement sign-off
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-base font-bold text-purple-400 font-mono">
+                          {(dashboard?.stages?.Proposal?.count || 0) + (dashboard?.stages?.Converted?.count || 0)} accounts
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {formatZAR(dashboard?.stages?.Proposal?.mrr || 0)} value
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Phase 3: Retention & Service Delivery */}
+                    <div className="p-3 rounded-xl border border-emerald-500/20 bg-emerald-950/10 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-lg bg-emerald-500/20 flex items-center justify-center text-emerald-400 font-bold text-xs">
+                          3
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            Retention & Value Phase
+                            <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-400">
+                              Active & Onboarding
+                            </Badge>
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Live operational billing, continuous SLA & high health
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-base font-bold text-emerald-400 font-mono">
+                          {dashboard?.revenue?.active_customers ?? (dashboard?.stages?.Active?.count || 0)} active
+                        </p>
+                        <p className="text-[10px] text-emerald-400/80 font-medium">
+                          {formatZAR(dashboard?.revenue?.total_mrr || 0)} MRR
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Phase 4: Risk Mitigation */}
+                    <div className="p-3 rounded-xl border border-amber-500/20 bg-amber-950/10 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-8 rounded-lg bg-amber-500/20 flex items-center justify-center text-amber-400 font-bold text-xs">
+                          4
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                            Risk Assessment
+                            <Badge variant="outline" className="text-[10px] border-amber-500/30 text-amber-400">
+                              At Risk Monitoring
+                            </Badge>
+                          </p>
+                          <p className="text-[11px] text-muted-foreground">
+                            Early churn signals, ticket escalations & intervention
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-base font-bold text-amber-400 font-mono">
+                          {dashboard?.risk?.at_risk_count || 0} at risk
+                        </p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {((dashboard?.risk?.avg_churn_probability || 0) * 100).toFixed(0)}% avg churn prob
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Individual Stage Grid */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground mb-2">Stage Breakdown</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                      {stageList.map((stageName) => {
+                        const data = dashboard?.stages[stageName]
+                        const count = data?.count || 0
+                        const mrr = data?.mrr || 0
+                        const color = STAGE_COLORS[stageName] || "#888"
+
+                        return (
+                          <div
+                            key={stageName}
+                            className="flex flex-col items-center rounded-xl border border-border bg-secondary/30 p-2.5 text-center transition-all hover:bg-secondary/50"
+                            style={{ borderColor: `${color}35` }}
+                          >
+                            <div className="h-2 w-2 rounded-full mb-1" style={{ backgroundColor: color }} />
+                            <p className="text-[11px] font-medium text-foreground truncate w-full">{stageName}</p>
+                            <p className="text-base font-bold font-mono" style={{ color }}>{count}</p>
+                            {mrr > 0 ? (
+                              <p className="text-[10px] text-muted-foreground font-mono">{formatZAR(mrr)}</p>
+                            ) : (
+                              <p className="text-[10px] text-muted-foreground/60">—</p>
+                            )}
+                            <Badge
+                              variant="outline"
+                              className="mt-1 text-[9px] px-1 py-0"
+                              style={{ borderColor: `${color}50`, color }}
+                            >
+                              {data ? `${data.avg_health.toFixed(0)}%` : "—"}
+                            </Badge>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* ── Right Side: Traditional Inverted Funnel (6 cols) ── */}
+            <div className="lg:col-span-6 space-y-4">
+              <Card className="border-border bg-card shadow-sm">
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base font-bold flex items-center gap-2">
+                        <Layers className="h-5 w-5 text-emerald-400" />
+                        Pipeline & Deal Funnel
+                      </CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Traditional inverted funnel: Inbound leads &rarr; active pipeline &rarr; closed won subscribers
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Badge variant="outline" className="text-xs font-mono border-emerald-500/30 text-emerald-400">
+                        {salesFunnel?.totals?.total_leads ?? (dashboard ? Object.values(dashboard.stages).reduce((s, d) => s + d.count, 0) : 36)} Leads
+                      </Badge>
+                      <Badge variant="outline" className="text-xs font-mono border-purple-500/30 text-purple-400">
+                        {formatZAR(Number(salesFunnel?.totals?.total_pipeline_value_zar) || (dashboard?.stages?.Qualified?.mrr || 0) + (dashboard?.stages?.Proposal?.mrr || 0))} Pipeline
                       </Badge>
                     </div>
-                  )
-                })}
-              </div>
-
-              {/* Stage connection arrows */}
-              <div className="flex justify-center mt-4">
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <UserPlus className="h-3 w-3" />
-                  <span>Acquisition</span>
-                  <ArrowRight className="h-3 w-3 mx-1" />
-                  <TrendingUp className="h-3 w-3" />
-                  <span>Conversion</span>
-                  <ArrowRight className="h-3 w-3 mx-1" />
-                  <Users className="h-3 w-3" />
-                  <span>Retention</span>
-                  <ArrowRight className="h-3 w-3 mx-1" />
-                  <AlertTriangle className="h-3 w-3" />
-                  <span>Risk</span>
-                  <ArrowRight className="h-3 w-3 mx-1" />
-                  <UserMinus className="h-3 w-3" />
-                  <span>Churn</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-2">
+                  <TraditionalFunnel
+                    tiers={funnelTiers}
+                    totalLeads={salesFunnel?.totals?.total_leads ?? (dashboard ? Object.values(dashboard.stages).reduce((s, d) => s + d.count, 0) : 36)}
+                    totalPipelineZar={Number(salesFunnel?.totals?.total_pipeline_value_zar) || (dashboard?.stages?.Qualified?.mrr || 0) + (dashboard?.stages?.Proposal?.mrr || 0)}
+                    wonLeads={Math.max(salesFunnel?.totals?.won_leads || 0, dashboard?.revenue?.active_customers || 0)}
+                    wonRevenueZar={Math.max(Number(salesFunnel?.totals?.won_value_zar) || 0, dashboard?.revenue?.total_mrr || 0)}
+                  />
+                </CardContent>
+              </Card>
+            </div>
+          </div>
         </TabsContent>
 
         {/* --- CUSTOMERS TAB --- */}
