@@ -349,3 +349,17 @@ class AgentEmail(Base):
         Index("ix_agent_emails_tenant_created", "tenant_id", "created_at"),
     )
 
+
+
+class AgentMailConfig(Base):
+    """Per-tenant AgentMail credentials. Secrets are Fernet-encrypted at rest
+    (SECRETS_ENCRYPTION_KEY). Same table is created on demand by
+    services.common.agentmail (marketing writes it too)."""
+    __tablename__ = "agentmail_config"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    api_key_enc: Mapped[str] = mapped_column(Text, nullable=True)
+    inbox: Mapped[str] = mapped_column(String(255), nullable=True)
+    webhook_secret_enc: Mapped[str] = mapped_column(Text, nullable=True)
+    webhook_id: Mapped[str] = mapped_column(String(120), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

@@ -38,6 +38,8 @@ async def startup() -> None:
         from services.communication.database import init_tables
         await init_tables()
         logger.info("Communication tables ensured")
+    from services.communication.routes.mail import start_mail_workers
+    start_mail_workers()
 
 
 @app.middleware("http")

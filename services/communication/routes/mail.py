@@ -3,14 +3,14 @@ Agent Mail Router for OmniDome Communication Service.
 Handles mailboxes for agents, inbound emails, automated LLM dispatch, and outbound mail tracking.
 """
 
-import hashlib
-import hmac
+import asyncio
 import html as html_lib
+import json
 import logging
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 import httpx
@@ -184,6 +184,17 @@ async def _process_inbound(
                 detail=f"No active Agent Mailbox found for recipient '{payload.recipient}'",
             )
 
+        # Idempotency: webhook retries and the polling fallback can both deliver
+        # the same provider message; never store or auto-reply twice.
+        if payload.message_id:
+            dup = (await session.execute(select(AgentEmail).where(
+                AgentEmail.tenant_id == tenant_id,
+                AgentEmail.direction == "inbound",
+                AgentEmail.message_id == payload.message_id,
+            ))).scalars().first()
+            if dup is not None:
+                return dup
+
         email_record = AgentEmail(
             id=uuid.uuid4(),
             tenant_id=tenant_id,
@@ -301,26 +312,62 @@ async def handle_inbound_email(
     )
 
 
+async def _webhook_secrets(session) -> List[str]:
+    secrets = agentmail_client.platform_webhook_secrets()
+    try:
+        for _tid, c in await agentmail_client.load_all_creds(session):
+            if c.webhook_secret:
+                secrets.append(c.webhook_secret)
+    except Exception as exc:  # noqa: BLE001 - missing key / table must not break env-secret verification
+        logger.debug("tenant webhook secrets unavailable: %s", exc)
+    return secrets
+
+
 @router.post("/webhook")
 async def agentmail_webhook(request: Request):
     """
-    Signed AgentMail webhook receiver (public at middleware; HMAC is the auth).
-    Tenant is resolved from the recipient address in agent_mailboxes.
+    Svix-signed AgentMail webhook receiver (public at middleware; the signature is the auth).
+    Verifies svix-id/svix-timestamp/svix-signature (HMAC-SHA256, 5 min replay window) against the
+    platform secret and any tenant webhook secrets. Tenant is resolved from the recipient address.
     """
-    secret = os.getenv("AGENTMAIL_WEBHOOK_SECRET", "")
-    if not secret:
-        logger.error("AGENTMAIL_WEBHOOK_SECRET not set - rejecting mail webhook")
-        raise HTTPException(status_code=503, detail="Webhook secret not configured")
     raw_body = await request.body()
-    signature = request.headers.get("X-Webhook-Signature", "")
-    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    async with get_session() as session:
+        secrets = await _webhook_secrets(session)
+    if not secrets:
+        logger.error("No AgentMail webhook secret configured - rejecting mail webhook")
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    if not agentmail_client.verify_svix(raw_body, request.headers, secrets):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
     try:
-        payload = InboundEmailPayload.model_validate_json(raw_body)
+        event = json.loads(raw_body)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    event_type = str(event.get("event_type") or event.get("type") or "")
+    msg = event.get("message") or {}
+    if not isinstance(msg, dict):
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+
+    if event_type in ("message.bounced", "message.complained", "message.rejected", "message.delivered"):
+        await _apply_delivery_event(event_type, msg, event.get("bounce") or event)
+        return {"status": "accepted", "event": event_type}
+    if event_type != "message.received":
+        return {"status": "ignored", "event": event_type}
+
+    flat = agentmail_client.normalize_message(msg)
+    try:
+        payload = InboundEmailPayload(**flat)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid inbound email payload")
 
+    record = await _ingest_for_recipient(payload)
+    if record is None:
+        raise HTTPException(status_code=404, detail="No unique active Agent Mailbox for recipient")
+    _STATE["last_inbound_at"] = datetime.now(timezone.utc).isoformat()
+    _STATE["last_inbound_via"] = "webhook"
+    return {"status": "accepted", "email_id": str(record.id)}
+
+
+async def _ingest_for_recipient(payload: InboundEmailPayload) -> Optional[AgentEmail]:
     recipient_clean = payload.recipient.lower().strip()
     async with get_session() as session:
         res = await session.execute(
@@ -331,14 +378,26 @@ async def agentmail_webhook(request: Request):
         )
         mailboxes = res.scalars().all()
     if len(mailboxes) != 1:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No unique active Agent Mailbox for recipient",
-        )
-    record = await _process_inbound(mailboxes[0].tenant_id, None, payload)
-    return {"status": "accepted", "email_id": str(record.id)}
+        return None
+    return await _process_inbound(mailboxes[0].tenant_id, None, payload)
 
 
+async def _apply_delivery_event(event_type: str, msg: dict, detail: Any) -> None:
+    mid = str(msg.get("message_id") or "")
+    if not mid:
+        return
+    new_status = {"message.delivered": "delivered", "message.bounced": "bounced",
+                  "message.complained": "complained", "message.rejected": "rejected"}[event_type]
+    async with get_session() as session:
+        rows = (await session.execute(select(AgentEmail).where(
+            AgentEmail.direction == "outbound", AgentEmail.message_id == mid,
+        ))).scalars().all()
+        for r in rows:
+            # never downgrade a bounce/complaint to delivered
+            if new_status == "delivered" and r.status in ("bounced", "complained", "rejected"):
+                continue
+            r.status = new_status
+            r.headers = {**(r.headers or {}), "provider_event": event_type}
 
 
 @router.get("/emails", response_model=List[AgentEmailRead])
@@ -436,7 +495,8 @@ async def _deliver_and_store(
         raise HTTPException(status_code=422, detail="At least one recipient is required")
     if len(to) + len(cc) + len(bcc) > MAX_RECIPIENTS:
         raise HTTPException(status_code=422, detail=f"Too many recipients (max {MAX_RECIPIENTS})")
-    if not agentmail_client.is_configured():
+    creds = await _tenant_creds(tenant_id)
+    if not agentmail_client.is_configured(creds):
         raise HTTPException(status_code=503, detail="Email provider not configured")
 
     async with get_session() as session:
@@ -454,7 +514,7 @@ async def _deliver_and_store(
     try:
         provider_id = await agentmail_client.send_message(
             to, subject, html_body, text=body_text, cc=cc, bcc=bcc,
-            reply_to_message_id=reply_to_message_id,
+            reply_to_message_id=reply_to_message_id, creds=creds,
         )
     except agentmail_client.EmailNotConfigured:
         raise HTTPException(status_code=503, detail="Email provider not configured")
@@ -588,3 +648,209 @@ async def delete_email(email_id: uuid.UUID, auth: AuthContext = Depends(get_auth
         rec.status = "deleted"
         await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# -- Webhook keepalive + inbound polling fallback ----------------------------
+# AgentMail webhooks can be disabled/expire after inactivity. A background loop
+# (started from communication startup) re-verifies them and a second loop polls
+# the inbox so mail still arrives while the webhook is dead.
+
+_STATE: dict = {
+    "webhook_url": None, "last_check_at": None, "last_check_ok": None, "last_error": None,
+    "webhook": None, "last_repair_at": None, "last_repair_action": None,
+    "last_poll_at": None, "last_poll_error": None, "last_poll_ingested": 0,
+    "last_inbound_at": None, "last_inbound_via": None,
+}
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _tenant_creds(tenant_id: uuid.UUID) -> Optional[agentmail_client.Creds]:
+    """Tenant's own AgentMail credentials, or None (fall back to platform env)."""
+    try:
+        async with get_session() as session:
+            return await agentmail_client.load_creds(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tenant AgentMail creds lookup failed (using platform default): %s", exc)
+        return None
+
+
+async def _all_targets() -> List[tuple]:
+    """[(tenant_id | None, Creds)] - platform env creds first, then tenant configs."""
+    targets: List[tuple] = []
+    env = agentmail_client.env_creds()
+    if env:
+        targets.append((None, env))
+    try:
+        async with get_session() as session:
+            for tid, c in await agentmail_client.load_all_creds(session):
+                targets.append((tid, c))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not load tenant AgentMail configs: %s", exc)
+    return targets
+
+
+async def _ensure_webhook_for(tenant_id, creds, url: str) -> dict:
+    wanted = agentmail_client.WEBHOOK_EVENT_TYPES
+    hooks = await agentmail_client.list_webhooks(creds)
+    ours = [h for h in hooks if (h.get("url") or "").rstrip("/") == url.rstrip("/")]
+    action = "ok"
+    hook: dict = {}
+    if not ours:
+        hook = await agentmail_client.create_webhook(url, wanted, creds)
+        action = "created"
+    else:
+        hook = next((h for h in ours if h.get("enabled")), ours[0])
+        wid = hook.get("webhook_id")
+        was_enabled = bool(hook.get("enabled"))
+        missing = set(wanted) - set(hook.get("event_types") or [])
+        if not was_enabled or missing:
+            try:
+                hook = await agentmail_client.update_webhook(
+                    wid, creds=creds, enabled=True, event_types=wanted if missing else None) or hook
+                action = "re-enabled" if not was_enabled else "updated"
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("webhook update failed (%s); recreating", exc)
+                try:
+                    await agentmail_client.delete_webhook(wid, creds=creds)
+                except Exception:  # noqa: BLE001
+                    pass
+                hook = await agentmail_client.create_webhook(url, wanted, creds)
+                action = "recreated"
+    secret = hook.get("secret") or ""
+    if tenant_id is None:
+        agentmail_client.remember_platform_secret(secret)
+    elif secret and secret != creds.webhook_secret:
+        try:
+            async with get_session() as session:
+                await agentmail_client.save_creds(session, tenant_id, webhook_secret=secret,
+                                                  webhook_id=hook.get("webhook_id"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not persist webhook secret for tenant %s: %s", tenant_id, exc)
+    return {"action": action, "webhook_id": hook.get("webhook_id"), "enabled": hook.get("enabled"),
+            "event_types": hook.get("event_types")}
+
+
+async def webhook_keepalive_once() -> None:
+    url = os.getenv("AGENTMAIL_WEBHOOK_URL", "").strip()
+    _STATE["webhook_url"] = url or None
+    _STATE["last_check_at"] = _now_iso()
+    if not url:
+        _STATE.update(last_check_ok=None, last_error="AGENTMAIL_WEBHOOK_URL not set; keepalive skipped")
+        return
+    targets = await _all_targets()
+    if not targets:
+        _STATE.update(last_check_ok=None, last_error="AgentMail not configured")
+        return
+    errors: List[str] = []
+    for tenant_id, creds in targets:
+        try:
+            info = await _ensure_webhook_for(tenant_id, creds, url)
+            if tenant_id is None:
+                _STATE["webhook"] = info
+            if info["action"] != "ok":
+                _STATE["last_repair_at"] = _now_iso()
+                _STATE["last_repair_action"] = info["action"]
+                logger.warning("AgentMail webhook %s (tenant=%s id=%s)", info["action"], tenant_id, info["webhook_id"])
+            else:
+                logger.info("AgentMail webhook healthy (tenant=%s)", tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{tenant_id or 'platform'}: {str(exc)[:200]}")
+            logger.error("AgentMail webhook check failed (tenant=%s): %s", tenant_id, exc)
+    _STATE["last_check_ok"] = not errors
+    _STATE["last_error"] = "; ".join(errors) or None
+
+
+async def poll_inbound_once() -> int:
+    """List recent messages per configured inbox; ingest unseen ones. Returns count ingested."""
+    targets = await _all_targets()
+    _STATE["last_poll_at"] = _now_iso()
+    ingested = 0
+    errors: List[str] = []
+    async with get_session() as session:
+        boxes = (await session.execute(select(AgentMailbox).where(AgentMailbox.is_active == True))).scalars().all()
+    by_addr: dict = {}
+    for b in boxes:
+        by_addr.setdefault(b.email_address.lower(), []).append(b.tenant_id)
+    lookback = (datetime.now(timezone.utc) - timedelta(hours=int(os.getenv("AGENTMAIL_POLL_LOOKBACK_HOURS", "24")))
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for tenant_id, creds in targets:
+        if tenant_id is not None:
+            inboxes = {creds.inbox.lower()} | {b.email_address.lower() for b in boxes if b.tenant_id == tenant_id}
+        else:
+            inboxes = {creds.inbox.lower()} | set(by_addr.keys())
+        for inbox in inboxes:
+            owners = [tenant_id] if tenant_id is not None else by_addr.get(inbox, [])
+            if len(owners) != 1:
+                continue
+            owner = owners[0]
+            try:
+                items = await agentmail_client.list_messages(inbox, creds=creds, limit=50, after=lookback)
+                ids = [str(m.get("message_id")) for m in items
+                       if m.get("message_id") and "sent" not in (m.get("labels") or [])]
+                if not ids:
+                    continue
+                async with get_session() as session:
+                    seen = set((await session.execute(select(AgentEmail.message_id).where(
+                        AgentEmail.tenant_id == owner, AgentEmail.message_id.in_(ids)))).scalars().all())
+                for mid in [i for i in ids if i not in seen][:20]:
+                    full = await agentmail_client.get_message(inbox, mid, creds=creds)
+                    flat = agentmail_client.normalize_message(full, inbox)
+                    flat["recipient"] = flat["recipient"] or inbox
+                    await _process_inbound(owner, None, InboundEmailPayload(**flat))
+                    ingested += 1
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{inbox}: {str(exc)[:160]}")
+                logger.warning("AgentMail poll failed for %s: %s", inbox, exc)
+    _STATE["last_poll_error"] = "; ".join(errors) or None
+    _STATE["last_poll_ingested"] = ingested
+    if ingested:
+        _STATE["last_inbound_at"] = _now_iso()
+        _STATE["last_inbound_via"] = "poll"
+        logger.warning("AgentMail poll ingested %d message(s) missed by the webhook", ingested)
+    return ingested
+
+
+async def _loop(name: str, fn, interval_s: float, initial_delay: float) -> None:
+    await asyncio.sleep(initial_delay)
+    while True:
+        try:
+            await fn()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never let a worker die
+            logger.error("%s loop error: %s", name, exc)
+        await asyncio.sleep(interval_s)
+
+
+_TASKS: list = []
+
+
+def start_mail_workers() -> None:
+    """Start keepalive + poll loops (idempotent). Called from communication startup."""
+    if _TASKS or os.getenv("AGENTMAIL_WORKERS_ENABLED", "true").lower() != "true":
+        return
+    check_s = max(1.0, float(os.getenv("AGENTMAIL_WEBHOOK_CHECK_MINUTES", "30"))) * 60
+    poll_s = max(0.5, float(os.getenv("AGENTMAIL_POLL_MINUTES", "3"))) * 60
+    _TASKS.append(asyncio.create_task(_loop("agentmail-keepalive", webhook_keepalive_once, check_s, 15)))
+    _TASKS.append(asyncio.create_task(_loop("agentmail-poll", poll_inbound_once, poll_s, 45)))
+    logger.info("AgentMail workers started (webhook check %.0fs, poll %.0fs)", check_s, poll_s)
+
+
+@router.get("/webhook-status")
+async def webhook_status(auth: AuthContext = Depends(get_auth_context)):
+    """Webhook + inbound health for the UI. No secrets are returned."""
+    async with get_session() as session:
+        last = (await session.execute(select(func.max(AgentEmail.created_at)).where(
+            AgentEmail.tenant_id == auth.tenant_id, AgentEmail.direction == "inbound"))).scalar_one()
+    creds = await _tenant_creds(auth.tenant_id)
+    return {
+        **_STATE,
+        "last_inbound_at": last.isoformat() if last else _STATE.get("last_inbound_at"),
+        "configured": agentmail_client.is_configured(creds),
+        "credentials_source": "tenant" if creds else ("env" if agentmail_client.env_creds() else None),
+        "workers_running": bool(_TASKS),
+        "healthy": bool(_STATE.get("last_check_ok")),
+    }

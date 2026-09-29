@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text, select, insert, update, delete, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.common import agentmail as agentmail_client
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
 from services.common.db import get_engine, get_async_session, run_with_db_retry
 from services.common.entitlements import EntitlementGuard
@@ -959,16 +960,21 @@ async def delete_campaign(
 # ─────────────────────── Email Delivery ───────────────────────
 
 
-_AGENTMAIL_BASE_URL = os.getenv("AGENTMAIL_BASE_URL", "https://api.agentmail.to/v0")
+def _tenant_agentmail_creds(tenant_id: Optional[uuid.UUID]):
+    """Tenant's own AgentMail credentials (encrypted table) or None -> platform env default."""
+    if not tenant_id:
+        return None
+    try:
+        with get_engine().begin() as conn:
+            return agentmail_client.load_creds_sync(conn, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tenant AgentMail creds lookup failed (using platform default): %s", exc)
+        return None
 
 
-def _email_provider_configured() -> bool:
-    """AgentMail is the configured ESP for OmniDome (api.agentmail.to)."""
-    return bool(os.getenv("AGENTMAIL_API_KEY"))
-
-
-def _agentmail_inbox() -> str:
-    return os.getenv("AGENTMAIL_INBOX") or os.getenv("AGENTMAIL_INBOX_ID") or "omnidome@agentmail.to"
+def _email_provider_configured(tenant_id: Optional[uuid.UUID] = None) -> bool:
+    """AgentMail is the configured ESP: tenant key first, else platform env."""
+    return agentmail_client.is_configured(_tenant_agentmail_creds(tenant_id))
 
 
 async def _send_one_email(
@@ -979,41 +985,19 @@ async def _send_one_email(
     from_name: Optional[str],
     from_email: Optional[str],
     reply_to: Optional[str],
+    tenant_id: Optional[uuid.UUID] = None,
 ) -> str:
     """Send one email via AgentMail. Returns the provider message id. Raises on failure.
 
     AgentMail sends from the inbox itself, so `from_email`/`from_name` are advisory
-    (used only as an optional reply-to hint) — the visible sender is the inbox address.
+    (used only as an optional reply-to hint) - the visible sender is the inbox address.
     """
-    from urllib.parse import quote
-
-    api_key = os.getenv("AGENTMAIL_API_KEY")
-    if not api_key:
-        raise HTTPException(503, "Email provider not configured — set AGENTMAIL_API_KEY")
-    inbox = _agentmail_inbox()
-    payload: Dict[str, Any] = {
-        "to": [to_email],
-        "subject": subject,
-        "html": body_html or "",
-    }
-    if reply_to:
-        payload["reply_to"] = [reply_to]
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"{_AGENTMAIL_BASE_URL}/inboxes/{quote(inbox, safe='')}/messages/send",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"AgentMail {resp.status_code}: {resp.text[:300]}")
+    creds = _tenant_agentmail_creds(tenant_id)
     try:
-        data = resp.json()
-    except Exception:
-        data = {}
-    return data.get("message_id") or data.get("id") or ""
+        return await agentmail_client.send_email(
+            to_email, subject, body_html, reply_to=reply_to, creds=creds)
+    except agentmail_client.EmailNotConfigured:
+        raise HTTPException(503, "Email provider not configured - set AGENTMAIL_API_KEY")
 
 
 @app.post("/email/send", response_model=EmailSendResponse, status_code=202)
@@ -1022,7 +1006,7 @@ async def send_email_batch(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """Actually deliver a batch of emails via AgentMail (api.agentmail.to)."""
-    if not _email_provider_configured():
+    if not _email_provider_configured(tenant_id):
         raise HTTPException(503, "Email provider not configured — set AGENTMAIL_API_KEY")
     from_email = body.from_email
 
@@ -1063,16 +1047,18 @@ async def send_email_batch(
     failed = 0
     for to_email in body.recipients:
         try:
-            await _send_one_email(
+            provider_id = await _send_one_email(
                 to_email=to_email,
                 subject=body.subject,
                 body_html=body.body_html,
                 from_name=body.from_name,
                 from_email=from_email,
                 reply_to=body.reply_to,
+                tenant_id=tenant_id,
             )
             sent += 1
-            event_type, event_data = "sent", "{}"
+            # provider message_id lets delivery/bounce webhooks map back to this batch
+            event_type, event_data = "sent", json.dumps({"message_id": provider_id})
         except Exception as e:  # noqa: BLE001 - record the failure, continue the batch
             failed += 1
             event_type = "failed"
@@ -1135,23 +1121,7 @@ async def get_email_batch(
 
 # ─────────────────────── AgentMail Onboarding & Management ─────
 
-_AGENTMAIL_STATUS: Dict[str, Any] = {
-    "is_verified": False,
-    "inbox_id": os.getenv("AGENTMAIL_INBOX") or "omnidome@agentmail.to",
-}
-
-
-@app.get("/email/agentmail/status")
-async def get_agentmail_status(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    api_key = os.getenv("AGENTMAIL_API_KEY")
-    inbox = _agentmail_inbox()
-    return {
-        "configured": bool(api_key),
-        "inbox_id": inbox,
-        "is_verified": _AGENTMAIL_STATUS.get("is_verified", bool(api_key)),
-        "base_url": _AGENTMAIL_BASE_URL,
-        "provider": "agentmail",
-    }
+_AGENTMAIL_STATUS: Dict[str, Any] = {}  # per-tenant OTP verification state (in-memory; keyed by tenant id)
 
 
 def _require_agentmail_admin(auth: AuthContext) -> None:
@@ -1164,6 +1134,29 @@ def _mask_key(key: str) -> str:
     return f"****{key[-4:]}" if key else ""
 
 
+def _save_tenant_agentmail(tenant_id: uuid.UUID, **fields: Any) -> None:
+    """Encrypted per-tenant storage; refuses (503) when SECRETS_ENCRYPTION_KEY is unset."""
+    try:
+        with get_engine().begin() as conn:
+            agentmail_client.save_creds_sync(conn, tenant_id, **fields)
+    except agentmail_client.SecretsUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
+@app.get("/email/agentmail/status")
+async def get_agentmail_status(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    creds = _tenant_agentmail_creds(tenant_id)
+    configured = agentmail_client.is_configured(creds)
+    return {
+        "configured": configured,
+        "inbox_id": creds.inbox if creds else agentmail_client.inbox_address(),
+        "is_verified": _AGENTMAIL_STATUS.get(str(tenant_id), configured),
+        "base_url": agentmail_client.base_url(),
+        "provider": "agentmail",
+        "credentials_source": "tenant" if creds else ("env" if configured else None),
+    }
+
+
 @app.post("/email/agentmail/signup")
 async def agentmail_signup(
     body: AgentMailSignUpRequest,
@@ -1171,16 +1164,18 @@ async def agentmail_signup(
 ):
     """Programmatically onboard AI agent to AgentMail (no console access needed)."""
     _require_agentmail_admin(auth)
+    if not os.getenv("SECRETS_ENCRYPTION_KEY"):
+        # fail before creating an AgentMail account whose key we could not store
+        raise HTTPException(status_code=503, detail="SECRETS_ENCRYPTION_KEY is not set; cannot store tenant secrets")
     payload = {
         "human_email": body.human_email,
         "username": body.username,
     }
-    api_key = ""
     inbox_id = f"{body.username}@agentmail.to"
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(f"{_AGENTMAIL_BASE_URL}/agent/sign-up", json=payload)
+            resp = await client.post(f"{agentmail_client.base_url()}/agent/sign-up", json=payload)
     except Exception as e:
         logger.warning("AgentMail live sign-up call failed: %s", e)
         raise HTTPException(status_code=502, detail="AgentMail sign-up service unreachable")
@@ -1193,10 +1188,8 @@ async def agentmail_signup(
     if not api_key:
         raise HTTPException(status_code=502, detail="AgentMail sign-up did not return an API key")
 
-    os.environ["AGENTMAIL_API_KEY"] = api_key
-    os.environ["AGENTMAIL_INBOX"] = inbox_id
-    _AGENTMAIL_STATUS["is_verified"] = False
-    _AGENTMAIL_STATUS["inbox_id"] = inbox_id
+    _save_tenant_agentmail(auth.tenant_id, api_key=api_key, inbox=inbox_id)
+    _AGENTMAIL_STATUS[str(auth.tenant_id)] = False
 
     return {
         "status": "success",
@@ -1209,21 +1202,22 @@ async def agentmail_signup(
 @app.post("/email/agentmail/verify")
 async def agentmail_verify(
     body: AgentMailVerifyRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(get_auth_context),
 ):
-    """Verify 6-digit OTP code with AgentMail to unlock full permissions."""
-    api_key = os.getenv("AGENTMAIL_API_KEY")
+    """Verify 6-digit OTP code with AgentMail to unlock full permissions (admin only)."""
+    _require_agentmail_admin(auth)
+    creds = _tenant_agentmail_creds(auth.tenant_id) or agentmail_client.env_creds()
     success = False
     detail_msg = "AgentMail verified successfully. External sending is now enabled."
 
-    if not api_key:
+    if not creds:
         detail_msg = "AgentMail is not configured (no API key)."
     else:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
-                    f"{_AGENTMAIL_BASE_URL}/agent/verify",
-                    headers={"Authorization": f"Bearer {api_key}"},
+                    f"{agentmail_client.base_url()}/agent/verify",
+                    headers={"Authorization": f"Bearer {creds.api_key}"},
                     json={"otp_code": body.otp_code},
                 )
                 if resp.status_code < 400:
@@ -1234,11 +1228,11 @@ async def agentmail_verify(
             logger.warning("AgentMail live verify call: %s", e)
             detail_msg = "AgentMail verification request failed."
 
-    _AGENTMAIL_STATUS["is_verified"] = success
+    _AGENTMAIL_STATUS[str(auth.tenant_id)] = success
     return {
         "status": "verified" if success else "failed",
         "success": success,
-        "inbox_id": _agentmail_inbox(),
+        "inbox_id": creds.inbox if creds else agentmail_client.inbox_address(),
         "is_verified": success,
         "message": detail_msg,
     }
@@ -1249,34 +1243,42 @@ async def agentmail_configure(
     body: AgentMailConfigRequest,
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Manually configure AgentMail API key and active inbox."""
+    """Configure this tenant's AgentMail API key / inbox (stored encrypted per tenant)."""
     _require_agentmail_admin(auth)
-    if body.api_key:
-        os.environ["AGENTMAIL_API_KEY"] = body.api_key
-    if body.inbox_id:
-        os.environ["AGENTMAIL_INBOX"] = body.inbox_id
-        _AGENTMAIL_STATUS["inbox_id"] = body.inbox_id
+    if body.api_key or body.inbox_id:
+        _save_tenant_agentmail(auth.tenant_id, api_key=body.api_key or None, inbox=body.inbox_id or None)
+    creds = _tenant_agentmail_creds(auth.tenant_id)
     return {
         "status": "configured",
-        "inbox_id": _agentmail_inbox(),
-        "configured": bool(os.getenv("AGENTMAIL_API_KEY")),
-        "api_key": _mask_key(os.getenv("AGENTMAIL_API_KEY", "")),
+        "inbox_id": creds.inbox if creds else agentmail_client.inbox_address(),
+        "configured": agentmail_client.is_configured(creds),
+        "api_key": _mask_key(creds.api_key if creds else os.getenv("AGENTMAIL_API_KEY", "")),
     }
 
 
 @app.post("/email/webhook")
 async def email_webhook(request: Request):
-    """Webhook endpoint for email provider callbacks (delivery, bounce, open, click). HMAC-signed."""
-    import hashlib
-    import hmac
-    secret = os.getenv("AGENTMAIL_WEBHOOK_SECRET", "")
-    if not secret:
-        logger.error("AGENTMAIL_WEBHOOK_SECRET not set - rejecting email webhook")
-        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    """AgentMail delivery events (Svix-signed: svix-id/svix-timestamp/svix-signature).
+
+    Batches are matched by the provider message_id stored on the 'sent' event.
+    """
     raw_body = await request.body()
-    signature = request.headers.get("X-Webhook-Signature", "")
-    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, signature):
+    secrets = agentmail_client.platform_webhook_secrets()
+    try:
+        with get_engine().begin() as conn:
+            agentmail_client.ensure_config_table_sync(conn)
+            for r in conn.execute(text(
+                    "SELECT tenant_id, api_key_enc, inbox, webhook_secret_enc FROM agentmail_config "
+                    "WHERE webhook_secret_enc IS NOT NULL")).mappings():
+                c = agentmail_client._row_to_creds(r)
+                if c and c.webhook_secret:
+                    secrets.append(c.webhook_secret)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("tenant webhook secrets unavailable: %s", exc)
+    if not secrets:
+        logger.error("No AgentMail webhook secret configured - rejecting email webhook")
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    if not agentmail_client.verify_svix(raw_body, request.headers, secrets):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
     try:
         event = json.loads(raw_body)
@@ -1284,39 +1286,41 @@ async def email_webhook(request: Request):
         raise HTTPException(400, "Invalid JSON")
     if not isinstance(event, dict):
         raise HTTPException(400, "Invalid payload")
-    engine = get_engine()
-    _ensure_marketing_tables(engine)
-    event_type = event.get("event_type", "unknown")
-    batch_id = event.get("batch_id")
-    if not batch_id:
-        raise HTTPException(400, "batch_id required")
 
+    event_type = str(event.get("event_type") or event.get("type") or "unknown")
     counter_map = {
-        "delivered": "total_delivered",
-        "bounced": "total_bounced",
-        "opened": "total_opened",
-        "clicked": "total_clicked",
+        "message.delivered": "total_delivered",
+        "message.bounced": "total_bounced",
+        "message.complained": "total_bounced",
     }
     col = counter_map.get(event_type)
+    msg = event.get("message") or {}
+    mid = str(msg.get("message_id") or "")
+    if not col or not mid:
+        return {"status": "ignored", "event": event_type}  # e.g. message.received belongs to communication
+
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
     with engine.begin() as conn:
+        hit = conn.execute(
+            text("SELECT tenant_id, batch_id, recipient_email FROM marketing_email_events "
+                 "WHERE event_type = 'sent' AND event_data->>'message_id' = :mid LIMIT 1"),
+            {"mid": mid},
+        ).mappings().first()
+        if not hit:
+            return {"status": "ignored", "reason": "unknown message"}
         conn.execute(
             text("""
                 INSERT INTO marketing_email_events (tenant_id, batch_id, recipient_email, event_type, event_data)
-                SELECT tenant_id, id, :email, :etype, :edata::jsonb
-                FROM marketing_email_batches WHERE id = :bid
+                VALUES (:tid, :bid, :email, :etype, CAST(:edata AS jsonb))
             """),
-            {
-                "bid": batch_id,
-                "email": event.get("email", ""),
-                "etype": event_type,
-                "edata": json.dumps(event),
-            },
+            {"tid": str(hit["tenant_id"]), "bid": str(hit["batch_id"]), "email": hit["recipient_email"],
+             "etype": event_type.split(".", 1)[-1], "edata": json.dumps(event)},
         )
-        if col:
-            conn.execute(
-                text(f"UPDATE marketing_email_batches SET {col} = {col} + 1 WHERE id = :bid"),
-                {"bid": batch_id},
-            )
+        conn.execute(
+            text(f"UPDATE marketing_email_batches SET {col} = {col} + 1 WHERE id = :bid"),
+            {"bid": str(hit["batch_id"])},
+        )
     return {"status": "accepted"}
 
 
