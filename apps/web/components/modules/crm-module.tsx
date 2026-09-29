@@ -36,6 +36,7 @@ import {
   Briefcase,
   DollarSign,
   Tag,
+  Target,
 } from "lucide-react"
 import {
   LineChart,
@@ -58,6 +59,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { PageHeader } from "@/components/ui/page-header"
 import { LeadFunnelView } from "./sales/lead-funnel-view"
 import { LifecycleDashboard } from "./lifecycle/lifecycle-dashboard"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 import {
   getActivities,
   getDashboardSummary,
@@ -1121,16 +1123,20 @@ export function CrmModule() {
         {/* TAB 6: LEAD FUNNEL BY CHANNEL                                     */}
         {/* ───────────────────────────────────────────────────────────────── */}
         <TabsContent value="funnel" className="space-y-6 pt-4">
-          <LeadFunnelView
-            onNavigateToLeads={() => setActiveTab("pipeline")}
-          />
+          <ErrorBoundary fallbackTitle="Lead Funnel View encountered an issue">
+            <LeadFunnelView
+              onNavigateToLeads={() => setActiveTab("pipeline")}
+            />
+          </ErrorBoundary>
         </TabsContent>
 
         {/* ───────────────────────────────────────────────────────────────── */}
         {/* TAB 7: CUSTOMER LIFECYCLE & RETENTION                             */}
         {/* ───────────────────────────────────────────────────────────────── */}
         <TabsContent value="lifecycle" className="space-y-6 pt-4">
-          <LifecycleDashboard />
+          <ErrorBoundary fallbackTitle="Customer Lifecycle Dashboard encountered an issue">
+            <LifecycleDashboard />
+          </ErrorBoundary>
         </TabsContent>
       </Tabs>
 

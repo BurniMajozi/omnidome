@@ -60,6 +60,7 @@ import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales
 import { LeadActionsMenu, LeadPanel, type LeadPanelMode } from "./sales-lead-actions"
 import { LeadWarmingRules } from "./sales-lead-warming"
 import { LeadFunnelView } from "./sales/lead-funnel-view"
+import { ErrorBoundary } from "@/components/ui/error-boundary"
 import { SalesCommissionsView } from "./talent/sales-commissions-view"
 import {
   getSalesTalentOverview,
@@ -738,11 +739,13 @@ export function SalesModule() {
 
       {/* ── TAB 2: Lead Funnel by Channel & Attribution ── */}
       {activeTab === "channels" && (
-        <LeadFunnelView
-          onNavigateToLeads={(channel, stage) => {
-            setActiveTab("leads")
-          }}
-        />
+        <ErrorBoundary fallbackTitle="Lead Funnel by Channel encountered an issue">
+          <LeadFunnelView
+            onNavigateToLeads={(channel, stage) => {
+              setActiveTab("leads")
+            }}
+          />
+        </ErrorBoundary>
       )}
 
       {/* ── TAB 3: Lead Stage Management (SPEC-lead-lifecycle.md) ── */}

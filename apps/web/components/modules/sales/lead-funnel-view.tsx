@@ -54,12 +54,14 @@ interface LeadFunnelViewProps {
   onNavigateToLeads?: (channel?: string, stage?: string) => void
 }
 
-const zar = (n: number) =>
-  new Intl.NumberFormat("en-ZA", {
+const zar = (n: number | string | undefined | null) => {
+  const num = typeof n === "number" ? n : Number(n) || 0
+  return new Intl.NumberFormat("en-ZA", {
     style: "currency",
     currency: "ZAR",
     maximumFractionDigits: 0,
-  }).format(n)
+  }).format(num)
+}
 
 const CHANNEL_METADATA: Record<
   string,
@@ -187,14 +189,14 @@ export function LeadFunnelView({
       .filter((c) => c.total_leads > 0)
       .slice(0, 8)
       .map((c) => ({
-        name: c.channel_label,
+        name: c.channel_label || c.channel,
         channel: c.channel,
         total: c.total_leads,
         won: c.won_count,
         lost: c.lost_count,
-        pipeline: c.total_leads - c.won_count - c.lost_count,
+        pipeline: Math.max(0, c.total_leads - c.won_count - c.lost_count),
         conversion: c.conversion_rate,
-        revenue: c.won_value_zar,
+        revenue: Number(c.won_value_zar) || 0,
         color: CHANNEL_METADATA[c.channel]?.color || "#94a3b8",
       }))
   }, [data])
@@ -236,11 +238,15 @@ export function LeadFunnelView({
               className="bg-background text-foreground text-xs rounded-md px-2 py-1 border border-border focus:outline-none focus:ring-1 focus:ring-primary"
             >
               <option value="all">All Channels</option>
-              {SALES_CHANNELS.map((ch) => (
-                <option key={ch} value={ch}>
-                  {CHANNEL_METADATA[ch]?.label || ch}
-                </option>
-              ))}
+              {SALES_CHANNELS.map((ch: any) => {
+                const id = typeof ch === "string" ? ch : ch.id
+                const label = typeof ch === "string" ? (CHANNEL_METADATA[ch]?.label || ch) : ch.label
+                return (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                )
+              })}
             </select>
           </div>
 
@@ -295,7 +301,7 @@ export function LeadFunnelView({
               <Users className="h-3.5 w-3.5 text-blue-400" />
             </p>
             <p className="text-2xl font-bold text-foreground mt-1">
-              {data?.totals.total_leads ?? 0}
+              {data?.totals?.total_leads ?? 0}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               Across all channels
@@ -310,7 +316,7 @@ export function LeadFunnelView({
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
             </p>
             <p className="text-2xl font-bold text-emerald-400 mt-1">
-              {data?.totals.won_leads ?? 0}
+              {data?.totals?.won_leads ?? 0}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               Active converted clients
@@ -325,7 +331,7 @@ export function LeadFunnelView({
               <TrendingUp className="h-3.5 w-3.5 text-amber-400" />
             </p>
             <p className="text-2xl font-bold text-amber-400 mt-1">
-              {data?.totals.conversion_rate ?? 0}%
+              {data?.totals?.conversion_rate ?? 0}%
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               Won / Total Leads
@@ -340,7 +346,7 @@ export function LeadFunnelView({
               <DollarSign className="h-3.5 w-3.5 text-purple-400" />
             </p>
             <p className="text-xl font-bold text-foreground mt-1 truncate">
-              {zar(data?.totals.total_pipeline_value_zar ?? 0)}
+              {zar(data?.totals?.total_pipeline_value_zar ?? 0)}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               Total open opportunities
@@ -355,7 +361,7 @@ export function LeadFunnelView({
               <DollarSign className="h-3.5 w-3.5 text-emerald-400" />
             </p>
             <p className="text-xl font-bold text-emerald-400 mt-1 truncate">
-              {zar(data?.totals.won_value_zar ?? 0)}
+              {zar(data?.totals?.won_value_zar ?? 0)}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               Realized deal contract value
@@ -370,7 +376,7 @@ export function LeadFunnelView({
               <Target className="h-3.5 w-3.5 text-cyan-400" />
             </p>
             <p className="text-sm font-bold text-foreground mt-2 truncate">
-              {data?.totals.top_performing_channel ?? "—"}
+              {data?.totals?.top_performing_channel ?? "—"}
             </p>
             <p className="text-[10px] text-muted-foreground mt-0.5">
               By lead volume & closed deals
@@ -406,10 +412,11 @@ export function LeadFunnelView({
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 pt-2">
-            {data?.overall_funnel.map((st, idx) => {
+            {data?.overall_funnel?.map((st, idx) => {
               const color = STAGE_COLORS[st.stage] || "#94a3b8"
               const isWon = st.stage === "Closed Won"
               const isLost = st.stage === "Closed Lost"
+              const valNum = Number(st.value_zar) || 0
 
               return (
                 <div
@@ -437,13 +444,13 @@ export function LeadFunnelView({
                     {st.count}
                   </p>
 
-                  {st.value_zar > 0 && (
+                  {valNum > 0 && (
                     <p className="text-[10px] font-mono text-muted-foreground mt-1 truncate">
-                      {zar(st.value_zar)}
+                      {zar(valNum)}
                     </p>
                   )}
 
-                  {idx < (data.overall_funnel.length - 1) && !isLost && (
+                  {data?.overall_funnel && idx < (data.overall_funnel.length - 1) && !isLost && (
                     <div className="hidden lg:block absolute -right-2 top-1/2 -translate-y-1/2 z-10">
                       <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40" />
                     </div>
