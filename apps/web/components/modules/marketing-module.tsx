@@ -27,6 +27,7 @@ import {
 import { EmailTemplatesTab } from "./marketing/email-templates-tab"
 import { EmailComposeTab } from "./marketing/email-compose-tab"
 import { EmailJourneyTab } from "./marketing/email-journey-tab"
+import { AgentMailTab } from "./marketing/agentmail-tab"
 import {
   listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
   getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
@@ -107,7 +108,7 @@ type MarketingTab =
   | "inbox-messages" | "inbox-comments" | "inbox-reviews" | "inbox-contacts"
   | "analytics"
   | "whatsapp-overview" | "whatsapp-templates" | "whatsapp-flows" | "whatsapp-groups" | "whatsapp-conversions" | "whatsapp-broadcasts" | "whatsapp-contacts"
-  | "email-templates" | "email-compose" | "email-journeys"
+  | "email-templates" | "email-compose" | "email-journeys" | "email-agentmail"
   | "sms-senders"
   | "team-users"
   | "ads" | "automations" | "traditional"
@@ -166,6 +167,7 @@ const MARKETING_NAV: NavEntry[] = [
       { key: "email-templates", label: "Templates & Builder", icon: FileText },
       { key: "email-compose", label: "Campaigns", icon: Send },
       { key: "email-journeys", label: "Templates Journey", icon: Workflow },
+      { key: "email-agentmail", label: "AgentMail Integration", icon: Sparkles },
     ],
   },
   {
@@ -299,6 +301,7 @@ export function MarketingModule() {
               onOpenTemplateInBuilder={() => setActiveTab("email-templates")}
             />
           )}
+          {activeTab === "email-agentmail" && <AgentMailTab />}
           {activeTab === "sms-senders" && <SmsSenderIdsTab />}
           {activeTab === "team-users" && <TeamUsersTab />}
           {activeTab === "ads" && <AdsTab />}

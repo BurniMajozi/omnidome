@@ -10,15 +10,19 @@ async function forward(request: NextRequest, method: "GET" | "POST" | "PUT" | "D
   const { headers, identity } = await identityHeaders(request)
   if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
 
-  const init: RequestInit = { method, headers, cache: "no-store" }
+  const init: RequestInit = { method, headers, cache: "no-store", signal: AbortSignal.timeout(2000) }
   if (method !== "GET" && method !== "DELETE") {
     init.body = await request.text()
   }
 
-  const response = await fetch(url.toString(), init)
-  const payload = await response.json().catch(() => null)
-  const data = payload?.items ?? payload
-  return NextResponse.json({ data }, { status: response.status })
+  try {
+    const response = await fetch(url.toString(), init)
+    const payload = await response.json().catch(() => null)
+    const data = payload?.items ?? payload
+    return NextResponse.json({ data }, { status: response.status })
+  } catch (err) {
+    return NextResponse.json({ data: [] }, { status: 200 })
+  }
 }
 
 export function GET(request: NextRequest) {

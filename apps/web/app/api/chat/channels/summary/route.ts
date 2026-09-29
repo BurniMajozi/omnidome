@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
       method: "GET",
       headers,
       cache: "no-store",
+      signal: AbortSignal.timeout(1500),
     })
     if (!response.ok) return NextResponse.json({ data: [] }, { status: 200 })
     const payload = await response.json()

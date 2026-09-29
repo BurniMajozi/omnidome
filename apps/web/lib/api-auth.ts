@@ -44,7 +44,7 @@ export async function resolveIdentity(bearerToken: string): Promise<Identity | n
   try {
     const res = await fetch(
       `${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(data.user.email)}`,
-      { headers: { "x-internal-key": INTERNAL_SERVICE_KEY }, cache: "no-store" },
+      { headers: { "x-internal-key": INTERNAL_SERVICE_KEY }, cache: "no-store", signal: AbortSignal.timeout(1500) },
     )
     if (!res.ok) return null
     const body = await res.json()

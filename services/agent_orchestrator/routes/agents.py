@@ -5,7 +5,7 @@ import uuid
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -30,6 +30,68 @@ from services.agent_orchestrator.audit_actions import GUARDRAILS_INPUT, GUARDRAI
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Intent-based agent router — classifies user message → best specialist
+# ---------------------------------------------------------------------------
+
+# Each entry: (agent_type, keyword_patterns)
+# Checked in priority order; first match wins.
+_INTENT_ROUTES: list[tuple[str, list[str]]] = [
+    ("executive", [
+        "executive", "briefing", "summary", "mrr", "arr", "arpu", "churn rate",
+        "revenue", "pipeline", "forecast", "financial summary", "kpi",
+        "performance", "scorecard", "strategy", "board", "c-suite",
+        "quarterly", "monthly report", "insights", "variance", "target",
+        "closed won", "win rate", "deals closed",
+    ]),
+    ("retention", [
+        "churn", "at risk", "retention", "save customer", "cancel",
+        "downgrade", "loyalty", "winback", "risk score", "churn predict",
+    ]),
+    ("support", [
+        "ticket", "escalat", "fault", "outage", "diagnostic", "troubleshoot",
+        "complaint", "sla", "resolve", "incident", "issue",
+    ]),
+    ("call_center", [
+        "call center", "call centre", "queue", "wait time", "agent metrics",
+        "call volume", "abandon rate", "aht", "average handle",
+    ]),
+    ("provisioning", [
+        "provision", "onboard", "activate", "install", "rica",
+        "coverage check", "new customer", "signup", "sign up",
+    ]),
+    ("talent", [
+        "employee", "staff", "hr ", "human resource", "leave", "payroll",
+        "hiring", "recruit", "attrition", "wellness", "overtime",
+        "schedule", "shift", "training", "onboarding task",
+    ]),
+    ("analytics", [
+        "analytics", "sql", "query", "data", "metric", "trend",
+        "network health", "conversion", "funnel",
+    ]),
+    ("products", [
+        "product", "plan", "bundle", "pricing", "fibre", "package",
+        "catalogue", "catalog",
+    ]),
+    ("customer_facing", [
+        "balance", "invoice", "payment", "account", "customer",
+        "billing", "coverage", "service status",
+    ]),
+    # assistant is the catch-all
+]
+
+
+def _classify_agent(message: str) -> str:
+    """Classify a user message to the best agent type. Returns agent_type string."""
+    msg_lower = message.lower()
+    for agent_type, patterns in _INTENT_ROUTES:
+        for pattern in patterns:
+            if pattern in msg_lower:
+                return agent_type
+    # Default: assistant (most versatile, has strategy + drafting + memory tools)
+    return "assistant"
 
 
 def _hermes_system_note(agent_type: str, tenant_id, context: dict, skills: str = "") -> str:
@@ -163,6 +225,34 @@ async def _load_compaction_state(conversation_id: Optional[uuid.UUID], tenant_id
 
 
 # ---------------------------------------------------------------------------
+# In-memory registry of custom HR-created agents
+# ---------------------------------------------------------------------------
+_custom_agents: dict[str, dict] = {}
+
+
+@router.post("/register")
+async def register_custom_agent(body: dict = Body(...)):
+    """Register an HR-created AI agent so it appears in list_agents and Agent Manager."""
+    emp_id = body.get("employee_id", "")
+    agent_key = body.get("agent_type") or f"custom_{emp_id[:8]}"
+    _custom_agents[agent_key] = {
+        "agent_type": agent_key,
+        "name": body.get("full_name", agent_key),
+        "role": body.get("job_title", "Custom AI Agent"),
+        "department": body.get("department", "General"),
+        "llm_model": body.get("llm_model", "qwen2.5:7b"),
+        "financial_limit": body.get("financial_limit", 0),
+        "scope": body.get("scope", ""),
+        "is_subagent": body.get("is_subagent", False),
+        "parent_agent_id": body.get("parent_agent_id"),
+        "employee_id": emp_id,
+        "employee_code": body.get("employee_code", ""),
+    }
+    logger.info(f"Registered custom agent: {agent_key} ({body.get('full_name')})")
+    return {"status": "registered", "agent_type": agent_key}
+
+
+# ---------------------------------------------------------------------------
 # GET /api/agents — List agents
 # ---------------------------------------------------------------------------
 
@@ -201,7 +291,7 @@ async def list_agents():
             sql_table_allowlist=allowlist,
         )
 
-    return [
+    agents = [
         _info("customer_facing", "DomeBot — assists customers with balances, invoices, coverage, tickets"),
         _info("retention", "ChurnGuard — autonomous churn prediction and retention campaigns"),
         _info("provisioning", "ProvisionBot — automates new customer provisioning workflow"),
@@ -216,6 +306,20 @@ async def list_agents():
         _info("products", "ProductBot — fibre plans, bundles and pricing"),
         _info("talent", "StaffBot — HR rosters, attrition risk and leave"),
     ]
+
+    # ── Append HR-created custom agents ──────────────────────────────
+    for key, meta in _custom_agents.items():
+        agents.append(AgentInfo(
+            agent_type=key,
+            description=f"{meta['name']} — {meta.get('role', 'Custom AI Agent')} ({meta.get('department', '')})",
+            llm=meta.get("llm_model", "qwen2.5:7b"),
+            tools=[],
+            tool_policies=[],
+            specialist_models=[],
+            sql_table_allowlist=[],
+        ))
+
+    return agents
 
 
 # ---------------------------------------------------------------------------
@@ -475,17 +579,26 @@ async def invoke_agent(
     )
 
     if settings.chat_backend == "hermes":
-        messages = await agent.prepare_turn(safe_message, history, compaction_state)
-        if not skip_db and conversation_id and agent.compaction_update:
-            try:
-                async with get_session() as session:
-                    await _store_compaction(session, conversation_id, agent.compaction_update)
-                    await session.flush()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Early compaction store failed for %s: %s", conversation_id, exc)
-        messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
-        content = await hermes_client.chat(messages)
-        result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
+        try:
+            messages = await agent.prepare_turn(safe_message, history, compaction_state)
+            if not skip_db and conversation_id and agent.compaction_update:
+                try:
+                    async with get_session() as session:
+                        await _store_compaction(session, conversation_id, agent.compaction_update)
+                        await session.flush()
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Early compaction store failed for %s: %s", conversation_id, exc)
+            messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, tenant_id, body.context, agent.skills_prompt)})
+            content = await hermes_client.chat(messages)
+            result = {"content": content, "tool_calls": [], "conversation_id": conversation_id}
+        except Exception as exc:
+            logger.warning("Hermes chat failed (%s); falling back to native agent reasoning loop: %s", settings.hermes_base_url, exc)
+            result = await agent.run(
+                user_message=safe_message,
+                history=history,
+                conversation_id=conversation_id,
+                compaction_state=compaction_state,
+            )
     else:
         result = await agent.run(
             user_message=safe_message,
@@ -603,8 +716,9 @@ async def invoke_agent_stream(
             except Exception as exc:  # noqa: BLE001 - compaction is an optimisation
                 logger.warning("Compaction state not loaded for %s: %s", conv_id, exc)
 
-        try:
-            if settings.chat_backend == "hermes":
+        used_hermes = False
+        if settings.chat_backend == "hermes":
+            try:
                 messages = await agent.prepare_turn(safe_message, history, compaction_state)
                 if not skip_db and conv_id and agent.compaction_update:
                     try:
@@ -620,34 +734,82 @@ async def invoke_agent_stream(
                         type="TEXT_MESSAGE_CONTENT", run_id=run_id, tenant_id=tenant_id,
                         conversation_id=conv_id, data={"delta": delta},
                     ))
-            else:
-                from services.agent_orchestrator.llm import llm_client
+                if full_content.strip():
+                    used_hermes = True
+                else:
+                    logger.warning("Hermes yielded empty stream; falling back to native agent stream")
+                    used_hermes = False
+            except Exception as exc:
+                logger.warning("Hermes stream failed (%s); falling back to native agent stream: %s", settings.hermes_base_url, exc)
+                used_hermes = False
 
-                messages = await agent.prepare_turn(safe_message, history, compaction_state)
-                if not skip_db and conv_id and agent.compaction_update:
-                    try:
-                        async with get_session() as session:
-                            await _store_compaction(session, conv_id, agent.compaction_update)
-                            await session.flush()
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("Early compaction store failed for %s: %s", conv_id, exc)
-                tools_for_llm = tool_registry.to_openai_format(agent.tools)   # after skills added theirs
-                async for token in llm_client.chat_stream(
-                    agent_type=body.agent_type, messages=messages, tools=tools_for_llm,
-                    system_extra=agent.skills_prompt,
-                ):
-                    full_content += token
+        executed_tool_calls = []
+        if not used_hermes:
+            try:
+                import asyncio
+
+                result = await agent.run(
+                    user_message=safe_message,
+                    history=history,
+                    conversation_id=conv_id,
+                    compaction_state=compaction_state,
+                )
+                full_content = result.get("content") or ""
+                executed_tool_calls = result.get("tool_calls", [])
+
+                for tc in executed_tool_calls:
+                    tool_name = tc.get("name")
                     yield emit(AGUIEvent(
-                        type="TEXT_MESSAGE_CONTENT", run_id=run_id, tenant_id=tenant_id,
-                        conversation_id=conv_id, data={"delta": token},
+                        type="TOOL_CALL_START",
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        conversation_id=conv_id,
+                        data={
+                            "tool_name": tool_name,
+                            "arguments": tc.get("arguments"),
+                        },
                     ))
-        except Exception as exc:
-            logger.error("Agent stream failed (backend=%s): %s", settings.chat_backend, exc)
-            yield emit(AGUIEvent(
-                type="RUN_ERROR", run_id=run_id, tenant_id=tenant_id,
-                conversation_id=conv_id, data={"error": str(exc)},
-            ))
-            return
+                    yield emit(AGUIEvent(
+                        type="TOOL_CALL_RESULT",
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        conversation_id=conv_id,
+                        data={
+                            "tool_name": tool_name,
+                            "result": tc.get("result"),
+                        },
+                    ))
+                    yield emit(AGUIEvent(
+                        type="TOOL_CALL_END",
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        conversation_id=conv_id,
+                        data={
+                            "tool_name": tool_name,
+                        },
+                    ))
+
+                words = full_content.split(" ")
+                chunk_size = 5
+                for i in range(0, len(words), chunk_size):
+                    chunk = " ".join(words[i:i + chunk_size])
+                    if i > 0:
+                        chunk = " " + chunk
+                    yield emit(AGUIEvent(
+                        type="TEXT_MESSAGE_CONTENT",
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        conversation_id=conv_id,
+                        data={"delta": chunk},
+                    ))
+                    await asyncio.sleep(0.01)
+            except Exception as exc:
+                logger.error("Agent stream failed: %s", exc)
+                yield emit(AGUIEvent(
+                    type="RUN_ERROR", run_id=run_id, tenant_id=tenant_id,
+                    conversation_id=conv_id, data={"error": str(exc)},
+                ))
+                return
 
         # Guardrails post-gate on the accumulated assistant output.
         gate_out = run_gate(full_content, policy)
@@ -668,7 +830,7 @@ async def invoke_agent_stream(
                     agent_type=body.agent_type,
                     user_message=safe_message,
                     assistant_content=full_content,
-                    tool_calls=[],
+                    tool_calls=executed_tool_calls,
                     gate_verdicts=gate_verdicts,
                 )
                 await _store_compaction(session, conv_id, agent.compaction_update)

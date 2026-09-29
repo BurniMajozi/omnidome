@@ -19,6 +19,7 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS priority VARCHAR(10) NOT NULL DEFAULT
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS close_reason TEXT;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS source_channel VARCHAR(50);
 
 WITH top AS (
     SELECT tenant_id, max(ref_no) AS max_ref FROM leads GROUP BY tenant_id
@@ -33,7 +34,23 @@ UPDATE leads SET ref_no = numbered.n FROM numbered WHERE leads.id = numbered.id;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_leads_tenant_ref ON leads (tenant_id, ref_no);
 CREATE INDEX IF NOT EXISTS ix_leads_tenant_status ON leads (tenant_id, status);
+CREATE INDEX IF NOT EXISTS ix_leads_tenant_source_channel ON leads (tenant_id, source_channel);
 CREATE INDEX IF NOT EXISTS ix_deals_lead_id ON deals (lead_id);
+
+UPDATE leads SET source_channel = CASE
+    WHEN source ILIKE '%field%' OR source ILIKE '%door%' OR source ILIKE '%visit%' THEN 'FIELD_SALES'
+    WHEN source ILIKE '%call%in%' OR source ILIKE '%inbound%call%' THEN 'CALL_CENTER_INBOUND'
+    WHEN source ILIKE '%call%out%' OR source ILIKE '%outbound%call%' OR source ILIKE '%tele%' THEN 'CALL_CENTER_OUTBOUND'
+    WHEN source ILIKE '%market%' OR source ILIKE '%campaign%' OR source ILIKE '%social%' OR source ILIKE '%ad%' THEN 'MARKETING'
+    WHEN source ILIKE '%portal%' OR source ILIKE '%web%' OR source ILIKE '%site%' THEN 'PORTAL_WEBSITE'
+    WHEN source ILIKE '%tender%' OR source ILIKE '%rfq%' THEN 'TENDER'
+    WHEN source ILIKE '%company%' OR notes ILIKE '%company search%' THEN 'COMPANY_SEARCH'
+    WHEN source ILIKE '%email%' OR source ILIKE '%mail%' THEN 'INBOUND_EMAIL'
+    WHEN source ILIKE '%walk%' OR source ILIKE '%branch%' THEN 'WALK_IN'
+    WHEN source ILIKE '%refer%' OR source ILIKE '%partner%' THEN 'REFERRAL'
+    ELSE COALESCE(NULLIF(source, ''), 'OTHER')
+END
+WHERE source_channel IS NULL;
 
 CREATE TABLE IF NOT EXISTS lead_activities (
     id UUID PRIMARY KEY,

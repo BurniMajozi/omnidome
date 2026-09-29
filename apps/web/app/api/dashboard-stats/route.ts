@@ -36,7 +36,7 @@ function headersFor(request: Request): HeadersInit {
 
 async function fetchJson(url: string, headers: HeadersInit): Promise<unknown | null> {
   try {
-    const res = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(5000) })
+    const res = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(1500) })
     if (!res.ok) return null
     return await res.json()
   } catch {
@@ -111,5 +111,79 @@ export async function GET(request: Request) {
     },
   ]
 
-  return NextResponse.json({ stats, sources: { deals: deals !== null, customers: customerCount !== null } })
+  const openDeals = dealsArr.filter((d: any) => d.status === "OPEN")
+  const wonDeals = dealsArr.filter((d: any) => d.status === "WON")
+  const openRevenue = openDeals.reduce((sum: number, d: any) => sum + (Number.parseFloat(d?.value_zar ?? "0") || 0), 0)
+
+  // Map real top deals by value
+  const recentDeals = [...dealsArr]
+    .sort((a: any, b: any) => (Number.parseFloat(b?.value_zar ?? "0") || 0) - (Number.parseFloat(a?.value_zar ?? "0") || 0))
+    .slice(0, 4)
+    .map((d: any) => {
+      const isWon = d.status === "WON"
+      const val = Number.parseFloat(d.value_zar ?? "0") || 0
+      return {
+        client: d.name || "Commercial Account",
+        type: d.lead_reference ? `Lead ${d.lead_reference}` : (isWon ? "Closed Won Deal" : "Active Opportunity"),
+        amount: `R ${val.toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`,
+        stage: d.stage_name || (isWon ? "Closed Won" : "In Pipeline"),
+        stageColor: isWon
+          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+          : "bg-blue-500/10 text-blue-400 border-blue-500/20",
+        rep: d.owner_name || "Sales Team",
+      }
+    })
+
+  // Executive summary driven by real metrics
+  const executiveSummary = (dealsArr.length > 0 || customerCount !== null)
+    ? `Active sales pipeline currently tracks R${totalRevenue.toLocaleString("en-ZA", { maximumFractionDigits: 0 })} across ${dealsArr.length} deals (${wonDeals.length} won, ${openDeals.length} open proposals). CRM records ${customerCount ?? 0} active customer accounts. InsightDome advises prioritizing the ${openDeals.length} in-flight pipeline opportunities and running automated web lead scans via Firecrawl.`
+    : "AI Agent Orchestrator is operational. Connect sales and CRM data streams to view live portfolio health."
+
+  // Dynamic AI Suggestions driven by orchestrator & live telemetry
+  const aiSuggestions = [
+    {
+      id: "sug-1",
+      title: "Accelerate In-Flight Commercial Deals",
+      description: `${openDeals.length} active proposals totaling R${openRevenue.toLocaleString("en-ZA", { maximumFractionDigits: 0 })} await closure. Deploy InsightDome to draft targeted follow-ups.`,
+      category: "Sales Pipeline",
+      impact: "high" as const,
+      actionPrompt: "Analyze our open sales deals in the pipeline and draft tailored follow-up proposals to accelerate closure.",
+      agentType: "executive",
+    },
+    {
+      id: "sug-2",
+      title: "Autonomous Lead Generation (Firecrawl)",
+      description: "Extract and enrich high-value B2B commercial fiber tender opportunities in key business corridors.",
+      category: "Lead Generation",
+      impact: "high" as const,
+      actionPrompt: "Run an opportunity scan for high-potential commercial fiber tender and corporate leads in Gauteng and Western Cape.",
+      agentType: "assistant",
+    },
+    {
+      id: "sug-3",
+      title: "Workforce & Talent Health (StaffBot)",
+      description: "Monitor NOC shift fatigue and field technician dispatch schedules for upcoming infrastructure work.",
+      category: "HR & Talent",
+      impact: "medium" as const,
+      actionPrompt: "Check StaffBot talent health and employee roster coverage for upcoming maintenance windows.",
+      agentType: "talent",
+    },
+    {
+      id: "sug-4",
+      title: "Customer Retention & Proactive Care",
+      description: "Run churn prediction analysis on active accounts and verify statutory RICA identification compliance.",
+      category: "Retention & Compliance",
+      impact: "medium" as const,
+      actionPrompt: "Run churn prediction analysis on active accounts and review any pending RICA verification flags.",
+      agentType: "retention",
+    },
+  ]
+
+  return NextResponse.json({
+    stats,
+    recentDeals: recentDeals.length > 0 ? recentDeals : null,
+    executiveSummary,
+    aiSuggestions,
+    sources: { deals: deals !== null, customers: customerCount !== null },
+  })
 }

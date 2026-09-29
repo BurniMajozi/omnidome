@@ -388,18 +388,25 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
       setExpandedNodeIds((prev) => new Set([...prev, assignedMgrId]))
     }
 
-    // Call API in background if human
-    if (!newStaffIsAgent) {
-      createEmployee({
-        employee_id: newEmpId,
-        full_name: newRecord.full_name,
-        job_title: newRecord.job_title,
-        department: newRecord.department,
-        hire_date: newRecord.hire_date,
-        manager_id: assignedMgrId,
-        financial_limit: newStaffFinancialLimit,
-      }).catch(() => null)
-    }
+    // Call API in background — for BOTH agents and humans
+    createEmployee({
+      employee_id: newEmpId,
+      full_name: newRecord.full_name,
+      job_title: newRecord.job_title,
+      department: newRecord.department,
+      hire_date: newRecord.hire_date,
+      manager_id: assignedMgrId,
+      financial_limit: newStaffFinancialLimit,
+      is_agent: newStaffIsAgent || undefined,
+      llm_model: newStaffIsAgent ? newStaffLlmModel : undefined,
+    }).then((saved) => {
+      // Update local state with the real DB id so subsequent actions work
+      if (saved?.id) {
+        setLocalStaff((prev) =>
+          prev.map((s) => (s.id === newRecord.id ? { ...s, id: saved.id } : s))
+        )
+      }
+    }).catch(() => null)
 
     setToastMessage(
       newStaffIsAgent
@@ -602,6 +609,25 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     setOptimizerModalOpen(false)
     setToastMessage(`Deployed AI Agent "${newRecord.full_name}" reporting to ${rec.proposedAgent.managerName}!`)
     setTimeout(() => setToastMessage(null), 3500)
+
+    // Persist to backend — triggers Orchestrator + Tenant Memory registration
+    createEmployee({
+      employee_id: newRecord.employee_id,
+      full_name: newRecord.full_name,
+      job_title: newRecord.job_title,
+      department: newRecord.department,
+      hire_date: newRecord.hire_date,
+      manager_id: rec.proposedAgent.managerId,
+      financial_limit: rec.proposedAgent.financialLimit,
+      is_agent: true,
+      llm_model: rec.proposedAgent.llmModel,
+    }).then((saved) => {
+      if (saved?.id) {
+        setLocalStaff((prev) =>
+          prev.map((s) => (s.id === newRecord.id ? { ...s, id: saved.id } : s))
+        )
+      }
+    }).catch(() => null)
   }
 
   // ── SAVE FINANCIAL DELEGATION LIMIT ───────────────────────────────────────

@@ -56,6 +56,8 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PageHeader } from "@/components/ui/page-header"
+import { LeadFunnelView } from "./sales/lead-funnel-view"
+import { LifecycleDashboard } from "./lifecycle/lifecycle-dashboard"
 import {
   getActivities,
   getDashboardSummary,
@@ -415,7 +417,9 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
 
 export function CrmModule() {
   // ── Tab State ──────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<"overview" | "customers" | "pipeline" | "companies" | "activities">("overview")
+  const [activeTab, setActiveTab] = useState<
+    "overview" | "customers" | "pipeline" | "funnel" | "lifecycle" | "companies" | "activities"
+  >("overview")
 
   // ── Data States ────────────────────────────────────────────────────────────
   const [summaryData, setSummaryData] = useState<DashboardSummary | null>(null)
@@ -643,21 +647,27 @@ export function CrmModule() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
-        <TabsList className="grid w-full grid-cols-5 bg-muted/30">
+        <TabsList className="grid w-full grid-cols-7 bg-muted/30">
           <TabsTrigger value="overview" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <TrendingUp className="h-3.5 w-3.5" /> Overview
           </TabsTrigger>
           <TabsTrigger value="customers" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
-            <Users className="h-3.5 w-3.5" /> People & Customers ({customers.length})
+            <Users className="h-3.5 w-3.5" /> People ({customers.length})
           </TabsTrigger>
           <TabsTrigger value="pipeline" className="gap-1.5 text-xs data-[state=active]:text-purple-400">
-            <Kanban className="h-3.5 w-3.5" /> Pipeline Kanban ({leads.length})
+            <Kanban className="h-3.5 w-3.5" /> Pipeline ({leads.length})
+          </TabsTrigger>
+          <TabsTrigger value="funnel" className="gap-1.5 text-xs data-[state=active]:text-blue-400">
+            <Target className="h-3.5 w-3.5" /> Lead Funnel
+          </TabsTrigger>
+          <TabsTrigger value="lifecycle" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
+            <ActivityIcon className="h-3.5 w-3.5" /> Lifecycle
           </TabsTrigger>
           <TabsTrigger value="companies" className="gap-1.5 text-xs data-[state=active]:text-amber-400">
-            <Building2 className="h-3.5 w-3.5" /> B2B Companies ({companies.length})
+            <Building2 className="h-3.5 w-3.5" /> Companies ({companies.length})
           </TabsTrigger>
           <TabsTrigger value="activities" className="gap-1.5 text-xs data-[state=active]:text-pink-400">
-            <ActivityIcon className="h-3.5 w-3.5" /> Activities & Tasks
+            <Clock className="h-3.5 w-3.5" /> Activities
           </TabsTrigger>
         </TabsList>
 
@@ -1105,6 +1115,22 @@ export function CrmModule() {
               </CardContent>
             </Card>
           </div>
+        </TabsContent>
+
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {/* TAB 6: LEAD FUNNEL BY CHANNEL                                     */}
+        {/* ───────────────────────────────────────────────────────────────── */}
+        <TabsContent value="funnel" className="space-y-6 pt-4">
+          <LeadFunnelView
+            onNavigateToLeads={() => setActiveTab("pipeline")}
+          />
+        </TabsContent>
+
+        {/* ───────────────────────────────────────────────────────────────── */}
+        {/* TAB 7: CUSTOMER LIFECYCLE & RETENTION                             */}
+        {/* ───────────────────────────────────────────────────────────────── */}
+        <TabsContent value="lifecycle" className="space-y-6 pt-4">
+          <LifecycleDashboard />
         </TabsContent>
       </Tabs>
 

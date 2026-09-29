@@ -73,6 +73,13 @@ def _emp_to_dict(emp: Employee) -> dict:
         "phone": emp.phone,
         "manager_id": emp.manager_id,
         "call_center_agent_id": emp.call_center_agent_id,
+        "is_agent": getattr(emp, 'is_agent', False),
+        "agent_type": getattr(emp, 'agent_type', None),
+        "llm_model": getattr(emp, 'llm_model', None),
+        "financial_limit": getattr(emp, 'financial_limit', None),
+        "scope": getattr(emp, 'scope', None),
+        "is_subagent": getattr(emp, 'is_subagent', False),
+        "parent_agent_id": getattr(emp, 'parent_agent_id', None),
         "created_at": emp.created_at,
     }
 
@@ -93,6 +100,13 @@ class EmployeeCreate(EmployeeBase):
     phone: Optional[str] = None
     manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
+    is_agent: Optional[bool] = False
+    agent_type: Optional[str] = None
+    llm_model: Optional[str] = None
+    financial_limit: Optional[float] = None
+    scope: Optional[str] = None
+    is_subagent: Optional[bool] = False
+    parent_agent_id: Optional[uuid.UUID] = None
 
 class EmployeeUpdate(BaseModel):
     full_name: Optional[str] = None
@@ -144,11 +158,59 @@ async def create_employee(
         phone=data.phone,
         manager_id=data.manager_id,
         call_center_agent_id=data.call_center_agent_id,
+        is_agent=data.is_agent or False,
+        agent_type=data.agent_type,
+        llm_model=data.llm_model,
+        financial_limit=data.financial_limit,
+        scope=data.scope,
+        is_subagent=data.is_subagent or False,
+        parent_agent_id=data.parent_agent_id,
     )
     db.add(emp)
     await db.flush()
     await db.refresh(emp)
     logger.info(f"Employee created: {data.full_name} ({data.employee_id})")
+
+    # ── Side-effect: register AI agent with Orchestrator + Tenant Memory ──
+    if data.is_agent:
+        _mem_url = os.environ.get("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")
+        _orch_url = os.environ.get("ORCHESTRATOR_URL", "http://agent-orchestrator:8021")
+        agent_entry = {
+            "employee_id": str(emp.id),
+            "employee_code": data.employee_id,
+            "full_name": data.full_name,
+            "job_title": data.job_title,
+            "department": data.department,
+            "agent_type": data.agent_type or "custom",
+            "llm_model": data.llm_model,
+            "financial_limit": data.financial_limit,
+            "scope": data.scope,
+            "is_subagent": data.is_subagent or False,
+            "parent_agent_id": str(data.parent_agent_id) if data.parent_agent_id else None,
+            "manager_id": str(data.manager_id) if data.manager_id else None,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10) as _c:
+                await _c.post(
+                    f"{_mem_url}/api/v1/memories",
+                    json={
+                        "scope": "agent_roster",
+                        "content": f"AI Agent deployed: {data.full_name} ({data.agent_type or 'custom'}) "
+                                   f"in {data.department}, model={data.llm_model}, "
+                                   f"limit=R{data.financial_limit or 0}, scope={data.scope}",
+                        "metadata": agent_entry,
+                    },
+                    headers={"x-tenant-id": str(tenant_id)},
+                )
+                await _c.post(
+                    f"{_orch_url}/api/agents/register",
+                    json=agent_entry,
+                    headers={"x-tenant-id": str(tenant_id)},
+                )
+                logger.info(f"Agent '{data.full_name}' registered with Orchestrator + Memory")
+        except Exception as exc:
+            logger.warning(f"Agent registration side-effect failed (non-blocking): {exc}")
+
     return _emp_to_dict(emp)
 
 

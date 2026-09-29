@@ -164,11 +164,16 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <Mail className="h-5 w-5 text-blue-600" /> Send Email Campaign
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Launch email broadcasts using visual templates or edit your message directly.
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-xl font-bold flex items-center gap-2">
+              <Mail className="h-5 w-5 text-blue-600" /> Send Email Campaign
+            </h2>
+            <Badge variant="outline" className="border-emerald-500 text-emerald-600 bg-emerald-500/10 text-[11px] font-mono gap-1">
+              <CheckCircle2 className="h-3 w-3" /> AgentMail: omnidome@agentmail.to
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1">
+            Launch email broadcasts powered by AgentMail inboxes and visual templates.
           </p>
         </div>
 
@@ -355,10 +360,10 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
 
           <Card className="border-border bg-card/60 text-xs text-muted-foreground p-4 space-y-2">
             <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5">
-              <Sparkles className="h-4 w-4 text-blue-500" /> listmonk Engine
+              <Sparkles className="h-4 w-4 text-blue-500" /> Powered by AgentMail
             </h4>
             <p>
-              High-throughput transactional & marketing dispatch. Supports unsubscribe headers, click/open tracking, and custom SMTP/AgentMail relays.
+              High-throughput two-way AI agent email infrastructure. Sent directly from your verified AgentMail inbox with native thread parsing, allowlists, and event streams.
             </p>
           </Card>
         </div>

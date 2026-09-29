@@ -21,15 +21,17 @@ import {
 } from "@/lib/marketing-demo-api"
 import { EmailTemplatesTab } from "@/components/modules/marketing/email-templates-tab"
 import { EmailJourneyTab } from "@/components/modules/marketing/email-journey-tab"
+import { AgentMailTab } from "@/components/modules/marketing/agentmail-tab"
 
 const ZAR = (n?: number | null) => (n == null ? "—" : "R " + Number(n).toLocaleString("en-ZA"))
-const TABS = ["prospects", "campaigns", "email", "journeys", "whatsapp", "leads"] as const
+const TABS = ["prospects", "campaigns", "email", "journeys", "agentmail", "whatsapp", "leads"] as const
 type Tab = (typeof TABS)[number]
 const TAB_LABEL: Record<Tab, string> = {
   prospects: "Prospects & Segments",
   campaigns: "Campaigns",
   email: "Email & Templates",
   journeys: "Templates Journey",
+  agentmail: "AgentMail Integration",
   whatsapp: "WhatsApp",
   leads: "Leads",
 }
@@ -111,6 +113,7 @@ export default function MarketingPage() {
         )}
         {tab === "email" && <EmailTemplatesTab />}
         {tab === "journeys" && <EmailJourneyTab />}
+        {tab === "agentmail" && <AgentMailTab />}
         {tab === "whatsapp" && (
           <WhatsAppTab broadcasts={broadcasts} contactCount={contacts.length} reload={reloadAll} setError={setError} />
         )}

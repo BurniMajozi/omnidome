@@ -183,6 +183,7 @@ class Lead(Base):
     phone = Column(String(20))
     address = Column(Text)
     source = Column(String(50), default="FIELD_VISIT")
+    source_channel = Column(String(50))
     interest_level = Column(Integer, default=3)
     status = Column(String(20), nullable=False, default="NEW")
     notes = Column(Text)

@@ -58,7 +58,9 @@ import {
   PanelRightClose,
   X,
   Sparkles,
+  Mail,
 } from "lucide-react"
+import { AgentMailView } from "./communication/mail/agentmail-view"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -150,6 +152,7 @@ interface Task {
   status: "todo" | "in-progress" | "done"
   priority: "low" | "medium" | "high"
   dueDate: string
+  notes?: string
 }
 
 interface Lead {
@@ -525,7 +528,7 @@ const DEFAULT_TEAM_USERS = [
   { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
 ]
 
-export function CommunicationModule() {
+export function CommunicationModule({ initialTab }: { initialTab?: string } = {}) {
   const [channelsExpanded, setChannelsExpanded] = useState(false)
   const [dmExpanded, setDmExpanded] = useState(false)
   const [systemMsgExpanded, setSystemMsgExpanded] = useState(false)
@@ -533,7 +536,39 @@ export function CommunicationModule() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
   const [selectedChannel, setSelectedChannel] = useState("sales-team")
   const [messageInput, setMessageInput] = useState("")
-  const [activeTab, setActiveTab] = useState("chat")
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (initialTab) return initialTab
+    if (typeof window !== "undefined") {
+      const p = new URLSearchParams(window.location.search)
+      const t = p.get("tab") || p.get("view")
+      if (t && ["chat", "agents", "mail", "tasks", "approvals", "escalations", "schedule"].includes(t)) {
+        return t
+      }
+    }
+    return "chat"
+  })
+
+  // Keep activeTab in sync if initialTab or URL search changes
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const handlePop = () => {
+        const p = new URLSearchParams(window.location.search)
+        const t = p.get("tab") || p.get("view")
+        if (t && ["chat", "agents", "mail", "tasks", "approvals", "escalations", "schedule"].includes(t)) {
+          setActiveTab(t)
+        }
+      }
+      handlePop()
+      window.addEventListener("popstate", handlePop)
+      return () => window.removeEventListener("popstate", handlePop)
+    }
+  }, [])
   const [scheduleView, setScheduleView] = useState<"kanban" | "timeline" | "todo" | "activity">("kanban")
   const [scheduleFilter, setScheduleFilter] = useState<"hour" | "day" | "week" | "month">("week")
   const [channels, setChannels] = useState<Channel[]>(seedChannels)
@@ -1818,6 +1853,7 @@ export function CommunicationModule() {
               {[
                 { value: "chat", icon: MessageSquare, label: "Chat" },
                 { value: "agents", icon: Bot, label: "Agent" },
+                { value: "mail", icon: Mail, label: "Mail" },
                 { value: "tasks", icon: ListTodo, label: "Tasks" },
                 { value: "approvals", icon: CheckSquare, label: "Approvals" },
                 { value: "escalations", icon: Flag, label: "Escalations" },
@@ -1839,6 +1875,7 @@ export function CommunicationModule() {
               })}
             </div>
             {!sidebarCollapsed && <div className="mb-2 border-t border-border" />}
+
             {/* Channels Section */}
             {!sidebarCollapsed && (
               <button
@@ -2174,50 +2211,52 @@ export function CommunicationModule() {
 
       {/* Main Content Area */}
       <div className="flex-1 flex min-h-0 flex-col lg:ml-0">
-        {/* Channel Header */}
-        <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Hash className="h-5 w-5 text-muted-foreground" />
-              <h2 className="font-semibold text-foreground">{selectedChannel}</h2>
-              {/* Real-time connection indicator */}
-              <span
-                title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
-                className={cn(
-                  "inline-block h-2 w-2 rounded-full transition-colors",
-                  wsConnected ? "bg-emerald-500 shadow-[0_0_6px_#22c55e]" : "bg-amber-400 animate-pulse",
-                )}
-              />
+        {/* Channel Header (Hidden in Mail view for full-height AgentMail workspace) */}
+        {activeTab !== "mail" && (
+          <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Hash className="h-5 w-5 text-muted-foreground" />
+                <h2 className="font-semibold text-foreground">{selectedChannel}</h2>
+                {/* Real-time connection indicator */}
+                <span
+                  title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
+                  className={cn(
+                    "inline-block h-2 w-2 rounded-full transition-colors",
+                    wsConnected ? "bg-emerald-500 shadow-[0_0_6px_#22c55e]" : "bg-amber-400 animate-pulse",
+                  )}
+                />
+              </div>
+              <Badge variant="outline" className="text-xs">
+                <Users className="h-3 w-3 mr-1" />
+                {teamUsers.length + AGENT_ITEMS.length} members
+              </Badge>
             </div>
-            <Badge variant="outline" className="text-xs">
-              <Users className="h-3 w-3 mr-1" />
-              {teamUsers.length + AGENT_ITEMS.length} members
-            </Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 lg:hidden"
+                onClick={() => setMobileSidebarOpen(true)}
+              >
+                <PanelLeft className="h-4 w-4 mr-2" />
+                Channels
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("voice")}>
+                <Phone className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("video")}>
+                <Video className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <MonitorSpeaker className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Settings className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              className="h-8 lg:hidden"
-              onClick={() => setMobileSidebarOpen(true)}
-            >
-              <PanelLeft className="h-4 w-4 mr-2" />
-              Channels
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("voice")}>
-              <Phone className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleStartCall("video")}>
-              <Video className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <MonitorSpeaker className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-8 w-8">
-              <Settings className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
+        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {/* Chat Tab - Added context menu to messages */}
@@ -3318,6 +3357,75 @@ export function CommunicationModule() {
                 )}
               </ScrollArea>
             </div>
+          </TabsContent>
+
+          {/* Mail Tab (AgentMail Automated Box) */}
+          <TabsContent value="mail" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden flex flex-col">
+            <AgentMailView
+              onCreateTask={(task) => {
+                const newTask: Task = {
+                  id: `task-${Date.now()}`,
+                  title: task.title,
+                  assignee: task.assignee,
+                  avatar: "AI",
+                  status: "todo",
+                  priority: task.priority,
+                  dueDate: "Tomorrow",
+                  notes: task.notes,
+                }
+                setTasks((prev) => [newTask, ...prev])
+                addActivity({
+                  id: `activity-${Date.now()}-mail-task`,
+                  type: "task",
+                  title: `Task created from Mail: ${task.title}`,
+                  actor: "AgentMail",
+                  time: "just now",
+                })
+              }}
+              onCreateApproval={(approval) => {
+                const newApproval: AgentApproval = {
+                  id: `approval-${Date.now()}`,
+                  agent: approval.agent,
+                  avatar: "SA",
+                  type: "override",
+                  customer: approval.subject,
+                  amount: approval.amount,
+                  reason: approval.reason,
+                  status: "pending",
+                  time: "just now",
+                }
+                setApprovals((prev) => [newApproval, ...prev])
+                addActivity({
+                  id: `activity-${Date.now()}-mail-approval`,
+                  type: "approval",
+                  title: `Quote approval requested from Mail: ${approval.subject}`,
+                  actor: approval.agent,
+                  time: "just now",
+                  meta: approval.amount,
+                })
+              }}
+              onCreateEscalation={(esc) => {
+                const newEscalation: Escalation = {
+                  id: `escalation-${Date.now()}`,
+                  title: esc.title,
+                  customer: "Inbound Email",
+                  severity: esc.severity,
+                  assignee: "Supervisor",
+                  avatar: "OP",
+                  time: "just now",
+                  status: "open",
+                }
+                setEscalations((prev) => [newEscalation, ...prev])
+                addActivity({
+                  id: `activity-${Date.now()}-mail-esc`,
+                  type: "escalation",
+                  title: `Escalation from Mail: ${esc.title}`,
+                  actor: "AgentMail",
+                  time: "just now",
+                  meta: esc.severity,
+                })
+              }}
+            />
           </TabsContent>
         </Tabs>
       </div>

@@ -24,7 +24,9 @@ import {
   ArrowRight,
   Sparkles,
   Zap,
+  Bot,
 } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { useModuleData } from "@/lib/module-data"
 
 const defaultModuleCards = [
@@ -224,12 +226,21 @@ export function DashboardOverview() {
   // back to the blob/defaults if the live fetch fails, same resilience
   // pattern as useModuleData itself.
   const [liveStats, setLiveStats] = useState<typeof defaultDashboardStats | null>(null)
+  const [liveDeals, setLiveDeals] = useState<typeof recentHighValueDeals | null>(null)
+  const [executiveSummary, setExecutiveSummary] = useState<string | null>(null)
+  const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null)
+
   useEffect(() => {
     let cancelled = false
     fetch("/api/dashboard-stats", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((payload) => {
-        if (!cancelled && payload?.stats) setLiveStats(payload.stats)
+        if (!cancelled && payload) {
+          if (payload.stats) setLiveStats(payload.stats)
+          if (payload.recentDeals) setLiveDeals(payload.recentDeals)
+          if (payload.executiveSummary) setExecutiveSummary(payload.executiveSummary)
+          if (payload.aiSuggestions) setAiSuggestions(payload.aiSuggestions)
+        }
       })
       .catch(() => {})
     return () => {
@@ -264,10 +275,97 @@ export function DashboardOverview() {
         ))}
       </div>
 
-      {/* ── 2. Executive Approval Queue ('Needs You' Review Inbox) ──── */}
+      {/* ── 2. AI Executive Briefing & Autonomous Suggestions (Driven by Orchestrator) ── */}
+      <div className="rounded-xl border border-primary/30 bg-gradient-to-r from-primary/10 via-background to-secondary/30 p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1.5 max-w-3xl">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/20 text-primary">
+                <Sparkles className="h-4 w-4" />
+              </div>
+              <h2 className="text-base font-bold text-foreground">Executive AI Briefing (InsightDome)</h2>
+              <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400 border border-emerald-500/20">
+                Orchestrator Connected
+              </span>
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground font-medium">
+              {executiveSummary || "AI Agent Orchestrator is synthesizing telemetry, pipeline data, and workforce status across all operational units..."}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => {
+              window.dispatchEvent(
+                new CustomEvent("open-agent-chat", {
+                  detail: {
+                    agent: "executive",
+                    prompt: "Provide an executive briefing on revenue, deal pipeline stages, and strategic recommendations for this month.",
+                  },
+                }),
+              )
+            }}
+            className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-xs shrink-0"
+          >
+            <Bot className="h-3.5 w-3.5" />
+            Chat with InsightDome
+          </Button>
+        </div>
+
+        {/* AI Actionable Suggestions Grid */}
+        {aiSuggestions && aiSuggestions.length > 0 && (
+          <div className="mt-4 pt-4 border-t border-border/60">
+            <div className="mb-2.5 flex items-center justify-between">
+              <span className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5 text-amber-400" />
+                Autonomous AI Suggestions
+              </span>
+              <span className="text-[11px] text-muted-foreground">Click to execute or review with specialized agent</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {aiSuggestions.map((sug) => (
+                <div
+                  key={sug.id}
+                  onClick={() => {
+                    window.dispatchEvent(
+                      new CustomEvent("open-agent-chat", {
+                        detail: {
+                          agent: sug.agentType || "executive",
+                          prompt: sug.actionPrompt || sug.description,
+                        },
+                      }),
+                    )
+                  }}
+                  className="group flex flex-col justify-between rounded-lg border border-border/80 bg-background/60 p-3 hover:border-primary/50 hover:bg-secondary/40 transition-all cursor-pointer shadow-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-primary uppercase">{sug.category}</span>
+                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${sug.impact === "high" ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"}`}>
+                        {sug.impact} impact
+                      </span>
+                    </div>
+                    <h4 className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-1">
+                      {sug.title}
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground line-clamp-2">
+                      {sug.description}
+                    </p>
+                  </div>
+                  <div className="mt-2.5 pt-2 border-t border-border/40 flex items-center justify-between text-[11px] font-medium text-primary">
+                    <span>Act with agent</span>
+                    <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── 3. Executive Approval Queue ('Needs You' Review Inbox) ──── */}
       <ExecutiveApprovalQueue />
 
-      {/* ── 3. Hero Sales Graph + Live Activity & Quick Actions (CX Core) ─ */}
+      {/* ── 4. Hero Sales Graph + Live Activity & Quick Actions (CX Core) ─ */}
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left 2 Cols: Main Sales Chart & Deal Highlights */}
         <div className="space-y-6 lg:col-span-2">
@@ -283,16 +381,16 @@ export function DashboardOverview() {
                 </div>
                 <div>
                   <h3 className="text-base font-semibold text-foreground">High-Value Deals in Pipeline</h3>
-                  <p className="text-xs text-muted-foreground">Top active deal proposals with high close probabilities</p>
+                  <p className="text-xs text-muted-foreground">Top active deal proposals from live sales database</p>
                 </div>
               </div>
               <span className="text-xs font-semibold text-emerald-400">
-                Total R5.13M
+                Live Deals ({(liveDeals ?? recentHighValueDeals).length})
               </span>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              {recentHighValueDeals.map((deal) => (
+              {(liveDeals ?? recentHighValueDeals).map((deal) => (
                 <div
                   key={deal.client}
                   className="group relative flex flex-col justify-between rounded-lg border border-border/80 bg-secondary/20 p-3.5 transition-all hover:border-primary/40 hover:bg-secondary/35"

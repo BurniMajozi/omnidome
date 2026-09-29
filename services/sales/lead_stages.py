@@ -153,3 +153,54 @@ def is_forward_move(
     else:
         target = _rank(target_status or "", None, stage_names)
     return target is not None and target > current
+
+
+# ── Channel normalization for funnel analytics ────────────────────────────
+
+SALES_CHANNELS = (
+    "MARKETING",
+    "INBOUND_EMAIL",
+    "CALL_CENTER_INBOUND",
+    "CALL_CENTER_OUTBOUND",
+    "PORTAL_WEBSITE",
+    "FIELD_SALES",
+    "WALK_IN",
+    "REFERRAL",
+    "COMPANY_SEARCH",
+    "TENDER",
+    "OTHER",
+)
+
+
+def normalize_channel(
+    channel: Optional[str] = None,
+    source: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> str:
+    """Normalize raw channel or legacy source string into a canonical sales channel."""
+    raw = (channel or source or "").strip()
+    norm = raw.upper().replace("-", "_").replace(" ", "_")
+    if norm in SALES_CHANNELS:
+        return norm
+    if "COMPANY" in norm or (notes and "company search" in notes.lower()):
+        return "COMPANY_SEARCH"
+    if any(k in norm for k in ("FIELD", "DOOR", "VISIT")):
+        return "FIELD_SALES"
+    if "CALL" in norm and "IN" in norm:
+        return "CALL_CENTER_INBOUND"
+    if any(k in norm for k in ("CALL", "OUTBOUND", "TELE")):
+        return "CALL_CENTER_OUTBOUND"
+    if any(k in norm for k in ("MARKET", "CAMPAIGN", "SOCIAL", "ADS", "ADVERT")):
+        return "MARKETING"
+    if any(k in norm for k in ("PORTAL", "WEB", "ONLINE", "SITE")):
+        return "PORTAL_WEBSITE"
+    if any(k in norm for k in ("TENDER", "RFQ", "PROCURE")):
+        return "TENDER"
+    if "EMAIL" in norm or "MAIL" in norm:
+        return "INBOUND_EMAIL"
+    if any(k in norm for k in ("WALK", "BRANCH", "STORE")):
+        return "WALK_IN"
+    if any(k in norm for k in ("REFER", "PARTNER", "AFFILIATE")):
+        return "REFERRAL"
+    return "OTHER" if not norm else norm[:50]
+

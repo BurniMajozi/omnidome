@@ -1287,3 +1287,29 @@ async def delete_commission_record(
     )
     await db.flush()
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 11. CULTURE, STRATEGY & PPP MEMORY INTEGRATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/culture/ppp")
+async def get_hr_ppp_framework():
+    """Retrieve the full Policy, Process, and Procedure (PPP) framework from HR."""
+    from services.hr.culture_strategy import OMNIDOME_PPP, OMNIDOME_CULTURE, OMNIDOME_STRATEGY
+    return {
+        "culture": OMNIDOME_CULTURE,
+        "strategy": OMNIDOME_STRATEGY,
+        "ppp": OMNIDOME_PPP,
+    }
+
+
+@router.post("/culture/sync")
+async def sync_hr_culture_to_memory(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Synchronize HR Culture, Strategic Targets, and PPP entries into Tenant Memory."""
+    from services.hr.culture_strategy import sync_culture_and_strategy_to_memory
+    res = await sync_culture_and_strategy_to_memory(str(tenant_id))
+    return {"status": "synced", "tenant_id": str(tenant_id), **res}
+
+

@@ -94,6 +94,7 @@ def lead_dict(lead: Lead, deal: Optional[Deal] = None, deal_stage: Optional[str]
         "id": lead.id, "tenant_id": lead.tenant_id, "contact_id": lead.contact_id,
         "agent_id": lead.agent_id, "first_name": lead.first_name, "last_name": lead.last_name,
         "email": lead.email, "phone": lead.phone, "address": lead.address, "source": lead.source,
+        "source_channel": getattr(lead, "source_channel", None) or lead.source,
         "interest_level": lead.interest_level, "status": lead.status, "notes": lead.notes,
         "converted_at": lead.converted_at, "created_at": lead.created_at, "updated_at": lead.updated_at,
         "reference": format_reference(lead.ref_no), "owner_id": lead.owner_id, "owner_name": lead.owner_name,

@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text, Numeric, Time
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, Numeric, Time
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -38,6 +38,14 @@ class Employee(Base):
     tax_number: Mapped[Optional[str]] = mapped_column(String(30))
     # Link to call center agent (optional — only for employees who are also CC agents)
     call_center_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    # ── AI Agent fields (populated when employee is an AI agent) ──────
+    is_agent: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    agent_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    llm_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    financial_limit: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    scope: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    is_subagent: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
+    parent_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 

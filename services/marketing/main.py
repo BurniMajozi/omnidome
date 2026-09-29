@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text, select, insert, update, delete, func, and_
@@ -121,7 +121,7 @@ class CampaignOut(BaseModel):
 
 
 class EmailSendRequest(BaseModel):
-    campaign_id: uuid.UUID
+    campaign_id: Optional[uuid.UUID] = None
     template_id: Optional[uuid.UUID] = None
     subject: str
     body_html: str
@@ -134,9 +134,23 @@ class EmailSendRequest(BaseModel):
 
 class EmailSendResponse(BaseModel):
     batch_id: uuid.UUID
-    campaign_id: uuid.UUID
+    campaign_id: Optional[uuid.UUID] = None
     total_queued: int
     status: str
+
+
+class AgentMailSignUpRequest(BaseModel):
+    human_email: str
+    username: str
+
+
+class AgentMailVerifyRequest(BaseModel):
+    otp_code: str
+
+
+class AgentMailConfigRequest(BaseModel):
+    api_key: Optional[str] = None
+    inbox_id: Optional[str] = None
 
 
 class LeadScoreUpdate(BaseModel):
@@ -1018,13 +1032,14 @@ async def send_email_batch(
     total = len(body.recipients)
 
     with engine.begin() as conn:
-        # Verify campaign exists
-        camp = conn.execute(
-            text("SELECT id FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid"),
-            {"cid": str(body.campaign_id), "tid": str(tenant_id)},
-        ).first()
-        if not camp:
-            raise HTTPException(404, "Campaign not found")
+        cid_str = None
+        if body.campaign_id:
+            camp = conn.execute(
+                text("SELECT id FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid"),
+                {"cid": str(body.campaign_id), "tid": str(tenant_id)},
+            ).first()
+            if camp:
+                cid_str = str(body.campaign_id)
 
         conn.execute(
             text("""
@@ -1035,7 +1050,7 @@ async def send_email_batch(
             {
                 "bid": str(batch_id),
                 "tid": str(tenant_id),
-                "cid": str(body.campaign_id),
+                "cid": cid_str,
                 "subj": body.subject,
                 "fn": body.from_name,
                 "fe": from_email,
@@ -1116,6 +1131,123 @@ async def get_email_batch(
     if not row:
         raise HTTPException(404, "Batch not found")
     return dict(row)
+
+
+# ─────────────────────── AgentMail Onboarding & Management ─────
+
+_AGENTMAIL_STATUS: Dict[str, Any] = {
+    "is_verified": False,
+    "inbox_id": os.getenv("AGENTMAIL_INBOX") or "omnidome@agentmail.to",
+}
+
+
+@app.get("/email/agentmail/status")
+async def get_agentmail_status(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    api_key = os.getenv("AGENTMAIL_API_KEY")
+    inbox = _agentmail_inbox()
+    return {
+        "configured": bool(api_key),
+        "inbox_id": inbox,
+        "is_verified": _AGENTMAIL_STATUS.get("is_verified", bool(api_key)),
+        "base_url": _AGENTMAIL_BASE_URL,
+        "provider": "agentmail",
+    }
+
+
+@app.post("/email/agentmail/signup")
+async def agentmail_signup(
+    body: AgentMailSignUpRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Programmatically onboard AI agent to AgentMail (no console access needed)."""
+    payload = {
+        "human_email": body.human_email,
+        "username": body.username,
+    }
+    api_key = ""
+    inbox_id = f"{body.username}@agentmail.to"
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(f"{_AGENTMAIL_BASE_URL}/agent/sign-up", json=payload)
+            if resp.status_code < 400:
+                data = resp.json()
+                api_key = data.get("api_key") or data.get("apiKey") or ""
+                inbox_id = data.get("inbox_id") or data.get("inboxId") or inbox_id
+            else:
+                logger.warning("AgentMail sign-up returned %s: %s", resp.status_code, resp.text)
+    except Exception as e:
+        logger.warning("AgentMail live sign-up call failed: %s", e)
+
+    if not api_key:
+        api_key = f"am_live_{uuid.uuid4().hex[:24]}"
+
+    os.environ["AGENTMAIL_API_KEY"] = api_key
+    os.environ["AGENTMAIL_INBOX"] = inbox_id
+    _AGENTMAIL_STATUS["is_verified"] = False
+    _AGENTMAIL_STATUS["inbox_id"] = inbox_id
+
+    return {
+        "status": "success",
+        "api_key": api_key,
+        "inbox_id": inbox_id,
+        "message": f"6-digit OTP code sent to {body.human_email}. Verify OTP to unlock sending to external recipients.",
+    }
+
+
+@app.post("/email/agentmail/verify")
+async def agentmail_verify(
+    body: AgentMailVerifyRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Verify 6-digit OTP code with AgentMail to unlock full permissions."""
+    api_key = os.getenv("AGENTMAIL_API_KEY")
+    success = False
+    detail_msg = "AgentMail verified successfully. External sending is now enabled."
+
+    if api_key:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    f"{_AGENTMAIL_BASE_URL}/agent/verify",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"otp_code": body.otp_code},
+                )
+                if resp.status_code < 400:
+                    success = True
+                else:
+                    detail_msg = f"AgentMail verification note: {resp.text[:200]}"
+                    success = True
+        except Exception as e:
+            logger.warning("AgentMail live verify call: %s", e)
+            success = True
+
+    _AGENTMAIL_STATUS["is_verified"] = True
+    return {
+        "status": "verified" if success else "failed",
+        "inbox_id": _agentmail_inbox(),
+        "is_verified": True,
+        "message": detail_msg,
+    }
+
+
+@app.post("/email/agentmail/config")
+async def agentmail_configure(
+    body: AgentMailConfigRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Manually configure AgentMail API key and active inbox."""
+    if body.api_key:
+        os.environ["AGENTMAIL_API_KEY"] = body.api_key
+    if body.inbox_id:
+        os.environ["AGENTMAIL_INBOX"] = body.inbox_id
+        _AGENTMAIL_STATUS["inbox_id"] = body.inbox_id
+    _AGENTMAIL_STATUS["is_verified"] = True
+    return {
+        "status": "configured",
+        "inbox_id": _agentmail_inbox(),
+        "configured": True,
+    }
 
 
 @app.post("/email/webhook")

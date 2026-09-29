@@ -59,6 +59,7 @@ import { SalesLeadSources } from "./sales-lead-sources"
 import { SalesLeadsTab, SALES_CHANGED_EVENT, announceSalesChange } from "./sales-leads-tab"
 import { LeadActionsMenu, LeadPanel, type LeadPanelMode } from "./sales-lead-actions"
 import { LeadWarmingRules } from "./sales-lead-warming"
+import { LeadFunnelView } from "./sales/lead-funnel-view"
 import { SalesCommissionsView } from "./talent/sales-commissions-view"
 import {
   getSalesTalentOverview,
@@ -675,7 +676,7 @@ export function SalesModule() {
               </TabsTrigger>
               <TabsTrigger value="channels" className="text-xs font-semibold gap-1.5">
                 <BarChart className="h-3.5 w-3.5 text-emerald-400" />
-                Sales by Channel Chart
+                Lead Funnel by Channel
               </TabsTrigger>
               <TabsTrigger value="leads" className="text-xs font-semibold gap-1.5">
                 <Users className="h-3.5 w-3.5 text-purple-400" />
@@ -735,136 +736,13 @@ export function SalesModule() {
         </div>
       )}
 
-      {/* ── TAB 2: Sales by Channel Chart & Analytics ── */}
+      {/* ── TAB 2: Lead Funnel by Channel & Attribution ── */}
       {activeTab === "channels" && (
-        <div className="space-y-6">
-          {/* Quick Channel Pill Cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            {channelMetrics.map((ch) => (
-              <div
-                key={ch.source}
-                className="rounded-xl border border-border bg-card p-3 shadow-sm hover:border-primary/40 transition-colors"
-              >
-                <div className="flex items-center justify-between">
-                  <div
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: ch.color }}
-                  />
-                  <span className="font-mono text-[11px] font-semibold text-foreground">
-                    {ch.deals} deals
-                  </span>
-                </div>
-                <div className="mt-2 text-xs font-semibold text-foreground truncate" title={ch.name}>
-                  {ch.name}
-                </div>
-                <div className="mt-1 font-mono text-xs font-bold text-emerald-400">
-                  {formatCurrency(ch.revenue)}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Main Charts: Bar Chart + Donut Split */}
-          <div className="grid gap-6 lg:grid-cols-3">
-            {/* Sales Revenue by Channel Bar Chart */}
-            <div className="surface-card p-5 lg:col-span-2">
-              <div className="flex items-center justify-between mb-4">
-                <div>
-                  <h3 className="section-title">Sales Revenue by Channel</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Direct attribution across Customer Walk-ins, Portal Applications, Email, Call Center & Field Reps
-                  </p>
-                </div>
-                <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-xs">
-                  Total: {formatCurrency(totalChannelRevenue)}
-                </Badge>
-              </div>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={channelMetrics} margin={{ top: 10, right: 10, left: 10, bottom: 20 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                    <XAxis
-                      dataKey="name"
-                      tick={{ fill: "#9ca3af", fontSize: 11 }}
-                      interval={0}
-                      angle={-15}
-                      textAnchor="end"
-                    />
-                    <YAxis
-                      tick={{ fill: "#9ca3af", fontSize: 11 }}
-                      tickFormatter={(v) => `R${v / 1000}K`}
-                    />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#18181b",
-                        border: "1px solid #3f3f46",
-                        borderRadius: "8px",
-                        color: "#fff",
-                      }}
-                      formatter={(value: number, name: string) => [
-                        name === "revenue" ? formatCurrency(value) : value,
-                        name === "revenue" ? "Revenue" : "Deals Closed",
-                      ]}
-                    />
-                    <Legend />
-                    <Bar dataKey="revenue" name="revenue" fill="#38bdf8" radius={[4, 4, 0, 0]}>
-                      {channelMetrics.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* Deal Volume Distribution Pie */}
-            <div className="surface-card p-5">
-              <h3 className="section-title mb-2">Deal Volume Share</h3>
-              <p className="text-xs text-muted-foreground mb-4">Proportion of closed deals per channel</p>
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={channelMetrics}
-                      dataKey="deals"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={50}
-                      outerRadius={80}
-                      paddingAngle={3}
-                    >
-                      {channelMetrics.map((entry, index) => (
-                        <Cell key={`slice-${index}`} fill={entry.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#18181b",
-                        border: "1px solid #3f3f46",
-                        borderRadius: "8px",
-                        color: "#fff",
-                      }}
-                      formatter={(val: number) => [`${val} Deals`, "Deals Count"]}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              <div className="space-y-1.5 pt-2 border-t border-border/60">
-                {channelMetrics.slice(0, 4).map((ch) => (
-                  <div key={ch.source} className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 w-2 rounded-full" style={{ backgroundColor: ch.color }} />
-                      <span className="text-muted-foreground truncate max-w-[120px]">{ch.name}</span>
-                    </div>
-                    <span className="font-semibold text-foreground">{ch.deals} deals</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <LeadFunnelView
+          onNavigateToLeads={(channel, stage) => {
+            setActiveTab("leads")
+          }}
+        />
       )}
 
       {/* ── TAB 3: Lead Stage Management (SPEC-lead-lifecycle.md) ── */}

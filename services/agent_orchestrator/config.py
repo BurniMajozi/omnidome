@@ -21,11 +21,10 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
-    # Hermes — local agent brain (Ollama + Gemma). When chat_backend is
-    # "hermes", chat is bridged to Hermes's OpenAI-compatible API server
-    # instead of the legacy qwen/llama Agent.run() loop. "legacy" is kept
-    # as a rollback switch.
-    chat_backend: str = "hermes"
+    # Chat backend: "native" uses Agent.run() / llm_client with model_routes;
+    # "hermes" bridges to Hermes's local API server. Default to "native" for immediate
+    # responsiveness and graceful resilience.
+    chat_backend: str = "native"
     hermes_base_url: str = "http://hermes:8642/v1"
     hermes_api_key: str = ""
 
@@ -39,6 +38,10 @@ class Settings(BaseSettings):
         "executive":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
         "support":        ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
         "assistant":      ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "talent":         ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "call_center":    ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "products":       ("qwen2.5:7b", "openrouter/qwen/qwen-2.5-7b-instruct"),
+        "analytics":      ("llama3.1:70b", "openrouter/meta-llama/llama-3.1-70b-instruct"),
     }
 
     # Tool settings
@@ -65,6 +68,7 @@ class Settings(BaseSettings):
     sales_service_url: str = "http://sales:8002"
     finance_service_url: str = "http://finance:8015"
     call_center_service_url: str = "http://call_center:8007"
+    hr_service_url: str = "http://hr:8009"
     tenant_memory_service_url: str = "http://tenant_memory:8025"
     fno_intelligence_service_url: str = "http://fno-intelligence:8024"
     public_agent_url: str = "http://agent-orchestrator:8021"
@@ -116,6 +120,7 @@ class Settings(BaseSettings):
             "sales.get_pipeline",
             "finance.get_financial_summary",
             "crm.get_customer_360_cvm", "crm.get_customer_360_crm",
+            "hr.*", "talent.*",
             "fno_intelligence.*",
         ],
         "support": [
@@ -126,9 +131,14 @@ class Settings(BaseSettings):
             "call_center.get_intelligence",
             "fno_intelligence.*",
         ],
+        "talent": [
+            "hr.*", "talent.*",
+            "call_center.get_agent_metrics",
+            "memory.*",
+        ],
         "assistant": [
             "orchestrator.consult_specialist", "orchestrator_consult_specialist",
-            "crm.*", "billing.*", "network.*", "support.*", "fno_intelligence.*",
+            "crm.*", "billing.*", "network.*", "support.*", "hr.*", "talent.*", "sales.*", "fno_intelligence.*",
         ],
     }
 

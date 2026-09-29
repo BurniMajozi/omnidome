@@ -30,12 +30,12 @@ export async function POST(
       method: "POST",
       headers,
       body,
+      signal: AbortSignal.timeout(1000),
     })
-    const data = await res.json()
+    const data = await res.json().catch(() => ({ status: "ok" }))
     return NextResponse.json(data)
   } catch (err) {
-    console.error("Analytics proxy error:", err)
-    return NextResponse.json({ status: "ok" })
+    return NextResponse.json({ status: "skipped" })
   }
 }
 

@@ -38,7 +38,8 @@ MESSAGE_ROLE = SAEnum(
 
 AGENT_TYPE = SAEnum(
     "customer_facing", "retention", "provisioning", "executive", "support", "assistant",
-    name="agent_type", create_type=True,
+    "talent", "analytics", "sales", "crm", "billing", "call_center", "products",
+    name="agent_type", create_type=False,
 )
 
 ACTION_STATUS = SAEnum(
@@ -58,7 +59,7 @@ class AgentConversation(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
-    agent_type: Mapped[str] = mapped_column(AGENT_TYPE, nullable=False)
+    agent_type: Mapped[str] = mapped_column(String(50), nullable=False)
     channel: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
     external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(

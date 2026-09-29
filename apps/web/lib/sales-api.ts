@@ -175,6 +175,7 @@ export interface SalesLead {
   phone?: string | null
   address?: string | null
   source: string // Maps to channel e.g. INBOUND_EMAIL, WALK_IN, PORTAL_WEBSITE
+  source_channel?: string | null
   interest_level: number
   /** Lead phase: NEW | CONTACTED | QUALIFIED | DISQUALIFIED. With a deal it mirrors
    *  the deal: CONVERTED (open, "In pipeline") | WON | LOST. SPEC-lead-lifecycle.md */
@@ -198,6 +199,40 @@ export interface SalesLead {
 }
 
 export type LeadPriority = "low" | "normal" | "high" | "urgent"
+
+export interface FunnelStageItem {
+  stage: string
+  count: number
+  pct_of_total: number
+  value_zar: number
+}
+
+export interface ChannelFunnelItem {
+  channel: string
+  channel_label: string
+  total_leads: number
+  stage_counts: Record<string, number>
+  stage_values_zar: Record<string, number>
+  won_count: number
+  lost_count: number
+  conversion_rate: number
+  total_pipeline_value_zar: number
+  won_value_zar: number
+}
+
+export interface LeadFunnelResponse {
+  channels: ChannelFunnelItem[]
+  overall_funnel: FunnelStageItem[]
+  totals: {
+    total_leads: number
+    won_leads: number
+    conversion_rate: number
+    total_pipeline_value_zar: number
+    won_value_zar: number
+    top_performing_channel: string
+  }
+  period_days?: number | null
+}
 
 export const LEAD_PHASE_STAGES = [
   { id: "NEW", label: "New" },
@@ -273,6 +308,7 @@ export interface SalesLeadCreate {
   phone?: string
   address?: string
   source: string
+  source_channel?: string
   interest_level?: number
   notes?: string
   agent_id?: string
@@ -290,6 +326,7 @@ export interface SalesLeadUpdate {
   phone?: string
   address?: string
   source?: string
+  source_channel?: string
   interest_level?: number
   status?: string
   notes?: string
@@ -349,12 +386,21 @@ export const salesApi = {
     }),
 
   // Leads
-  listLeads: (params?: { status?: string; source?: string; limit?: number }) => {
+  listLeads: (params?: { status?: string; source?: string; channel?: string; limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.status) q.set("status", params.status)
     if (params?.source) q.set("source", params.source)
+    if (params?.channel) q.set("channel", params.channel)
     if (params?.limit) q.set("limit", String(params.limit))
     return fetchSales<SalesLead[]>(`/leads?${q}`)
+  },
+
+  getLeadFunnel: (params?: { days?: number; channel?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.days) q.set("days", String(params.days))
+    if (params?.channel) q.set("channel", params.channel)
+    const qs = q.toString() ? `?${q.toString()}` : ""
+    return fetchSales<LeadFunnelResponse>(`/leads/funnel${qs}`)
   },
 
   createLead: (data: SalesLeadCreate) =>

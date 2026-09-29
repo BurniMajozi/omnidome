@@ -31,7 +31,7 @@ SERVICE_URLS = {
     "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
     "memory": os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025"),
     "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno-intelligence:8024"),
-    "hr": os.getenv("HR_SERVICE_URL", "http://hr:8014"),
+    "hr": os.getenv("HR_SERVICE_URL", "http://hr:8009"),
     "portal": os.getenv("PORTAL_BUILDER_SERVICE_URL", "http://portal_builder:8018"),
 }
 
@@ -73,15 +73,22 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     "analytics_get_network_health": _READ,
     "analytics.query": ToolPolicy(mutates=False, timeout_s=10, max_output_chars=8000),
     "sales_get_pipeline": _READ,
+    "sales.get_pipeline": _READ,
     "finance_get_financial_summary": _READ,
     "call_center_get_intelligence": _READ,
     "call_center_get_queues": _READ,
     "call_center_get_agent_metrics": _READ,
-    # Products, talent
+    # Products, talent & HR
     "products_list_plans": _READ,
     "products_list_bundles": _READ,
     "talent_list_employees": _READ,
     "talent_get_performance_summary": _READ,
+    "hr.list_employees": _READ,
+    "hr.get_employee": _READ,
+    "hr.get_wellness_insights": _READ,
+    "hr.execute_wellness_action": ToolPolicy(mutates=True, requires_approval=True),
+    "hr.get_attrition_risk": _READ,
+    "hr.list_leave_requests": _READ,
     # Tenant memory
     "memory.recall": _READ,
     "memory.write_entry": ToolPolicy(mutates=True),
@@ -93,9 +100,15 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     "fno_intelligence.web_intel_cancellation_processing": _WEB_READ,
     "fno_intelligence.web_intel_address_lookup": _WEB_READ,
     "fno_intelligence.web_intel_competitor_analysis": _WEB_READ,
+    # Strategy & Deterministic Goals
+    "strategy.track_performance": _READ,
+    "strategy_track_performance": _READ,
+    "strategy.get_strategic_goals": _READ,
+    "strategy_get_strategic_goals": _READ,
     # A sub-agent may call mutating tools itself (each gated on its own), so the
     # consultation runs alone and gets a longer timeout.
     "orchestrator_consult_specialist": ToolPolicy(mutates=True, timeout_s=180),
+    "orchestrator.consult_specialist": ToolPolicy(mutates=True, timeout_s=180),
 }
 
 # User decision 2026-09-24: creating customers or tickets, provisioning,
@@ -143,6 +156,17 @@ class Tool:
                 timeout_s=self.timeout_s,
                 max_output_chars=self.max_output_chars,
             )
+
+        if self.name in ("strategy.track_performance", "strategy_track_performance"):
+            from services.agent_orchestrator.goals import track_deterministic_performance
+            return await track_deterministic_performance(
+                tenant_id=tenant_id,
+                target_overrides=tool_input.get("target_overrides"),
+            )
+
+        if self.name in ("strategy.get_strategic_goals", "strategy_get_strategic_goals"):
+            from services.agent_orchestrator.goals import get_strategic_goals_and_culture
+            return await get_strategic_goals_and_culture(tenant_id=tenant_id)
 
         base_url = SERVICE_URLS.get(self.service, "")
         if not base_url:
@@ -514,7 +538,7 @@ class ToolRegistry:
             parameters={"type": "object", "properties": {}, "required": []},
         ))
 
-        # ── Talent & HR Tools (Read-Only) ───────────────────────────
+        # ── Talent & HR Tools ───────────────────────────────────────
         self.register(Tool(
             name="talent_list_employees",
             description="Query employee directory, departments, and active shift rosters.",
@@ -530,6 +554,70 @@ class ToolRegistry:
             method="GET",
             endpoint="/analytics/attrition-risk",
             parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="hr.list_employees",
+            description="Query employee directory, departments, and active rosters.",
+            service="hr",
+            method="GET",
+            endpoint="/employees",
+            parameters={"type": "object", "properties": {"department": {"type": "string"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="hr.get_employee",
+            description="Get detailed profile, contact info, and tenure for a specific employee.",
+            service="hr",
+            method="GET",
+            endpoint="/employees/{employee_id}",
+            parameters={"type": "object", "properties": {"employee_id": {"type": "string"}}, "required": ["employee_id"]},
+        ))
+        self.register(Tool(
+            name="hr.get_wellness_insights",
+            description="Retrieve team burnout indicators, sentiment scores, and wellness survey trends.",
+            service="hr",
+            method="GET",
+            endpoint="/cross-service/orchestrator/wellness",
+            parameters={"type": "object", "properties": {"department": {"type": "string"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="hr.execute_wellness_action",
+            description="Trigger a wellness check-in, workload rebalancing, or support plan for an employee.",
+            service="hr",
+            method="POST",
+            endpoint="/cross-service/orchestrator/wellness/{alert_id}/execute",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "alert_id": {"type": "string"},
+                    "action_type": {"type": "string"},
+                    "notes": {"type": "string"},
+                },
+                "required": ["alert_id"],
+            },
+        ))
+        self.register(Tool(
+            name="hr.get_attrition_risk",
+            description="Get attrition risk scores, flight-risk factors, and retention suggestions.",
+            service="hr",
+            method="GET",
+            endpoint="/analytics/attrition-risk",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="hr.list_leave_requests",
+            description="List pending and approved employee leave requests.",
+            service="hr",
+            method="GET",
+            endpoint="/leave/requests",
+            parameters={"type": "object", "properties": {"status": {"type": "string"}}, "required": []},
+        ))
+        self.register(Tool(
+            name="sales.get_pipeline",
+            description="Get sales pipeline summary with stages, deal counts, and conversion probabilities.",
+            service="sales",
+            method="GET",
+            endpoint="/pipeline",
+            parameters={"type": "object", "properties": {"status": {"type": "string"}}, "required": []},
         ))
 
         # ── Analytics & Telemetry Tools (Read-Only) ─────────────────
@@ -604,6 +692,31 @@ class ToolRegistry:
             },
         ))
 
+        # ── Strategy & Deterministic Goals Tools ────────────────────
+        self.register(Tool(
+            name="strategy.track_performance",
+            description=(
+                "Track actual business performance deterministically against promised corporate targets. "
+                "Queries immutable tables (deals, customers, subscriptions, invoices) to calculate real MRR, "
+                "active subscriber count, pipeline value, closed-won totals, and win rate with variance scoring."
+            ),
+            service="orchestrator",
+            method="POST",
+            endpoint="/api/tools/strategy/track_performance",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+        self.register(Tool(
+            name="strategy.get_strategic_goals",
+            description=(
+                "Retrieve corporate strategy, promised targets (FY 2026/2027), culture pillars, and "
+                "HR PPP (Policy, Process, Procedure) governance frameworks (BCEA wellness, sales stages, retention authority)."
+            ),
+            service="orchestrator",
+            method="GET",
+            endpoint="/api/tools/strategy/get_strategic_goals",
+            parameters={"type": "object", "properties": {}, "required": []},
+        ))
+
     def register(self, tool: Tool):
         policy = policy_for(tool.name)
         tool.mutates = policy.mutates
@@ -651,6 +764,7 @@ class ToolRegistry:
                 "retention_get_predictions", "retention_get_cases",
                 "products_list_plans", "products_list_bundles",
                 "support_create_ticket", "support_get_tickets",
+                "strategy.track_performance", "strategy.get_strategic_goals",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
             "provisioning": [
@@ -662,12 +776,13 @@ class ToolRegistry:
             ] + FNO_TOOLS,
             "executive": [
                 "orchestrator_consult_specialist", "orchestrator.consult_specialist",
+                "strategy.track_performance", "strategy.get_strategic_goals",
                 "analytics_get_executive_summary", "analytics_get_mrr_trends", "analytics_get_network_health",
                 "analytics.query",
-                "finance_get_financial_summary", "sales_get_pipeline",
+                "finance_get_financial_summary", "sales_get_pipeline", "sales.get_pipeline",
                 "retention_get_predictions", "retention_get_cases",
                 "call_center_get_intelligence", "call_center_get_queues",
-                "talent_get_performance_summary",
+                "talent_get_performance_summary", "hr.list_employees", "hr.get_wellness_insights", "hr.get_attrition_risk",
                 "memory.recall", "memory.write_entry", "memory.upsert_summary",
             ] + FNO_TOOLS,
             "support": [
@@ -701,23 +816,29 @@ class ToolRegistry:
             ] + FNO_TOOLS,
             "talent": [
                 "talent_list_employees", "talent_get_performance_summary",
+                "strategy.track_performance", "strategy.get_strategic_goals",
+                "hr.list_employees", "hr.get_employee", "hr.get_wellness_insights",
+                "hr.execute_wellness_action", "hr.get_attrition_risk", "hr.list_leave_requests",
                 "call_center_get_agent_metrics",
                 "memory.recall", "memory.write_entry",
             ],
             "analytics": [
+                "strategy.track_performance", "strategy.get_strategic_goals",
                 "analytics_get_mrr_trends", "analytics_get_network_health", "analytics_get_executive_summary",
                 "analytics.query",
-                "sales_get_pipeline", "finance_get_financial_summary",
+                "sales_get_pipeline", "sales.get_pipeline", "finance_get_financial_summary",
                 "retention_get_predictions", "call_center_get_intelligence",
                 "memory.recall", "memory.write_entry",
             ],
             "assistant": [
                 "orchestrator_consult_specialist", "orchestrator.consult_specialist",
+                "strategy.track_performance", "strategy.get_strategic_goals",
                 "crm_get_customer", "crm_get_customer_360",
                 "billing_get_balance", "billing_get_invoice",
                 "products_list_plans", "products_list_bundles",
                 "network_check_coverage", "network_get_service_status",
                 "support_get_tickets",
+                "sales.get_pipeline", "hr.list_employees", "hr.get_wellness_insights",
                 "memory.recall", "memory.write_entry",
             ] + FNO_TOOLS,
         }

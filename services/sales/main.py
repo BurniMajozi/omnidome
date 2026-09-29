@@ -44,7 +44,12 @@ from services.common.middleware import configure_production
 from services.sales.database import get_db, get_session, init_tables
 from services.sales import lead_actions, lead_service
 from services.sales.lead_service import Actor
-from services.sales.lead_stages import StageChangeError, is_forward_move
+from services.sales.lead_stages import (
+    SALES_CHANNELS,
+    StageChangeError,
+    is_forward_move,
+    normalize_channel,
+)
 from services.sales.models import (
     Commission,
     CommissionTier,
@@ -338,6 +343,7 @@ class LeadCreate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     source: str = "FIELD_VISIT"
+    source_channel: Optional[str] = None
     interest_level: int = Field(default=3, ge=1, le=5)
     notes: Optional[str] = None
     agent_id: Optional[uuid.UUID] = None
@@ -354,6 +360,7 @@ class LeadUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     source: Optional[str] = None
+    source_channel: Optional[str] = None
     interest_level: Optional[int] = Field(None, ge=1, le=5)
     status: Optional[str] = None
     notes: Optional[str] = None
@@ -374,6 +381,7 @@ class LeadResponse(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     source: str
+    source_channel: Optional[str] = None
     interest_level: int
     status: str
     notes: Optional[str] = None
@@ -393,6 +401,33 @@ class LeadResponse(BaseModel):
     deal_status: Optional[str] = None
     deal_value_zar: Optional[Decimal] = None
     open_tasks: int = 0
+
+
+class FunnelStageItem(BaseModel):
+    stage: str
+    count: int
+    pct_of_total: float = 0.0
+    value_zar: Decimal = Decimal("0")
+
+
+class ChannelFunnelItem(BaseModel):
+    channel: str
+    channel_label: str
+    total_leads: int
+    stage_counts: Dict[str, int]
+    stage_values_zar: Dict[str, Decimal]
+    won_count: int
+    lost_count: int
+    conversion_rate: float
+    total_pipeline_value_zar: Decimal
+    won_value_zar: Decimal
+
+
+class LeadFunnelResponse(BaseModel):
+    channels: List[ChannelFunnelItem]
+    overall_funnel: List[FunnelStageItem]
+    totals: Dict[str, Any]
+    period_days: Optional[int] = None
 
 
 class LeadConvert(BaseModel):
@@ -1680,11 +1715,38 @@ def _source_label(source: Optional[str]) -> str:
     return (source or "manual entry").replace("_", " ").title()
 
 
+CHANNEL_LABELS: Dict[str, str] = {
+    "MARKETING": "Marketing Campaigns",
+    "INBOUND_EMAIL": "Inbound Email",
+    "CALL_CENTER_INBOUND": "Call Center Inbound",
+    "CALL_CENTER_OUTBOUND": "Call Center Outbound",
+    "PORTAL_WEBSITE": "Portal & Website",
+    "FIELD_SALES": "Field Sales Team",
+    "WALK_IN": "Walk-in Customers",
+    "REFERRAL": "Partner Referral",
+    "COMPANY_SEARCH": "Company Search",
+    "TENDER": "Tenders & RFQs",
+    "OTHER": "Direct / Other",
+}
+
+STANDARD_FUNNEL_STAGES: List[str] = [
+    "NEW",
+    "CONTACTED",
+    "QUALIFIED",
+    "Prospecting",
+    "Proposal",
+    "Negotiation",
+    "Closed Won",
+    "Closed Lost",
+]
+
+
 @app.get("/leads", response_model=List[LeadResponse])
 async def list_leads(
     status: Optional[str] = None,
     agent_id: Optional[uuid.UUID] = None,
     source: Optional[str] = None,
+    channel: Optional[str] = None,
     min_interest: Optional[int] = Query(None, ge=1, le=5),
     limit: int = Query(50, ge=1, le=200),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1697,6 +1759,9 @@ async def list_leads(
         q = q.where(Lead.agent_id == agent_id)
     if source:
         q = q.where(Lead.source == source)
+    if channel:
+        norm_ch = normalize_channel(channel)
+        q = q.where((Lead.source_channel == norm_ch) | (Lead.source == channel))
     if min_interest:
         q = q.where(Lead.interest_level >= min_interest)
     q = q.order_by(Lead.created_at.desc()).limit(limit)
@@ -1710,6 +1775,138 @@ async def list_leads(
     ]
 
 
+@app.get("/leads/funnel", response_model=LeadFunnelResponse)
+async def get_lead_funnel(
+    days: Optional[int] = Query(None, ge=1, le=730),
+    channel: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Funnel view of leads by channel across lead status and deal pipeline stages."""
+    q = select(Lead).where(Lead.tenant_id == tenant_id)
+    if days:
+        since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+        q = q.where(Lead.created_at >= since)
+    if channel:
+        norm_filter = normalize_channel(channel)
+        q = q.where((Lead.source_channel == norm_filter) | (Lead.source == channel))
+
+    leads = list((await db.execute(q)).scalars().all())
+    deals = await lead_service.deals_by_lead(db, [lead.id for lead in leads])
+
+    # Per-channel data containers
+    channel_data: Dict[str, Dict[str, Any]] = {}
+    for ch in SALES_CHANNELS:
+        channel_data[ch] = {
+            "channel": ch,
+            "channel_label": CHANNEL_LABELS.get(ch, ch.replace("_", " ").title()),
+            "total_leads": 0,
+            "stage_counts": {s: 0 for s in STANDARD_FUNNEL_STAGES},
+            "stage_values_zar": {s: Decimal("0.00") for s in STANDARD_FUNNEL_STAGES},
+            "won_count": 0,
+            "lost_count": 0,
+            "total_pipeline_value_zar": Decimal("0.00"),
+            "won_value_zar": Decimal("0.00"),
+        }
+
+    overall_counts: Dict[str, int] = {s: 0 for s in STANDARD_FUNNEL_STAGES}
+    overall_values: Dict[str, Decimal] = {s: Decimal("0.00") for s in STANDARD_FUNNEL_STAGES}
+
+    for lead in leads:
+        lead_ch = lead.source_channel or normalize_channel(None, lead.source, lead.notes)
+        if lead_ch not in channel_data:
+            lead_ch = "OTHER"
+
+        deal, deal_stage = deals.get(lead.id, (None, None))
+
+        if deal:
+            stage_name = deal_stage or "Prospecting"
+            val = Decimal(str(deal.value_zar or 0))
+            is_won = deal.status == "WON" or stage_name == "Closed Won"
+            is_lost = deal.status == "LOST" or stage_name == "Closed Lost"
+        else:
+            stage_name = lead.status or "NEW"
+            val = Decimal("0.00")
+            is_won = stage_name == "WON"
+            is_lost = stage_name in ("DISQUALIFIED", "LOST")
+
+        mapped_stage = stage_name
+        if mapped_stage not in channel_data[lead_ch]["stage_counts"]:
+            channel_data[lead_ch]["stage_counts"][mapped_stage] = 0
+            channel_data[lead_ch]["stage_values_zar"][mapped_stage] = Decimal("0.00")
+        if mapped_stage not in overall_counts:
+            overall_counts[mapped_stage] = 0
+            overall_values[mapped_stage] = Decimal("0.00")
+
+        channel_data[lead_ch]["total_leads"] += 1
+        channel_data[lead_ch]["stage_counts"][mapped_stage] += 1
+        channel_data[lead_ch]["stage_values_zar"][mapped_stage] += val
+        channel_data[lead_ch]["total_pipeline_value_zar"] += val
+        overall_counts[mapped_stage] += 1
+        overall_values[mapped_stage] += val
+
+        if is_won:
+            channel_data[lead_ch]["won_count"] += 1
+            channel_data[lead_ch]["won_value_zar"] += val
+        elif is_lost:
+            channel_data[lead_ch]["lost_count"] += 1
+
+    channels_res: List[ChannelFunnelItem] = []
+    total_leads_all = len(leads)
+    total_won_all = sum(cd["won_count"] for cd in channel_data.values())
+    total_pipeline_val_all = sum(cd["total_pipeline_value_zar"] for cd in channel_data.values())
+    total_won_val_all = sum(cd["won_value_zar"] for cd in channel_data.values())
+
+    for ch in SALES_CHANNELS:
+        cd = channel_data[ch]
+        tot = cd["total_leads"]
+        won = cd["won_count"]
+        conv_rate = round((won / tot * 100.0), 1) if tot > 0 else 0.0
+        channels_res.append(
+            ChannelFunnelItem(
+                channel=cd["channel"],
+                channel_label=cd["channel_label"],
+                total_leads=tot,
+                stage_counts=cd["stage_counts"],
+                stage_values_zar=cd["stage_values_zar"],
+                won_count=won,
+                lost_count=cd["lost_count"],
+                conversion_rate=conv_rate,
+                total_pipeline_value_zar=cd["total_pipeline_value_zar"].quantize(Decimal("0.01")),
+                won_value_zar=cd["won_value_zar"].quantize(Decimal("0.01")),
+            )
+        )
+
+    # Sort so channels with active leads come first
+    channels_res.sort(key=lambda c: (c.total_leads, c.total_pipeline_value_zar), reverse=True)
+
+    overall_funnel = [
+        FunnelStageItem(
+            stage=s,
+            count=overall_counts.get(s, 0),
+            pct_of_total=round((overall_counts.get(s, 0) / total_leads_all * 100.0), 1) if total_leads_all > 0 else 0.0,
+            value_zar=overall_values.get(s, Decimal("0.00")).quantize(Decimal("0.01")),
+        )
+        for s in STANDARD_FUNNEL_STAGES
+    ]
+
+    top_channel = channels_res[0].channel_label if channels_res and channels_res[0].total_leads > 0 else "None"
+
+    return LeadFunnelResponse(
+        channels=channels_res,
+        overall_funnel=overall_funnel,
+        totals={
+            "total_leads": total_leads_all,
+            "won_leads": total_won_all,
+            "conversion_rate": round((total_won_all / total_leads_all * 100.0), 1) if total_leads_all > 0 else 0.0,
+            "total_pipeline_value_zar": float(total_pipeline_val_all),
+            "won_value_zar": float(total_won_val_all),
+            "top_performing_channel": top_channel,
+        },
+        period_days=days,
+    )
+
+
 @app.post("/leads", response_model=LeadResponse, status_code=201)
 async def create_lead(
     payload: LeadCreate,
@@ -1718,11 +1915,12 @@ async def create_lead(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    source_channel = normalize_channel(payload.source_channel, payload.source, payload.notes)
     lead = Lead(
         id=uuid.uuid4(), tenant_id=tenant_id,
         first_name=payload.first_name, last_name=payload.last_name,
         email=payload.email, phone=payload.phone, address=payload.address,
-        source=payload.source, interest_level=payload.interest_level,
+        source=payload.source, source_channel=source_channel, interest_level=payload.interest_level,
         notes=payload.notes, agent_id=payload.agent_id, owner_id=payload.owner_id, owner_name=payload.owner_name,
         priority=payload.priority, ref_no=await lead_service.next_ref_no(db, tenant_id),
         status="NEW", created_at=now, updated_at=now,
@@ -1731,7 +1929,7 @@ async def create_lead(
     await db.flush()
     await lead_service.record_activity(
         db, tenant_id, lead.id, "created", f"Lead created from {_source_label(payload.source)}",
-        {"source": payload.source}, _actor(ctx))
+        {"source": payload.source, "source_channel": source_channel}, _actor(ctx))
     await lead_service.publish_lead_event(db, lead, "sales.lead.created")
     if payload.pipeline:
         await _change_stage(db, tenant_id, lead, ctx, target_stage=payload.pipeline.stage_name,
@@ -1781,6 +1979,12 @@ async def update_lead(
     lead = await _get_lead(db, tenant_id, lead_id)
     update_data = payload.model_dump(exclude_unset=True)
     new_status = update_data.pop("status", None)
+    if "source_channel" in update_data or "source" in update_data:
+        lead.source_channel = normalize_channel(
+            update_data.get("source_channel"),
+            update_data.get("source", lead.source),
+            update_data.get("notes", lead.notes),
+        )
     changed = [k for k, v in update_data.items() if getattr(lead, k) != v]
     for key, value in update_data.items():
         setattr(lead, key, value)

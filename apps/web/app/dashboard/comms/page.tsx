@@ -4,21 +4,35 @@
  * Communication Hub — /dashboard/comms
  *
  * Standalone full-page route for the team communication hub.
- *
- * Replaces hub_ux.py (Python-served vanilla HTML SPA) with the existing
- * React CommunicationModule, properly integrated into the web admin app.
- *
- * Accessible from the sidebar "Communication" nav item.
- * Also exposes a direct URL that agents and Hermes can deep-link into.
+ * Accessible from the sidebar "Communication" and "AgentMail" nav items.
+ * Supports ?tab=mail, ?tab=chat, ?tab=tasks, etc.
  */
 
+import { Suspense } from "react"
+import { useSearchParams } from "next/navigation"
 import { CommunicationModule } from "@/components/modules/communication-module"
+
+function CommsContent() {
+  const searchParams = useSearchParams()
+  const tab = searchParams.get("tab") || undefined
+
+  return (
+    <div className="h-screen w-full flex flex-col min-h-0 overflow-hidden bg-background">
+      <CommunicationModule initialTab={tab} />
+    </div>
+  )
+}
 
 export default function CommsPage() {
   return (
-    // Full-bleed layout — CommunicationModule manages its own internal layout
-    <div className="h-screen w-full flex flex-col min-h-0 overflow-hidden bg-background">
-      <CommunicationModule />
-    </div>
+    <Suspense
+      fallback={
+        <div className="h-screen w-full flex items-center justify-center bg-background text-sm text-muted-foreground">
+          Loading Communication Hub...
+        </div>
+      }
+    >
+      <CommsContent />
+    </Suspense>
   )
 }

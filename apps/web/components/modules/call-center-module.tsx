@@ -42,6 +42,14 @@ import {
   Timer,
   Hash,
   Sparkles,
+  Server,
+  Globe,
+  HardDrive,
+  PhoneForwarded,
+  DollarSign,
+  FileText,
+  Music,
+  Laugh,
 } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -52,6 +60,12 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { PageHeader } from "@/components/ui/page-header"
 import { VoiceAIPanel } from "@/components/modules/voice-ai-panel"
 import { VoiceStudioTab } from "@/components/modules/voice-studio-tab"
+import { AsteriskTelephonyView } from "./call-center/asterisk-telephony-view"
+import { AstppBillingView } from "./call-center/astpp-billing-view"
+import { CallSeekerView } from "./call-center/call-seeker-view"
+import { SmartIvrStudio } from "./call-center/smart-ivr-studio"
+import { VoipHardwareView } from "./call-center/voip-hardware-view"
+import { TelecomProvidersView } from "./call-center/telecom-providers-view"
 import {
   listAgents,
   listSessions,
@@ -1392,14 +1406,14 @@ export function CallCenterModule() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">
-        <TabsList className="mb-4 grid w-full grid-cols-5 bg-muted/30">
+        <TabsList className="mb-4 flex flex-wrap gap-1 bg-muted/40 p-1.5 rounded-lg border border-border w-full">
           <TabsTrigger value="overview" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <TrendingUp className="h-3.5 w-3.5" />
-            Overview
+            Analytics Overview
           </TabsTrigger>
           <TabsTrigger value="queues" className="gap-1.5 text-xs data-[state=active]:text-blue-400">
             <Headphones className="h-3.5 w-3.5" />
-            Queues
+            ACD Queues
           </TabsTrigger>
           <TabsTrigger value="whisper" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
             <Mic className="h-3.5 w-3.5" />
@@ -1409,8 +1423,32 @@ export function CallCenterModule() {
             <Sparkles className="h-3.5 w-3.5" />
             Voice Studio
           </TabsTrigger>
+          <TabsTrigger value="asterisk" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
+            <Server className="h-3.5 w-3.5" />
+            Asterisk Core &amp; CDRs
+          </TabsTrigger>
+          <TabsTrigger value="astpp" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
+            <DollarSign className="h-3.5 w-3.5" />
+            ASTPP Voice Billing
+          </TabsTrigger>
+          <TabsTrigger value="seeker" className="gap-1.5 text-xs data-[state=active]:text-blue-400">
+            <PhoneForwarded className="h-3.5 w-3.5" />
+            Call Seeker
+          </TabsTrigger>
+          <TabsTrigger value="smart_ivr" className="gap-1.5 text-xs data-[state=active]:text-pink-400">
+            <Music className="h-3.5 w-3.5" />
+            Smart IVR Studio
+          </TabsTrigger>
+          <TabsTrigger value="hardware" className="gap-1.5 text-xs data-[state=active]:text-indigo-400">
+            <HardDrive className="h-3.5 w-3.5" />
+            VoIP Hardware
+          </TabsTrigger>
+          <TabsTrigger value="providers" className="gap-1.5 text-xs data-[state=active]:text-teal-400">
+            <Globe className="h-3.5 w-3.5" />
+            SIP Trunks &amp; Carriers
+          </TabsTrigger>
           <TabsTrigger value="customer360" className="gap-1.5 text-xs data-[state=active]:text-violet-400">
-                       <User className="h-3.5 w-3.5" />
+            <User className="h-3.5 w-3.5" />
             Customer 360
           </TabsTrigger>
         </TabsList>
@@ -1429,6 +1467,30 @@ export function CallCenterModule() {
 
         <TabsContent value="voicestudio">
           <VoiceStudioTab />
+        </TabsContent>
+
+        <TabsContent value="asterisk">
+          <AsteriskTelephonyView />
+        </TabsContent>
+
+        <TabsContent value="astpp">
+          <AstppBillingView />
+        </TabsContent>
+
+        <TabsContent value="seeker">
+          <CallSeekerView />
+        </TabsContent>
+
+        <TabsContent value="smart_ivr">
+          <SmartIvrStudio />
+        </TabsContent>
+
+        <TabsContent value="hardware">
+          <VoipHardwareView />
+        </TabsContent>
+
+        <TabsContent value="providers">
+          <TelecomProvidersView />
         </TabsContent>
 
         <TabsContent value="customer360">

@@ -578,19 +578,124 @@ ALL_TOOLS: List[Tool] = [
         timeout=60,
         required_params=["fno_name"],
     ),
+    # ── Sales & Opportunities ──────────────────────────────────────────────
+    Tool(
+        name="sales.get_pipeline",
+        description="Get current sales pipeline overview: deal count, total pipeline value in ZAR, and deals by stage.",
+        parameters=_pydantic_to_json_schema({}),
+        endpoint="/pipeline/overview",
+        method="GET",
+        service_url=settings.sales_service_url,
+        timeout=15,
+    ),
+    # ── HR & Talent (StaffBot) ─────────────────────────────────────────────
+    Tool(
+        name="hr.list_employees",
+        description="List active employees across departments (sales, NOC, field technicians, support, finance).",
+        parameters=_pydantic_to_json_schema(
+            {
+                "department": {
+                    "type": "string",
+                    "description": "Optional filter by department name",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Filter by employment status: active, on_leave, terminated",
+                },
+            },
+        ),
+        endpoint="/employees",
+        method="GET",
+        service_url=settings.hr_service_url,
+        timeout=15,
+    ),
+    Tool(
+        name="hr.get_employee",
+        description="Get employee details: job title, department, contact info, hire date, and manager.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "employee_id": {
+                    "type": "string",
+                    "description": "UUID of the employee",
+                },
+            },
+            required=["employee_id"],
+        ),
+        endpoint="/employees/{employee_id}",
+        method="GET",
+        service_url=settings.hr_service_url,
+        required_params=["employee_id"],
+        timeout=10,
+    ),
+    Tool(
+        name="hr.get_wellness_insights",
+        description="Get AI agent orchestrator workforce wellness, burnout risk, and shift fatigue alerts across teams.",
+        parameters=_pydantic_to_json_schema({}),
+        endpoint="/cross-service/orchestrator/wellness",
+        method="GET",
+        service_url=settings.hr_service_url,
+        timeout=15,
+    ),
+    Tool(
+        name="hr.execute_wellness_action",
+        description="Execute an approved proactive wellness action for an employee (e.g. schedule fatigue rest day, rebalance shift load).",
+        parameters=_pydantic_to_json_schema(
+            {
+                "alert_id": {
+                    "type": "string",
+                    "description": "UUID of the wellness alert to execute",
+                },
+                "action_type": {
+                    "type": "string",
+                    "description": "Type of action: schedule_rest, rebalance_shift, peer_kudos",
+                },
+            },
+            required=["alert_id"],
+        ),
+        endpoint="/cross-service/orchestrator/wellness/{alert_id}/execute",
+        method="POST",
+        service_url=settings.hr_service_url,
+        required_params=["alert_id"],
+        timeout=15,
+    ),
+    Tool(
+        name="hr.get_attrition_risk",
+        description="Get predicted flight/attrition risk scores across departments and identify at-risk staff.",
+        parameters=_pydantic_to_json_schema({}),
+        endpoint="/analytics/attrition-risk",
+        method="GET",
+        service_url=settings.hr_service_url,
+        timeout=15,
+    ),
+    Tool(
+        name="hr.list_leave_requests",
+        description="List employee leave requests with approval status.",
+        parameters=_pydantic_to_json_schema(
+            {
+                "status": {
+                    "type": "string",
+                    "description": "Filter by status: pending, approved, rejected",
+                },
+            },
+        ),
+        endpoint="/leave-requests",
+        method="GET",
+        service_url=settings.hr_service_url,
+        timeout=10,
+    ),
     # ── Cross-Agent Orchestration ──────────────────────────────────────────
     Tool(
         name="orchestrator.consult_specialist",
         description=(
-            "Consult an internal specialist agent (churnguard, supportbot, domebot, provisionbot, analytics) "
+            "Consult an internal specialist agent (churnguard, supportbot, domebot, provisionbot, analytics, talent, staffbot) "
             "to gather domain insights, diagnostics, or retention predictions."
         ),
         parameters=_pydantic_to_json_schema(
             {
                 "specialist": {
                     "type": "string",
-                    "description": "Specialist agent name: churnguard, supportbot, domebot, provisionbot, analytics",
-                    "enum": ["churnguard", "supportbot", "domebot", "provisionbot", "analytics"],
+                    "description": "Specialist agent name: churnguard, supportbot, domebot, provisionbot, analytics, talent, staffbot",
+                    "enum": ["churnguard", "supportbot", "domebot", "provisionbot", "analytics", "talent", "staffbot"],
                 },
                 "query": {
                     "type": "string",

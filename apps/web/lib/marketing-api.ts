@@ -945,6 +945,37 @@ export const triggerEmailJourney = (id: string, data?: { contact_email?: string 
     body: JSON.stringify(data || {}),
   })
 
+// ── AgentMail Integration ──────────────────────────────────────────
+
+export interface AgentMailStatus {
+  configured: boolean
+  inbox_id: string
+  is_verified: boolean
+  base_url: string
+  provider: string
+}
+
+export const getAgentMailStatus = () =>
+  fetchMarketing<AgentMailStatus>("/email/agentmail/status")
+
+export const agentMailSignUp = (data: { human_email: string; username: string }) =>
+  fetchMarketing<{ status: string; api_key: string; inbox_id: string; message: string }>("/email/agentmail/signup", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const agentMailVerify = (data: { otp_code: string }) =>
+  fetchMarketing<{ status: string; inbox_id: string; is_verified: boolean; message: string }>("/email/agentmail/verify", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const agentMailConfigure = (data: { api_key?: string; inbox_id?: string }) =>
+  fetchMarketing<{ status: string; inbox_id: string; configured: boolean }>("/email/agentmail/config", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
 export const listAudienceSegments = (type?: AudienceType) =>
   fetchMarketingResult<AudienceSegment[]>(`/segments${type ? `?type=${type}` : ""}`)
 
