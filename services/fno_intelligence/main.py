@@ -9,6 +9,7 @@ from services.common.middleware import configure_production
 from services.fno_intelligence.database import init_tables
 from services.common.background_tasks import schedule_background
 from services.fno_intelligence.opportunity_routes import router as opportunity_router, run_tender_scheduler
+from services.fno_intelligence.market_routes import router as market_router, run_market_scheduler
 from services.fno_intelligence.routes import router, sweep_stuck_passed_home_imports
 
 logger = logging.getLogger("fno_intelligence")
@@ -24,6 +25,7 @@ configure_production(app)
 
 app.include_router(router, prefix="/api/fno")
 app.include_router(opportunity_router, prefix="/api/fno")
+app.include_router(market_router, prefix="/api/fno")
 
 
 @app.on_event("startup")
@@ -33,6 +35,7 @@ async def startup():
     if swept:
         logger.info("Marked %d interrupted passed-home import(s) as failed", swept)
     schedule_background(run_tender_scheduler())
+    schedule_background(run_market_scheduler())
     logger.info("FNO Intelligence service started")
 
 

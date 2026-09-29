@@ -1174,3 +1174,55 @@ class OppTender(Base):
         UniqueConstraint("tenant_id", "source_id", "dedupe_key", name="uq_opp_tender_dedupe"),
         Index("ix_opp_tender_closing", "tenant_id", "closing_at"),
     )
+
+
+
+# ════════════════════════════════════════════════════════════════════════
+# MARKET WATCH (competitor pricing monitor -- CAPABILITY-MAP 'market-signals')
+# NOTE: created by create_all() only; later column changes need a manual ALTER.
+# ════════════════════════════════════════════════════════════════════════
+
+class MarketWatch(Base):
+    """A competitor pricing page the tenant asked us to watch."""
+    __tablename__ = "market_watch"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    competitor_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False, default="fibre")  # fibre|lte|wireless|other
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_scraped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    scan_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str] = mapped_column(String(30), nullable=False, default="never")  # never|scanning|ok|no_plans_found|failed
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("tenant_id", "url", name="uq_market_watch_tenant_url"),)
+
+
+class MarketSnapshot(Base):
+    __tablename__ = "market_snapshot"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    watch_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("market_watch.id", ondelete="CASCADE"), nullable=False, index=True)
+    scraped_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    plans: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+
+
+class MarketSignal(Base):
+    __tablename__ = "market_signal"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    watch_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("market_watch.id", ondelete="CASCADE"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)  # price_change|new_plan|removed_plan|speed_change
+    plan_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    before: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    after: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

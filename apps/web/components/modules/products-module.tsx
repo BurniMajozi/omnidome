@@ -31,6 +31,7 @@ import {
   YAxis,
 } from "recharts"
 import { useIsClient } from "@/lib/use-is-client"
+import { MarketWatchView } from "./products/market-watch-view"
 import { listPlans, createPlan, listBundles, createBundle, type Plan, type Bundle } from "@/lib/products-api"
 
 const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
@@ -190,6 +191,7 @@ export function ProductsModule() {
             <TabsTrigger value="products">Products</TabsTrigger>
             <TabsTrigger value="bundles">Bundles</TabsTrigger>
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
+            <TabsTrigger value="market">Market Watch</TabsTrigger>
           </TabsList>
         </div>
 
@@ -359,6 +361,9 @@ export function ProductsModule() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+        <TabsContent value="market" className="mt-4">
+          <MarketWatchView plans={plans} />
         </TabsContent>
       </Tabs>
     </div>
