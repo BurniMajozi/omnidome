@@ -25,7 +25,7 @@ app = FastAPI(
 
 guard = EntitlementGuard(
     module_id="communication",
-    public_paths={"/health", "/docs", "/openapi.json", "/api/v1/public"},
+    public_paths={"/health", "/docs", "/openapi.json", "/api/v1/public", "/api/v1/mail/webhook"},
 )
 
 configure_production(app)

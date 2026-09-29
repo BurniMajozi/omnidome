@@ -8,10 +8,13 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-INBOX_ID = "omnidome@agentmail.to"
-ENCODED_INBOX = "omnidome%40agentmail.to"
+INBOX_ID = os.environ.get("AGENTMAIL_INBOX", "").strip()
+if not INBOX_ID:
+    sys.exit("AGENTMAIL_INBOX env var is required (e.g. omnidome@agentmail.to)")
+ENCODED_INBOX = urllib.parse.quote(INBOX_ID, safe="")
 BASE_URL = "https://api.agentmail.to/v0"
 
 

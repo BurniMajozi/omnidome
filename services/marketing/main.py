@@ -52,7 +52,7 @@ app = FastAPI(title="OmniDome Marketing Service", version="2.0.0")
 # X-Zernio-Signature HMAC check inside the route itself (Sep 2026).
 guard = EntitlementGuard(
     module_id="marketing",
-    public_paths={"/social/webhooks/zernio/inbound"},
+    public_paths={"/social/webhooks/zernio/inbound", "/email/webhook"},
 )
 
 configure_production(app)
@@ -1154,12 +1154,23 @@ async def get_agentmail_status(tenant_id: uuid.UUID = Depends(get_current_tenant
     }
 
 
+def _require_agentmail_admin(auth: AuthContext) -> None:
+    roles = {r.lower() for r in (auth.roles or [])}
+    if not (auth.is_platform_admin or roles & {"admin", "owner", "tenant_admin", "super_admin"}):
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
+def _mask_key(key: str) -> str:
+    return f"****{key[-4:]}" if key else ""
+
+
 @app.post("/email/agentmail/signup")
 async def agentmail_signup(
     body: AgentMailSignUpRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Programmatically onboard AI agent to AgentMail (no console access needed)."""
+    _require_agentmail_admin(auth)
     payload = {
         "human_email": body.human_email,
         "username": body.username,
@@ -1170,17 +1181,17 @@ async def agentmail_signup(
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(f"{_AGENTMAIL_BASE_URL}/agent/sign-up", json=payload)
-            if resp.status_code < 400:
-                data = resp.json()
-                api_key = data.get("api_key") or data.get("apiKey") or ""
-                inbox_id = data.get("inbox_id") or data.get("inboxId") or inbox_id
-            else:
-                logger.warning("AgentMail sign-up returned %s: %s", resp.status_code, resp.text)
     except Exception as e:
         logger.warning("AgentMail live sign-up call failed: %s", e)
-
+        raise HTTPException(status_code=502, detail="AgentMail sign-up service unreachable")
+    if resp.status_code >= 400:
+        logger.warning("AgentMail sign-up returned %s: %s", resp.status_code, resp.text)
+        raise HTTPException(status_code=502, detail=f"AgentMail sign-up failed ({resp.status_code})")
+    data = resp.json()
+    api_key = data.get("api_key") or data.get("apiKey") or ""
+    inbox_id = data.get("inbox_id") or data.get("inboxId") or inbox_id
     if not api_key:
-        api_key = f"am_live_{uuid.uuid4().hex[:24]}"
+        raise HTTPException(status_code=502, detail="AgentMail sign-up did not return an API key")
 
     os.environ["AGENTMAIL_API_KEY"] = api_key
     os.environ["AGENTMAIL_INBOX"] = inbox_id
@@ -1189,7 +1200,7 @@ async def agentmail_signup(
 
     return {
         "status": "success",
-        "api_key": api_key,
+        "api_key": _mask_key(api_key),
         "inbox_id": inbox_id,
         "message": f"6-digit OTP code sent to {body.human_email}. Verify OTP to unlock sending to external recipients.",
     }
@@ -1205,7 +1216,9 @@ async def agentmail_verify(
     success = False
     detail_msg = "AgentMail verified successfully. External sending is now enabled."
 
-    if api_key:
+    if not api_key:
+        detail_msg = "AgentMail is not configured (no API key)."
+    else:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.post(
@@ -1216,17 +1229,17 @@ async def agentmail_verify(
                 if resp.status_code < 400:
                     success = True
                 else:
-                    detail_msg = f"AgentMail verification note: {resp.text[:200]}"
-                    success = True
+                    detail_msg = f"AgentMail verification failed: {resp.text[:200]}"
         except Exception as e:
             logger.warning("AgentMail live verify call: %s", e)
-            success = True
+            detail_msg = "AgentMail verification request failed."
 
-    _AGENTMAIL_STATUS["is_verified"] = True
+    _AGENTMAIL_STATUS["is_verified"] = success
     return {
         "status": "verified" if success else "failed",
+        "success": success,
         "inbox_id": _agentmail_inbox(),
-        "is_verified": True,
+        "is_verified": success,
         "message": detail_msg,
     }
 
@@ -1234,25 +1247,43 @@ async def agentmail_verify(
 @app.post("/email/agentmail/config")
 async def agentmail_configure(
     body: AgentMailConfigRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Manually configure AgentMail API key and active inbox."""
+    _require_agentmail_admin(auth)
     if body.api_key:
         os.environ["AGENTMAIL_API_KEY"] = body.api_key
     if body.inbox_id:
         os.environ["AGENTMAIL_INBOX"] = body.inbox_id
         _AGENTMAIL_STATUS["inbox_id"] = body.inbox_id
-    _AGENTMAIL_STATUS["is_verified"] = True
     return {
         "status": "configured",
         "inbox_id": _agentmail_inbox(),
-        "configured": True,
+        "configured": bool(os.getenv("AGENTMAIL_API_KEY")),
+        "api_key": _mask_key(os.getenv("AGENTMAIL_API_KEY", "")),
     }
 
 
 @app.post("/email/webhook")
-async def email_webhook(event: Dict[str, Any]):
-    """Webhook endpoint for email provider callbacks (delivery, bounce, open, click)."""
+async def email_webhook(request: Request):
+    """Webhook endpoint for email provider callbacks (delivery, bounce, open, click). HMAC-signed."""
+    import hashlib
+    import hmac
+    secret = os.getenv("AGENTMAIL_WEBHOOK_SECRET", "")
+    if not secret:
+        logger.error("AGENTMAIL_WEBHOOK_SECRET not set - rejecting email webhook")
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    raw_body = await request.body()
+    signature = request.headers.get("X-Webhook-Signature", "")
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        event = json.loads(raw_body)
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON")
+    if not isinstance(event, dict):
+        raise HTTPException(400, "Invalid payload")
     engine = get_engine()
     _ensure_marketing_tables(engine)
     event_type = event.get("event_type", "unknown")
@@ -1278,7 +1309,7 @@ async def email_webhook(event: Dict[str, Any]):
                 "bid": batch_id,
                 "email": event.get("email", ""),
                 "etype": event_type,
-                "edata": "{}",
+                "edata": json.dumps(event),
             },
         )
         if col:

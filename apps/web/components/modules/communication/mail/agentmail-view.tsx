@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import {
   Inbox,
   Send,
@@ -74,6 +74,17 @@ import {
 } from "@/components/ui/dialog"
 import { cn } from "@/lib/utils"
 import {
+  listMailboxes,
+  listEmails,
+  sendEmail,
+  replyToEmail,
+  approveAgentReply,
+  updateEmail,
+  deleteEmail,
+  type MailboxRow,
+  type AgentEmailRow,
+} from "@/lib/mail-api"
+import {
   AgentMailPod,
   AgentMailbox,
   AgentMailThread,
@@ -98,6 +109,151 @@ import {
   INITIAL_SHARED_FOLDERS,
 } from "./mock-data"
 
+
+// ── Live data wiring ────────────────────────────────────────────────────────
+const LIVE_POD: AgentMailPod = {
+  id: "pod-live",
+  name: "Live workspace",
+  tenantId: "current",
+  isDefault: true,
+  description: "Real mailboxes from the communication service",
+  inboxCount: 0,
+  createdAt: new Date(0).toISOString(),
+}
+
+const EMPTY_MAILBOX: AgentMailbox = {
+  id: "",
+  podId: LIVE_POD.id,
+  emailAddress: "no mailbox configured",
+  displayName: "No mailbox",
+  agentType: "auto_reply",
+  isHuman: false,
+  domain: "",
+  autoReplyEnabled: false,
+  smartLabelEnabled: false,
+  unreadCount: 0,
+  totalCount: 0,
+  isActive: false,
+  createdAt: new Date(0).toISOString(),
+}
+
+const EMPTY_METRICS: typeof INITIAL_METRICS = {
+  totalInbound: 0,
+  totalOutbound: 0,
+  automatedRepliesSent: 0,
+  avgResponseSeconds: 0,
+  smartLabelAccuracy: 0,
+  pendingApprovals: 0,
+  escalatedToHuman: 0,
+  activeAgents: 0,
+  deliveryRate: 0,
+  volumeByHour: [],
+  categoryDistribution: [],
+  sentCount: 0,
+  receivedCount: 0,
+  bouncedCount: 0,
+  rejectedCount: 0,
+  complainedCount: 0,
+  bounceRate: 0,
+  complaintRate: 0,
+  streakDays: 0,
+  messages30Days: 0,
+  activityMatrix: [],
+}
+
+const PERSONAS: AgentPersonaType[] = ["sales", "smart_label", "auto_reply", "finance", "support", "human"]
+const MESSAGE_STATUSES = ["received", "processed", "auto_replied", "sent", "draft", "failed"]
+
+function mapMailbox(row: MailboxRow, emails: AgentEmailRow[]): AgentMailbox {
+  const mine = emails.filter((e) => e.mailbox_id === row.id)
+  const persona = PERSONAS.includes(row.agent_type as AgentPersonaType)
+    ? (row.agent_type as AgentPersonaType)
+    : "auto_reply"
+  return {
+    id: row.id,
+    podId: LIVE_POD.id,
+    emailAddress: row.email_address,
+    displayName: row.display_name,
+    agentType: persona,
+    isHuman: persona === "human",
+    domain: row.email_address.split("@")[1] ?? "",
+    autoReplyEnabled: row.auto_reply_enabled,
+    smartLabelEnabled: false,
+    inboundChannelId: row.inbound_channel_id ?? undefined,
+    unreadCount: mine.filter((e) => e.direction === "inbound" && e.status === "received").length,
+    totalCount: mine.length,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+  }
+}
+
+function parseSender(raw: string): { name: string; email: string } {
+  const m = raw.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/)
+  if (m) return { name: m[1].trim() || m[2], email: m[2] }
+  return { name: raw, email: raw }
+}
+
+function mapEmailsToThreads(emails: AgentEmailRow[]): AgentMailThread[] {
+  const groups = new Map<string, AgentEmailRow[]>()
+  for (const e of emails) {
+    const key = `${e.mailbox_id}::${(e.subject || "").replace(/^(re|fwd?):\s*/gi, "").trim().toLowerCase()}`
+    const list = groups.get(key)
+    if (list) list.push(e)
+    else groups.set(key, [e])
+  }
+  const threads: AgentMailThread[] = []
+  groups.forEach((rows, key) => {
+    rows.sort((a, b) => a.created_at.localeCompare(b.created_at))
+    const last = rows[rows.length - 1]
+    const first = rows[0]
+    const from = parseSender(first.sender)
+    const messages: AgentMailMessage[] = rows.map((r) => {
+      const s = parseSender(r.sender)
+      const rc = parseSender(r.recipient)
+      return {
+        id: r.id,
+        threadId: key,
+        direction: r.direction === "outbound" ? "outbound" : "inbound",
+        sender: s.name,
+        senderEmail: s.email,
+        recipient: rc.name,
+        recipientEmail: rc.email,
+        subject: r.subject,
+        bodyText: r.body_text,
+        bodyHtml: r.body_html ?? undefined,
+        status: (r.status === "replied"
+          ? "auto_replied"
+          : MESSAGE_STATUSES.includes(r.status)
+            ? r.status
+            : "received") as AgentMailMessage["status"],
+        agentResponse: r.agent_response ?? undefined,
+        createdAt: r.created_at,
+      }
+    })
+    const d = new Date(last.created_at)
+    threads.push({
+      id: key,
+      podId: LIVE_POD.id,
+      mailboxId: first.mailbox_id,
+      sender: from.name,
+      senderEmail: from.email,
+      recipientEmail: parseSender(first.recipient).email,
+      subject: first.subject,
+      snippet: last.body_text.slice(0, 140),
+      unread: rows.some((r) => r.direction === "inbound" && r.headers?.is_read !== true),
+      isStarred: rows.some((r) => r.headers?.is_starred === true),
+      folder: last.direction === "outbound" ? "sent" : "inbox",
+      labels: [],
+      messagesCount: rows.length,
+      hasAttachments: false,
+      dateGroup: d.toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      timestamp: last.created_at,
+      messages,
+    })
+  })
+  return threads.sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+}
+
 export interface AgentMailViewProps {
   onCreateTask?: (task: { title: string; assignee: string; priority: "low" | "medium" | "high"; notes?: string }) => void
   onCreateApproval?: (approval: { subject: string; agent: string; amount: string; reason: string }) => void
@@ -121,14 +277,14 @@ export function AgentMailView({
   const [overviewTimeRange, setOverviewTimeRange] = useState<"24h" | "7d" | "30d" | "custom">("30d")
 
   // ── Multi-Tenant Pod State ──
-  const [pods, setPods] = useState<AgentMailPod[]>(INITIAL_PODS)
-  const [selectedPodId, setSelectedPodId] = useState<string>("pod-default")
+  const [pods, setPods] = useState<AgentMailPod[]>([LIVE_POD])
+  const [selectedPodId, setSelectedPodId] = useState<string>(LIVE_POD.id)
   const [createPodOpen, setCreatePodOpen] = useState(false)
   const [newPodName, setNewPodName] = useState("")
 
   // ── Mailboxes & Inboxes State ──
-  const [mailboxes, setMailboxes] = useState<AgentMailbox[]>(INITIAL_MAILBOXES)
-  const [selectedMailboxId, setSelectedMailboxId] = useState<string>("mb-burnibraa")
+  const [mailboxes, setMailboxes] = useState<AgentMailbox[]>([])
+  const [selectedMailboxId, setSelectedMailboxId] = useState<string>("")
   const [createInboxOpen, setCreateInboxOpen] = useState(false)
   const [newInboxUsername, setNewInboxUsername] = useState("")
   const [newInboxDomain, setNewInboxDomain] = useState("agentmail.to")
@@ -136,7 +292,7 @@ export function AgentMailView({
   const [newInboxDisplayName, setNewInboxDisplayName] = useState("")
 
   // ── Shared Groups & Team Mailboxes State ──
-  const [sharedGroups, setSharedGroups] = useState<SharedMailboxGroup[]>(INITIAL_SHARED_GROUPS)
+  const [sharedGroups, setSharedGroups] = useState<SharedMailboxGroup[]>([])
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [manageGroupModalOpen, setManageGroupModalOpen] = useState(false)
   const [capabilitiesDrawerOpen, setCapabilitiesDrawerOpen] = useState(false)
@@ -147,7 +303,7 @@ export function AgentMailView({
   const [newGroupEmail, setNewGroupEmail] = useState("")
 
   // ── Threads & Messaging State ──
-  const [threads, setThreads] = useState<AgentMailThread[]>(INITIAL_THREADS)
+  const [threads, setThreads] = useState<AgentMailThread[]>([])
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedLabelFilter, setSelectedLabelFilter] = useState<string | null>(null)
@@ -156,9 +312,9 @@ export function AgentMailView({
   const [copiedEmail, setCopiedEmail] = useState(false)
 
   // ── Allow/Block Lists & Domains ──
-  const [listRules, setListRules] = useState<AgentMailListRule[]>(INITIAL_LIST_RULES)
-  const [domains, setDomains] = useState<AgentMailDomain[]>(INITIAL_DOMAINS)
-  const [labels] = useState<AgentMailLabel[]>(INITIAL_LABELS)
+  const [listRules, setListRules] = useState<AgentMailListRule[]>([])
+  const [domains, setDomains] = useState<AgentMailDomain[]>([])
+  const [labels, setLabels] = useState<AgentMailLabel[]>([])
   const [addRuleOpen, setAddRuleOpen] = useState(false)
   const [newRuleScope, setNewRuleScope] = useState<"receive" | "send" | "reply">("receive")
   const [newRuleType, setNewRuleType] = useState<"allow" | "block">("allow")
@@ -171,10 +327,67 @@ export function AgentMailView({
   const [composeTo, setComposeTo] = useState("")
   const [composeSubject, setComposeSubject] = useState("")
   const [composeBody, setComposeBody] = useState("")
-  const [composeFromMailboxId, setComposeFromMailboxId] = useState<string>("mb-burnibraa")
+  const [composeFromMailboxId, setComposeFromMailboxId] = useState<string>("")
   const [aiPrompt, setAiPrompt] = useState("")
   const [isGeneratingAi, setIsGeneratingAi] = useState(false)
   const [notificationMsg, setNotificationMsg] = useState<string | null>(null)
+  const [sendingCompose, setSendingCompose] = useState(false)
+  const [composeError, setComposeError] = useState<string | null>(null)
+  const [replyText, setReplyText] = useState("")
+  const [replyBusy, setReplyBusy] = useState(false)
+  const [replyError, setReplyError] = useState<string | null>(null)
+
+
+  // ── Live data vs explicit demo data ──
+  const [demoMode, setDemoMode] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const metrics = demoMode ? INITIAL_METRICS : EMPTY_METRICS
+
+  const loadLive = useCallback(async () => {
+    setLoading(true)
+    setLoadError(null)
+    const [mbRes, emRes] = await Promise.all([listMailboxes(), listEmails()])
+    if (!mbRes.ok || !emRes.ok) {
+      setLoadError(mbRes.error || emRes.error || "Mail service unavailable")
+      setLoading(false)
+      return
+    }
+    const rows = emRes.data ?? []
+    const mbs = (mbRes.data ?? []).map((r) => mapMailbox(r, rows))
+    setPods([{ ...LIVE_POD, inboxCount: mbs.length }])
+    setSelectedPodId(LIVE_POD.id)
+    setMailboxes(mbs)
+    setSelectedMailboxId((prev) => (mbs.some((m) => m.id === prev) ? prev : mbs[0]?.id ?? ""))
+    setComposeFromMailboxId((prev) => (mbs.some((m) => m.id === prev) ? prev : mbs[0]?.id ?? ""))
+    setThreads(mapEmailsToThreads(rows))
+    setSharedGroups([])
+    setListRules([])
+    setDomains([])
+    setLabels([])
+    setLoading(false)
+  }, [])
+
+  useEffect(() => {
+    if (demoMode) {
+      setPods(INITIAL_PODS)
+      setSelectedPodId("pod-default")
+      setMailboxes(INITIAL_MAILBOXES)
+      setSelectedMailboxId("mb-burnibraa")
+      setComposeFromMailboxId("mb-burnibraa")
+      setThreads(INITIAL_THREADS)
+      setSharedGroups(INITIAL_SHARED_GROUPS)
+      setListRules(INITIAL_LIST_RULES)
+      setDomains(INITIAL_DOMAINS)
+      setLabels(INITIAL_LABELS)
+      setLoading(false)
+      setLoadError(null)
+    } else {
+      void loadLive()
+    }
+  }, [demoMode, loadLive])
+
+  const liveEmpty = !demoMode && !loading && !loadError && mailboxes.length === 0 && threads.length === 0
 
   // Current active pod
   const currentPod = useMemo(
@@ -184,7 +397,7 @@ export function AgentMailView({
 
   // Current active mailbox
   const currentMailbox = useMemo(
-    () => mailboxes.find((m) => m.id === selectedMailboxId) || mailboxes[0],
+    () => mailboxes.find((m) => m.id === selectedMailboxId) || mailboxes[0] || EMPTY_MAILBOX,
     [mailboxes, selectedMailboxId]
   )
 
@@ -368,8 +581,36 @@ export function AgentMailView({
     }, 800)
   }
 
-  const handleSendCompose = () => {
+  const handleSendCompose = async () => {
     if (!composeTo.trim() || !composeSubject.trim()) return
+    if (!demoMode) {
+      const mbId = composeFromMailboxId || currentMailbox?.id
+      if (!mbId) {
+        setComposeError("Select a mailbox to send from")
+        return
+      }
+      const split = (v: string) => v.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean)
+      setSendingCompose(true)
+      setComposeError(null)
+      const res = await sendEmail({
+        mailbox_id: mbId,
+        to: split(composeTo),
+        subject: composeSubject,
+        body_text: composeBody,
+      })
+      setSendingCompose(false)
+      if (!res.ok || res.data?.status === "failed") {
+        setComposeError(res.error || (res.data?.headers?.error as string) || "Send failed")
+        return
+      }
+      setComposeOpen(false)
+      setComposeTo("")
+      setComposeSubject("")
+      setComposeBody("")
+      showNotification(`Email sent to ${res.data?.recipient ?? "recipient"}`)
+      void loadLive()
+      return
+    }
     const senderMb = mailboxes.find((m) => m.id === composeFromMailboxId) || currentMailbox
     const newMsg: AgentMailMessage = {
       id: `msg-${Date.now()}`,
@@ -409,6 +650,79 @@ export function AgentMailView({
     setComposeSubject("")
     setComposeBody("")
     showNotification(`Email dispatched to ${composeTo} via AgentMail`)
+  }
+
+  const liveMessageIds = (thread: AgentMailThread) => thread.messages.map((m) => m.id)
+
+  const openThreadLive = (thread: AgentMailThread) => {
+    setSelectedThreadId(thread.id)
+    setReplyText("")
+    setReplyError(null)
+    if (demoMode || !thread.unread) return
+    setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, unread: false } : t)))
+    void Promise.all(
+      thread.messages.filter((m) => m.direction === "inbound").map((m) => updateEmail(m.id, { is_read: true }))
+    )
+  }
+
+  const toggleStarLive = async (thread: AgentMailThread) => {
+    const next = !thread.isStarred
+    setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, isStarred: next } : t)))
+    if (demoMode) return
+    const results = await Promise.all(liveMessageIds(thread).map((id) => updateEmail(id, { is_starred: next })))
+    if (results.some((r) => !r.ok)) {
+      setThreads((prev) => prev.map((t) => (t.id === thread.id ? { ...t, isStarred: !next } : t)))
+      showNotification("Could not update star: " + (results.find((r) => !r.ok)?.error ?? "error"))
+    }
+  }
+
+  const deleteSelectedLive = async () => {
+    const ids = new Set(selectedThreadIds)
+    if (demoMode) {
+      setThreads((prev) => prev.filter((t) => !ids.has(t.id)))
+      setSelectedThreadIds(new Set())
+      showNotification("Selected threads moved to trash")
+      return
+    }
+    const targets = threads.filter((t) => ids.has(t.id)).flatMap(liveMessageIds)
+    const results = await Promise.all(targets.map((id) => deleteEmail(id)))
+    setSelectedThreadIds(new Set())
+    const failed = results.find((r) => !r.ok)
+    showNotification(failed ? `Delete failed: ${failed.error}` : "Selected threads deleted")
+    void loadLive()
+  }
+
+  const handleSendReplyLive = async (thread: AgentMailThread) => {
+    const inbound = [...thread.messages].reverse().find((m) => m.direction === "inbound")
+    if (!inbound || !replyText.trim()) return
+    setReplyBusy(true)
+    setReplyError(null)
+    const res = await replyToEmail(inbound.id, replyText)
+    setReplyBusy(false)
+    if (!res.ok || res.data?.status === "failed") {
+      setReplyError(res.error || (res.data?.headers?.error as string) || "Reply failed")
+      return
+    }
+    setReplyText("")
+    showNotification("Reply sent")
+    void loadLive()
+  }
+
+  const handleApproveAgentReply = async (thread: AgentMailThread) => {
+    const target = [...thread.messages]
+      .reverse()
+      .find((m) => m.direction === "inbound" && m.agentResponse && m.status !== "auto_replied")
+    if (!target) return
+    setReplyBusy(true)
+    setReplyError(null)
+    const res = await approveAgentReply(target.id)
+    setReplyBusy(false)
+    if (!res.ok || res.data?.status === "failed") {
+      setReplyError(res.error || (res.data?.headers?.error as string) || "Approve and send failed")
+      return
+    }
+    showNotification("Agent reply approved and sent")
+    void loadLive()
   }
 
   const handleAutoReply = (thread: AgentMailThread) => {
@@ -478,6 +792,33 @@ export function AgentMailView({
 
   return (
     <div className="flex h-full w-full bg-background text-foreground overflow-hidden select-none relative">
+      {/* ── LIVE / DEMO STATUS ── */}
+      <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 rounded-full border border-border bg-card/95 px-3 py-1 text-[11px] shadow">
+        {demoMode ? (
+          <Badge variant="outline" className="border-amber-500/50 text-amber-400">Demo data - not real email</Badge>
+        ) : loading ? (
+          <span className="text-muted-foreground">Loading mailboxes...</span>
+        ) : loadError ? (
+          <span className="text-red-400">Mail service error: {loadError}</span>
+        ) : liveEmpty ? (
+          <span className="text-muted-foreground">No mailboxes or emails yet. Configure the mail service or use Demo data.</span>
+        ) : (
+          <span className="text-emerald-400">Live</span>
+        )}
+        {!demoMode && !loading && (
+          <button type="button" className="underline text-muted-foreground hover:text-foreground" onClick={() => void loadLive()}>
+            Retry
+          </button>
+        )}
+        <button
+          type="button"
+          className="underline text-muted-foreground hover:text-foreground"
+          onClick={() => setDemoMode((v) => !v)}
+        >
+          {demoMode ? "Back to live" : "Demo data"}
+        </button>
+      </div>
+
       {/* ── NOTIFICATION TOAST ── */}
       {notificationMsg && (
         <div className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-lg bg-muted/50 border border-emerald-500/40 px-4 py-2.5 shadow-2xl text-emerald-300 text-xs font-medium animate-in fade-in slide-in-from-top-2">
@@ -981,11 +1322,7 @@ export function AgentMailView({
                 {selectedThreadIds.size > 0 && (
                   <div className="flex items-center gap-2 pl-2 border-l border-border">
                     <button
-                      onClick={() => {
-                        setThreads((prev) => prev.filter((t) => !selectedThreadIds.has(t.id)))
-                        setSelectedThreadIds(new Set())
-                        showNotification("Selected threads moved to trash")
-                      }}
+                      onClick={() => void deleteSelectedLive()}
                       className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
@@ -1021,7 +1358,7 @@ export function AgentMailView({
                     return (
                       <div
                         key={thread.id}
-                        onClick={() => setSelectedThreadId(thread.id)}
+                        onClick={() => openThreadLive(thread)}
                         className={cn(
                           "group flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50 cursor-pointer transition-colors text-xs",
                           thread.unread ? "font-semibold text-foreground bg-card/40" : "text-foreground/80",
@@ -1048,9 +1385,7 @@ export function AgentMailView({
                         <button
                           onClick={(e) => {
                             e.stopPropagation()
-                            setThreads((prev) =>
-                              prev.map((t) => (t.id === thread.id ? { ...t, isStarred: !t.isStarred } : t))
-                            )
+                            void toggleStarLive(thread)
                           }}
                           className="text-neutral-600 hover:text-amber-400 transition-colors shrink-0"
                         >
@@ -1126,17 +1461,61 @@ export function AgentMailView({
 
               <div className="flex items-center gap-2">
                 <ThemeToggleCompact />
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleAutoReply(activeThread)}
-                  className="h-8 text-xs border-border text-foreground hover:bg-muted/50 gap-1.5"
-                >
-                  <Bot className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>Agent Auto-Reply</span>
-                </Button>
+                {demoMode ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleAutoReply(activeThread)}
+                    className="h-8 text-xs border-border text-foreground hover:bg-muted/50 gap-1.5"
+                  >
+                    <Bot className="h-3.5 w-3.5 text-cyan-400" />
+                    <span>Agent Auto-Reply</span>
+                  </Button>
+                ) : (
+                  activeThread.messages.some(
+                    (m) => m.direction === "inbound" && m.agentResponse && m.status !== "auto_replied"
+                  ) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={replyBusy}
+                      onClick={() => void handleApproveAgentReply(activeThread)}
+                      className="h-8 text-xs border-border text-foreground hover:bg-muted/50 gap-1.5"
+                    >
+                      <Bot className="h-3.5 w-3.5 text-cyan-400" />
+                      <span>{replyBusy ? "Sending..." : "Approve & send agent reply"}</span>
+                    </Button>
+                  )
+                )}
               </div>
             </div>
+
+            {!demoMode && activeThread.messages.some((m) => m.direction === "inbound") && (
+              <div className="flex items-center gap-2 border-b border-border px-4 py-2">
+                <input
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault()
+                      void handleSendReplyLive(activeThread)
+                    }
+                  }}
+                  placeholder="Write a reply to the sender..."
+                  className="h-8 flex-1 rounded border border-border bg-background px-2 text-xs"
+                />
+                <Button
+                  size="sm"
+                  disabled={replyBusy || !replyText.trim()}
+                  onClick={() => void handleSendReplyLive(activeThread)}
+                  className="h-8 text-xs"
+                >
+                  <Send className="h-3.5 w-3.5 mr-1" />
+                  {replyBusy ? "Sending..." : "Reply"}
+                </Button>
+                {replyError && <span className="text-xs text-red-400">{replyError}</span>}
+              </div>
+            )}
 
             {/* Thread Content */}
             <div className="flex-1 flex min-h-0">
@@ -1423,23 +1802,23 @@ export function AgentMailView({
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
                 <div className="rounded-xl border border-border bg-card p-4">
                   <p className="text-xs text-muted-foreground">Sent</p>
-                  <p className="text-2xl font-bold text-foreground mt-1">{INITIAL_METRICS.sentCount}</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">{metrics.sentCount}</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-4">
                   <p className="text-xs text-muted-foreground">Received</p>
-                  <p className="text-2xl font-bold text-foreground mt-1">{INITIAL_METRICS.receivedCount}</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">{metrics.receivedCount}</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-4">
                   <p className="text-xs text-muted-foreground">Bounced</p>
-                  <p className="text-2xl font-bold text-foreground mt-1">{INITIAL_METRICS.bouncedCount}</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">{metrics.bouncedCount}</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-4">
                   <p className="text-xs text-muted-foreground">Rejected</p>
-                  <p className="text-2xl font-bold text-foreground mt-1">{INITIAL_METRICS.rejectedCount}</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">{metrics.rejectedCount}</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-4">
                   <p className="text-xs text-muted-foreground">Complained</p>
-                  <p className="text-2xl font-bold text-foreground mt-1">{INITIAL_METRICS.complainedCount}</p>
+                  <p className="text-2xl font-bold text-foreground mt-1">{metrics.complainedCount}</p>
                 </div>
               </div>
 
@@ -1461,7 +1840,7 @@ export function AgentMailView({
 
                 {/* Visual Chart representation */}
                 <div className="h-44 w-full flex items-end gap-2 pt-4 px-2 border-b border-border">
-                  {INITIAL_METRICS.activityMatrix.map((item, idx) => {
+                  {metrics.activityMatrix.map((item, idx) => {
                     const h1 = Math.min(100, item.count * 12 + 6)
                     const h2 = Math.min(100, Math.floor(item.count * 8 + 4))
                     return (
@@ -1718,25 +2097,25 @@ export function AgentMailView({
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 <div className="rounded-xl border border-border bg-card p-5">
                   <span className="text-xs text-muted-foreground">Total messages (30 days)</span>
-                  <p className="text-3xl font-bold text-foreground mt-1.5 font-mono">{INITIAL_METRICS.messages30Days}</p>
+                  <p className="text-3xl font-bold text-foreground mt-1.5 font-mono">{metrics.messages30Days}</p>
                   <p className="text-[10px] text-muted-foreground/75 mt-1">Sent &amp; received combined</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-5">
                   <span className="text-xs text-muted-foreground">Streak</span>
                   <div className="flex items-center gap-2 mt-1.5">
                     <Flame className="h-6 w-6 text-amber-400" />
-                    <p className="text-3xl font-bold text-foreground font-mono">{INITIAL_METRICS.streakDays} days</p>
+                    <p className="text-3xl font-bold text-foreground font-mono">{metrics.streakDays} days</p>
                   </div>
                   <p className="text-[10px] text-muted-foreground/75 mt-1">Consecutive activity</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-5">
                   <span className="text-xs text-muted-foreground">Bounce Rate</span>
-                  <p className="text-3xl font-bold text-amber-400 mt-1.5 font-mono">{INITIAL_METRICS.bounceRate}%</p>
+                  <p className="text-3xl font-bold text-amber-400 mt-1.5 font-mono">{metrics.bounceRate}%</p>
                   <p className="text-[10px] text-amber-400/80 mt-1">Above recommended 5%</p>
                 </div>
                 <div className="rounded-xl border border-border bg-card p-5">
                   <span className="text-xs text-muted-foreground">Complaint Rate</span>
-                  <p className="text-3xl font-bold text-emerald-400 mt-1.5 font-mono">{INITIAL_METRICS.complaintRate}%</p>
+                  <p className="text-3xl font-bold text-emerald-400 mt-1.5 font-mono">{metrics.complaintRate}%</p>
                   <p className="text-[10px] text-emerald-400 mt-1">Excellent reputation</p>
                 </div>
               </div>
@@ -1757,7 +2136,7 @@ export function AgentMailView({
 
                 {/* Heatmap Grid */}
                 <div className="grid grid-cols-6 sm:grid-cols-10 gap-2 pt-2">
-                  {INITIAL_METRICS.activityMatrix.map((cell, idx) => {
+                  {metrics.activityMatrix.map((cell, idx) => {
                     const bg =
                       cell.level === 0
                         ? "bg-muted/40 border border-border text-muted-foreground"
@@ -2620,7 +2999,8 @@ export function AgentMailView({
                 Attach
               </Button>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {composeError && <span className="text-xs text-red-400">{composeError}</span>}
               <Button
                 variant="outline"
                 size="sm"
@@ -2631,11 +3011,12 @@ export function AgentMailView({
               </Button>
               <Button
                 size="sm"
-                onClick={handleSendCompose}
+                onClick={() => void handleSendCompose()}
+                disabled={sendingCompose}
                 className="h-8 text-xs bg-primary text-primary-foreground hover:bg-foreground/80 font-medium"
               >
                 <Send className="h-3.5 w-3.5 mr-1" />
-                Send Email
+                {sendingCompose ? "Sending..." : "Send Email"}
               </Button>
             </div>
           </DialogFooter>
