@@ -37,7 +37,7 @@ MESSAGE_ROLE = SAEnum(
 )
 
 AGENT_TYPE = SAEnum(
-    "customer_facing", "retention", "provisioning", "executive", "support", "assistant",
+    "auto", "orchestrator", "customer_facing", "retention", "provisioning", "executive", "support", "assistant",
     "talent", "analytics", "sales", "crm", "billing", "call_center", "products",
     name="agent_type", create_type=False,
 )

@@ -309,6 +309,8 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free}
+      - OPENROUTER_FALLBACK_MODELS=${OPENROUTER_FALLBACK_MODELS:-nvidia/nemotron-3-super-120b-a12b:free,liquid/lfm-2.5-2.6b:free,qwen/qwen3.8-27b:free}
       - AGENT_ORCHESTRATOR_ENABLE_TELEGRAM=false
       - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
       - SIM_API_URL=${SIM_API_URL:-}

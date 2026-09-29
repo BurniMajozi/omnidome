@@ -3,7 +3,7 @@
 import json
 import uuid
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -122,6 +122,23 @@ def _hermes_system_note(agent_type: str, tenant_id, context: dict, skills: str =
     return f"{note}\n\n{skills}" if skills else note
 
 
+def _json_safe(obj: Any) -> Any:
+    """Recursively convert Decimal, UUID, date, and other non-JSON types for JSONB storage."""
+    from decimal import Decimal
+    from datetime import date, datetime
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(x) for x in obj]
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, (datetime, date)):
+        return obj.isoformat()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    return obj
+
+
 # ---------------------------------------------------------------------------
 # Helper: persist messages to a conversation
 # ---------------------------------------------------------------------------
@@ -146,15 +163,17 @@ async def _persist_messages(
 
     # Tool call messages (if any)
     for tc in tool_calls:
+        safe_args = _json_safe(tc.get("arguments", {}))
+        safe_res = _json_safe(tc.get("result", {}))
         tool_msg = AgentMessage(
             conversation_id=conversation_id,
             role="tool",
             content=str(tc.get("result", "")),
             tool_calls=[{
                 "name": tc.get("name", ""),
-                "arguments": tc.get("arguments", {}),
+                "arguments": safe_args,
             }],
-            tool_results=[tc.get("result", {})],
+            tool_results=[safe_res],
         )
         session.add(tool_msg)
 
@@ -163,8 +182,8 @@ async def _persist_messages(
             conversation_id=conversation_id,
             agent_type=agent_type,
             tool_name=tc.get("name", ""),
-            tool_input=tc.get("arguments", {}),
-            tool_output=tc.get("result", {}),
+            tool_input=safe_args,
+            tool_output=safe_res,
             success=tc.get("result", {}).get("success", True) if isinstance(tc.get("result"), dict) else True,
         )
         session.add(action)

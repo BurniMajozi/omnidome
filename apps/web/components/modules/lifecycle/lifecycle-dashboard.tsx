@@ -130,16 +130,7 @@ export function LifecycleDashboard() {
 
   useEffect(() => { loadData() }, [loadData])
 
-  if (loading && !dashboard) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="flex items-center gap-3 text-muted-foreground">
-          <Activity className="h-5 w-5 animate-spin" />
-          <span>Loading lifecycle data...</span>
-        </div>
-      </div>
-    )
-  }
+
 
   // Prepare chart data
   const stageChartData = dashboard ? Object.entries(dashboard.stages).map(([name, data]) => ({
@@ -309,6 +300,17 @@ export function LifecycleDashboard() {
     "Lead", "Qualified", "Proposal", "Converted", "Onboarding",
     "Active", "At Risk", "Churned", "Reactivated",
   ]
+
+  if (loading && !dashboard) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="flex items-center gap-3 text-muted-foreground">
+          <Activity className="h-5 w-5 animate-spin" />
+          <span>Loading lifecycle data...</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">

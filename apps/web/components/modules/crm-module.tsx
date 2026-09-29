@@ -653,9 +653,6 @@ export function CrmModule() {
           <TabsTrigger value="overview" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <TrendingUp className="h-3.5 w-3.5" /> Overview
           </TabsTrigger>
-          <TabsTrigger value="customers" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
-            <Users className="h-3.5 w-3.5" /> People ({customers.length})
-          </TabsTrigger>
           <TabsTrigger value="pipeline" className="gap-1.5 text-xs data-[state=active]:text-purple-400">
             <Kanban className="h-3.5 w-3.5" /> Pipeline ({leads.length})
           </TabsTrigger>
@@ -664,6 +661,9 @@ export function CrmModule() {
           </TabsTrigger>
           <TabsTrigger value="lifecycle" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
             <ActivityIcon className="h-3.5 w-3.5" /> Lifecycle
+          </TabsTrigger>
+          <TabsTrigger value="customers" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
+            <Users className="h-3.5 w-3.5" /> People ({customers.length})
           </TabsTrigger>
           <TabsTrigger value="companies" className="gap-1.5 text-xs data-[state=active]:text-amber-400">
             <Building2 className="h-3.5 w-3.5" /> Companies ({companies.length})

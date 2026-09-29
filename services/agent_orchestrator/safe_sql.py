@@ -17,6 +17,7 @@ import json
 import logging
 import re
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, List, Optional, Set
 import uuid
 
@@ -169,8 +170,12 @@ def _serialize_row_value(val: Any) -> Any:
         return val.isoformat()
     if isinstance(val, uuid.UUID):
         return str(val)
-    if isinstance(val, (dict, list)):
-        return val
+    if isinstance(val, Decimal):
+        return float(val)
+    if isinstance(val, dict):
+        return {k: _serialize_row_value(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_serialize_row_value(item) for item in val]
     return val
 
 

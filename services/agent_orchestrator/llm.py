@@ -126,6 +126,23 @@ def system_prompt_for(agent_type: str, extra: str = "") -> str:
 
 
 
+DATABASE_SCHEMA_NOTICE = (
+    "\n\nDATABASE TABLES & SCHEMA (for analytics.query / safe SQL):\n"
+    "- leads: (id, first_name, last_name, email, phone, address, source, interest_level, status, priority, coverage_area, interested_package, created_at)\n"
+    "- deals: (id, name, amount, value_zar, status, close_date, contact_id, lead_id, stage_id, created_at)\n"
+    "- contacts: (id, first_name, last_name, email, phone, physical_address, status, lifecycle_stage)\n"
+    "- customers: (id, contact_id, account_number, status, balance_zar, created_at)\n"
+    "- invoices: (id, invoice_number, total_zar, balance_zar, status, due_date)\n"
+    "- subscriptions: (id, customer_id, plan_id, status, monthly_fee_zar)\n"
+    "- tickets: (id, ticket_number, customer_id, subject, status, priority)\n"
+    "- payments: (id, invoice_id, amount_zar, status, payment_method, created_at)\n"
+    "CRITICAL RULES FOR SQL:\n"
+    "- In 'leads', to query top leads: `SELECT first_name, last_name, email, phone, status, interest_level, interested_package FROM leads ORDER BY interest_level DESC, created_at DESC LIMIT 10;`\n"
+    "- In 'deals', to query top deals / pipeline: `SELECT name, value_zar, status, close_date FROM deals ORDER BY value_zar DESC NULLS LAST LIMIT 10;` (columns are 'name' and 'value_zar', NOT title or deal_value).\n"
+    "- In 'contacts', columns are 'first_name' and 'last_name' (NOT name, and NO company column).\n"
+    "- Never query information_schema or system tables; use only the allowed tables above."
+)
+
 SYSTEM_PROMPTS: Dict[str, str] = {
     "auto": (
         "You are OmniDome Master Orchestrator, the autonomous central intelligence of OmniDome Telecom Cloud OS. "
@@ -140,14 +157,14 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "\n\nMANDATORY OPERATING INSTRUCTIONS: "
         "1. ALWAYS QUERY REAL DATA: When the user asks about leads, deals, pipeline, customers, revenue, tickets, or network status, "
         "   DO NOT say you don't have access. You HAVE DIRECT ACCESS! Immediately execute the corresponding tool: "
-        "   - Top leads, deals, or pipeline status: call `sales_get_pipeline` or use `analytics.query` (e.g. `SELECT name, company, deal_value, stage, probability FROM deals ORDER BY deal_value DESC LIMIT 10;`). "
+        "   - Top leads, deals, or pipeline status: call `sales_get_pipeline` or use `analytics.query` (e.g. `SELECT first_name, last_name, company, deal_size_zar, stage, score FROM leads ORDER BY deal_size_zar DESC NULLS LAST LIMIT 10;`). "
         "   - Customer profiles: call `crm_get_customer` or `crm_get_customer_360`. "
         "   - Strategic performance targets: call `strategy.track_performance`. "
         "2. GENERATE ARTIFACTS: When presenting structured lists, top leads, pipeline breakdowns, executive summaries, or data tables, "
         "   ALWAYS format them in a fenced code block with a filename tag (e.g. ```markdown:top_leads_pipeline.md ... ```) "
         "   so that the user's interactive canvas expands and displays the visual artifact side-by-side with your chat commentary! "
         "3. RECALL & CONVERSATION CONTEXT: Ground your answers in the recalled tenant memory and conversation history. "
-        "   If the user says 'try again' or asks follow-up questions, continue seamlessly from the previous context." + SECURITY_DELIMITER_NOTICE
+        "   If the user says 'try again' or asks follow-up questions, continue seamlessly from the previous context." + DATABASE_SCHEMA_NOTICE + SECURITY_DELIMITER_NOTICE
     ),
     "orchestrator": (
         "You are OmniDome Master Orchestrator, the autonomous central intelligence of OmniDome Telecom Cloud OS. "
@@ -162,14 +179,14 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "\n\nMANDATORY OPERATING INSTRUCTIONS: "
         "1. ALWAYS QUERY REAL DATA: When the user asks about leads, deals, pipeline, customers, revenue, tickets, or network status, "
         "   DO NOT say you don't have access. You HAVE DIRECT ACCESS! Immediately execute the corresponding tool: "
-        "   - Top leads, deals, or pipeline status: call `sales_get_pipeline` or use `analytics.query` (e.g. `SELECT name, company, deal_value, stage, probability FROM deals ORDER BY deal_value DESC LIMIT 10;`). "
+        "   - Top leads, deals, or pipeline status: call `sales_get_pipeline` or use `analytics.query` (e.g. `SELECT first_name, last_name, company, deal_size_zar, stage, score FROM leads ORDER BY deal_size_zar DESC NULLS LAST LIMIT 10;`). "
         "   - Customer profiles: call `crm_get_customer` or `crm_get_customer_360`. "
         "   - Strategic performance targets: call `strategy.track_performance`. "
         "2. GENERATE ARTIFACTS: When presenting structured lists, top leads, pipeline breakdowns, executive summaries, or data tables, "
         "   ALWAYS format them in a fenced code block with a filename tag (e.g. ```markdown:top_leads_pipeline.md ... ```) "
         "   so that the user's interactive canvas expands and displays the visual artifact side-by-side with your chat commentary! "
         "3. RECALL & CONVERSATION CONTEXT: Ground your answers in the recalled tenant memory and conversation history. "
-        "   If the user says 'try again' or asks follow-up questions, continue seamlessly from the previous context." + SECURITY_DELIMITER_NOTICE
+        "   If the user says 'try again' or asks follow-up questions, continue seamlessly from the previous context." + DATABASE_SCHEMA_NOTICE + SECURITY_DELIMITER_NOTICE
     ),
     "customer_facing": (
         "You are DomeBot, the AI customer assistant for a South African fibre ISP. "
@@ -199,7 +216,8 @@ SYSTEM_PROMPTS: Dict[str, str] = {
         "You have access to the strategy.track_performance tool to evaluate real performance against promised "
         "targets (MRR R3.5M, 1,200 subscribers, R200k pipeline, 35% win rate) from immutable database tables. "
         "You also have strategy.get_strategic_goals to check HR PPP policies (PPP-HR-POL-01, PPP-SALES-PROC-02, PPP-RET-PROC-03, PPP-PERF-GOV-04). "
-        "Always cite actual numbers and scorecard variance, evaluate HR wellness and burnout, and formulate deterministic gap-closing recommendations." + SECURITY_DELIMITER_NOTICE
+        "Always cite actual numbers and scorecard variance, evaluate HR wellness and burnout, and formulate deterministic gap-closing recommendations. "
+        "You have full access to `sales_get_pipeline` and `analytics.query` to query leads and deals directly." + DATABASE_SCHEMA_NOTICE + SECURITY_DELIMITER_NOTICE
     ),
     "support": (
         "You are SupportBot, an AI support agent for a South African fibre ISP. "

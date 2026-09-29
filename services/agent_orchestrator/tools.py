@@ -641,7 +641,15 @@ class ToolRegistry:
             name="analytics.query",
             description=(
                 "Safely query structured business data using read-only SQL (WeKnora pattern). "
-                "Allowed tables: deals, leads, contacts, customers, invoices, tickets, subscriptions, payments, lead_activities, lead_tasks. "
+                "Allowed tables and columns: "
+                "leads(id, first_name, last_name, email, phone, address, source, interest_level, status, priority, coverage_area, interested_package, created_at); "
+                "deals(id, name, amount, value_zar, status, close_date, contact_id, lead_id, stage_id); "
+                "contacts(id, first_name, last_name, email, phone, physical_address, status); "
+                "customers(id, account_number, status, balance_zar); "
+                "invoices(id, invoice_number, total_zar, balance_zar, status, due_date); "
+                "subscriptions(id, status, monthly_fee_zar); "
+                "tickets(id, ticket_number, subject, status, priority). "
+                "Rules: In leads use 'interest_level' (1-5) and 'created_at' for ranking top leads. In deals use 'name' and 'value_zar' (NOT title or deal_value). In contacts use 'first_name', 'last_name' (no company column). "
                 "Returns table rows, row count and columns. The query is automatically rewritten to be strictly scoped to your tenant."
             ),
             service="orchestrator",
