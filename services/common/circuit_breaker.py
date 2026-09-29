@@ -74,6 +74,10 @@ class _CircuitBreaker:
                 self._state = CircuitState.CLOSED
             return result
         except Exception as exc:
+            # Errors flagged `breaker_ignore` (e.g. client 4xx responses) mean the
+            # downstream service is healthy -- do not count them as failures.
+            if getattr(exc, "breaker_ignore", False):
+                raise
             async with self._lock:
                 self._failure_count += 1
                 self._last_failure_time = time.monotonic()

@@ -24,13 +24,15 @@ Usage
     from services.common.firecrawl import firecrawl
 
     md = await firecrawl.scrape("https://fno.example.com/coverage")
-    results = await firecrawl search("Vuma Fibre new coverage areas 2026")
+    results = await firecrawl.search("Vuma Fibre new coverage areas 2026")
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import time
 from typing import Any, Optional
 
 import httpx
@@ -63,58 +65,115 @@ CAPABILITY_MODELS: dict[str, dict[str, str]] = {
 
 
 class FirecrawlError(Exception):
-    """Base error for Firecrawl client failures."""
+    """Base error for Firecrawl client failures.
+
+    `breaker_ignore` tells the shared circuit breaker not to count the error
+    (client 4xx errors mean Firecrawl is up; only 5xx/timeouts/connection
+    errors should trip it).
+    """
+
+    breaker_ignore = False
 
 
 class FirecrawlUnavailable(FirecrawlError):
-    """Raised when Firecrawl cannot service the request (no key + keyless-only endpoint)."""
+    """Raised when Firecrawl cannot service the request (no/invalid key, paywall)."""
+
+    breaker_ignore = True
 
     def __init__(self, message: str = "Firecrawl is not configured for this operation"):
         super().__init__(message)
 
 
+def _client_error(message: str) -> FirecrawlError:
+    err = FirecrawlError(message)
+    err.breaker_ignore = True
+    return err
+
+
+def _retry_after_seconds(resp: httpx.Response, default: float) -> float:
+    try:
+        return min(max(float(resp.headers.get("Retry-After", default)), 0.0), 30.0)
+    except (TypeError, ValueError):
+        return default
+
+
 class FirecrawlClient:
     """Async Firecrawl REST v2 client with circuit breaking and graceful keyless mode."""
 
-    def __init__(self, base_url: str = _BASE_URL, api_key: str = _API_KEY):
+    def __init__(self, base_url: str = _BASE_URL, api_key: Optional[str] = None):
         self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
-        self._has_key = bool(api_key)
+        # None -> read FIRECRAWL_API_KEY lazily on every call.
+        self._explicit_key = api_key
+
+    @property
+    def api_key(self) -> str:
+        if self._explicit_key is not None:
+            return self._explicit_key
+        return os.getenv("FIRECRAWL_API_KEY", "") or _API_KEY
+
+    @property
+    def _has_key(self) -> bool:
+        return bool(self.api_key)
 
     # ── internal helpers ──────────────────────────────────────────────────
     def _headers(self, require_key: bool = False) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self._has_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        key = self.api_key
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
         elif require_key:
             raise FirecrawlUnavailable(
-                "This endpoint requires a Firecrawl API key (keyless free tier unsupported)."
+                "This Firecrawl endpoint requires an API key. Set FIRECRAWL_API_KEY "
+                "(the keyless free tier only supports search/scrape)."
             )
         return headers
+
+    async def _request(self, method: str, path: str, *, payload: Optional[dict] = None,
+                       params: Optional[dict] = None, require_key: bool = False,
+                       timeout: float = 60.0) -> dict:
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers = self._headers(require_key=require_key)
+        attempts_5xx = 0
+        attempts_429 = 0
+        while True:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                if method == "GET":
+                    resp = await client.get(url, params=params or {}, headers=headers)
+                else:
+                    resp = await client.post(url, json=payload, headers=headers)
+            code = resp.status_code
+            if code == 429 and attempts_429 < 2:  # max 3 tries
+                attempts_429 += 1
+                await asyncio.sleep(_retry_after_seconds(resp, 2.0 * attempts_429))
+                continue
+            if code >= 500 and attempts_5xx < 1:  # transient 5xx: retry once
+                attempts_5xx += 1
+                await asyncio.sleep(1.0)
+                continue
+            break
+        if code == 402:
+            raise FirecrawlUnavailable("Firecrawl rate limit / paywall — add a paid key.")
+        if code == 401:
+            raise FirecrawlUnavailable("Firecrawl rejected the API key (401) — set a valid FIRECRAWL_API_KEY.")
+        if code >= 400:
+            msg = f"Firecrawl {path} → HTTP {code}: {resp.text[:300]}"
+            if code < 500:  # 4xx (incl. exhausted 429): Firecrawl is up, don't trip the breaker
+                raise _client_error(msg)
+            raise FirecrawlError(msg)
+        try:
+            return resp.json()
+        except ValueError as exc:
+            raise FirecrawlError(f"Firecrawl {path} returned invalid JSON: {exc}") from exc
 
     @circuit_breaker("firecrawl", failure_threshold=5, recovery_timeout=60)
     async def _post(self, path: str, payload: dict, *, require_key: bool = False,
                     timeout: float = 60.0) -> dict:
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        headers = self._headers(require_key=require_key)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload, headers=headers)
-        if resp.status_code == 402:
-            raise FirecrawlUnavailable("Firecrawl rate limit / paywall — add a paid key.")
-        if resp.status_code >= 400:
-            raise FirecrawlError(f"Firecrawl {path} → HTTP {resp.status_code}: {resp.text[:300]}")
-        return resp.json()
+        return await self._request("POST", path, payload=payload, require_key=require_key, timeout=timeout)
 
     @circuit_breaker("firecrawl", failure_threshold=5, recovery_timeout=60)
     async def _get(self, path: str, params: Optional[dict] = None, *,
                    require_key: bool = False, timeout: float = 30.0) -> dict:
-        url = f"{self.base_url}/{path.lstrip('/')}"
-        headers = self._headers(require_key=require_key)
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.get(url, params=params or {}, headers=headers)
-        if resp.status_code >= 400:
-            raise FirecrawlError(f"Firecrawl {path} → HTTP {resp.status_code}: {resp.text[:300]}")
-        return resp.json()
+        return await self._request("GET", path, params=params, require_key=require_key, timeout=timeout)
 
     # ── capability wrappers (the six use cases) ──────────────────────────
     async def search(self, query: str, *, limit: int = 5,
@@ -151,16 +210,79 @@ class FirecrawlClient:
         payload = {"url": url, "actions": actions, "formats": ["markdown"]}
         return await self._post("/interact", payload, require_key=False)
 
+    async def map_site(self, url: str, *, search: Optional[str] = None, limit: int = 100,
+                       timeout: float = 60.0) -> dict:
+        """Discover URLs on a site (v2 POST /map). Result: {"links": [{"url", "title", ...}]}."""
+        payload: dict[str, Any] = {"url": url, "limit": limit}
+        if search:
+            payload["search"] = search
+        return await self._post("/map", payload, require_key=False, timeout=timeout)
+
+    async def crawl(self, url: str, *, limit: int = 10, scrape_formats: Optional[list] = None,
+                    include_paths: Optional[list] = None, poll_interval: float = 3.0,
+                    max_wait: float = 180.0) -> dict:
+        """Start a crawl (v2 POST /crawl) and poll GET /crawl/{id} until it finishes.
+
+        Returns the final status payload ({"status", "data": [...]}). Raises
+        FirecrawlError on failure or when `max_wait` seconds elapse. Requires a key.
+        """
+        payload: dict[str, Any] = {
+            "url": url, "limit": limit,
+            "scrapeOptions": {"formats": scrape_formats or ["markdown"]},
+        }
+        if include_paths:
+            payload["includePaths"] = include_paths
+        started = await self._post("/crawl", payload, require_key=True, timeout=60.0)
+        job_id = started.get("id")
+        if not job_id:
+            raise FirecrawlError(f"Firecrawl /crawl did not return a job id: {str(started)[:200]}")
+        return await self._poll(f"/crawl/{job_id}", ok={"completed"}, bad={"failed", "cancelled"},
+                                poll_interval=poll_interval, max_wait=max_wait)
+
+    async def extract(self, urls: list[str], *, prompt: Optional[str] = None,
+                      schema: Optional[dict] = None, poll_interval: float = 3.0,
+                      max_wait: float = 180.0) -> dict:
+        """Structured extraction over one or more URLs (v2 POST /extract + poll).
+
+        Provide a `schema` (JSON schema) and/or a `prompt`. Requires a key.
+        """
+        if not prompt and not schema:
+            raise ValueError("extract() needs a prompt and/or a schema")
+        payload: dict[str, Any] = {"urls": urls}
+        if prompt:
+            payload["prompt"] = prompt
+        if schema:
+            payload["schema"] = schema
+        started = await self._post("/extract", payload, require_key=True, timeout=60.0)
+        job_id = started.get("id")
+        if not job_id:
+            return started  # some responses return data synchronously
+        return await self._poll(f"/extract/{job_id}", ok={"completed"}, bad={"failed", "cancelled"},
+                                poll_interval=poll_interval, max_wait=max_wait)
+
+    async def _poll(self, path: str, *, ok: set, bad: set, poll_interval: float,
+                    max_wait: float) -> dict:
+        deadline = time.monotonic() + max_wait
+        while True:
+            status = await self._get(path, require_key=True)
+            state = str(status.get("status", "")).lower()
+            if state in ok:
+                return status
+            if state in bad:
+                raise FirecrawlError(f"Firecrawl {path} ended with status '{state}'")
+            if time.monotonic() + poll_interval > deadline:
+                raise FirecrawlError(f"Firecrawl {path} still '{state}' after {max_wait:.0f}s")
+            await asyncio.sleep(poll_interval)
+
     async def parse(self, file_path: str, *, output_format: str = "markdown") -> dict:
         """Parse a *local* document (PDF/DOCX/XLSX) into markdown. Requires key."""
-        import httpx as _hx
         upload_url = f"{self.base_url}/parse"
         headers = self._headers(require_key=True)
         headers.pop("Content-Type", None)
         with open(file_path, "rb") as f:
             files = {"file": f}
             data = {"formats": output_format}
-            async with _hx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(upload_url, headers=headers, files=files, data=data)
         if resp.status_code >= 400:
             raise FirecrawlError(f"Firecrawl /parse → HTTP {resp.status_code}: {resp.text[:300]}")

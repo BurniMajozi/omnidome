@@ -228,7 +228,4 @@ async def competitor_analysis(fno_name: str, competitors: list[str]) -> dict:
 
 # Thin alias used by the capability wrappers above — delegates to the client's search.
 async def firecrawlsearch(query: str, *, limit: int = 5) -> dict:
-    return await firecrawlsearch_client(query, limit=limit)
-
-
-firecrawlsearch_client = lambda query, *, limit=5: getattr(firecrawl, "search")(query, limit=limit)
+    return await firecrawl.search(query, limit=limit)
