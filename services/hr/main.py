@@ -12,7 +12,7 @@ from sqlalchemy import select, desc, and_, func
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
-from services.common.auth import get_current_tenant_id
+from services.common.auth import get_current_tenant_id, get_auth_context, AuthContext
 from services.hr.database import (
     get_session, init_tables,
     Employee, LeaveRequest, PerformanceReview,
@@ -456,6 +456,84 @@ class CompanyKPIConfigUpdate(BaseModel):
     profit_source_mode: Optional[str] = "LIVE_TABLE"
 
 
+VALUE_KEYS = ("ubuntu_empathy", "operational_speed", "staff_wellness_bcea", "popia_ethical_governance")
+HR_ADMIN_ROLES = {"admin", "hr", "hr_admin", "hr_manager", "tenant_admin", "owner", "platform_admin"}
+APPROVER_ROLES = HR_ADMIN_ROLES | {"manager", "line_manager"}
+
+
+def _norm_roles(ctx: AuthContext) -> set:
+    return {str(r).strip().lower() for r in (ctx.roles or [])}
+
+
+def _is_hr_admin(ctx: AuthContext) -> bool:
+    return bool(ctx.is_platform_admin) or bool(_norm_roles(ctx) & HR_ADMIN_ROLES)
+
+
+def _can_approve(ctx: AuthContext, emp: Employee) -> bool:
+    """Manager-or-HR role required; the sheet owner (Employee.user_id == caller) may never approve."""
+    if emp.user_id is not None and emp.user_id == ctx.user_id:
+        return False
+    return bool(ctx.is_platform_admin) or bool(_norm_roles(ctx) & APPROVER_ROLES)
+
+
+def _validate_values_ratings(raw: Any) -> Dict[str, int]:
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=422, detail={"message": "values_ratings must be an object"})
+    bad_keys = sorted(set(raw.keys()) - set(VALUE_KEYS))
+    if bad_keys:
+        raise HTTPException(status_code=422, detail={"message": f"values_ratings has unknown keys {bad_keys}; allowed: {list(VALUE_KEYS)}"})
+    out: Dict[str, int] = {}
+    for k, v in raw.items():
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or int(v) != v or not (1 <= int(v) <= 5):
+            raise HTTPException(status_code=422, detail={"message": f"values_ratings.{k} must be an integer from 1 to 5"})
+        out[k] = int(v)
+    return out
+
+
+def _load_ratings(sheet: EmployeeKPISheet) -> Dict[str, int]:
+    try:
+        d = json.loads(sheet.values_ratings) if sheet.values_ratings else {}
+        return {k: int(v) for k, v in d.items() if k in VALUE_KEYS} if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _level_score(level: Any) -> float:
+    """Same mapping as the UI's kpiLevelScore: level 3 = 100% of target."""
+    try:
+        lv = float(level)
+    except (TypeError, ValueError):
+        lv = 3.0
+    return (lv or 3.0) / 3.0 * 100.0
+
+
+def _compute_composite(sheet: EmployeeKPISheet, kpis: List[Dict[str, Any]], comp_scores: Dict[str, Any], company_missing: bool) -> Dict[str, Any]:
+    sh_w = float(sheet.company_shared_weight_pct or 0)
+    val_w = float(sheet.values_weight_pct or 0)
+    ind_w = float(sheet.individual_target_weight_pct or 0)
+    shared_score = 0.0 if company_missing else float(comp_scores.get("corporate_attainment_index") or 0.0)
+    ratings = _load_ratings(sheet)
+    values_rated = all(k in ratings for k in VALUE_KEYS)
+    values_score = (sum(ratings[k] for k in VALUE_KEYS) / len(VALUE_KEYS)) / 3.0 * 100.0 if values_rated else None
+    items = [k for k in kpis if isinstance(k, dict)]
+    w_sum = sum(float(k.get("weight_pct") or 0) for k in items)
+    individual_score = (
+        sum(_level_score(k.get("current_level")) * float(k.get("weight_pct") or 0) for k in items) / w_sum
+        if w_sum > 0 else 0.0
+    )
+    total = shared_score * sh_w / 100 + (values_score or 0.0) * val_w / 100 + individual_score * ind_w / 100
+    return {
+        "total": round(total, 1),
+        "shared_score": round(shared_score, 2),
+        "values_score": round(values_score, 2) if values_score is not None else None,
+        "individual_score": round(individual_score, 2),
+        "values_rated": values_rated,
+        "company_missing": company_missing,
+    }
+
+
 class EmployeeKPISheetUpdate(BaseModel):
     fiscal_year: Optional[str] = "FY 2026/2027"
     position_level: Optional[str] = None
@@ -467,6 +545,16 @@ class EmployeeKPISheetUpdate(BaseModel):
     kpis: Optional[List[Dict[str, Any]]] = None
     overall_score: Optional[float] = None
     reviewer_notes: Optional[str] = None
+    values_ratings: Optional[Dict[str, Any]] = None
+
+
+class KPIRejectRequest(BaseModel):
+    reason: str
+    fiscal_year: Optional[str] = None
+
+
+class KPIFiscalYearBody(BaseModel):
+    fiscal_year: Optional[str] = None
 
 
 class CascadeKPIRequest(BaseModel):
@@ -857,6 +945,7 @@ async def get_employee_kpi_sheet(
     emp_id: uuid.UUID,
     fiscal_year: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    ctx: AuthContext = Depends(get_auth_context),
     db=Depends(get_session),
 ):
     """Retrieve an individual employee's KPI sheet with shared company cascade and SMART criteria."""
@@ -949,6 +1038,13 @@ async def get_employee_kpi_sheet(
         await db.refresh(sheet)
 
     kpis_list = json.loads(sheet.kpis_json) if sheet.kpis_json else []
+    company_missing = (
+        config is None
+        or float(config.sales_budget_zar or 0) <= 0
+        or float(config.cost_budget_zar or 0) <= 0
+        or float(config.profit_budget_zar or 0) <= 0
+    )
+    composite = _compute_composite(sheet, kpis_list, comp_scores, company_missing)
 
     return {
         "id": str(sheet.id),
@@ -967,9 +1063,116 @@ async def get_employee_kpi_sheet(
         "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
         "reviewer_notes": sheet.reviewer_notes,
         "company_benchmarks": comp_scores,
+        "values_ratings": _load_ratings(sheet),
+        "composite": composite,
+        "approved_by": str(sheet.approved_by) if sheet.approved_by else None,
+        "approved_at": sheet.approved_at,
+        "reject_reason": sheet.reject_reason,
+        "permissions": {
+            "can_approve": _can_approve(ctx, emp),
+            "can_reopen": _is_hr_admin(ctx),
+        },
         "created_at": sheet.created_at,
         "updated_at": sheet.updated_at,
     }
+
+
+async def _find_sheet_or_404(emp_id: uuid.UUID, tenant_id: uuid.UUID, fiscal_year: Optional[str], db) -> EmployeeKPISheet:
+    q = select(EmployeeKPISheet).where(
+        EmployeeKPISheet.employee_id == emp_id,
+        EmployeeKPISheet.tenant_id == tenant_id,
+    )
+    if fiscal_year:
+        q = q.where(EmployeeKPISheet.fiscal_year == fiscal_year)
+    sheet = (await db.execute(q.order_by(desc(EmployeeKPISheet.updated_at)))).scalars().first()
+    if not sheet:
+        raise HTTPException(status_code=404, detail="KPI sheet not found")
+    return sheet
+
+
+def _workflow_response(sheet: EmployeeKPISheet) -> Dict[str, Any]:
+    return {
+        "success": True,
+        "sheet_id": str(sheet.id),
+        "status": sheet.status,
+        "approved_by": str(sheet.approved_by) if sheet.approved_by else None,
+        "approved_at": sheet.approved_at,
+        "reject_reason": sheet.reject_reason,
+    }
+
+
+@app.post("/employees/{emp_id}/kpi-sheet/approve")
+async def approve_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    body: Optional[KPIFiscalYearBody] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    ctx: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
+):
+    """SUBMITTED -> APPROVED. Requires manager/HR role; the sheet owner cannot approve their own sheet."""
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+    if not _can_approve(ctx, emp):
+        raise HTTPException(status_code=403, detail="Approval requires a manager or HR role, and employees cannot approve their own KPI sheet")
+    sheet = await _find_sheet_or_404(emp_id, tenant_id, body.fiscal_year if body else None, db)
+    if sheet.status != "SUBMITTED":
+        raise HTTPException(status_code=409, detail=f"Only SUBMITTED sheets can be approved (current status: {sheet.status})")
+    sheet.status = "APPROVED"
+    sheet.approved_by = ctx.user_id
+    sheet.approved_at = datetime.utcnow()
+    sheet.reject_reason = None
+    await db.flush()
+    await db.refresh(sheet)
+    return _workflow_response(sheet)
+
+
+@app.post("/employees/{emp_id}/kpi-sheet/reject")
+async def reject_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    body: KPIRejectRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    ctx: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
+):
+    """SUBMITTED -> DRAFT with a stored reason (request changes)."""
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+    if not _can_approve(ctx, emp):
+        raise HTTPException(status_code=403, detail="Rejecting requires a manager or HR role, and employees cannot act on their own KPI sheet")
+    reason = (body.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=422, detail="A reason is required when requesting changes")
+    sheet = await _find_sheet_or_404(emp_id, tenant_id, body.fiscal_year, db)
+    if sheet.status != "SUBMITTED":
+        raise HTTPException(status_code=409, detail=f"Only SUBMITTED sheets can be rejected (current status: {sheet.status})")
+    sheet.status = "DRAFT"
+    sheet.reject_reason = reason
+    sheet.approved_by = None
+    sheet.approved_at = None
+    await db.flush()
+    await db.refresh(sheet)
+    return _workflow_response(sheet)
+
+
+@app.post("/employees/{emp_id}/kpi-sheet/reopen")
+async def reopen_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    body: Optional[KPIFiscalYearBody] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    ctx: AuthContext = Depends(get_auth_context),
+    db=Depends(get_session),
+):
+    """APPROVED -> DRAFT. HR/admin roles only."""
+    await _get_employee_or_404(emp_id, tenant_id, db)
+    if not _is_hr_admin(ctx):
+        raise HTTPException(status_code=403, detail="Reopening an approved KPI sheet requires an HR/admin role")
+    sheet = await _find_sheet_or_404(emp_id, tenant_id, body.fiscal_year if body else None, db)
+    if sheet.status != "APPROVED":
+        raise HTTPException(status_code=409, detail=f"Only APPROVED sheets can be reopened (current status: {sheet.status})")
+    sheet.status = "DRAFT"
+    sheet.approved_by = None
+    sheet.approved_at = None
+    await db.flush()
+    await db.refresh(sheet)
+    return _workflow_response(sheet)
 
 
 @app.put("/employees/{emp_id}/kpi-sheet")
@@ -977,6 +1180,7 @@ async def update_employee_kpi_sheet(
     emp_id: uuid.UUID,
     data: EmployeeKPISheetUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    ctx: AuthContext = Depends(get_auth_context),
     db=Depends(get_session),
 ):
     """Save and validate an employee's KPI sheet with SMART criteria and auto-calculated score."""
@@ -990,6 +1194,13 @@ async def update_employee_kpi_sheet(
         ).order_by(desc(EmployeeKPISheet.updated_at))
     )
     sheet = s_res.scalars().first()
+
+    # -- Approval state machine guards --
+    if sheet is not None and sheet.status == "APPROVED":
+        raise HTTPException(status_code=409, detail="This KPI sheet is APPROVED and locked. An HR/admin must reopen it before it can be edited.")
+    if (data.status or "").upper() == "APPROVED":
+        raise HTTPException(status_code=409, detail="Use POST /employees/{id}/kpi-sheet/approve to approve a submitted sheet.")
+    new_ratings = _validate_values_ratings(data.values_ratings) if data.values_ratings is not None else None
 
     # -- Server-side validation (before any mutation) --
     eff_status = (data.status or (sheet.status if sheet else "DRAFT") or "DRAFT").upper()
@@ -1067,6 +1278,10 @@ async def update_employee_kpi_sheet(
         sheet.individual_target_weight_pct = data.individual_target_weight_pct
     if data.status is not None:
         sheet.status = data.status
+        if data.status == "SUBMITTED":
+            sheet.reject_reason = None
+    if new_ratings is not None:
+        sheet.values_ratings = json.dumps(new_ratings)
     if data.kpis is not None:
         sheet.kpis_json = json.dumps(data.kpis)
     if data.overall_score is not None:
@@ -1088,6 +1303,7 @@ async def update_employee_kpi_sheet(
         "status": sheet.status,
         "total_weight_pct": float(sheet.total_weight_pct),
         "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
+        "values_ratings": _load_ratings(sheet),
     }
 
 

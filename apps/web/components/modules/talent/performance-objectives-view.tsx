@@ -64,6 +64,10 @@ import {
   cascadeSharedKPIs,
   getEmployeeKPISheet,
   updateEmployeeKPISheet,
+  approveEmployeeKPISheet,
+  rejectEmployeeKPISheet,
+  reopenEmployeeKPISheet,
+  type ValueKey,
   generateAISmartCriteria,
   getKpisLiveActuals,
   listEmployees,
@@ -168,6 +172,13 @@ const normalizeSheet = (sheet: EmployeeKPISheet): EmployeeKPISheet => ({
     smart_criteria: normalizeCriteria(k.smart_criteria),
   })),
 })
+
+const VALUE_DEFS: { key: ValueKey; label: string }[] = [
+  { key: "ubuntu_empathy", label: "Ubuntu & Empathy" },
+  { key: "operational_speed", label: "Operational Speed" },
+  { key: "staff_wellness_bcea", label: "Staff Wellness / BCEA" },
+  { key: "popia_ethical_governance", label: "POPIA & Ethical Governance" },
+]
 
 /** Score % for a KPI at its achieved level (level 3 = 100% of target). */
 const kpiLevelScore = (k: IndividualKPIItem) => ((k.current_level || 3) / 3) * 100
@@ -504,6 +515,11 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
   const [sheetDirty, setSheetDirty] = useState(false)
   const editVersionRef = useRef(0)
 
+  // Approval workflow state
+  const [workflowBusy, setWorkflowBusy] = useState(false)
+  const [rejectOpen, setRejectOpen] = useState(false)
+  const [rejectReasonText, setRejectReasonText] = useState("")
+
   // Selected KPI (expanded editor) + AI copilot state
   const [selectedKpiId, setSelectedKpiId] = useState<string | null>(null)
   const [aiGenerating, setAiGenerating] = useState(false)
@@ -809,7 +825,8 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
   // ── Sheet mutation helpers (every edit marks the sheet dirty) ──────
   const mutateSheet = useCallback((fn: (s: EmployeeKPISheet) => EmployeeKPISheet) => {
     editVersionRef.current += 1
-    setEmpSheet((prev) => (prev ? fn(prev) : prev))
+    // APPROVED sheets are locked; edits are ignored until an admin reopens the sheet
+    setEmpSheet((prev) => (prev && prev.status !== "APPROVED" ? fn(prev) : prev))
     setSheetDirty(true)
     setSheetSaveMessage(null)
     setSheetError(null)
@@ -976,6 +993,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
         total_weight_pct: calculatedTotalWeight,
         status: status,
         kpis: empSheet.kpis,
+        values_ratings: empSheet.values_ratings || {},
       }
       const res = await updateEmployeeKPISheet(empIdAtSave, payload)
       if (selectedEmpIdRef.current !== empIdAtSave) return
@@ -1000,6 +1018,33 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
       }
     } finally {
       setSavingSheet(false)
+    }
+  }
+
+  // Approval workflow actions (server enforces roles; UI only shows them when permitted)
+  const runWorkflow = async (action: "approve" | "reject" | "reopen") => {
+    if (!empSheet || !selectedEmpId) return
+    const empIdAtStart = selectedEmpId
+    setWorkflowBusy(true)
+    setSheetError(null)
+    setSheetSaveMessage(null)
+    try {
+      if (action === "approve") await approveEmployeeKPISheet(empIdAtStart, empSheet.fiscal_year)
+      else if (action === "reject") await rejectEmployeeKPISheet(empIdAtStart, rejectReasonText.trim(), empSheet.fiscal_year)
+      else await reopenEmployeeKPISheet(empIdAtStart, empSheet.fiscal_year)
+      const fresh = await getEmployeeKPISheet(empIdAtStart)
+      if (selectedEmpIdRef.current !== empIdAtStart) return
+      setEmpSheet(normalizeSheet(fresh))
+      setSheetDirty(false)
+      setRejectOpen(false)
+      setRejectReasonText("")
+      setSheetSaveMessage(
+        action === "approve" ? "KPI sheet approved and locked." : action === "reject" ? "Changes requested; sheet returned to draft." : "KPI sheet reopened for editing."
+      )
+    } catch (err) {
+      if (selectedEmpIdRef.current === empIdAtStart) setSheetError(`Action failed: ${describeApiError(err)}`)
+    } finally {
+      setWorkflowBusy(false)
     }
   }
 
@@ -1069,19 +1114,28 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
 
   // Composite score preview (achieved level 3 = 100% of target)
   const compositeBreakdown = useMemo(() => {
-    if (!empSheet) return { total: 0, companyPts: 0, valuesPts: 0, indivPts: 0, companyMissing: false }
+    if (!empSheet) return { total: 0, companyPts: 0, valuesPts: 0, indivPts: 0, companyMissing: false, valuesRated: false, valuesScore: null as number | null }
     const sharedWeight = Number(empSheet.company_shared_weight_pct) || 0
     const valuesWeight = Number(empSheet.values_weight_pct) || 0
     const companyMissing = companyIndex === null
     const companyPts = ((companyIndex ?? 0) * sharedWeight) / 100
-    const valuesPts = (100 * valuesWeight) / 100
+    // Values: average 1-5 rating mapped with the same level->points rule as KPI levels (level 3 = 100%)
+    const ratings = empSheet.values_ratings || {}
+    const valuesRated = VALUE_DEFS.every((v) => typeof ratings[v.key] === "number")
+    const valuesScore = valuesRated
+      ? ((VALUE_DEFS.reduce((a, v) => a + (ratings[v.key] as number), 0) / VALUE_DEFS.length) / 3) * 100
+      : null
+    const valuesPts = ((valuesScore ?? 0) * valuesWeight) / 100
     let indivPts = 0
     empSheet.kpis.forEach((k) => {
       indivPts += (kpiLevelScore(k) * (Number(k.weight_pct) || 0)) / 100
     })
-    const total = Math.round((companyPts + valuesPts + indivPts) * 10) / 10
-    return { total, companyPts, valuesPts, indivPts, companyMissing }
-  }, [empSheet, companyIndex])
+    const localTotal = Math.round((companyPts + valuesPts + indivPts) * 10) / 10
+    // Prefer the backend composite when the sheet has no unsaved edits; otherwise use the local calculation
+    const backend = !sheetDirty ? empSheet.composite : undefined
+    const total = backend && typeof backend.total === "number" ? backend.total : localTotal
+    return { total, companyPts, valuesPts, indivPts, companyMissing, valuesRated, valuesScore }
+  }, [empSheet, companyIndex, sheetDirty])
   const compositeScore = compositeBreakdown.total
 
   // Analytics Chart Data: Budget vs Actuals
@@ -1374,6 +1428,89 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     {sheetLoadWarning}
                   </div>
                 )}
+                {/* Approval workflow banner (outside the lockable fieldset so actions stay usable) */}
+                {(empSheet.status === "SUBMITTED" || empSheet.status === "APPROVED" || !!empSheet.reject_reason) && (
+                  <div className="p-3 rounded-lg border border-border bg-card text-xs space-y-2" data-testid="kpi-approval-banner">
+                    {empSheet.status === "DRAFT" && empSheet.reject_reason && (
+                      <div className="p-2 rounded border border-red-500/40 bg-red-500/10 text-red-400">
+                        <b>Changes requested:</b> {empSheet.reject_reason}
+                      </div>
+                    )}
+                    {empSheet.status === "SUBMITTED" && (
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-muted-foreground flex items-center gap-1.5">
+                            <Clock className="h-3.5 w-3.5 text-amber-400" />
+                            Submitted and awaiting approval.
+                            {!empSheet.permissions?.can_approve && " Only a manager or HR user (other than the sheet owner) can approve."}
+                          </span>
+                          {empSheet.permissions?.can_approve && (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                onClick={() => void runWorkflow("approve")}
+                                disabled={workflowBusy}
+                                className="text-xs h-8 bg-emerald-600 text-white font-semibold hover:bg-emerald-600/90"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setRejectOpen((o) => !o)}
+                                disabled={workflowBusy}
+                                className="text-xs h-8"
+                              >
+                                Request changes
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                        {rejectOpen && empSheet.permissions?.can_approve && (
+                          <div className="space-y-2">
+                            <Textarea
+                              value={rejectReasonText}
+                              onChange={(e) => setRejectReasonText(e.target.value)}
+                              placeholder="Explain what needs to change (required)"
+                              className="text-xs min-h-[70px]"
+                            />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => void runWorkflow("reject")}
+                              disabled={workflowBusy || !rejectReasonText.trim()}
+                              className="text-xs h-8 border-red-500/50 text-red-400"
+                            >
+                              Send back to draft
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {empSheet.status === "APPROVED" && (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-emerald-400 flex items-center gap-1.5">
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Approved and locked
+                          {empSheet.approved_at ? ` on ${new Date(empSheet.approved_at).toLocaleDateString("en-ZA")}` : ""}. Editing is disabled.
+                        </span>
+                        {empSheet.permissions?.can_reopen && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void runWorkflow("reopen")}
+                            disabled={workflowBusy}
+                            className="text-xs h-8"
+                          >
+                            Reopen
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                <fieldset disabled={empSheet.status === "APPROVED"} className="contents border-0 p-0 m-0 min-w-0">
                 {/* Employee Profile Header & 100% Weight Verification Banner */}
                 <Card className="border-border bg-card shadow-sm">
                   <CardContent className="p-5">
@@ -1890,6 +2027,43 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                       </div>
                     )}
 
+                    {/* Values assessment (manager rates 1-5) */}
+                    <div className="p-3 rounded-lg border border-border/80 bg-background/60 text-[11px] space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-foreground">Values assessment (1-5, rated by manager)</span>
+                        <span className="text-muted-foreground">
+                          {compositeBreakdown.valuesRated && compositeBreakdown.valuesScore !== null
+                            ? `Values score ${compositeBreakdown.valuesScore.toFixed(0)}%`
+                            : "Values not yet rated"}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {VALUE_DEFS.map((v) => (
+                          <div key={v.key} className="flex items-center justify-between gap-2">
+                            <span className="text-muted-foreground">{v.label}</span>
+                            <div className="flex gap-0.5">
+                              {[1, 2, 3, 4, 5].map((n) => (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  onClick={() =>
+                                    mutateSheet((s) => ({ ...s, values_ratings: { ...(s.values_ratings || {}), [v.key]: n } }))
+                                  }
+                                  className={`h-6 w-6 rounded text-[11px] font-semibold border ${
+                                    empSheet.values_ratings?.[v.key] === n
+                                      ? "bg-primary text-primary-foreground border-primary"
+                                      : "border-border text-muted-foreground hover:text-foreground"
+                                  }`}
+                                >
+                                  {n}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
                     {/* Composite score preview */}
                     <div className="p-3 rounded-lg border border-border/80 bg-background/60 text-[11px] space-y-1">
                       <div className="flex items-center justify-between">
@@ -1900,11 +2074,12 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                         <span>
                           Shared company: <b className="text-foreground">{compositeBreakdown.companyMissing ? "Not connected" : `${compositeBreakdown.companyPts.toFixed(1)} pts`}</b>
                         </span>
-                        <span>Values: <b className="text-foreground">{compositeBreakdown.valuesPts.toFixed(1)} pts</b></span>
+                        <span>Values: <b className="text-foreground">{compositeBreakdown.valuesRated ? `${compositeBreakdown.valuesPts.toFixed(1)} pts` : "Values not yet rated"}</b></span>
                         <span>Individual KPIs: <b className="text-foreground">{compositeBreakdown.indivPts.toFixed(1)} pts</b></span>
                       </div>
                       <p className="text-[10px] text-muted-foreground/80">
-                        Level 3 = 100% of target. Values pillar is assumed 100% in this preview.
+                        Level 3 = 100% of target.
+                        {!compositeBreakdown.valuesRated ? " Values count as 0 pts until all four values are rated." : ""}
                         {compositeBreakdown.companyMissing ? " Shared company score counts as 0 until sales/cost/profit sources are connected." : ""}
                       </p>
                     </div>
@@ -1966,6 +2141,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     </div>
                   </CardContent>
                 </Card>
+                </fieldset>
               </>
             ) : null}
           </div>

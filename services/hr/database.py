@@ -349,6 +349,12 @@ class EmployeeKPISheet(Base):
     kpis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of individual KPIs with SMART levels 1-5
     overall_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     reviewer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Approval workflow (added via idempotent ALTER in _ensure_kpi_sheet_columns)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # JSON object: {"ubuntu_empathy": 1-5, "operational_speed": 1-5, "staff_wellness_bcea": 1-5, "popia_ethical_governance": 1-5}
+    values_ratings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -383,6 +389,51 @@ async def init_tables():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _ensure_kpi_unique_indexes(conn)
+        await _ensure_kpi_sheet_columns(conn)
+        await _ensure_employee_columns(conn)
+
+
+async def _ensure_employee_columns(conn) -> None:
+    """Idempotent migration: create_all never ALTERs, so add agent columns missing from older DBs."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger("hr.database")
+    cols = [
+        ("is_agent", "BOOLEAN DEFAULT FALSE"),
+        ("agent_type", "VARCHAR(50)"),
+        ("llm_model", "VARCHAR(100)"),
+        ("financial_limit", "DOUBLE PRECISION"),
+        ("scope", "VARCHAR(500)"),
+        ("is_subagent", "BOOLEAN DEFAULT FALSE"),
+        ("parent_agent_id", "UUID"),
+    ]
+    for name, typ in cols:
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(f"ALTER TABLE employees ADD COLUMN IF NOT EXISTS {name} {typ}"))
+        except Exception as exc:  # never block startup
+            log.warning("Could not ensure column employees.%s: %s", name, exc)
+
+
+async def _ensure_kpi_sheet_columns(conn) -> None:
+    """Idempotent migration: add approval + values-rating columns to existing tables."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger("hr.database")
+    cols = [
+        ("approved_by", "UUID"),
+        ("approved_at", "TIMESTAMP WITH TIME ZONE"),
+        ("reject_reason", "TEXT"),
+        ("values_ratings", "TEXT"),
+    ]
+    for name, typ in cols:
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(
+                    f"ALTER TABLE employee_kpi_sheets ADD COLUMN IF NOT EXISTS {name} {typ}"
+                ))
+        except Exception as exc:  # never block startup
+            log.warning("Could not ensure column employee_kpi_sheets.%s: %s", name, exc)
 
 
 async def _ensure_kpi_unique_indexes(conn) -> None:

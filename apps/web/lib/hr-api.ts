@@ -982,6 +982,35 @@ export interface EmployeeKPISheet {
   overall_score?: number | null
   reviewer_notes?: string | null
   company_benchmarks?: Partial<CompanyKPIConfig>
+  /** Manager ratings (1-5) for the 4 strategic values; keys in VALUE_KEYS. */
+  values_ratings?: Partial<Record<ValueKey, number>>
+  composite?: {
+    total: number
+    shared_score: number
+    values_score: number | null
+    individual_score: number
+    values_rated: boolean
+    company_missing: boolean
+  }
+  approved_by?: string | null
+  approved_at?: string | null
+  reject_reason?: string | null
+  permissions?: { can_approve: boolean; can_reopen: boolean }
+}
+
+export type ValueKey =
+  | "ubuntu_empathy"
+  | "operational_speed"
+  | "staff_wellness_bcea"
+  | "popia_ethical_governance"
+
+export interface KPIWorkflowResult {
+  success: boolean
+  sheet_id: string
+  status: string
+  approved_by?: string | null
+  approved_at?: string | null
+  reject_reason?: string | null
 }
 
 export interface AISmartCriteriaResult {
@@ -1031,9 +1060,28 @@ export const updateEmployeeKPISheet = (empId: string, data: Partial<EmployeeKPIS
     status: string
     total_weight_pct: number
     overall_score?: number | null
+    values_ratings?: Partial<Record<ValueKey, number>>
   }>(`/employees/${empId}/kpi-sheet`, {
     method: "PUT",
     body: JSON.stringify(data),
+  })
+
+export const approveEmployeeKPISheet = (empId: string, fiscalYear?: string) =>
+  fetchHR<KPIWorkflowResult>(`/employees/${empId}/kpi-sheet/approve`, {
+    method: "POST",
+    body: JSON.stringify({ fiscal_year: fiscalYear }),
+  })
+
+export const rejectEmployeeKPISheet = (empId: string, reason: string, fiscalYear?: string) =>
+  fetchHR<KPIWorkflowResult>(`/employees/${empId}/kpi-sheet/reject`, {
+    method: "POST",
+    body: JSON.stringify({ reason, fiscal_year: fiscalYear }),
+  })
+
+export const reopenEmployeeKPISheet = (empId: string, fiscalYear?: string) =>
+  fetchHR<KPIWorkflowResult>(`/employees/${empId}/kpi-sheet/reopen`, {
+    method: "POST",
+    body: JSON.stringify({ fiscal_year: fiscalYear }),
   })
 
 export const generateAISmartCriteria = (data: {
