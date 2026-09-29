@@ -204,6 +204,20 @@ class FirecrawlClient:
             payload["onlyMainContent"] = only_main_content
         return await self._post("/scrape", payload, require_key=False, timeout=timeout)
 
+    async def scrape_json(self, url: str, *, prompt: str, schema: Optional[dict] = None,
+                          timeout: float = 90.0) -> dict:
+        """Scrape one URL with LLM JSON extraction (v2 formats entry
+        {"type": "json", "prompt", "schema"}). Returns the extracted object
+        from `data.json` ({} when absent)."""
+        fmt: dict[str, Any] = {"type": "json", "prompt": prompt}
+        if schema:
+            fmt["schema"] = schema
+        result = await self._post("/scrape", {"url": url, "formats": [fmt]},
+                                  require_key=False, timeout=timeout)
+        data = result.get("data") if isinstance(result, dict) else None
+        js = data.get("json") if isinstance(data, dict) else None
+        return js if isinstance(js, dict) else {}
+
     async def interact(self, url: str, actions: list[dict]) -> dict:
         """Browser actions on a live page (clicks/forms/login) for portals that
         need interaction before content is reachable. Keyless-supported."""
@@ -236,8 +250,21 @@ class FirecrawlClient:
         job_id = started.get("id")
         if not job_id:
             raise FirecrawlError(f"Firecrawl /crawl did not return a job id: {str(started)[:200]}")
-        return await self._poll(f"/crawl/{job_id}", ok={"completed"}, bad={"failed", "cancelled"},
-                                poll_interval=poll_interval, max_wait=max_wait)
+        final = await self._poll(f"/crawl/{job_id}", ok={"completed"}, bad={"failed", "cancelled"},
+                                 poll_interval=poll_interval, max_wait=max_wait)
+        # GET /crawl/{id} returns at most ~10MB per page and links the rest via `next`.
+        data = list(final.get("data") or [])
+        nxt = final.get("next")
+        for _ in range(50):
+            if not nxt:
+                break
+            path = nxt[len(self.base_url):] if str(nxt).startswith(self.base_url) else nxt
+            page = await self._get(path, require_key=True)
+            data.extend(page.get("data") or [])
+            nxt = page.get("next")
+        final["data"] = data
+        final["next"] = None
+        return final
 
     async def extract(self, urls: list[str], *, prompt: Optional[str] = None,
                       schema: Optional[dict] = None, poll_interval: float = 3.0,

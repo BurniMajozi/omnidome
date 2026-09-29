@@ -48,6 +48,7 @@ export function ProductsModule() {
   const [bundles, setBundles] = useState<Bundle[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState("overview")
+  const [pricingTab, setPricingTab] = useState("plans")
   const [showAddBundle, setShowAddBundle] = useState(false)
   const [newBundle, setNewBundle] = useState({ name: "", discount_pct: "5", plan_ids: [] as string[] })
   const isClient = useIsClient()
@@ -191,7 +192,6 @@ export function ProductsModule() {
             <TabsTrigger value="products">Products</TabsTrigger>
             <TabsTrigger value="bundles">Bundles</TabsTrigger>
             <TabsTrigger value="pricing">Pricing</TabsTrigger>
-            <TabsTrigger value="market">Market Watch</TabsTrigger>
           </TabsList>
         </div>
 
@@ -336,6 +336,12 @@ export function ProductsModule() {
         </TabsContent>
 
         <TabsContent value="pricing" className="mt-4">
+          <Tabs value={pricingTab} onValueChange={setPricingTab}>
+            <TabsList className="bg-secondary">
+              <TabsTrigger value="plans">Plan Pricing</TabsTrigger>
+              <TabsTrigger value="market">Market Watch</TabsTrigger>
+            </TabsList>
+            <TabsContent value="plans" className="mt-4">
           <Card className="border-border bg-card">
             <CardHeader>
               <CardTitle className="text-base">Price Comparison by Product</CardTitle>
@@ -361,9 +367,11 @@ export function ProductsModule() {
               )}
             </CardContent>
           </Card>
-        </TabsContent>
-        <TabsContent value="market" className="mt-4">
-          <MarketWatchView plans={plans} />
+            </TabsContent>
+            <TabsContent value="market" className="mt-4">
+              <MarketWatchView plans={plans} />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>

@@ -1780,7 +1780,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 <Button
                   size="icon"
                   className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground"
-                  onClick={handleSendMessage}
+                  onClick={() => void handleSendMessage()}
                   disabled={isSending || !inputValue.trim()}
                   title="Send message"
                 >

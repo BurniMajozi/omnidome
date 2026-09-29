@@ -45,6 +45,39 @@ function describeSignal(s: MarketSignal): string {
   return p?.price_zar != null ? formatCurrency(p.price_zar) : ""
 }
 
+/** Parse download Mbps from text like "50/50 Mbps", "100Mbps Fibre", "1Gbps". */
+function parseSpeedMbps(text: string | null | undefined): number | null {
+  if (!text) return null
+  const pair = text.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*(?:mbps|mb\/s|mbit)?/i)
+  if (pair) return parseFloat(pair[1])
+  const g = text.match(/(\d+(?:\.\d+)?)\s*gbps/i)
+  if (g) return parseFloat(g[1]) * 1000
+  const m = text.match(/(\d+(?:\.\d+)?)\s*(?:mbps|mb\/s|mbit|meg)/i)
+  return m ? parseFloat(m[1]) : null
+}
+
+interface Matched {
+  plan: Plan | null
+  speed: number | null
+  exact: boolean // true when matched by speed, false when falling back to cheapest
+}
+
+function matchOurPlan(r: CompareRow, cands: { plan: Plan; speed: number | null }[]): Matched {
+  if (cands.length === 0) return { plan: null, speed: null, exact: false }
+  const withSpeed = cands.filter((c) => c.speed != null)
+  if (r.speed_down_mbps != null && withSpeed.length > 0) {
+    let best = withSpeed[0]
+    for (const c of withSpeed) {
+      const d = Math.abs(c.speed! - r.speed_down_mbps)
+      const bd = Math.abs(best.speed! - r.speed_down_mbps)
+      if (d < bd || (d === bd && c.plan.price < best.plan.price)) best = c
+    }
+    return { plan: best.plan, speed: best.speed, exact: true }
+  }
+  const cheapest = cands.reduce((a, b) => (b.plan.price < a.plan.price ? b : a))
+  return { plan: cheapest.plan, speed: cheapest.speed, exact: false }
+}
+
 function errMsg(e: unknown): string {
   return e instanceof MarketApiError || e instanceof Error ? e.message : "Something went wrong"
 }
@@ -108,16 +141,22 @@ export function MarketWatchView({ plans }: { plans: Plan[] }) {
     setForm({ competitor_name: w.competitor_name, url: w.url, category: w.category })
   }
 
-  // Our cheapest active plan per category (billing catalog) for the price delta.
-  const ourCheapest = useMemo(() => {
-    const map: Record<string, number> = {}
+  // Our active plans per category, with download speed parsed from the plan name
+  // (billing plans have no speed field). Handles "50/50 Mbps", "100Mbps", "1 Gbps".
+  const ourPlans = useMemo(() => {
+    const map: Record<string, { plan: Plan; speed: number | null }[]> = {}
     for (const p of plans) {
       if (!p.is_active || !p.category) continue
       const k = p.category.toLowerCase()
-      map[k] = Math.min(map[k] ?? Infinity, p.price)
+      ;(map[k] ??= []).push({ plan: p, speed: parseSpeedMbps(p.name) })
     }
     return map
   }, [plans])
+
+  const matched = useMemo(
+    () => compare.map((r) => matchOurPlan(r, ourPlans[r.category] ?? [])),
+    [compare, ourPlans],
+  )
 
   const unacked = signals.filter((s) => !s.acknowledged)
 
@@ -317,14 +356,18 @@ export function MarketWatchView({ plans }: { plans: Plan[] }) {
                     <th className="pr-3">Plan</th>
                     <th className="pr-3">Speed (down/up)</th>
                     <th className="pr-3">Price</th>
-                    <th className="pr-3">Our cheapest (same category)</th>
-                    <th>Delta</th>
+                    <th className="pr-3">Our matched plan</th>
+                    <th className="pr-3">Our speed</th>
+                    <th className="pr-3">Our price</th>
+                    <th>Delta (R / %)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {compare.map((r, i) => {
-                    const ours = ourCheapest[r.category]
+                    const m = matched[i]
+                    const ours = m.plan?.price ?? null
                     const delta = ours != null && r.price_zar != null ? r.price_zar - ours : null
+                    const pct = delta != null && ours ? (delta / ours) * 100 : null
                     return (
                       <tr key={`${r.watch_id}-${r.plan_name}-${i}`} className="border-b border-border/50">
                         <td className="py-2 pr-3">{r.competitor_name}</td>
@@ -333,6 +376,13 @@ export function MarketWatchView({ plans }: { plans: Plan[] }) {
                           {r.speed_down_mbps ?? "?"}/{r.speed_up_mbps ?? "?"} Mbps
                         </td>
                         <td className="pr-3">{formatCurrency(r.price_zar)}</td>
+                        <td className="pr-3">
+                          {m.plan ? m.plan.name : "-"}
+                          {m.plan && !m.exact && (
+                            <span className="ml-1 text-xs text-muted-foreground">(no speed match)</span>
+                          )}
+                        </td>
+                        <td className="pr-3">{m.speed != null ? `${m.speed} Mbps` : "?"}</td>
                         <td className="pr-3">{ours != null ? formatCurrency(ours) : "-"}</td>
                         <td
                           className={
@@ -345,7 +395,11 @@ export function MarketWatchView({ plans }: { plans: Plan[] }) {
                                   : ""
                           }
                         >
-                          {delta == null ? "-" : `${delta > 0 ? "+" : ""}${formatCurrency(delta)}`}
+                          {delta == null
+                            ? "-"
+                            : `${delta > 0 ? "+" : ""}${formatCurrency(delta)}${
+                                pct != null ? ` (${pct > 0 ? "+" : ""}${pct.toFixed(1)}%)` : ""
+                              }`}
                         </td>
                       </tr>
                     )
@@ -353,7 +407,7 @@ export function MarketWatchView({ plans }: { plans: Plan[] }) {
                 </tbody>
               </table>
               <p className="mt-2 text-xs text-muted-foreground">
-                Red: competitor is cheaper than our cheapest active plan in that category. Green: we are cheaper.
+                Each competitor plan is matched to our nearest active plan by download speed in the same category (speed parsed from our plan names); falls back to our cheapest plan when no speed can be matched. Red: competitor is cheaper. Green: we are cheaper. Delta is competitor minus ours.
               </p>
             </div>
           )}
