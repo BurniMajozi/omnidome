@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, Numeric, Time
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, Numeric, Time, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -301,7 +301,60 @@ class Payslip(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+# ── Company & Individual KPI Models ───────────────────────────────────
+
+class CompanyKPIConfig(Base):
+    """Whole-company shared KPI targets, budget benchmarks, and position level weights."""
+    __tablename__ = "company_kpi_configs"
+    __table_args__ = (UniqueConstraint("tenant_id", "fiscal_year", name="uq_company_kpi_tenant_fy"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    fiscal_year: Mapped[str] = mapped_column(String(50), nullable=False, default="FY 2026/2027")
+    # Shared Company Metrics against Budget (Sales, Cost, Profit)
+    sales_budget_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=3500000.00)
+    sales_actual_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=0.00)
+    cost_budget_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=2100000.00)
+    cost_actual_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=0.00)
+    profit_budget_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=1400000.00)
+    profit_actual_zar: Mapped[float] = mapped_column(Numeric(14, 2), default=0.00)
+    # Strategic Values (fixed 10% across all employees)
+    values_weight_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=10.00)
+    values_description: Mapped[Optional[str]] = mapped_column(Text, default="Ubuntu & Customer Empathy, Operational Excellence & Speed, Staff Wellness (BCEA), POPIA & Ethical Governance")
+    # Level weights JSON: weights for Executive (60%), Director (40%), Manager (30%), Staff (20%)
+    level_weights_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Source modes: LIVE_TABLE, PERCENTAGE, MANUAL
+    sales_source_mode: Mapped[Optional[str]] = mapped_column(String(50), default="LIVE_TABLE")
+    cost_source_mode: Mapped[Optional[str]] = mapped_column(String(50), default="LIVE_TABLE")
+    profit_source_mode: Mapped[Optional[str]] = mapped_column(String(50), default="LIVE_TABLE")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmployeeKPISheet(Base):
+    """Individual employee KPI sheet with shared company cascade and individual SMART criteria."""
+    __tablename__ = "employee_kpi_sheets"
+    __table_args__ = (UniqueConstraint("tenant_id", "employee_id", "fiscal_year", name="uq_employee_kpi_tenant_emp_fy"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    employee_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("employees.id", ondelete="CASCADE"), index=True)
+    fiscal_year: Mapped[str] = mapped_column(String(50), nullable=False, default="FY 2026/2027")
+    position_level: Mapped[str] = mapped_column(String(50), default="STAFF")  # EXECUTIVE, DIRECTOR, MANAGER, STAFF
+    company_shared_weight_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=20.00)
+    values_weight_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=10.00)
+    individual_target_weight_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=70.00)
+    total_weight_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=100.00)
+    status: Mapped[str] = mapped_column(String(30), default="DRAFT")  # DRAFT, SUBMITTED, APPROVED, CALIBRATED
+    kpis_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON array of individual KPIs with SMART levels 1-5
+    overall_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    reviewer_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 # ── Session factory ────────────────────────────────────────────────────
+
 
 _session_factory: Optional[async_sessionmaker] = None
 
@@ -329,3 +382,28 @@ async def init_tables():
     engine = get_async_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _ensure_kpi_unique_indexes(conn)
+
+
+async def _ensure_kpi_unique_indexes(conn) -> None:
+    """Idempotent migration: create_all never ALTERs existing tables, so add the
+    unique indexes explicitly. Skipped (with a warning) if duplicates exist."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger("hr.database")
+    specs = [
+        ("company_kpi_configs", "uq_company_kpi_tenant_fy", "tenant_id, fiscal_year"),
+        ("employee_kpi_sheets", "uq_employee_kpi_tenant_emp_fy", "tenant_id, employee_id, fiscal_year"),
+    ]
+    for table, idx, cols in specs:
+        try:
+            async with conn.begin_nested():
+                dup = await conn.execute(text(
+                    f"SELECT 1 FROM {table} GROUP BY {cols} HAVING COUNT(*) > 1 LIMIT 1"
+                ))
+                if dup.first() is not None:
+                    log.warning("Duplicates in %s on (%s); skipping unique index %s - dedupe manually", table, cols, idx)
+                    continue
+                await conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {idx} ON {table} ({cols})"))
+        except Exception as exc:  # never block startup
+            log.warning("Could not ensure unique index %s: %s", idx, exc)

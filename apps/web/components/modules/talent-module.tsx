@@ -120,6 +120,7 @@ import { TalentTrainingView } from "./talent/talent-training-view"
 import { TalentDisciplinaryView } from "./talent/talent-disciplinary-view"
 import { TalentCultureView } from "./talent/talent-culture-view"
 import { TalentExitView } from "./talent/talent-exit-view"
+import { PerformanceObjectivesView } from "./talent/performance-objectives-view"
 
 type NewEmployeeModalProps = {
   isOpen: boolean
@@ -468,7 +469,7 @@ export function TalentModule() {
   }
 
   useEffect(() => {
-    if (activePanel === "directory" || activePanel === "onboarding" || activePanel === "org_chart" || activePanel === "time" || activePanel === "reporting") {
+    if (activePanel === "directory" || activePanel === "onboarding" || activePanel === "org_chart" || activePanel === "time" || activePanel === "reporting" || activePanel === "performance") {
       fetchDir()
     }
   }, [activePanel])
@@ -1018,131 +1019,14 @@ export function TalentModule() {
       // ── PERFORMANCE ───────────────────────────────────────────────
             case "performance":
               return (
-                <div className="space-y-6">
-                  <Card>
-                    <CardHeader>
-                      <CardTitle className="flex items-center gap-2">
-                        <BarChart3 className="h-4 w-4 text-muted-foreground" /> KPI management
-                      </CardTitle>
-                      <CardDescription>Targets, reviews, and team health metrics.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[680px]">
-                          <thead>
-                            <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                              <th className="py-2 pr-4 font-medium">KPI</th>
-                              <th className="py-2 pr-4 font-medium">Owner</th>
-                              <th className="py-2 pr-4 font-medium">Target</th>
-                              <th className="py-2 pr-4 font-medium">Current</th>
-                              <th className="py-2 font-medium">Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {perfLoading ? (
-                              <LoadingRow cols={5} />
-                            ) : perfError ? (
-                              <ErrorRow message={perfError} cols={5} />
-                            ) : kpis.length === 0 ? (
-                              <tr><td colSpan={5} className="py-4 text-center text-sm text-muted-foreground">No KPI data available. Configure KPIs in analytics.</td></tr>
-                            ) : (
-                              kpis.map((row) => (
-                                <tr key={row.kpi} className="border-b border-border/60 text-sm">
-                                  <td className="py-3 pr-4 text-foreground">{row.kpi}</td>
-                                  <td className="py-3 pr-4 text-muted-foreground">{row.owner}</td>
-                                  <td className="py-3 pr-4 text-muted-foreground">{row.target}</td>
-                                  <td className="py-3 pr-4 text-muted-foreground">{row.current}</td>
-                                  <td className="py-3">
-                                    <Badge variant="outline" className={row.ok ? "border-emerald-500/40 text-emerald-500" : "border-red-500/40 text-red-400"}>
-                                      {row.ok ? "On track" : "At risk"}
-                                    </Badge>
-                                  </td>
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <div className="grid gap-6 lg:grid-cols-2">
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Employee growth & turnover</CardTitle>
-                        <CardDescription>Hiring vs separations over time.</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="h-64">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={employeeGrowth}>
-                              <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                              <XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} />
-                              <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
-                              <Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} />
-                              <Legend />
-                              <Bar dataKey="hired" fill="#4ade80" name="Hired" />
-                              <Bar dataKey="separated" fill="#ef4444" name="Separated" />
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>Attrition prediction</CardTitle>
-                        <CardDescription>Early signals across departments.</CardDescription>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="grid gap-3">
-                          {attritionData.length === 0 ? (
-                            <p className="col-span-full text-sm text-muted-foreground">No attrition risk data available. Run analytics to populate.</p>
-                          ) : (
-                            attritionData.map((row) => (
-                              <div key={row.dept} className="flex items-center justify-between rounded-lg border border-border bg-background/40 p-3">
-                                <div>
-                                  <p className="font-medium text-foreground">{row.dept}</p>
-                                  <p className="text-xs text-muted-foreground">{row.note}</p>
-                                </div>
-                                <Badge variant="outline" className={statusColor(row.risk)}>{row.risk}</Badge>
-                              </div>
-                            ))
-                          )}
-                        </div>
-                        <div className="mt-4 rounded-lg border border-border bg-background/40 p-4 text-sm text-muted-foreground">
-                          Combine surveys, absence, performance, and scheduling load to flag retention risk.
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  <Card>
-                    <CardHeader>
-                      <CardTitle>Surveys</CardTitle>
-                      <CardDescription>Pulse results and follow-ups.</CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      <div className="grid gap-4 sm:grid-cols-3">
-                        {[
-                          { label: "Last pulse", value: "—" },
-                          { label: "Participation", value: "—" },
-                          { label: "Top theme", value: "—" },
-                        ].map((metric) => (
-                          <div key={metric.label} className="rounded-lg border border-border bg-background/40 p-4">
-                            <p className="text-xs text-muted-foreground">{metric.label}</p>
-                            <p className="mt-1 text-lg font-semibold text-foreground">{metric.value}</p>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-sm text-muted-foreground">Create a survey, publish to teams, and track action items.</p>
-                        <Button variant="outline">New survey</Button>
-                      </div>
-                    </CardContent>
-                  </Card>
+                <div className="space-y-6 min-w-0 w-full max-w-full">
+                  <PerformanceObjectivesView
+                    employees={employeesDir}
+                    onRefresh={fetchDir}
+                  />
                 </div>
               )
+
 
       // ── CULTURE & RECOGNITION ──────────────────────────────────────
       case "culture":

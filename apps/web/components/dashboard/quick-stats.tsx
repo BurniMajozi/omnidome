@@ -19,8 +19,11 @@ import {
   ArrowUpRight,
   RefreshCw,
   Sparkles,
+  Target,
 } from "lucide-react"
+import { Badge } from "@/components/ui/badge"
 import { salesApi, type PipelineOverviewStage } from "@/lib/sales-api"
+import { getCorporateSalesSnapshot, type CorporateSalesSnapshot } from "@/lib/hr-api"
 import { useModuleData } from "@/lib/module-data"
 
 type MetricView = "revenue" | "deals" | "pipeline"
@@ -51,6 +54,20 @@ export function QuickStats() {
   const [pipelineOverview, setPipelineOverview] = useState<PipelineOverviewStage[]>([])
   const [isLoadingPipeline, setIsLoadingPipeline] = useState(false)
   const [lastRefreshed, setLastRefreshed] = useState<string>("just now")
+  const [corpSales, setCorpSales] = useState<CorporateSalesSnapshot | null>(null)
+  const [corpSalesLoading, setCorpSalesLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    getCorporateSalesSnapshot()
+      .then((snap) => { if (!cancelled) setCorpSales(snap) })
+      .catch(() => { if (!cancelled) setCorpSales(null) })
+      .finally(() => { if (!cancelled) setCorpSalesLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  const fmtCorpZar = (v: number | null | undefined) =>
+    v === null || v === undefined ? "Not connected" : `R ${Math.round(v).toLocaleString("en-ZA")}`
 
   // Pull live sales module data from Supabase/module-data
   const { data: salesModuleData } = useModuleData<{
@@ -190,6 +207,40 @@ export function QuickStats() {
             <span className="hidden sm:inline">Sync</span>
           </button>
         </div>
+      </div>
+
+      {/* KPI vs Budget Shared Alignment Banner */}
+      <div className="mt-4 p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
+            <Target className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-foreground">Corporate Sales KPI vs Target Budget</span>
+              <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-[10px]">
+                {corpSalesLoading
+                  ? "Loading..."
+                  : corpSales?.achievementPct != null
+                    ? `${corpSales.achievementPct.toFixed(1)}% of ${fmtCorpZar(corpSales.budget)} Target`
+                    : "Not connected"}
+              </Badge>
+              <Badge variant="outline" className="border-primary/40 text-primary text-[10px]">
+                Shared KPI (20%–60% Weight)
+              </Badge>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Actual: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.budget)}</b> • Values Anchor: 10% Uniform
+            </p>
+          </div>
+        </div>
+        <a
+          href="#talent"
+          className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline shrink-0"
+        >
+          <span>Performance & Objectives</span>
+          <ArrowUpRight className="h-3.5 w-3.5" />
+        </a>
       </div>
 
       {/* Metric Switcher Cards (CX Interactive Tabs) */}

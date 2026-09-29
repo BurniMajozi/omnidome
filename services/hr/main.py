@@ -1,7 +1,8 @@
 import os
 import logging
+import json
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import uuid
 
 import httpx
@@ -18,6 +19,7 @@ from services.hr.database import (
     StaffSchedule, TrainingCourse, TrainingEnrollment,
     BenefitEnrollment, DisciplinaryAction, StaffExit, OnboardingTask,
     PayrollProfile, PayrollRun, Payslip,
+    CompanyKPIConfig, EmployeeKPISheet,
 )
 from services.hr import paystack as ps
 from services.hr.cross_service import router as cross_service_router
@@ -420,6 +422,832 @@ async def create_performance_review(
         "sentiment_score": float(review.sentiment_score) if review.sentiment_score is not None else None,
         "attrition_risk": review.attrition_risk, "reviewer_notes": review.reviewer_notes,
         "created_at": review.created_at,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPANY & INDIVIDUAL KPI / OBJECTIVE MANAGEMENT ENGINE
+# ═══════════════════════════════════════════════════════════════════════════
+
+DEFAULT_FISCAL_YEAR = "FY 2026/2027"
+VALID_SHEET_STATUSES = {"DRAFT", "SUBMITTED", "APPROVED"}
+WEIGHT_TOLERANCE = 0.01
+
+DEFAULT_LEVEL_WEIGHTS = {
+    "EXECUTIVE": 60.0,
+    "DIRECTOR": 40.0,
+    "MANAGER": 30.0,
+    "STAFF": 20.0,
+}
+
+class CompanyKPIConfigUpdate(BaseModel):
+    fiscal_year: Optional[str] = "FY 2026/2027"
+    sales_budget_zar: Optional[float] = None
+    sales_actual_zar: Optional[float] = None
+    cost_budget_zar: Optional[float] = None
+    cost_actual_zar: Optional[float] = None
+    profit_budget_zar: Optional[float] = None
+    profit_actual_zar: Optional[float] = None
+    values_weight_pct: Optional[float] = 10.0
+    values_description: Optional[str] = None
+    level_weights: Optional[Dict[str, float]] = None
+    sales_source_mode: Optional[str] = "LIVE_TABLE"
+    cost_source_mode: Optional[str] = "LIVE_TABLE"
+    profit_source_mode: Optional[str] = "LIVE_TABLE"
+
+
+class EmployeeKPISheetUpdate(BaseModel):
+    fiscal_year: Optional[str] = "FY 2026/2027"
+    position_level: Optional[str] = None
+    company_shared_weight_pct: Optional[float] = None
+    values_weight_pct: Optional[float] = 10.0
+    individual_target_weight_pct: Optional[float] = None
+    total_weight_pct: Optional[float] = 100.0
+    status: Optional[str] = "DRAFT"  # DRAFT, SUBMITTED, APPROVED, CALIBRATED
+    kpis: Optional[List[Dict[str, Any]]] = None
+    overall_score: Optional[float] = None
+    reviewer_notes: Optional[str] = None
+
+
+class CascadeKPIRequest(BaseModel):
+    fiscal_year: Optional[str] = "FY 2026/2027"
+
+
+class AISmartCriteriaRequest(BaseModel):
+    title: str
+    category: Optional[str] = "Operational Excellence"
+    job_title: Optional[str] = None
+    department: Optional[str] = None
+
+
+def _calculate_company_scores(config: CompanyKPIConfig) -> Dict[str, Any]:
+    s_budget = float(config.sales_budget_zar) if config.sales_budget_zar else 1.0
+    s_actual = float(config.sales_actual_zar) if config.sales_actual_zar else 0.0
+    sales_ach = round((s_actual / s_budget) * 100.0, 2) if s_budget > 0 else 0.0
+
+    c_budget = float(config.cost_budget_zar) if config.cost_budget_zar else 1.0
+    c_actual = float(config.cost_actual_zar) if config.cost_actual_zar else 0.0
+    # Cost efficiency (matches frontend): budget / actual; under budget is >100%
+    cost_eff = round((c_budget / c_actual) * 100.0, 2) if c_actual > 0 else 100.0
+
+    p_budget = float(config.profit_budget_zar) if config.profit_budget_zar else 1.0
+    p_actual = float(config.profit_actual_zar) if config.profit_actual_zar else 0.0
+    profit_ach = round((p_actual / p_budget) * 100.0, 2) if p_budget > 0 else 0.0
+
+    # Single source of truth (matches frontend): 45% sales / 35% cost efficiency / 20% profit
+    shared_score = round((sales_ach * 0.45) + (cost_eff * 0.35) + (profit_ach * 0.20), 2)
+    level_weights = json.loads(config.level_weights_json) if config.level_weights_json else DEFAULT_LEVEL_WEIGHTS
+
+    return {
+        "id": str(config.id),
+        "fiscal_year": config.fiscal_year,
+        "sales_budget_zar": float(config.sales_budget_zar or 0.0),
+        "sales_actual_zar": float(config.sales_actual_zar or 0.0),
+        "sales_achievement_pct": sales_ach,
+        "sales_source_mode": config.sales_source_mode or "LIVE_TABLE",
+        "cost_budget_zar": float(config.cost_budget_zar or 0.0),
+        "cost_actual_zar": float(config.cost_actual_zar or 0.0),
+        "cost_efficiency_pct": cost_eff,
+        "cost_source_mode": config.cost_source_mode or "LIVE_TABLE",
+        "profit_budget_zar": float(config.profit_budget_zar or 0.0),
+        "profit_actual_zar": float(config.profit_actual_zar or 0.0),
+        "profit_achievement_pct": profit_ach,
+        "profit_source_mode": config.profit_source_mode or "LIVE_TABLE",
+        "company_shared_score_pct": shared_score,
+        "corporate_attainment_index": shared_score,
+        "values_weight_pct": float(config.values_weight_pct),
+        "values_description": config.values_description,
+        "level_weights": level_weights,
+        "created_at": config.created_at,
+        "updated_at": config.updated_at,
+    }
+
+
+def _infer_employee_level(job_title: str) -> str:
+    title_lower = (job_title or "").lower()
+    if any(k in title_lower for k in ["ceo", "cfo", "cto", "coo", "chief", "executive", "managing director"]):
+        return "EXECUTIVE"
+    if any(k in title_lower for k in ["director", "vice president", "vp", "head of"]):
+        return "DIRECTOR"
+    if any(k in title_lower for k in ["manager", "lead", "supervisor", "principal"]):
+        return "MANAGER"
+    return "STAFF"
+
+
+@app.get("/kpis/company")
+async def get_company_kpis(
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Retrieve whole-company shared KPI targets, budget benchmarks, and position level weights."""
+    q = select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id)
+    if fiscal_year:
+        q = q.where(CompanyKPIConfig.fiscal_year == fiscal_year)
+    result = await db.execute(q.order_by(desc(CompanyKPIConfig.updated_at)))
+    config = result.scalars().first()
+    if not config:
+        config = CompanyKPIConfig(
+            tenant_id=tenant_id,
+            fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
+            # Targets are editable defaults; actuals start at zero (sync from /kpis/live-actuals).
+            sales_budget_zar=3500000.0,
+            sales_actual_zar=0.0,
+            cost_budget_zar=2100000.0,
+            cost_actual_zar=0.0,
+            profit_budget_zar=1400000.0,
+            profit_actual_zar=0.0,
+            values_weight_pct=10.0,
+            values_description="Ubuntu & Customer Empathy, Operational Excellence & Speed, Staff Wellness (BCEA), POPIA & Ethical Governance",
+            level_weights_json=json.dumps(DEFAULT_LEVEL_WEIGHTS),
+        )
+        db.add(config)
+        await db.flush()
+        await db.refresh(config)
+
+    return _calculate_company_scores(config)
+
+
+@app.put("/kpis/company")
+async def update_company_kpis(
+    data: CompanyKPIConfigUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Update whole-company shared KPI budgets (Sales, Cost, Profit) and level weight matrix."""
+    result = await db.execute(
+        select(CompanyKPIConfig)
+        .where(
+            CompanyKPIConfig.tenant_id == tenant_id,
+            CompanyKPIConfig.fiscal_year == (data.fiscal_year or DEFAULT_FISCAL_YEAR),
+        )
+        .order_by(desc(CompanyKPIConfig.updated_at))
+    )
+    config = result.scalars().first()
+    if not config:
+        config = CompanyKPIConfig(
+            tenant_id=tenant_id,
+            fiscal_year=data.fiscal_year or DEFAULT_FISCAL_YEAR,
+            sales_actual_zar=0.0, cost_actual_zar=0.0, profit_actual_zar=0.0,
+        )
+        db.add(config)
+
+    if data.fiscal_year is not None:
+        config.fiscal_year = data.fiscal_year
+    if data.sales_budget_zar is not None:
+        config.sales_budget_zar = data.sales_budget_zar
+    if data.sales_actual_zar is not None:
+        config.sales_actual_zar = data.sales_actual_zar
+    if data.cost_budget_zar is not None:
+        config.cost_budget_zar = data.cost_budget_zar
+    if data.cost_actual_zar is not None:
+        config.cost_actual_zar = data.cost_actual_zar
+    if data.profit_budget_zar is not None:
+        config.profit_budget_zar = data.profit_budget_zar
+    if data.profit_actual_zar is not None:
+        config.profit_actual_zar = data.profit_actual_zar
+    if data.values_weight_pct is not None:
+        config.values_weight_pct = data.values_weight_pct
+    if data.values_description is not None:
+        config.values_description = data.values_description
+    if data.level_weights is not None:
+        config.level_weights_json = json.dumps(data.level_weights)
+    if data.sales_source_mode is not None:
+        config.sales_source_mode = data.sales_source_mode
+    if data.cost_source_mode is not None:
+        config.cost_source_mode = data.cost_source_mode
+    if data.profit_source_mode is not None:
+        config.profit_source_mode = data.profit_source_mode
+
+    await db.flush()
+    await db.refresh(config)
+    return _calculate_company_scores(config)
+
+
+def _fiscal_year_start(fiscal_year: Optional[str]) -> date:
+    """Start date of a 'FY 2026/2027' style fiscal year (start month via FISCAL_YEAR_START_MONTH, default March)."""
+    import re
+    m = re.search(r"(\d{4})", fiscal_year or "")
+    year = int(m.group(1)) if m else date.today().year
+    month = int(os.getenv("FISCAL_YEAR_START_MONTH", "3"))
+    return date(year, month, 1)
+
+
+async def _live_sales_won_ytd(tenant_id: uuid.UUID, fy_start: date) -> Optional[float]:
+    """Won-deal value (ZAR) closed since fiscal-year start, from the sales service. None if unavailable."""
+    sales_url = os.getenv("SALES_SERVICE_URL", "http://sales:8002")
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                f"{sales_url}/deals",
+                params={"status": "WON"},
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+        if resp.status_code != 200:
+            logger.warning("Sales service /deals returned %s", resp.status_code)
+            return None
+        total = 0.0
+        for d in resp.json():
+            closed = d.get("closed_at")
+            if closed:
+                try:
+                    if datetime.fromisoformat(str(closed).replace("Z", "+00:00")).date() < fy_start:
+                        continue
+                except ValueError:
+                    pass
+            total += float(d.get("value_zar") or 0)
+        return round(total, 2)
+    except Exception as e:
+        logger.warning("Could not read won deals from sales service: %s", e)
+        return None
+
+
+async def _live_billing_collected_ytd(tenant_id: uuid.UUID, fy_start: date) -> Optional[float]:
+    """Payments collected (ZAR) since fiscal-year start, from billing /reports/revenue. None if unavailable."""
+    billing_url = os.getenv("BILLING_SERVICE_URL", "http://billing:8003")
+    today = date.today()
+    months = max(1, min(24, (today.year - fy_start.year) * 12 + (today.month - fy_start.month) + 1))
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                f"{billing_url}/reports/revenue",
+                params={"months": months},
+                headers={"X-Tenant-Id": str(tenant_id)},
+            )
+        if resp.status_code != 200:
+            logger.warning("Billing service /reports/revenue returned %s", resp.status_code)
+            return None
+        return round(sum(float(r.get("total_paid_zar") or 0) for r in resp.json()), 2)
+    except Exception as e:
+        logger.warning("Could not read collections from billing service: %s", e)
+        return None
+
+
+@app.get("/kpis/live-actuals")
+async def get_kpis_live_actuals(
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Retrieve ground-truth actual metrics from real sources (sales, billing, payroll).
+
+    Values that cannot be read are returned as null with source='unavailable' (never demo numbers).
+    """
+    fy_start = _fiscal_year_start(fiscal_year or DEFAULT_FISCAL_YEAR)
+
+    # 1. Operating Cost from Payroll (HR's own table)
+    cost_val: Optional[float] = None
+    cost_source = "unavailable"
+    try:
+        p_res = await db.execute(
+            select(func.sum(Payslip.gross + Payslip.uif_employer + Payslip.sdl))
+            .where(Payslip.tenant_id == tenant_id)
+        )
+        p_sum = p_res.scalar()
+        if p_sum is not None and float(p_sum) > 0:
+            cost_val = round(float(p_sum), 2)
+            cost_source = "live"
+    except Exception as e:
+        logger.warning("Could not query payslips for cost actual: %s", e)
+
+    # 2. Revenue: won deals YTD (sales) and payments collected YTD (billing)
+    sales_val = await _live_sales_won_ytd(tenant_id, fy_start)
+    billing_val = await _live_billing_collected_ytd(tenant_id, fy_start)
+    sales_source = "live" if sales_val is not None else "unavailable"
+    billing_source = "live" if billing_val is not None else "unavailable"
+
+    profit_val: Optional[float] = None
+    if sales_val is not None and cost_val is not None:
+        profit_val = round(sales_val - cost_val, 2)
+    profit_source = "live" if profit_val is not None else "unavailable"
+
+    return {
+        "sources": {
+            "sales": {
+                "metric_name": "Sales Revenue Actual",
+                "current_value": sales_val,
+                "unit": "ZAR",
+                "source": sales_source,
+                "table_source": "sales.deals (status=WON, closed since fiscal-year start)",
+                "mode": "LIVE_TABLE",
+                "options": [
+                    {"id": "sales_leads_won", "label": "Sales Pipeline Won Deals Ledger (ZAR)", "value": sales_val, "unit": "ZAR", "type": "actual", "source": sales_source},
+                    {"id": "billing_collections", "label": "Billing Invoices Collected (ZAR)", "value": billing_val, "unit": "ZAR", "type": "actual", "source": billing_source},
+                ]
+            },
+            "cost": {
+                "metric_name": "Operating Cost Actual",
+                "current_value": cost_val,
+                "unit": "ZAR",
+                "source": cost_source,
+                "table_source": "hr.payslips (gross + employer UIF + SDL)",
+                "mode": "LIVE_TABLE",
+                "options": [
+                    {"id": "payroll_statutory", "label": "Total Payroll & Statutory Levies (ZAR)", "value": cost_val, "unit": "ZAR", "type": "actual", "source": cost_source},
+                ]
+            },
+            "profit": {
+                "metric_name": "Net Profit / EBITDA",
+                "current_value": profit_val,
+                "unit": "ZAR",
+                "source": profit_source,
+                "table_source": "derived: won deals revenue minus payroll cost",
+                "mode": "LIVE_TABLE",
+                "options": [
+                    {"id": "net_ebitda", "label": "Net Operating Profit / EBITDA (ZAR)", "value": profit_val, "unit": "ZAR", "type": "actual", "source": profit_source},
+                ]
+            },
+            # No live source is wired for these yet; explicitly unavailable instead of demo constants.
+            "support": {
+                "metric_name": "Customer Support FCR",
+                "current_value": None,
+                "unit": "%",
+                "source": "unavailable",
+                "table_source": "support.tickets (First Contact Resolution) - not wired",
+            },
+            "subscribers": {
+                "metric_name": "Subscriber Churn Rate",
+                "current_value": None,
+                "unit": "%",
+                "source": "unavailable",
+                "table_source": "lifecycle.subscribers (Monthly Churn) - not wired",
+            }
+        },
+        "fiscal_year": fiscal_year or DEFAULT_FISCAL_YEAR,
+        "fiscal_year_start": fy_start.isoformat(),
+        "synced_at": datetime.utcnow().isoformat()
+    }
+
+
+
+@app.post("/kpis/cascade")
+async def cascade_company_kpis(
+    req: CascadeKPIRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Cascade shared company KPIs and weights to all employees according to their position level."""
+    # 1. Fetch company config
+    cascade_fy = req.fiscal_year or DEFAULT_FISCAL_YEAR
+    c_res = await db.execute(
+        select(CompanyKPIConfig)
+        .where(CompanyKPIConfig.tenant_id == tenant_id, CompanyKPIConfig.fiscal_year == cascade_fy)
+        .order_by(desc(CompanyKPIConfig.updated_at))
+    )
+    config = c_res.scalars().first()
+    level_weights = json.loads(config.level_weights_json) if config and config.level_weights_json else DEFAULT_LEVEL_WEIGHTS
+    values_weight = float(config.values_weight_pct) if config else 10.0
+
+    # 2. Fetch all active employees
+    e_res = await db.execute(
+        select(Employee).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
+    )
+    employees = e_res.scalars().all()
+    cascaded_count = 0
+
+    for emp in employees:
+        pos_level = _infer_employee_level(emp.job_title)
+        shared_weight = float(level_weights.get(pos_level, 20.0))
+        indiv_target_weight = max(0.0, round(100.0 - (shared_weight + values_weight), 2))
+
+        # Check existing sheet
+        s_res = await db.execute(
+            select(EmployeeKPISheet).where(
+                EmployeeKPISheet.employee_id == emp.id,
+                EmployeeKPISheet.tenant_id == tenant_id,
+                EmployeeKPISheet.fiscal_year == cascade_fy,
+            ).order_by(desc(EmployeeKPISheet.updated_at))
+        )
+        sheet = s_res.scalars().first()
+        if not sheet:
+            sheet = EmployeeKPISheet(
+                tenant_id=tenant_id,
+                employee_id=emp.id,
+                fiscal_year=cascade_fy,
+                position_level=pos_level,
+                company_shared_weight_pct=shared_weight,
+                values_weight_pct=values_weight,
+                individual_target_weight_pct=indiv_target_weight,
+                total_weight_pct=100.0,
+                status="DRAFT",
+                kpis_json=json.dumps([]),
+            )
+            db.add(sheet)
+        else:
+            sheet.company_shared_weight_pct = shared_weight
+            sheet.values_weight_pct = values_weight
+            sheet.individual_target_weight_pct = indiv_target_weight
+            sheet.position_level = pos_level
+            sheet.total_weight_pct = 100.0
+
+        cascaded_count += 1
+
+    await db.flush()
+    return {
+        "success": True,
+        "employees_cascaded": cascaded_count,
+        "fiscal_year": req.fiscal_year,
+        "level_weights_applied": level_weights,
+        "values_weight_pct": values_weight,
+    }
+
+
+@app.get("/employees/{emp_id}/kpi-sheet")
+async def get_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Retrieve an individual employee's KPI sheet with shared company cascade and SMART criteria."""
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+
+    # Fetch company KPI config
+    cq = select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id)
+    if fiscal_year:
+        cq = cq.where(CompanyKPIConfig.fiscal_year == fiscal_year)
+    c_res = await db.execute(cq.order_by(desc(CompanyKPIConfig.updated_at)))
+    config = c_res.scalars().first()
+    comp_scores = _calculate_company_scores(config) if config else {
+        "sales_budget_zar": 3500000.0, "sales_actual_zar": 0.0, "sales_achievement_pct": 0.0,
+        "cost_budget_zar": 2100000.0, "cost_actual_zar": 0.0, "cost_efficiency_pct": 100.0,
+        "profit_budget_zar": 1400000.0, "profit_actual_zar": 0.0, "profit_achievement_pct": 0.0,
+        "company_shared_score_pct": 0.0, "corporate_attainment_index": 0.0, "values_weight_pct": 10.0,
+        "level_weights": DEFAULT_LEVEL_WEIGHTS,
+    }
+
+    sq = select(EmployeeKPISheet).where(
+        EmployeeKPISheet.employee_id == emp_id,
+        EmployeeKPISheet.tenant_id == tenant_id,
+    )
+    if fiscal_year:
+        sq = sq.where(EmployeeKPISheet.fiscal_year == fiscal_year)
+    s_res = await db.execute(sq.order_by(desc(EmployeeKPISheet.updated_at)))
+    sheet = s_res.scalars().first()
+    if not sheet:
+        pos_level = _infer_employee_level(emp.job_title)
+        level_weights = comp_scores.get("level_weights", DEFAULT_LEVEL_WEIGHTS)
+        shared_weight = float(level_weights.get(pos_level, 20.0))
+        val_weight = float(comp_scores.get("values_weight_pct", 10.0))
+        indiv_target = max(0.0, round(100.0 - (shared_weight + val_weight), 2))
+
+        # Default sample ISP individual KPI based on role
+        sample_kpis = [
+            {
+                "id": str(uuid.uuid4()),
+                "title": f"Operational Excellence & Department Deliverables ({emp.department})",
+                "category": "Department Goals",
+                "weight_pct": round(indiv_target * 0.6, 1),
+                "timeline": "Quarterly Milestones (Q1-Q4)",
+                "measurable": "100% SLA fulfillment on primary duties with <2% error rate",
+                "requirement": "Monthly department sign-off and JIRA/Service audit records",
+                "current_level": 3,
+                "score": 100.0,
+                "smart_criteria": {
+                    "level_1": {"timeline": "Monthly", "measurable": "<80% target attainment", "requirement": "Audit log"},
+                    "level_2": {"timeline": "Monthly", "measurable": "80-94% target attainment", "requirement": "Supervisor review"},
+                    "level_3": {"timeline": "Monthly", "measurable": "95-100% on budget target", "requirement": "Verified system records"},
+                    "level_4": {"timeline": "Monthly", "measurable": "101-115% stretch performance", "requirement": "Peer and manager sign-off"},
+                    "level_5": {"timeline": "Annual", "measurable": ">115% breakthrough benchmarks", "requirement": "Executive commendation"},
+                }
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "title": "Cost Optimization & Resource Efficiency",
+                "category": "Cost Management",
+                "weight_pct": round(indiv_target * 0.4, 1),
+                "timeline": "Continuous / Monthly",
+                "measurable": "Maintain zero avoidable wastage and identify 1 operational saving opportunity",
+                "requirement": "Documented cost saving proposal submitted to finance",
+                "current_level": 3,
+                "score": 100.0,
+                "smart_criteria": {
+                    "level_1": {"timeline": "Monthly", "measurable": "Over budget spend", "requirement": "Variance report"},
+                    "level_2": {"timeline": "Monthly", "measurable": "Within 2% of budget", "requirement": "Expense logs"},
+                    "level_3": {"timeline": "Monthly", "measurable": "On budget with zero unauthorized spend", "requirement": "Finance verified ledger"},
+                    "level_4": {"timeline": "Monthly", "measurable": "3-5% verified savings", "requirement": "Approved optimization log"},
+                    "level_5": {"timeline": "Annual", "measurable": ">8% structural cost reduction", "requirement": "CFO commendation"},
+                }
+            }
+        ]
+
+        sheet = EmployeeKPISheet(
+            tenant_id=tenant_id,
+            employee_id=emp_id,
+            fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
+            position_level=pos_level,
+            company_shared_weight_pct=shared_weight,
+            values_weight_pct=val_weight,
+            individual_target_weight_pct=indiv_target,
+            total_weight_pct=100.0,
+            status="DRAFT",
+            kpis_json=json.dumps(sample_kpis),
+            overall_score=95.0,
+        )
+        db.add(sheet)
+        await db.flush()
+        await db.refresh(sheet)
+
+    kpis_list = json.loads(sheet.kpis_json) if sheet.kpis_json else []
+
+    return {
+        "id": str(sheet.id),
+        "employee_id": str(emp.id),
+        "employee_name": emp.full_name,
+        "job_title": emp.job_title,
+        "department": emp.department,
+        "fiscal_year": sheet.fiscal_year,
+        "position_level": sheet.position_level,
+        "company_shared_weight_pct": float(sheet.company_shared_weight_pct),
+        "values_weight_pct": float(sheet.values_weight_pct),
+        "individual_target_weight_pct": float(sheet.individual_target_weight_pct),
+        "total_weight_pct": float(sheet.total_weight_pct),
+        "status": sheet.status,
+        "kpis": kpis_list,
+        "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
+        "reviewer_notes": sheet.reviewer_notes,
+        "company_benchmarks": comp_scores,
+        "created_at": sheet.created_at,
+        "updated_at": sheet.updated_at,
+    }
+
+
+@app.put("/employees/{emp_id}/kpi-sheet")
+async def update_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    data: EmployeeKPISheetUpdate,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    """Save and validate an employee's KPI sheet with SMART criteria and auto-calculated score."""
+    await _get_employee_or_404(emp_id, tenant_id, db)
+    put_fy = data.fiscal_year or DEFAULT_FISCAL_YEAR
+    s_res = await db.execute(
+        select(EmployeeKPISheet).where(
+            EmployeeKPISheet.employee_id == emp_id,
+            EmployeeKPISheet.tenant_id == tenant_id,
+            EmployeeKPISheet.fiscal_year == put_fy,
+        ).order_by(desc(EmployeeKPISheet.updated_at))
+    )
+    sheet = s_res.scalars().first()
+
+    # -- Server-side validation (before any mutation) --
+    eff_status = (data.status or (sheet.status if sheet else "DRAFT") or "DRAFT").upper()
+    if eff_status not in VALID_SHEET_STATUSES:
+        raise HTTPException(status_code=422, detail={
+            "message": f"Invalid status '{data.status}'. Must be one of DRAFT, SUBMITTED, APPROVED.",
+            "allowed_statuses": sorted(VALID_SHEET_STATUSES),
+        })
+    data.status = eff_status
+    eff_kpis = data.kpis
+    if eff_kpis is None and sheet is not None and sheet.kpis_json:
+        try:
+            eff_kpis = json.loads(sheet.kpis_json)
+        except Exception:
+            eff_kpis = []
+    eff_kpis = eff_kpis or []
+    item_errors = []
+    item_weight_sum = 0.0
+    for idx, item in enumerate(eff_kpis):
+        if not isinstance(item, dict):
+            item_errors.append(f"KPI #{idx + 1}: must be an object")
+            continue
+        if not str(item.get("title") or "").strip():
+            item_errors.append(f"KPI #{idx + 1}: title is required")
+        try:
+            w = float(item.get("weight_pct"))
+            if w < 0 or w != w:
+                raise ValueError
+            item_weight_sum += w
+        except (TypeError, ValueError):
+            item_errors.append(f"KPI #{idx + 1}: weight_pct must be a number >= 0")
+        sc = item.get("smart_criteria")
+        if sc is not None:
+            allowed = {f"level_{i}" for i in range(1, 6)}
+            if not isinstance(sc, dict) or set(sc.keys()) - allowed:
+                bad = sorted(set(sc.keys()) - allowed) if isinstance(sc, dict) else ["<not an object>"]
+                item_errors.append(f"KPI #{idx + 1}: smart_criteria may only contain level_1..level_5 (invalid: {bad})")
+    if item_errors:
+        raise HTTPException(status_code=422, detail={"message": "Invalid KPI items: " + "; ".join(item_errors), "errors": item_errors})
+
+    def _pick(new, old, default):
+        return float(new if new is not None else (old if old is not None else default))
+    sh_w = _pick(data.company_shared_weight_pct, sheet.company_shared_weight_pct if sheet else None, 20.0)
+    val_w = _pick(data.values_weight_pct, sheet.values_weight_pct if sheet else None, 10.0)
+    ind_w = _pick(data.individual_target_weight_pct, sheet.individual_target_weight_pct if sheet else None, 70.0)
+    total_w = round(sh_w + val_w + ind_w, 2)
+    item_sum = round(item_weight_sum, 2)
+    if eff_status != "DRAFT":
+        problems = []
+        if abs(total_w - 100.0) > WEIGHT_TOLERANCE:
+            problems.append(f"shared ({sh_w}) + values ({val_w}) + individual ({ind_w}) = {total_w}, must equal 100")
+        if abs(item_sum - ind_w) > WEIGHT_TOLERANCE:
+            problems.append(f"individual KPI item weights sum to {item_sum}, must equal individual_target_weight_pct ({ind_w})")
+        if problems:
+            raise HTTPException(status_code=422, detail={
+                "message": f"Cannot save as {eff_status}: " + "; ".join(problems) + ". Save as DRAFT to keep incomplete work.",
+                "computed_total_weight_pct": total_w,
+                "computed_kpi_items_weight_pct": item_sum,
+                "individual_target_weight_pct": ind_w,
+            })
+
+    if not sheet:
+        sheet = EmployeeKPISheet(tenant_id=tenant_id, employee_id=emp_id)
+        db.add(sheet)
+
+    if data.fiscal_year is not None:
+        sheet.fiscal_year = data.fiscal_year
+    if data.position_level is not None:
+        sheet.position_level = data.position_level
+    if data.company_shared_weight_pct is not None:
+        sheet.company_shared_weight_pct = data.company_shared_weight_pct
+    if data.values_weight_pct is not None:
+        sheet.values_weight_pct = data.values_weight_pct
+    if data.individual_target_weight_pct is not None:
+        sheet.individual_target_weight_pct = data.individual_target_weight_pct
+    if data.status is not None:
+        sheet.status = data.status
+    if data.kpis is not None:
+        sheet.kpis_json = json.dumps(data.kpis)
+    if data.overall_score is not None:
+        sheet.overall_score = data.overall_score
+    if data.reviewer_notes is not None:
+        sheet.reviewer_notes = data.reviewer_notes
+
+    # Verify total weight
+    sh_w = float(sheet.company_shared_weight_pct or 0.0)
+    val_w = float(sheet.values_weight_pct or 0.0)
+    ind_w = float(sheet.individual_target_weight_pct or 0.0)
+    sheet.total_weight_pct = round(sh_w + val_w + ind_w, 2)
+
+    await db.flush()
+    await db.refresh(sheet)
+    return {
+        "success": True,
+        "sheet_id": str(sheet.id),
+        "status": sheet.status,
+        "total_weight_pct": float(sheet.total_weight_pct),
+        "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
+    }
+
+
+@app.post("/kpis/ai-smart-generate")
+async def generate_ai_smart_criteria(
+    req: AISmartCriteriaRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """AI Copilot: Generates SMART criteria across achievement levels 1 to 5 with timeline, measurable, and requirements."""
+    title = req.title.strip()
+    job_title = req.job_title or "Specialist"
+    dept = req.department or "Operations"
+
+    # Contextual SMART synthesis based on domain keywords
+    title_lower = title.lower()
+    is_cost = any(w in title_lower for w in ["cost", "spend", "saving", "budget", "reduce cost", "expense"])
+    is_sales = any(w in title_lower for w in ["sale", "revenue", "mrr", "deal", "pipeline", "client", "churn"])
+    is_tech = any(w in title_lower for w in ["fiber", "network", "mttr", "sla", "uptime", "latency", "noc", "infra"])
+
+    if is_cost:
+        levels = {
+            "level_1": {
+                "label": "Level 1: Unsatisfactory (<80%)",
+                "timeline": "Month 1-3 Review",
+                "measurable": "Operating expenditures exceed budget ceiling by >10%; zero cost initiatives completed.",
+                "requirement": "Audited ERP expense report showing monthly budget overrun.",
+            },
+            "level_2": {
+                "label": "Level 2: Needs Improvement (80-94%)",
+                "timeline": "Mid-Year Review",
+                "measurable": "Expenditures held within 0-3% above budget; 1 cost reduction initiative underway.",
+                "requirement": "Supplier contract negotiation drafts and internal procurement logs.",
+            },
+            "level_3": {
+                "label": "Level 3: Meets Expectation / Target Budget (100%)",
+                "timeline": "Quarterly Milestones",
+                "measurable": "100% adherence to agreed budget ceiling (e.g. 5% structural reduction against baseline).",
+                "requirement": "Approved monthly financial reconciliation verified by Department Head & Finance.",
+            },
+            "level_4": {
+                "label": "Level 4: Exceeds Expectation (110-125%)",
+                "timeline": "Q3-Q4 Delivery",
+                "measurable": "Delivered 8-12% verifiable cost savings without impacting SLA or customer satisfaction.",
+                "requirement": "Signed vendor rebate agreements and Finance validated ledger entries.",
+            },
+            "level_5": {
+                "label": "Level 5: Outstanding Breakthrough (>125%)",
+                "timeline": "Full Fiscal Year",
+                "measurable": ">15% sustained cost reduction with an automated or architectural innovation adopted across departments.",
+                "requirement": "Executive committee commendation and cross-departmental impact audit report.",
+            },
+        }
+    elif is_sales:
+        levels = {
+            "level_1": {
+                "label": "Level 1: Unsatisfactory (<80%)",
+                "timeline": "Monthly Review",
+                "measurable": "Closed deal revenue below 80% of sales quota (<R160k vs R200k target).",
+                "requirement": "CRM pipeline report and opportunity audit log.",
+            },
+            "level_2": {
+                "label": "Level 2: Needs Improvement (80-94%)",
+                "timeline": "Monthly Review",
+                "measurable": "Quotas achieved between 80% and 94% with healthy prospecting pipeline.",
+                "requirement": "CRM activity logs showing at least 40 customer outreach touchpoints.",
+            },
+            "level_3": {
+                "label": "Level 3: Meets Expectation / Target Budget (100%)",
+                "timeline": "Monthly & Quarterly Targets",
+                "measurable": "Achieved 100% of sales quota on target products (Fiber B2B / FTTH / VoIP SLAs).",
+                "requirement": "Signed customer service contracts and billing activation confirmation.",
+            },
+            "level_4": {
+                "label": "Level 4: Exceeds Expectation (110-125%)",
+                "timeline": "Consecutive Quarters",
+                "measurable": "Attained 110-125% of quota; sustained client retention >98%.",
+                "requirement": "Finance-cleared commission disbursement voucher and client onboarding report.",
+            },
+            "level_5": {
+                "label": "Level 5: Outstanding Breakthrough (>125%)",
+                "timeline": "Annual Cycle",
+                "measurable": "Exceeded quota by >130%; landed 2+ multi-year enterprise anchor fiber accounts.",
+                "requirement": "President's Club recognition and Master Service Agreements executed.",
+            },
+        }
+    elif is_tech:
+        levels = {
+            "level_1": {
+                "label": "Level 1: Unsatisfactory (<80%)",
+                "timeline": "Monthly Review",
+                "measurable": "Mean Time to Repair (MTTR) > 6.0 hours; core fiber availability < 99.5%.",
+                "requirement": "Zabbix/Prometheus outage incident logs and escalated complaint tickets.",
+            },
+            "level_2": {
+                "label": "Level 2: Needs Improvement (80-94%)",
+                "timeline": "Monthly Review",
+                "measurable": "MTTR between 4.5 and 6.0 hours; network uptime 99.8%.",
+                "requirement": "Post-incident reviews (PIR) logged with corrective root-cause actions.",
+            },
+            "level_3": {
+                "label": "Level 3: Meets Expectation / Target Budget (100%)",
+                "timeline": "Continuous Service Window",
+                "measurable": "MTTR <= 4.0 hours, 99.9% fiber core uptime, zero major SLA penalties.",
+                "requirement": "Automated telemetry dashboard report signed off by NOC Operations Manager.",
+            },
+            "level_4": {
+                "label": "Level 4: Exceeds Expectation (110-125%)",
+                "timeline": "Quarterly Target",
+                "measurable": "MTTR <= 2.8 hours, First Contact Resolution > 85%, automated failover verified.",
+                "requirement": "Synthetic uptime test reports and zero customer SLA breach claims.",
+            },
+            "level_5": {
+                "label": "Level 5: Outstanding Breakthrough (>125%)",
+                "timeline": "Annual Cycle",
+                "measurable": "Zero unplanned core fiber outages; authored self-healing bot resolving 90% faults.",
+                "requirement": "CTO commendation and architecture runbook published to company knowledge base.",
+            },
+        }
+    else:
+        levels = {
+            "level_1": {
+                "label": "Level 1: Unsatisfactory (<80%)",
+                "timeline": "End of Q1 Review",
+                "measurable": "Key deliverable delayed >30 days or quality compliance <75%.",
+                "requirement": "Supervisor non-conformance memo and audit log.",
+            },
+            "level_2": {
+                "label": "Level 2: Needs Improvement (80-94%)",
+                "timeline": "Mid-Year Review",
+                "measurable": "Deliverables completed with minor revisions; SLA score 80-94%.",
+                "requirement": "Sprint task tracker and peer review comments.",
+            },
+            "level_3": {
+                "label": "Level 3: Meets Expectation / Target Budget (100%)",
+                "timeline": "Quarterly Delivery Milestones",
+                "measurable": "100% of objective milestones achieved on time and within agreed budget.",
+                "requirement": "Formal stakeholder sign-off and validated deliverable report.",
+            },
+            "level_4": {
+                "label": "Level 4: Exceeds Expectation (110-125%)",
+                "timeline": "Q3 Target Completion",
+                "measurable": "Milestones delivered 2+ weeks ahead of schedule with 10% quality enhancement.",
+                "requirement": "Verified metrics report endorsed by Department Head.",
+            },
+            "level_5": {
+                "label": "Level 5: Outstanding Breakthrough (>125%)",
+                "timeline": "Annual Fiscal Review",
+                "measurable": "Breakthrough operational standard implemented and adopted company-wide.",
+                "requirement": "Executive commendation and enterprise capability enhancement audit.",
+            },
+        }
+
+    return {
+        "title": title,
+        "job_title": job_title,
+        "department": dept,
+        "suggested_measurable": levels["level_3"]["measurable"],
+        "suggested_timeline": levels["level_3"]["timeline"],
+        "suggested_requirement": levels["level_3"]["requirement"],
+        "smart_criteria": levels,
     }
 
 

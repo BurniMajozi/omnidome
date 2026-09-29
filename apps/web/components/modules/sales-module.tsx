@@ -41,6 +41,7 @@ import {
   Coins,
 } from "lucide-react"
 import { useModuleData } from "@/lib/module-data"
+import { getCorporateSalesSnapshot, type CorporateSalesSnapshot } from "@/lib/hr-api"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -440,6 +441,18 @@ export function SalesModule() {
   // ── Lead Management & Channel Sales State ─────────────────────────
   const [leads, setLeads] = useState<SalesLead[]>([])
   const [loadingLeads, setLoadingLeads] = useState(false)
+  const [corpSales, setCorpSales] = useState<CorporateSalesSnapshot | null>(null)
+  const [corpSalesLoading, setCorpSalesLoading] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    getCorporateSalesSnapshot()
+      .then((snap) => { if (!cancelled) setCorpSales(snap) })
+      .catch(() => { if (!cancelled) setCorpSales(null) })
+      .finally(() => { if (!cancelled) setCorpSalesLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+  const fmtCorpZar = (v: number | null | undefined) =>
+    v === null || v === undefined ? "Not connected" : `R ${Math.round(v).toLocaleString("en-ZA")}`
   const [activeTab, setActiveTab] = useState<"pipeline" | "channels" | "leads" | "ai-engine" | "commissions">("pipeline")
   const [pipelineRefreshCounter, setPipelineRefreshCounter] = useState(0)
 
@@ -712,6 +725,55 @@ export function SalesModule() {
             </div>
           </div>
         </Tabs>
+      </div>
+
+      {/* ── Corporate Sales KPI vs Budget Alignment Tile ── */}
+      <div className="surface-card p-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 mb-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
+              <Target className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="text-sm font-bold text-foreground">Sales Performance vs Corporate Budget Target</h4>
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-[10px]">
+                  {corpSalesLoading
+                    ? "Loading..."
+                    : corpSales?.achievementPct != null
+                      ? `${corpSales.achievementPct.toFixed(1)}% of Budget`
+                      : "Not connected"}
+                </Badge>
+                <Badge variant="outline" className="border-primary/40 text-primary text-[10px]">
+                  Shared Corporate KPI
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Current Sales: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.budget)}</b> • Contributes to 60% of Exec / 20–40% of Staff Annual KPI Review
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="hidden sm:block text-right">
+              <span className="text-[11px] text-muted-foreground">Variance to Budget</span>
+              <p className={`text-xs font-bold ${corpSales?.varianceZar != null ? (corpSales.varianceZar >= 0 ? "text-emerald-400" : "text-amber-400") : "text-muted-foreground"}`}>
+                {corpSalesLoading
+                  ? "Loading..."
+                  : corpSales?.varianceZar != null && corpSales.achievementPct != null
+                    ? `${corpSales.varianceZar < 0 ? "-" : "+"}R ${Math.abs(Math.round(corpSales.varianceZar)).toLocaleString("en-ZA")} (${(corpSales.achievementPct - 100).toFixed(1)}%)`
+                    : "Not connected"}
+              </p>
+            </div>
+            <a
+              href="#talent"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card hover:bg-muted text-xs font-semibold text-foreground transition-all shadow-xs"
+            >
+              <span>Performance & Objectives</span>
+              <ArrowRight className="h-3.5 w-3.5 text-primary" />
+            </a>
+          </div>
+        </div>
       </div>
 
       {/* ── TAB 1: Visual Pipeline Board ── */}

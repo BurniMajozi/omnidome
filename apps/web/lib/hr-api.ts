@@ -869,4 +869,219 @@ export const updateReportingLine = (employeeId: string, managerId: string | null
     body: JSON.stringify({ manager_id: managerId }),
   })
 
+// ── Company & Individual KPI / Objectives Management ───────────────────
 
+export interface SmartLevelCriterion {
+  label?: string
+  timeline: string
+  measurable: string
+  requirement: string
+}
+
+export interface LiveActualsSourceOption {
+  id: string
+  label: string
+  value: number
+  unit: string
+  type: "actual" | "percentage"
+}
+
+export interface LiveActualsMetric {
+  metric_name: string
+  current_value: number
+  unit: string
+  table_source: string
+  mode?: string
+  /** 'live' = read from a real table, 'unavailable' = source not connected, 'manual' = manually entered */
+  source?: "live" | "unavailable" | "manual"
+  options?: LiveActualsSourceOption[]
+}
+
+export interface LiveActualsResponse {
+  sources: {
+    sales: LiveActualsMetric
+    cost: LiveActualsMetric
+    profit: LiveActualsMetric
+    support?: LiveActualsMetric
+    subscribers?: LiveActualsMetric
+    [key: string]: LiveActualsMetric | undefined
+  }
+  synced_at: string
+}
+
+export interface IndividualKPIItem {
+  id: string
+  title: string
+  category: string
+  weight_pct: number
+  timeline: string
+  measurable: string
+  requirement: string
+  current_level?: number
+  score?: number
+  source_mode?: "LIVE_TABLE" | "PERCENTAGE" | "MANUAL"
+  source_metric_id?: string
+  actual_value?: number
+  target_value?: number
+  unit?: string
+  smart_criteria?: {
+    level_1: SmartLevelCriterion
+    level_2: SmartLevelCriterion
+    level_3: SmartLevelCriterion
+    level_4: SmartLevelCriterion
+    level_5: SmartLevelCriterion
+  }
+}
+
+export interface CompanyKPIConfig {
+  id: string
+  fiscal_year: string
+  sales_budget_zar: number
+  sales_actual_zar: number
+  sales_achievement_pct: number
+  cost_budget_zar: number
+  cost_actual_zar: number
+  cost_efficiency_pct: number
+  profit_budget_zar: number
+  profit_actual_zar: number
+  profit_achievement_pct: number
+  company_shared_score_pct: number
+  /** Backend-computed corporate attainment index (preferred over any local formula) */
+  corporate_attainment_index?: number
+  values_weight_pct: number
+  values_description: string
+  level_weights: {
+    EXECUTIVE: number
+    DIRECTOR: number
+    MANAGER: number
+    STAFF: number
+    [key: string]: number
+  }
+  sales_source_mode?: "LIVE_TABLE" | "PERCENTAGE" | "MANUAL"
+  cost_source_mode?: "LIVE_TABLE" | "PERCENTAGE" | "MANUAL"
+  profit_source_mode?: "LIVE_TABLE" | "PERCENTAGE" | "MANUAL"
+  sales_source_option_id?: string
+  cost_source_option_id?: string
+  profit_source_option_id?: string
+}
+
+export interface EmployeeKPISheet {
+  id: string
+  employee_id: string
+  employee_name?: string
+  job_title?: string
+  department?: string
+  fiscal_year: string
+  position_level: "EXECUTIVE" | "DIRECTOR" | "MANAGER" | "STAFF" | string
+  company_shared_weight_pct: number
+  values_weight_pct: number
+  individual_target_weight_pct: number
+  total_weight_pct: number
+  status: "DRAFT" | "SUBMITTED" | "APPROVED" | "CALIBRATED" | string
+  kpis: IndividualKPIItem[]
+  overall_score?: number | null
+  reviewer_notes?: string | null
+  company_benchmarks?: Partial<CompanyKPIConfig>
+}
+
+export interface AISmartCriteriaResult {
+  title: string
+  job_title: string
+  department: string
+  suggested_measurable: string
+  suggested_timeline: string
+  suggested_requirement: string
+  smart_criteria: {
+    level_1: SmartLevelCriterion
+    level_2: SmartLevelCriterion
+    level_3: SmartLevelCriterion
+    level_4: SmartLevelCriterion
+    level_5: SmartLevelCriterion
+  }
+}
+
+export const getCompanyKPIConfig = () =>
+  fetchHR<CompanyKPIConfig>("/kpis/company")
+
+export const updateCompanyKPIConfig = (data: Partial<CompanyKPIConfig>) =>
+  fetchHR<CompanyKPIConfig>("/kpis/company", {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const cascadeSharedKPIs = (fiscalYear: string = "FY 2026/2027") =>
+  fetchHR<{
+    success: boolean
+    employees_cascaded: number
+    fiscal_year: string
+    level_weights_applied: Record<string, number>
+    values_weight_pct: number
+  }>("/kpis/cascade", {
+    method: "POST",
+    body: JSON.stringify({ fiscal_year: fiscalYear }),
+  })
+
+export const getEmployeeKPISheet = (empId: string) =>
+  fetchHR<EmployeeKPISheet>(`/employees/${empId}/kpi-sheet`)
+
+export const updateEmployeeKPISheet = (empId: string, data: Partial<EmployeeKPISheet>) =>
+  fetchHR<{
+    success: boolean
+    sheet_id: string
+    status: string
+    total_weight_pct: number
+    overall_score?: number | null
+  }>(`/employees/${empId}/kpi-sheet`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  })
+
+export const generateAISmartCriteria = (data: {
+  title: string
+  category?: string
+  job_title?: string
+  department?: string
+}) =>
+  fetchHR<AISmartCriteriaResult>("/kpis/ai-smart-generate", {
+    method: "POST",
+    body: JSON.stringify(data),
+  })
+
+export const getKpisLiveActuals = () =>
+  fetchHR<LiveActualsResponse>("/kpis/live-actuals")
+
+
+
+
+export interface CorporateSalesSnapshot {
+  budget: number | null
+  actual: number | null
+  achievementPct: number | null
+  varianceZar: number | null
+}
+
+/**
+ * Corporate sales actual vs target budget for dashboard tiles.
+ * Any value that is not backed by a connected source is returned as null
+ * so callers can show "Not connected" instead of a number.
+ */
+export async function getCorporateSalesSnapshot(): Promise<CorporateSalesSnapshot> {
+  const [cfg, live] = await Promise.all([
+    getCompanyKPIConfig().catch(() => null),
+    getKpisLiveActuals().catch(() => null),
+  ])
+  const budgetRaw = cfg ? Number(cfg.sales_budget_zar) : NaN
+  const budget = Number.isFinite(budgetRaw) && budgetRaw > 0 ? budgetRaw : null
+  const sales = live?.sources?.sales
+  const actualRaw = sales && sales.source !== "unavailable" ? Number(sales.current_value) : NaN
+  const actual = Number.isFinite(actualRaw) ? actualRaw : null
+  if (budget === null || actual === null) {
+    return { budget, actual, achievementPct: null, varianceZar: null }
+  }
+  return {
+    budget,
+    actual,
+    achievementPct: (actual / budget) * 100,
+    varianceZar: actual - budget,
+  }
+}
