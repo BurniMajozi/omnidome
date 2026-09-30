@@ -15,6 +15,31 @@ async def init_tables() -> None:
     engine = get_async_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _repoint_schedule_task_fk(conn)
+
+
+async def _repoint_schedule_task_fk(conn) -> None:
+    """Idempotent: schedule_events.linked_task_id was created (by master_schema.sql)
+    with an FK to the CRM `tasks` table; communication tasks live in `comm_tasks`."""
+    import logging
+    from sqlalchemy import text
+
+    log = logging.getLogger("communication.database")
+    try:
+        async with conn.begin_nested():
+            row = (await conn.execute(text(
+                "SELECT c.conname FROM pg_constraint c "
+                "WHERE c.conrelid = 'schedule_events'::regclass AND c.contype = 'f' "
+                "AND c.confrelid = 'tasks'::regclass"
+            ))).first()
+            if row:
+                await conn.execute(text(f'ALTER TABLE schedule_events DROP CONSTRAINT "{row[0]}"'))
+                await conn.execute(text(
+                    "ALTER TABLE schedule_events ADD CONSTRAINT schedule_events_linked_task_id_fkey "
+                    "FOREIGN KEY (linked_task_id) REFERENCES comm_tasks(id) ON DELETE SET NULL"
+                ))
+    except Exception as exc:  # never block startup
+        log.warning("Could not repoint schedule_events.linked_task_id FK: %s", exc)
 
 
 # Re-export for route convenience

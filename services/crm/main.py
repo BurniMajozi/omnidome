@@ -11,7 +11,7 @@ from starlette.requests import Request
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
-from services.crm.database import init_tables
+from services.crm.database import ensure_cross_service_tables, init_tables
 from services.crm.routes.customers import router as customers_router
 from services.crm.routes.leads import router as leads_router
 from services.crm.routes.companies import router as companies_router
@@ -41,6 +41,7 @@ configure_production(app)
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
+    ensure_cross_service_tables()
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         init_tables()
         logger.info("CRM tables ensured")

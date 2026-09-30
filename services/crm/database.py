@@ -47,6 +47,26 @@ def init_tables() -> None:
     Base.metadata.create_all(bind=engine)
 
 
+def ensure_cross_service_tables() -> None:
+    """Idempotently create tables CRM READS but another service owns.
+
+    `retention_predictions` is owned by the retention service (created in its
+    startup), but CRM's insights / customer-360 endpoints query it directly.
+    When retention isn't running the table never exists and those endpoints 500,
+    so CRM ensures it (checkfirst => no-op once present). Never blocks startup.
+    """
+    import logging
+
+    log = logging.getLogger("crm.database")
+    try:
+        from services.common.db import get_engine as _get_sync_engine
+        from services.retention.batch_churn import RetentionPrediction
+
+        RetentionPrediction.__table__.create(bind=_get_sync_engine(), checkfirst=True)
+    except Exception as exc:
+        log.warning("Could not ensure retention_predictions table: %s", exc)
+
+
 def generate_account_number(tenant_id: uuid.UUID) -> str:
     """Generate a unique account number for a customer."""
     short_tenant = str(tenant_id).split("-")[0].upper()[:4]

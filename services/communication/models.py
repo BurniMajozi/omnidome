@@ -98,7 +98,10 @@ class Message(Base):
 # ── Task ──────────────────────────────────────────────────────────────────
 
 class Task(Base):
-    __tablename__ = "tasks"
+    # NOT "tasks": config/master_schema.sql already owns a CRM-style `tasks`
+    # table (subject/contact_id/deal_id) and create_all never ALTERs it, so the
+    # chat-task model must live in its own table.
+    __tablename__ = "comm_tasks"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
@@ -119,8 +122,8 @@ class Task(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        Index("ix_tasks_channel", "channel_id", "status"),
-        Index("ix_tasks_assignee", "tenant_id", "assignee_id", "status"),
+        Index("ix_comm_tasks_channel", "channel_id", "status"),
+        Index("ix_comm_tasks_assignee", "tenant_id", "assignee_id", "status"),
     )
 
 
@@ -287,7 +290,7 @@ class ScheduleEvent(Base):
         UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
     linked_task_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), ForeignKey("comm_tasks.id", ondelete="SET NULL"), nullable=True
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="upcoming")  # upcoming, in_progress, completed, cancelled
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
