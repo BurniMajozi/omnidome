@@ -81,6 +81,15 @@ export async function identityHeaders(
   if (token) {
     identity = await resolveIdentity(token)
   }
+  // proxy.ts (matcher: /api/*, /svc/*) strips client identity headers and
+  // re-injects x-user-id / x-tenant-id from the Supabase-verified user, so at
+  // this point those request headers are trustworthy. Use them when the admin
+  // lookup above is unavailable.
+  if (!identity) {
+    const uid = request.headers.get("x-user-id")
+    const tid = request.headers.get("x-tenant-id")
+    if (uid && tid) identity = { userId: uid, tenantId: tid }
+  }
   // Local auth-disabled fallback: no valid session -> act as the dev tenant/user
   // so proxy routes don't 401. Gated behind AUTH_DISABLED (local only).
   if (!identity && AUTH_DISABLED) {

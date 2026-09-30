@@ -2,7 +2,7 @@
 
 /**
  * AuthFetchInit — attaches the Supabase access token as a Bearer header to all
- * same-origin /api/* requests, once, on the client.
+ * same-origin /api/*, /svc/* and /gateway/* requests, once, on the client.
  *
  * Many modules call `fetch("/api/...")` directly without auth, so the server
  * proxy routes can't resolve identity and 401. Rather than edit every call site,
@@ -31,7 +31,10 @@ export function AuthFetchInit() {
                 ? input.url
                 : ""
         const origin = window.location.origin
-        const isApi = url.startsWith("/api/") || url.startsWith(`${origin}/api/`)
+        // /svc/* and /gateway/* are gated by proxy.ts exactly like /api/*.
+        const isApi = ["/api/", "/svc/", "/gateway/"].some(
+          (p) => url.startsWith(p) || url.startsWith(`${origin}${p}`),
+        )
         // Only string/URL inputs (the common case); leave Request objects alone.
         if (isApi && !(input instanceof Request)) {
           const existing = new Headers(init?.headers)

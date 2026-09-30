@@ -34,6 +34,9 @@ function headersFor(request: Request): HeadersInit {
   const auth = request.headers.get("authorization")
   const tenantId = request.headers.get("x-tenant-id") || DEV_TENANT_ID
   const h: Record<string, string> = { "x-tenant-id": tenantId }
+  // proxy.ts injects the verified x-user-id; backends reject a tenant without a user.
+  const userId = request.headers.get("x-user-id")
+  if (userId) h["x-user-id"] = userId
   if (auth) h["authorization"] = auth
   return h
 }
