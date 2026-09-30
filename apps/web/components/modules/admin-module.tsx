@@ -79,8 +79,11 @@ import {
   type CommissionTier,
   type CommissionTierCreate,
   type ModuleCatalogItem,
+  type PlatformSeatRow,
   type Tenant,
+  type Whoami,
 } from "@/lib/admin-api"
+import { CreateTenantCard, SeatsBillingTab, TeamTab, TenantSeatControls } from "@/components/modules/admin-team"
 import { cn } from "@/lib/utils"
 
 interface RoleDefinition {
@@ -181,6 +184,9 @@ export function AdminModule() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [successBanner, setSuccessBanner] = useState<string | null>(null)
+  const [identity, setIdentity] = useState<Whoami | null>(null)
+  const [seatRows, setSeatRows] = useState<PlatformSeatRow[]>([])
+  const [activeTab, setActiveTab] = useState<string | null>(null)
 
   // Protocols & Mandates
   const [ucpSessions, setUcpSessions] = useState<UCPCheckoutSession[]>([])
@@ -224,6 +230,12 @@ export function AdminModule() {
     [selectedTenantId, tenants],
   )
 
+  // UI gating only; services/admin enforces every action. Roles come from the verified edge identity.
+  const actorRoles = identity?.roles ?? []
+  const isPlatformAdmin = actorRoles.includes("platform_admin")
+  const canManageTeam = isPlatformAdmin || actorRoles.includes("owner") || actorRoles.includes("org_admin")
+  const currentTab = activeTab ?? (isPlatformAdmin ? "tenants" : canManageTeam ? "team" : "modules")
+
   const filteredAgentActions = useMemo(() => {
     if (agentFilter === "all") return agentActions
     return agentActions.filter((a) => a.agent_type === agentFilter)
@@ -234,8 +246,8 @@ export function AdminModule() {
     setError(null)
     try {
       const [tenantData, moduleData, userData, auditData, tierData, ucpData, mandateData, paymentData, actionsData] = await Promise.all([
-        adminApi.listTenants(),
-        adminApi.listModules(),
+        adminApi.listTenants().catch(() => [] as Tenant[]), // 403 for non-platform admins: Team tab still works
+        adminApi.listModules().catch(() => [] as ModuleCatalogItem[]),
         adminApi.listUsers().catch(() => []),
         adminApi.listAuditLog({ limit: 50 }).catch(() => []),
         adminApi.listCommissionTiers().catch(() => []),
@@ -244,6 +256,12 @@ export function AdminModule() {
         listPaymentMandates(20).catch(() => []),
         listAgentActions({ limit: 100 }).catch(() => ({ items: [] })),
       ])
+      const [who, seatData] = await Promise.all([
+        adminApi.whoami().catch(() => null),
+        adminApi.platformSeatUsage().catch(() => null),
+      ])
+      setIdentity(who)
+      setSeatRows(seatData?.tenants ?? [])
       setTenants(tenantData)
       setModules(moduleData)
       setUsers(userData)
@@ -256,7 +274,7 @@ export function AdminModule() {
       const tenantId = selectedTenantId || tenantData[0]?.id || ""
       setSelectedTenantId(tenantId)
       if (tenantId) {
-        setTenantModules(await adminApi.listTenantModules(tenantId))
+        setTenantModules(await adminApi.listTenantModules(tenantId).catch(() => [] as ModuleCatalogItem[]))
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load admin data")
@@ -561,9 +579,11 @@ export function AdminModule() {
         </Card>
       </div>
 
-      <Tabs defaultValue="tenants" className="space-y-4">
+      <Tabs value={currentTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="flex w-full justify-start overflow-x-auto">
-          <TabsTrigger value="tenants">Tenants</TabsTrigger>
+          {isPlatformAdmin && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
+          {canManageTeam && <TabsTrigger value="team">Team</TabsTrigger>}
+          {isPlatformAdmin && <TabsTrigger value="seats">Seats &amp; Billing</TabsTrigger>}
           <TabsTrigger value="modules">Modules</TabsTrigger>
           <TabsTrigger value="users">Users</TabsTrigger>
           <TabsTrigger value="audit">Audit</TabsTrigger>
@@ -571,7 +591,16 @@ export function AdminModule() {
           <TabsTrigger value="protocols">Protocols</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="team" className="space-y-4">
+          <TeamTab identity={identity} tenants={tenants} />
+        </TabsContent>
+
+        <TabsContent value="seats" className="space-y-4">
+          <SeatsBillingTab tenants={tenants} />
+        </TabsContent>
+
         <TabsContent value="tenants" className="space-y-4">
+          <CreateTenantCard onCreated={() => void loadAdminData()} />
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-foreground">Registered Organizations</h3>
@@ -600,6 +629,11 @@ export function AdminModule() {
                   <DataRow label="Tier" value={tenant.tier || "Enterprise"} />
                   <DataRow label="Org Code" value={tenant.org_code || "OMNI-CORP"} />
                   <DataRow label="Created" value={fmtDate(tenant.created_at)} />
+                  <TenantSeatControls
+                    tenant={tenant}
+                    usage={seatRows.find((r) => r.tenant_id === tenant.id)}
+                    onChanged={() => void loadAdminData()}
+                  />
 
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/60">
                     <Button

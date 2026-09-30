@@ -7,24 +7,72 @@
 
 const ADMIN_API = "/api/admin"
 
-async function fetchAdmin<T>(path: string, init?: RequestInit): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
+export class BillingUnavailableError extends Error {
+  constructor() {
+    super("billing service not connected")
+    this.name = "BillingUnavailableError"
   }
+}
 
+export class AdminApiError extends Error {
+  status: number
+  detail: unknown
+  constructor(status: number, body: string) {
+    super(`Admin API error ${status}: ${body}`)
+    this.name = "AdminApiError"
+    this.status = status
+    let detail: unknown = body
+    try {
+      const parsed = JSON.parse(body)
+      detail = parsed?.detail ?? parsed?.error ?? parsed
+    } catch {
+      /* non-JSON body */
+    }
+    this.detail = detail
+  }
+}
+
+/** Human message for a backend error, verbatim where the server gave one. */
+export function adminErrorMessage(err: unknown): string {
+  if (err instanceof AdminApiError) {
+    const d = err.detail
+    if (typeof d === "string") return d || `Request failed (${err.status})`
+    if (d && typeof d === "object") {
+      const o = d as Record<string, unknown>
+      if (o.error === "seat_limit_reached") {
+        return `Seat limit reached (${o.seats_used} of ${o.seat_limit} seats used, including pending invites)`
+      }
+      if (typeof o.message === "string") return o.message
+      if (typeof o.error === "string") return o.error
+      return JSON.stringify(d)
+    }
+    return `Request failed (${err.status})`
+  }
+  if (err instanceof DOMException && err.name === "TimeoutError") return "The request timed out. Try again."
+  return err instanceof Error ? err.message : String(err)
+}
+
+async function authHeader(): Promise<Record<string, string>> {
   // Attempt to attach Supabase session token if available
   try {
     const { getSessionSafe } = await import("@/lib/supabase/client")
     const { data } = await getSessionSafe()
-    if (data.session?.access_token) {
-      headers["Authorization"] = `Bearer ${data.session.access_token}`
-    }
+    if (data.session?.access_token) return { Authorization: `Bearer ${data.session.access_token}` }
   } catch {
     // Supabase browser client optional in dev/fallback mode
+  }
+  return {}
+}
+
+async function fetchAdmin<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(await authHeader()),
   }
 
   const res = await fetch(`${ADMIN_API}${path}`, {
     cache: "no-store",
+    signal: AbortSignal.timeout(20_000),
     headers: {
       ...headers,
       ...init?.headers,
@@ -33,7 +81,7 @@ async function fetchAdmin<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    throw new Error(`Admin API error ${res.status}: ${body}`)
+    throw new AdminApiError(res.status, body)
   }
   return res.json()
 }
@@ -115,6 +163,126 @@ export interface AuditLogEntry {
   created_at: string
 }
 
+// ── IAM: seats, invites, members ──
+
+export interface SeatUsage {
+  tenant_id: string
+  seat_limit: number | null
+  seat_price: string | null
+  billing_status?: string
+  active_users: number
+  pending_invites: number
+  seats_used: number
+  seats_available: number | null
+}
+
+export interface PlatformSeatRow extends SeatUsage {
+  name: string
+  status?: string
+}
+
+export interface TenantInvite {
+  id: string
+  email: string
+  roles: string[]
+  status: string
+  expires_at: string
+  created_at?: string
+}
+
+export interface InviteDelivery {
+  accept_link?: string
+  email_requested?: boolean
+  email_error?: string | null
+  note?: string
+}
+
+export interface CreatedInvite extends InviteDelivery {
+  invite_id: string
+  email: string
+  roles: string[]
+  status: string
+  expires_at: string
+}
+
+export interface TenantMember {
+  id: string
+  email: string
+  name?: string | null
+  is_active: boolean
+  is_owner?: boolean
+  roles: string[]
+  created_at?: string
+}
+
+export interface CreatedTenant extends Tenant {
+  seat_limit?: number | null
+  seat_price?: string | null
+  owner_invite?: InviteDelivery & { invite_id: string; email: string }
+}
+
+export interface Whoami {
+  user_id: string
+  tenant_id: string
+  roles: string[]
+}
+
+export interface ReconcileReport {
+  dry_run: boolean
+  db_users: number
+  supabase_users: number
+  in_sync: number
+  drift: Array<{ user_id: string; email: string; issue?: string; db?: unknown; supabase?: unknown; fixed?: boolean }>
+  orphans_in_supabase_only: Array<{ supabase_id: string; email?: string; app_metadata_tenant?: string | null; app_metadata_roles?: string[] }>
+  adopted?: unknown
+}
+
+export interface SeatBillingRun {
+  id: string
+  tenant_id: string
+  period_start: string
+  period_end: string
+  peak_seats: number
+  unit_price: string
+  amount: string
+  status: string
+  invoice_id: string | null
+}
+
+/** Tenant roles with the server's ranks (mirrors services/admin/migrations.py ROLE_RANKS). */
+export const TENANT_ROLE_RANKS: Record<string, number> = {
+  owner: 90,
+  org_admin: 80,
+  manager: 50,
+  hr_manager: 50,
+  org_user: 10,
+}
+const ALIAS_RANKS: Record<string, number> = { admin: 80, tenant_admin: 80, super_admin: 80, line_manager: 50, hr_admin: 50, hr: 50 }
+
+export const ROLE_LABELS: Record<string, string> = {
+  owner: "Owner",
+  org_admin: "Org admin",
+  manager: "Manager",
+  hr_manager: "HR manager",
+  org_user: "User",
+}
+
+export function actorRank(actorRoles: string[]): number {
+  if (actorRoles.includes("platform_admin")) return 100
+  return Math.max(0, ...actorRoles.map((r) => TENANT_ROLE_RANKS[r] ?? ALIAS_RANKS[r] ?? 0))
+}
+
+/** Roles the actor may grant (the server re-checks; this keeps the UI honest). */
+export function grantableRoles(actorRoles: string[]): string[] {
+  const platform = actorRoles.includes("platform_admin")
+  const owner = platform || actorRoles.includes("owner")
+  const rank = actorRank(actorRoles)
+  return Object.keys(TENANT_ROLE_RANKS).filter((r) => {
+    if (r === "owner" && !owner) return false
+    return platform || TENANT_ROLE_RANKS[r] <= rank
+  })
+}
+
 // API methods
 
 export const adminApi = {
@@ -184,5 +352,84 @@ export const adminApi = {
     fetchAdmin<{ status?: string }>(`/users/${userId}/roles/${roleId}`, {
       method: "DELETE",
     }),
+
+  // ── IAM: seats, invites, members ──
+  whoami: async (): Promise<Whoami> => {
+    const res = await fetch("/api/whoami", { cache: "no-store", signal: AbortSignal.timeout(10_000), headers: await authHeader() })
+    if (!res.ok) throw new AdminApiError(res.status, await res.text().catch(() => ""))
+    return res.json()
+  },
+
+  createTenant: (data: {
+    name: string
+    domain: string
+    seat_limit?: number
+    seat_price?: number
+    owner_email?: string
+    tier?: string
+    send_owner_invite_email?: boolean
+  }) => fetchAdmin<CreatedTenant>("/tenants", { method: "POST", body: JSON.stringify(data) }),
+
+  updateTenant: (tenantId: string, data: { tier?: string; status?: string; active?: boolean; name?: string }) =>
+    fetchAdmin<Tenant>(`/tenants/${tenantId}`, { method: "PUT", body: JSON.stringify(data) }),
+
+  closeTenant: (tenantId: string) => fetchAdmin<Tenant>(`/tenants/${tenantId}`, { method: "DELETE" }),
+
+  getSeats: (tenantId: string) => fetchAdmin<SeatUsage>(`/tenants/${tenantId}/seats?since_days=1`),
+
+  setSeats: (tenantId: string, data: { seat_limit?: number; seat_price?: number }) =>
+    fetchAdmin<SeatUsage>(`/tenants/${tenantId}/seats`, { method: "PUT", body: JSON.stringify(data) }),
+
+  platformSeatUsage: () => fetchAdmin<{ tenants: PlatformSeatRow[]; total_seats_used: number }>("/platform/seat-usage"),
+
+  listInvites: (tenantId: string) => fetchAdmin<TenantInvite[]>(`/tenants/${tenantId}/invites`),
+
+  createInvite: (tenantId: string, data: { email: string; roles: string[]; send_email?: boolean }) =>
+    fetchAdmin<CreatedInvite>(`/tenants/${tenantId}/invites`, { method: "POST", body: JSON.stringify(data) }),
+
+  resendInvite: (inviteId: string, sendEmail = true) =>
+    fetchAdmin<CreatedInvite>(`/invites/${inviteId}/resend?send_email=${sendEmail}`, { method: "POST" }),
+
+  revokeInvite: (inviteId: string) => fetchAdmin<{ status: string }>(`/invites/${inviteId}`, { method: "DELETE" }),
+
+  listMembers: (tenantId: string) => fetchAdmin<TenantMember[]>(`/tenants/${tenantId}/members`),
+
+  setMemberRoles: (tenantId: string, userId: string, roles: string[]) =>
+    fetchAdmin<{ added: string[]; removed: string[] }>(`/tenants/${tenantId}/members/${userId}/roles`, {
+      method: "PUT",
+      body: JSON.stringify({ roles }),
+    }),
+
+  deactivateMember: (tenantId: string, userId: string) =>
+    fetchAdmin<{ changed: boolean }>(`/tenants/${tenantId}/members/${userId}/deactivate`, { method: "POST" }),
+
+  reactivateMember: (tenantId: string, userId: string) =>
+    fetchAdmin<{ changed: boolean }>(`/tenants/${tenantId}/members/${userId}/reactivate`, { method: "POST" }),
+
+  transferOwnership: (tenantId: string, newOwnerUserId: string) =>
+    fetchAdmin<{ owner_user_id: string }>(`/tenants/${tenantId}/transfer-ownership`, {
+      method: "POST",
+      body: JSON.stringify({ new_owner_user_id: newOwnerUserId }),
+    }),
+
+  reconcileSupabase: (apply = false) =>
+    fetchAdmin<ReconcileReport>(`/admin/sync/reconcile?apply=${apply}`, { method: "POST" }),
+
+  /** Billing service (may be down): resolves to runs, or throws BillingUnavailableError. */
+  listSeatRuns: async (tenantId?: string): Promise<SeatBillingRun[]> => {
+    let res: Response
+    try {
+      res = await fetch(`/svc/billing/billing/seats/runs${tenantId ? `?tenant_id=${tenantId}` : ""}`, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+        headers: await authHeader(),
+      })
+    } catch {
+      throw new BillingUnavailableError()
+    }
+    if (res.status === 502 || res.status === 503 || res.status === 504) throw new BillingUnavailableError()
+    if (!res.ok) throw new AdminApiError(res.status, await res.text().catch(() => ""))
+    return res.json()
+  },
 }
 
