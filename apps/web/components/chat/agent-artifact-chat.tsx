@@ -59,13 +59,7 @@ import {
 import { cn } from "@/lib/utils"
 import { FormattedMarkdown } from "@/components/chat/ag-ui-chat"
 
-const DEFAULT_TEAM_USERS = [
-  { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
-  { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
-  { id: "u-3", name: "Emily Davis", email: "emily.davis@omnidome.co.za" },
-  { id: "u-4", name: "James Wilson", email: "james.wilson@omnidome.co.za" },
-  { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
-]
+const DEFAULT_TEAM_USERS: { id: string; name: string; email?: string }[] = []
 
 const AVAILABLE_AGENTS = [
   { id: "auto", name: "OmniDome Orchestrator", icon: "🧠", role: "Smart Intent Router", description: "Automatically analyzes your request and dispatches to the best specialist agent" },

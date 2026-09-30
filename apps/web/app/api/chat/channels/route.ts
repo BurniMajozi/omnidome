@@ -19,7 +19,8 @@ async function proxy(request: NextRequest) {
     })
 
     if (!response.ok) {
-      return NextResponse.json({ data: [] }, { status: 200 })
+      // Surface the real status so the UI can show "Service not running" instead of an empty list.
+      return NextResponse.json({ data: [], error: "upstream_error" }, { status: response.status })
     }
 
     const payload = await response.json()
@@ -27,7 +28,7 @@ async function proxy(request: NextRequest) {
     return NextResponse.json({ data }, { status: 200 })
   } catch (error) {
     console.error("Error fetching channels from communication service:", error)
-    return NextResponse.json({ data: [] }, { status: 200 })
+    return NextResponse.json({ data: [], error: "service_unreachable" }, { status: 503 })
   }
 }
 

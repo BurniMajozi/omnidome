@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
+import { listLoadable, type Loadable } from "@/lib/service-state"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { supabase, getSessionSafe } from "@/lib/supabase/client"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { AgentArtifactChat } from "@/components/chat/agent-artifact-chat"
@@ -176,331 +178,23 @@ interface Escalation {
   status?: "open" | "resolved"
 }
 
-const seedChannels: Channel[] = [
-  { id: "1", name: "general", unread: 3 },
-  { id: "2", name: "sales-team", unread: 12 },
-  { id: "3", name: "support-tickets" },
-  { id: "4", name: "network-alerts", unread: 5 },
-  { id: "5", name: "marketing", isPrivate: true },
-  { id: "6", name: "leadership", isPrivate: true },
-]
+const seedChannels: Channel[] = []
 
-const directMessages: DirectMessage[] = [
-  { id: "1", name: "Sarah Chen", avatar: "SC", status: "online", unread: 2 },
-  { id: "2", name: "Mike Johnson", avatar: "MJ", status: "online" },
-  { id: "3", name: "Emily Davis", avatar: "ED", status: "away" },
-  { id: "4", name: "James Wilson", avatar: "JW", status: "offline" },
-  { id: "5", name: "Lisa Park", avatar: "LP", status: "online", unread: 1 },
-]
+const directMessages: DirectMessage[] = []
 
-const systemMessages: SystemMessage[] = [
-  {
-    id: "1",
-    type: "alert",
-    title: "Network Alert",
-    content: "High latency detected in Johannesburg region",
-    time: "2 min ago",
-    read: false,
-  },
-  {
-    id: "2",
-    type: "notification",
-    title: "New Lead Assigned",
-    content: "TechCorp Enterprise lead assigned to you",
-    time: "15 min ago",
-    read: false,
-  },
-  {
-    id: "3",
-    type: "update",
-    title: "System Update",
-    content: "CRM sync completed successfully",
-    time: "1 hour ago",
-    read: true,
-  },
-  {
-    id: "4",
-    type: "warning",
-    title: "SLA Warning",
-    content: "Ticket #4521 approaching SLA breach",
-    time: "30 min ago",
-    read: false,
-  },
-]
+const systemMessages: SystemMessage[] = []
 
-const seedApprovals: AgentApproval[] = [
-  {
-    id: "1",
-    agent: "Sarah Chen",
-    avatar: "SC",
-    type: "discount",
-    customer: "Meridian Corp",
-    amount: "R15,000",
-    reason: "Loyalty discount for 3-year renewal",
-    status: "pending",
-    time: "10 min ago",
-  },
-  {
-    id: "2",
-    agent: "Mike Johnson",
-    avatar: "MJ",
-    type: "refund",
-    customer: "TechStart Ltd",
-    amount: "R8,500",
-    reason: "Service downtime compensation",
-    status: "pending",
-    time: "25 min ago",
-  },
-  {
-    id: "3",
-    agent: "Emily Davis",
-    avatar: "ED",
-    type: "credit",
-    customer: "RetailMax",
-    amount: "R3,200",
-    reason: "Billing adjustment for incorrect charges",
-    status: "approved",
-    time: "1 hour ago",
-  },
-  {
-    id: "4",
-    agent: "James Wilson",
-    avatar: "JW",
-    type: "override",
-    customer: "MediaGroup",
-    amount: "R22,000",
-    reason: "Special pricing for enterprise upgrade",
-    status: "pending",
-    time: "2 hours ago",
-  },
-]
+const seedApprovals: AgentApproval[] = []
 
-const seedScheduleEvents: ScheduleEvent[] = [
-  {
-    id: "1",
-    title: "Q4 Pipeline Review",
-    type: "meeting",
-    date: "Today",
-    time: "14:00",
-    assignee: "Sales Team",
-    status: "upcoming",
-  },
-  {
-    id: "2",
-    title: "Follow up Meridian",
-    type: "task",
-    date: "Today",
-    time: "16:00",
-    assignee: "Sarah Chen",
-    avatar: "SC",
-    status: "in-progress",
-  },
-  {
-    id: "3",
-    title: "Network Maintenance",
-    type: "reminder",
-    date: "Tomorrow",
-    time: "02:00",
-    assignee: "Network Ops",
-    status: "upcoming",
-  },
-  {
-    id: "4",
-    title: "Contract Deadline",
-    type: "deadline",
-    date: "Friday",
-    time: "17:00",
-    assignee: "Legal",
-    status: "upcoming",
-  },
-  {
-    id: "5",
-    title: "Client Presentation",
-    type: "meeting",
-    date: "Thursday",
-    time: "10:00",
-    assignee: "Mike Johnson",
-    avatar: "MJ",
-    status: "upcoming",
-  },
-  {
-    id: "6",
-    title: "Update CRM Records",
-    type: "task",
-    date: "Today",
-    time: "12:00",
-    assignee: "Emily Davis",
-    avatar: "ED",
-    status: "completed",
-  },
-]
+const seedScheduleEvents: ScheduleEvent[] = []
 
-const seedMessages: Message[] = [
-  {
-    id: "1",
-    author_name: "Sarah Chen",
-    author_avatar: "SC",
-    content: "Hey team! Just closed the Meridian account - R450K MRR! 🎉",
-    created_at: new Date().toISOString(),
-    reactions: [
-      { emoji: "🎉", count: 8 },
-      { emoji: "🔥", count: 5 },
-    ],
-    thread: 4,
-    isPinned: true,
-  },
-  {
-    id: "2",
-    author_name: "Mike Johnson",
-    author_avatar: "MJ",
-    content: "Amazing work Sarah! That's our biggest deal this quarter.",
-    created_at: new Date().toISOString(),
-    reactions: [{ emoji: "👏", count: 3 }],
-  },
-  {
-    id: "3",
-    author_name: "Emily Davis",
-    author_avatar: "ED",
-    content:
-      "@channel Quick reminder: All Q4 pipeline reviews due by EOD Friday. Please update your opportunities in the CRM.",
-    created_at: new Date().toISOString(),
-    reactions: [{ emoji: "👍", count: 12 }],
-  },
-  {
-    id: "4",
-    author_name: "James Wilson",
-    author_avatar: "JW",
-    content: "Network team heads up: We're seeing increased latency in the Johannesburg region. Investigating now.",
-    created_at: new Date().toISOString(),
-    thread: 7,
-  },
-  {
-    id: "5",
-    author_name: "Lisa Park",
-    author_avatar: "LP",
-    content:
-      "Customer escalation from TechCorp - they need bandwidth upgrade urgently. Can someone from provisioning assist?",
-    created_at: new Date().toISOString(),
-    reactions: [{ emoji: "👀", count: 2 }],
-  },
-]
+const seedMessages: Message[] = []
 
-const seedTasks: Task[] = [
-  {
-    id: "1",
-    title: "Follow up with Meridian contract",
-    assignee: "Sarah Chen",
-    avatar: "SC",
-    status: "in-progress",
-    priority: "high",
-    dueDate: "Today",
-  },
-  {
-    id: "2",
-    title: "Prepare Q4 sales presentation",
-    assignee: "Mike Johnson",
-    avatar: "MJ",
-    status: "todo",
-    priority: "medium",
-    dueDate: "Tomorrow",
-  },
-  {
-    id: "3",
-    title: "Review support ticket backlog",
-    assignee: "Emily Davis",
-    avatar: "ED",
-    status: "done",
-    priority: "low",
-    dueDate: "Completed",
-  },
-  {
-    id: "4",
-    title: "Network capacity planning",
-    assignee: "James Wilson",
-    avatar: "JW",
-    status: "in-progress",
-    priority: "high",
-    dueDate: "Friday",
-  },
-  {
-    id: "5",
-    title: "Update customer onboarding docs",
-    assignee: "Lisa Park",
-    avatar: "LP",
-    status: "todo",
-    priority: "medium",
-    dueDate: "Next Week",
-  },
-]
+const seedTasks: Task[] = []
 
-const leads: Lead[] = [
-  {
-    id: "1",
-    name: "David Smith",
-    company: "Acme Corp",
-    value: "R280,000",
-    assignee: "Sarah Chen",
-    avatar: "SC",
-    status: "qualified",
-  },
-  {
-    id: "2",
-    name: "Jennifer Brown",
-    company: "GlobalTech",
-    value: "R150,000",
-    assignee: "Mike Johnson",
-    avatar: "MJ",
-    status: "contacted",
-  },
-  {
-    id: "3",
-    name: "Robert Taylor",
-    company: "Innovate Inc",
-    value: "R95,000",
-    assignee: "Sarah Chen",
-    avatar: "SC",
-    status: "new",
-  },
-  {
-    id: "4",
-    name: "Amanda White",
-    company: "Enterprise Co",
-    value: "R420,000",
-    assignee: "Lisa Park",
-    avatar: "LP",
-    status: "contacted",
-  },
-]
+const leads: Lead[] = []
 
-const seedEscalations: Escalation[] = [
-  {
-    id: "1",
-    title: "Service outage - Cape Town",
-    customer: "TechCorp",
-    severity: "critical",
-    assignee: "James Wilson",
-    avatar: "JW",
-    time: "15 min ago",
-  },
-  {
-    id: "2",
-    title: "Billing dispute",
-    customer: "RetailMax",
-    severity: "high",
-    assignee: "Emily Davis",
-    avatar: "ED",
-    time: "1 hour ago",
-  },
-  {
-    id: "3",
-    title: "Speed degradation",
-    customer: "MediaGroup",
-    severity: "medium",
-    assignee: "Mike Johnson",
-    avatar: "MJ",
-    time: "2 hours ago",
-  },
-]
+const seedEscalations: Escalation[] = []
 
 const REACTION_EMOJIS = ["👍", "❤️", "🎉", "🔥", "👀", "✅", "🙏", "😂"]
 
@@ -520,13 +214,7 @@ const AGENT_ITEMS = Object.entries(AGENT_CATALOG).map(([key, info]) => ({
   icon: info.icon,
 }))
 
-const DEFAULT_TEAM_USERS = [
-  { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
-  { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
-  { id: "u-3", name: "Emily Davis", email: "emily.davis@omnidome.co.za" },
-  { id: "u-4", name: "James Wilson", email: "james.wilson@omnidome.co.za" },
-  { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
-]
+const DEFAULT_TEAM_USERS = [] as { id: string; name: string; email?: string }[]
 
 export function CommunicationModule({ initialTab }: { initialTab?: string } = {}) {
   const [channelsExpanded, setChannelsExpanded] = useState(false)
@@ -534,7 +222,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const [systemMsgExpanded, setSystemMsgExpanded] = useState(false)
   const [agentMsgExpanded, setAgentMsgExpanded] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true)
-  const [selectedChannel, setSelectedChannel] = useState("sales-team")
+  const [selectedChannel, setSelectedChannel] = useState("")
   const [messageInput, setMessageInput] = useState("")
   const [activeTab, setActiveTab] = useState<string>(() => {
     if (initialTab) return initialTab
@@ -576,28 +264,14 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const [mutedChannels, setMutedChannels] = useState<string[]>([])
   const [pinnedChannels, setPinnedChannels] = useState<string[]>([])
   const [loadingChannels, setLoadingChannels] = useState(true)
+  const [channelsState, setChannelsState] = useState<Loadable<Channel[]>>({ state: "loading" })
+  const [channelsReload, setChannelsReload] = useState(0)
   const [loadingMessages, setLoadingMessages] = useState(false)
   const [tasks, setTasks] = useState<Task[]>(seedTasks)
   const [approvals, setApprovals] = useState<AgentApproval[]>(seedApprovals)
   const [escalations, setEscalations] = useState<Escalation[]>(seedEscalations)
   const [scheduleEvents, setScheduleEvents] = useState<ScheduleEvent[]>(seedScheduleEvents)
   const [activityItems, setActivityItems] = useState<ActivityItem[]>([
-    {
-      id: "activity-1",
-      type: "schedule",
-      title: "Q4 Pipeline Review scheduled",
-      actor: "Sarah Chen",
-      time: "2 min ago",
-      meta: "Today at 14:00",
-    },
-    {
-      id: "activity-2",
-      type: "approval",
-      title: "Discount approval requested",
-      actor: "Mike Johnson",
-      time: "10 min ago",
-      meta: "Meridian Corp",
-    },
   ])
   const [panelOpen, setPanelOpen] = useState(false)
   const [panelType, setPanelType] = useState<
@@ -707,16 +381,25 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
       setLoadingChannels(true)
       try {
         const response = await fetch("/api/chat/channels")
-        const payload = await response.json()
+        const payload = await response.json().catch(() => null)
         if (!isMounted) return
-        if (Array.isArray(payload.data) && payload.data.length > 0) {
-          setChannels(payload.data)
-          setSelectedChannel((prev) =>
-            payload.data.some((channel: Channel) => channel.name === prev) ? prev : payload.data[0].name,
-          )
+        const next = listLoadable<Channel>(response.status, payload)
+        setChannelsState(next)
+        if (next.state === "ready") {
+          setChannels(next.data)
+          if (next.data.length > 0) {
+            setSelectedChannel((prev) =>
+              next.data.some((channel: Channel) => channel.name === prev) ? prev : next.data[0].name,
+            )
+          }
+        } else {
+          setChannels([])
         }
-      } catch (error) {
-        console.error("Failed to load channels", error)
+      } catch {
+        if (isMounted) {
+          setChannelsState({ state: "unreachable", status: null })
+          setChannels([])
+        }
       } finally {
         if (isMounted) setLoadingChannels(false)
       }
@@ -726,18 +409,18 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [channelsReload])
 
   useEffect(() => {
     let isMounted = true
     if (!activeChannelId) {
-      setMessages(seedMessages)
+      setMessages([])
       return () => {
         isMounted = false
       }
     }
     if (!isUuid(activeChannelId)) {
-      setMessages(seedMessages)
+      setMessages([])
       return () => {
         isMounted = false
       }
@@ -754,6 +437,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
         }
       } catch (error) {
         console.error("Failed to load messages", error)
+        if (isMounted) setMessages([])
       } finally {
         if (isMounted) setLoadingMessages(false)
       }
@@ -2217,7 +1901,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-2">
                 <Hash className="h-5 w-5 text-muted-foreground" />
-                <h2 className="font-semibold text-foreground">{selectedChannel}</h2>
+                <h2 className="font-semibold text-foreground">{selectedChannel || "No channel selected"}</h2>
                 {/* Real-time connection indicator */}
                 <span
                   title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
@@ -2266,7 +1950,23 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                 {loadingMessages && (
                   <div className="text-xs text-muted-foreground">Loading messages...</div>
                 )}
-                {!loadingMessages && messages.length === 0 && (
+                {channelsState.state !== "ready" && (
+                  <NotConnected
+                    loadable={channelsState}
+                    service="Communication service"
+                    onRetry={() => setChannelsReload((n) => n + 1)}
+                  />
+                )}
+                {channelsState.state === "ready" && channels.length === 0 && (
+                  <div className="flex flex-col items-center gap-3">
+                    <NoDataYet message="No channels yet" className="w-full" />
+                    <Button size="sm" onClick={() => setChannelDialogOpen(true)}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create channel
+                    </Button>
+                  </div>
+                )}
+                {channelsState.state === "ready" && channels.length > 0 && !loadingMessages && messages.length === 0 && (
                   <div className="text-xs text-muted-foreground">No messages yet.</div>
                 )}
                 {messages.map((msg) => (

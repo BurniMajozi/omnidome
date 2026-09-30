@@ -89,3 +89,9 @@ export function sumMoney(values: Array<number | string | null | undefined>): num
   }
   return t
 }
+
+/** /api/chat/channels (or any `{ data: T[] }` proxy) outcome -> Loadable. 200 + [] is ready-and-empty. */
+export function listLoadable<T>(status: number | null, payload: unknown): Loadable<T[]> {
+  const data = (payload as { data?: unknown } | null)?.data
+  return loadableFromStatus<T[]>(status, Array.isArray(data) ? (data as T[]) : undefined)
+}

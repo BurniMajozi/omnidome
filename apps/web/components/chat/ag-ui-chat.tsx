@@ -101,13 +101,7 @@ const AGENT_LIST = [
   { type: "assistant" as AgentType, name: "OmniAssist", icon: "✨", description: "Versatile assistant. Writes docs, SQL, and code into the canvas." },
 ]
 
-const DEFAULT_TEAM_USERS = [
-  { id: "u-1", name: "Sarah Chen", email: "sarah.chen@omnidome.co.za" },
-  { id: "u-2", name: "Mike Johnson", email: "mike.johnson@omnidome.co.za" },
-  { id: "u-3", name: "Emily Davis", email: "emily.davis@omnidome.co.za" },
-  { id: "u-4", name: "James Wilson", email: "james.wilson@omnidome.co.za" },
-  { id: "u-5", name: "Lisa Park", email: "lisa.park@omnidome.co.za" },
-]
+const DEFAULT_TEAM_USERS: { id: string; name: string; email?: string }[] = []
 
 const AGENT_ITEMS = [
   ...AGENT_LIST.map((a) => ({
