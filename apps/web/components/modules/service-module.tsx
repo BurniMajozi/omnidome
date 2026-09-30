@@ -4,13 +4,10 @@ import React, { useState, type JSX } from "react"
 import { ModuleLayout } from "./module-layout"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { ServiceSchedulingView } from "./service/service-scheduling-view"
 import { ServiceComplaintsRadar } from "./service/service-complaints-radar"
 import {
   BarChart,
   Bar,
-  LineChart,
-  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -21,94 +18,46 @@ import {
   Pie,
   Cell,
 } from "recharts"
-import { Headset, Clock, CheckCircle, AlertCircle, Radio, Flame, Sparkles } from "lucide-react"
-import { useModuleData } from "@/lib/module-data"
+import { Headset, Clock, CheckCircle, AlertCircle, Radio, RefreshCw } from "lucide-react"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
+import { tileLabel, type Loadable } from "@/lib/service-state"
+import { loadCommTasks, loadEscalations, useOps } from "@/lib/ops-api"
+import {
+  allSettled,
+  escalationStats,
+  fmtInt,
+  normPriority,
+  normTaskStatus,
+  relativeTime,
+  type EscalationRow,
+} from "@/lib/ops-derive"
 
-const defaultTicketTrend = [
-  { day: "Mon", open: 28, resolved: 32 },
-  { day: "Tue", open: 35, resolved: 28 },
-  { day: "Wed", open: 42, resolved: 35 },
-  { day: "Thu", open: 38, resolved: 40 },
-  { day: "Fri", open: 28, resolved: 45 },
-  { day: "Sat", open: 15, resolved: 18 },
-  { day: "Sun", open: 12, resolved: 14 },
-]
+/**
+ * Service. Tickets are the customer escalations and tasks in the Communication
+ * service (the only ticket store that runs). CSAT, SLA compliance and shift
+ * rostering have no backing service yet and say so instead of showing numbers.
+ */
 
-const defaultTicketsByPriority = [
-  { name: "Critical", value: 8, fill: "#ef4444" },
-  { name: "High", value: 32, fill: "#f97316" },
-  { name: "Medium", value: 52, fill: "#eab308" },
-  { name: "Low", value: 36, fill: "#4ade80" },
-]
+const STATUS_COLORS: Record<string, string> = {
+  open: "#ef4444",
+  in_progress: "#f97316",
+  resolved: "#4ade80",
+  closed: "#60a5fa",
+}
 
-const defaultResolutionTime = [
-  { priority: "Critical", time: 1.2 },
-  { priority: "High", time: 2.8 },
-  { priority: "Medium", time: 4.5 },
-  { priority: "Low", time: 8.3 },
-]
+const tooltipStyle = {
+  backgroundColor: "#262626",
+  border: "1px solid #404040",
+  borderRadius: "8px",
+  color: "#fff",
+}
 
-const defaultFlashcardKPIs = [
-  {
-    id: "1",
-    title: "Open Tickets",
-    value: "128",
-    change: "-24%",
-    changeType: "positive" as const,
-    iconKey: "open",
-    backTitle: "Ticket Breakdown",
-    backDetails: [
-      { label: "Critical", value: "8" },
-      { label: "High", value: "32" },
-      { label: "Medium/Low", value: "88" },
-    ],
-    backInsight: "Critical tickets down 40% from last week",
-  },
-  {
-    id: "2",
-    title: "Avg Resolution Time",
-    value: "4.2h",
-    change: "-15%",
-    changeType: "positive" as const,
-    iconKey: "resolution",
-    backTitle: "Resolution by Priority",
-    backDetails: [
-      { label: "Critical", value: "1.2h" },
-      { label: "High", value: "2.8h" },
-      { label: "Medium/Low", value: "6.4h" },
-    ],
-    backInsight: "SLA compliance at 98.5%",
-  },
-  {
-    id: "3",
-    title: "CSAT Score",
-    value: "4.6/5",
-    change: "+0.3",
-    changeType: "positive" as const,
-    iconKey: "csat",
-    backTitle: "Satisfaction Breakdown",
-    backDetails: [
-      { label: "5 Stars", value: "68%" },
-      { label: "4 Stars", value: "24%" },
-      { label: "1-3 Stars", value: "8%" },
-    ],
-    backInsight: "Highest score in 12 months",
-  },
-  {
-    id: "4",
-    title: "SLA Compliance",
-    value: "98.5%",
-    change: "+1.2%",
-    changeType: "positive" as const,
-    iconKey: "sla",
-    backTitle: "SLA by Category",
-    backDetails: [
-      { label: "Response Time", value: "99.2%" },
-      { label: "Resolution Time", value: "97.8%" },
-      { label: "First Contact", value: "98.5%" },
-    ],
-    backInsight: "Only 2 SLA breaches this month",
-  },
+const tableColumns = [
+  { key: "ticket", label: "Ticket" },
+  { key: "reason", label: "Reason" },
+  { key: "status", label: "Status" },
+  { key: "created", label: "Created" },
+  { key: "updated", label: "Updated" },
 ]
 
 const serviceKpiIconMap: Record<string, JSX.Element> = {
@@ -118,250 +67,87 @@ const serviceKpiIconMap: Record<string, JSX.Element> = {
   sla: <Headset className="h-5 w-5 text-purple-400" />,
 }
 
-const defaultActivities = [
-  {
-    id: "1",
-    user: "Tech Support",
-    action: "resolved ticket",
-    target: "TKT-4521",
-    time: "3 minutes ago",
-    type: "update" as const,
-  },
-  {
-    id: "2",
-    user: "John Nkosi",
-    action: "escalated ticket",
-    target: "TKT-4518",
-    time: "15 minutes ago",
-    type: "assign" as const,
-  },
-  {
-    id: "3",
-    user: "Sarah Mbeki",
-    action: "updated status of",
-    target: "TKT-4515",
-    time: "30 minutes ago",
-    type: "update" as const,
-  },
-  {
-    id: "4",
-    user: "Field Team",
-    action: "dispatched for",
-    target: "TKT-4512",
-    time: "1 hour ago",
-    type: "create" as const,
-  },
-  {
-    id: "5",
-    user: "Customer",
-    action: "rated service",
-    target: "5 stars",
-    time: "2 hours ago",
-    type: "comment" as const,
-  },
-]
+const NOT_CONNECTED_TILE = "Not connected"
 
-const defaultIssues = [
-  {
-    id: "1",
-    title: "Network outage in Johannesburg North",
-    severity: "critical" as const,
-    status: "in-progress" as const,
-    assignee: "Network Team",
-    time: "30 min ago",
-  },
-  {
-    id: "2",
-    title: "Billing system slow response",
-    severity: "high" as const,
-    status: "open" as const,
-    assignee: "IT Support",
-    time: "1 hour ago",
-  },
-  {
-    id: "3",
-    title: "Customer portal login issues",
-    severity: "medium" as const,
-    status: "in-progress" as const,
-    assignee: "Dev Team",
-    time: "2 hours ago",
-  },
-  {
-    id: "4",
-    title: "Email notifications delayed",
-    severity: "low" as const,
-    status: "resolved" as const,
-    assignee: "IT Support",
-    time: "Yesterday",
-  },
-]
-
-const defaultSummary = `Service desk performance is strong with 128 open tickets, down 24% from last week. Average resolution time improved to 4.2 hours, a 15% reduction. CSAT score reached 4.6/5, our highest in 12 months. SLA compliance is at 98.5% with only 2 breaches this month. The team resolved 212 tickets this week, with the network outage in Johannesburg North being the most significant ongoing issue. Focus areas include reducing critical ticket volume and maintaining the improved resolution times.`
-
-const defaultTasks = [
-  {
-    id: "1",
-    title: "Resolve Johannesburg network outage",
-    priority: "urgent" as const,
-    status: "in-progress" as const,
-    dueDate: "Today",
-    assignee: "Network Team",
-  },
-  {
-    id: "2",
-    title: "Update knowledge base articles",
-    priority: "high" as const,
-    status: "todo" as const,
-    dueDate: "Tomorrow",
-    assignee: "Sarah Mbeki",
-  },
-  {
-    id: "3",
-    title: "Review escalation procedures",
-    priority: "normal" as const,
-    status: "todo" as const,
-    dueDate: "This week",
-    assignee: "John Nkosi",
-  },
-  {
-    id: "4",
-    title: "Complete Q1 service report",
-    priority: "normal" as const,
-    status: "done" as const,
-    dueDate: "Completed",
-    assignee: "Manager",
-  },
-]
-
-const defaultAiRecommendations = [
-  {
-    id: "1",
-    title: "Pattern Detected",
-    description: "20% of tickets relate to router firmware. Consider proactive firmware update campaign.",
-    impact: "high" as const,
-    category: "Prevention",
-  },
-  {
-    id: "2",
-    title: "Resource Optimization",
-    description: "Tuesday/Wednesday have 40% more tickets. Adjust staffing accordingly.",
-    impact: "medium" as const,
-    category: "Staffing",
-  },
-  {
-    id: "3",
-    title: "Knowledge Gap",
-    description: "VoIP setup queries increased 60%. Create video tutorial for self-service.",
-    impact: "medium" as const,
-    category: "Self-Service",
-  },
-  {
-    id: "4",
-    title: "Escalation Alert",
-    description: "3 tickets approaching SLA breach in next 2 hours. Prioritize immediately.",
-    impact: "high" as const,
-    category: "SLA",
-  },
-]
-
-const defaultTableData = [
-  {
-    id: "1",
-    ticket: "TKT-4521",
-    customer: "Thabo Mokoena",
-    issue: "No internet connection",
-    priority: "High",
-    status: "Resolved",
-    created: "2024-01-12",
-    agent: "Tech Support",
-  },
-  {
-    id: "2",
-    ticket: "TKT-4520",
-    customer: "Sipho Ndlovu",
-    issue: "Slow speeds",
-    priority: "Medium",
-    status: "In Progress",
-    created: "2024-01-12",
-    agent: "Sarah Mbeki",
-  },
-  {
-    id: "3",
-    ticket: "TKT-4519",
-    customer: "Nomvula Dlamini",
-    issue: "Billing query",
-    priority: "Low",
-    status: "Open",
-    created: "2024-01-12",
-    agent: "Unassigned",
-  },
-  {
-    id: "4",
-    ticket: "TKT-4518",
-    customer: "Johan van der Merwe",
-    issue: "VoIP not working",
-    priority: "Critical",
-    status: "Escalated",
-    created: "2024-01-12",
-    agent: "John Nkosi",
-  },
-  {
-    id: "5",
-    ticket: "TKT-4517",
-    customer: "Lerato Molefe",
-    issue: "Router replacement",
-    priority: "Medium",
-    status: "Pending",
-    created: "2024-01-11",
-    agent: "Field Team",
-  },
-]
-
-const defaultTableColumns = [
-  { key: "ticket", label: "Ticket ID" },
-  { key: "customer", label: "Customer" },
-  { key: "issue", label: "Issue" },
-  { key: "priority", label: "Priority" },
-  { key: "status", label: "Status" },
-  { key: "created", label: "Created" },
-  { key: "agent", label: "Agent" },
-]
+const tile = (l: Loadable<unknown>, value: () => string) => (l.state === "ready" ? value() : (tileLabel(l) ?? "—"))
 
 export function ServiceModule() {
   const [activeTab, setActiveTab] = useState<"operations" | "scheduling" | "complaints">("operations")
+  const escalations = useOps(loadEscalations)
+  const commTasks = useOps(loadCommTasks)
 
-  const { data } = useModuleData("service", {
-    ticketTrend: defaultTicketTrend,
-    ticketsByPriority: defaultTicketsByPriority,
-    resolutionTime: defaultResolutionTime,
-    flashcardKPIs: defaultFlashcardKPIs,
-    activities: defaultActivities,
-    issues: defaultIssues,
-    summary: defaultSummary,
-    tasks: defaultTasks,
-    aiRecommendations: defaultAiRecommendations,
-    tableData: defaultTableData,
-    tableColumns: defaultTableColumns,
-  })
+  const reloadAll = () => {
+    escalations.reload()
+    commTasks.reload()
+  }
 
-  const {
-    ticketTrend,
-    ticketsByPriority,
-    resolutionTime,
-    flashcardKPIs,
-    activities,
-    issues,
-    summary,
-    tasks,
-    aiRecommendations,
-    tableData,
-    tableColumns,
-  } = data
+  const settled = allSettled(escalations.value, commTasks.value)
+  const rows: EscalationRow[] = escalations.value.state === "ready" ? escalations.value.data.rows : []
+  const total = escalations.value.state === "ready" ? escalations.value.data.total : 0
+  const stats = escalationStats(rows)
+  const taskRows: any[] = commTasks.value.state === "ready" ? commTasks.value.data.rows : []
+  const sample = rows.length < total ? ` (latest ${fmtInt(rows.length)} of ${fmtInt(total)} loaded)` : ""
 
-  const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
-    ...kpi,
-    icon: serviceKpiIconMap[kpi.iconKey] ?? null,
-  }))
+  const statusPie = Object.entries(stats.byStatus).map(([name, value]) => ({ name, value, fill: STATUS_COLORS[name] ?? "#737373" }))
+
+  const flashcardKPIs = [
+    {
+      id: "1",
+      title: "Open Escalations",
+      value: tile(escalations.value, () => fmtInt(stats.open + stats.inProgress)),
+      change: "",
+      changeType: "neutral" as const,
+      iconKey: "open",
+      backTitle: "Escalation Status",
+      backDetails: [
+        { label: "Open", value: fmtInt(stats.open) },
+        { label: "In progress", value: fmtInt(stats.inProgress) },
+        { label: "Resolved / closed", value: fmtInt(stats.resolved) },
+      ],
+      backInsight: `${fmtInt(total)} escalations on record${sample}.`,
+    },
+    {
+      id: "2",
+      title: "Avg Resolution Time",
+      value: tile(escalations.value, () =>
+        stats.avgResolutionHours === null ? "No data yet" : `${stats.avgResolutionHours.toFixed(1)}h`,
+      ),
+      change: "",
+      changeType: "neutral" as const,
+      iconKey: "resolution",
+      backTitle: "Resolution",
+      backDetails: [{ label: "Resolved / closed", value: fmtInt(stats.resolved) }],
+      backInsight: "Time from creation to last update of resolved escalations.",
+    },
+    {
+      id: "3",
+      title: "CSAT Score",
+      value: NOT_CONNECTED_TILE,
+      change: "",
+      changeType: "neutral" as const,
+      iconKey: "csat",
+      backTitle: "Satisfaction",
+      backDetails: [],
+      backInsight: "No survey source is connected, so no CSAT figure is shown.",
+    },
+    {
+      id: "4",
+      title: "SLA Compliance",
+      value: NOT_CONNECTED_TILE,
+      change: "",
+      changeType: "neutral" as const,
+      iconKey: "sla",
+      backTitle: "SLA",
+      backDetails: [],
+      backInsight: "Tickets carry no SLA targets yet, so no compliance figure is shown.",
+    },
+  ].map((kpi) => ({ ...kpi, icon: serviceKpiIconMap[kpi.iconKey] ?? null }))
+
+  const summary =
+    escalations.value.state === "ready"
+      ? `${fmtInt(total)} customer escalations on record${sample}: ${fmtInt(stats.open)} open, ${fmtInt(stats.inProgress)} in progress and ${fmtInt(stats.resolved)} resolved or closed. ` +
+        `${fmtInt(taskRows.length)} support tasks are tracked in the Communication hub. CSAT and SLA compliance are not connected.`
+      : "Ticket figures are unavailable because the Communication service could not be read. Nothing is estimated in its place."
 
   return (
     <div className="space-y-6">
@@ -377,7 +163,6 @@ export function ServiceModule() {
             <Headset className="h-3.5 w-3.5" />
             Service Operations & Tickets
           </Button>
-
           <Button
             variant={activeTab === "scheduling" ? "default" : "outline"}
             size="sm"
@@ -391,10 +176,9 @@ export function ServiceModule() {
             <Clock className="h-3.5 w-3.5" />
             Staff Demand & Shift Rostering
             <Badge variant="outline" className="text-[9px] py-0 px-1 border-cyan-400 text-cyan-300">
-              SLA Driver
+              Not connected
             </Badge>
           </Button>
-
           <Button
             variant={activeTab === "complaints" ? "default" : "outline"}
             size="sm"
@@ -405,128 +189,159 @@ export function ServiceModule() {
             }`}
             onClick={() => setActiveTab("complaints")}
           >
-            <Radio className="h-3.5 w-3.5 text-red-400 animate-pulse" />
+            <Radio className="h-3.5 w-3.5 text-red-400" />
             External Complaints & Sentiment Radar
             <Badge variant="outline" className="text-[9px] py-0 px-1 border-red-400 text-red-300">
-              Live Scraper
+              Not connected
             </Badge>
           </Button>
         </div>
       </div>
 
       {/* Tab 1: Service Operations & Tickets */}
-      {activeTab === "operations" && (
+      {activeTab === "operations" && !settled && (
+        <div className="space-y-4" aria-busy="true" aria-label="Loading service data">
+          <div className="h-16 animate-pulse rounded-lg bg-muted/50" />
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="h-28 animate-pulse rounded-lg bg-muted/50" />
+            ))}
+          </div>
+          <div className="h-64 animate-pulse rounded-lg bg-muted/50" />
+        </div>
+      )}
+
+      {activeTab === "operations" && settled && (
         <ModuleLayout
           title="Service"
           icon={<Headset className="h-5 w-5" />}
           subtitle="Tickets, SLAs, field service, and customer satisfaction scores"
-          flashcardKPIs={flashcardKPIsWithIcons}
-          activities={activities}
-          issues={issues}
+          headerActions={
+            <Button variant="outline" size="sm" onClick={reloadAll}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Refresh
+            </Button>
+          }
+          flashcardKPIs={flashcardKPIs}
+          activities={[...rows]
+            .sort((a, b) => b.created_at.localeCompare(a.created_at))
+            .slice(0, 15)
+            .map((e) => ({
+              id: e.id,
+              user: "Escalation",
+              action: `${e.status.replace("_", " ")} -`,
+              target: e.ticket_id || e.reason || e.id.slice(0, 8),
+              time: relativeTime(e.created_at),
+              type: "update" as const,
+            }))}
+          issues={rows
+            .filter((e) => e.status === "open" || e.status === "in_progress")
+            .slice(0, 20)
+            .map((e) => ({
+              id: e.id,
+              title: e.reason || `Escalation ${e.ticket_id ?? e.id.slice(0, 8)}`,
+              severity: "medium" as const,
+              status: (e.status === "in_progress" ? "in-progress" : "open") as "open" | "in-progress",
+              assignee: e.assigned_to ? "Assigned" : "Unassigned",
+              time: relativeTime(e.created_at),
+            }))}
           summary={summary}
-          tasks={tasks}
-          aiRecommendations={aiRecommendations}
-          tableData={tableData}
+          tasks={taskRows.map((t: any) => ({
+            id: String(t.id),
+            title: String(t.title ?? ""),
+            priority: normPriority(t.priority),
+            status: normTaskStatus(t.status),
+            dueDate: t.due_date ? new Date(t.due_date).toLocaleDateString("en-ZA") : "No date",
+            assignee: t.assignee_id ? "Assigned" : "Unassigned",
+          }))}
+          aiRecommendations={[]}
+          tableData={rows.map((e) => ({
+            id: e.id,
+            ticket: e.ticket_id || e.id.slice(0, 8),
+            reason: e.reason ?? "—",
+            status: e.status,
+            created: new Date(e.created_at).toLocaleDateString("en-ZA"),
+            updated: new Date(e.updated_at).toLocaleDateString("en-ZA"),
+          }))}
           tableColumns={tableColumns}
         >
-          {/* Charts */}
-          <div className="grid gap-6 lg:grid-cols-2">
-            {/* Ticket Trend */}
-            <div className="surface-card p-5">
-              <h3 className="section-title mb-4">Daily Ticket Activity</h3>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={ticketTrend}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                    <XAxis dataKey="day" tick={{ fill: "#737373", fontSize: 12 }} />
-                    <YAxis tick={{ fill: "#737373", fontSize: 12 }} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#262626",
-                        border: "1px solid #404040",
-                        borderRadius: "8px",
-                        color: "#fff",
-                      }}
-                    />
-                    <Legend />
-                    <Bar dataKey="open" fill="#ef4444" name="Open" />
-                    <Bar dataKey="resolved" fill="#4ade80" name="Resolved" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+          {escalations.value.state !== "ready" ? (
+            <NotConnected loadable={escalations.value} service="Communication" onRetry={escalations.reload} />
+          ) : (
+            <>
+              <div className="grid gap-6 lg:grid-cols-2">
+                {/* Ticket Trend */}
+                <div className="surface-card p-5">
+                  <h3 className="section-title mb-4">Daily Escalation Activity (last 7 days)</h3>
+                  {rows.length === 0 ? (
+                    <NoDataYet message="No escalations yet" />
+                  ) : (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={stats.days}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                          <XAxis dataKey="day" tick={{ fill: "#737373", fontSize: 12 }} />
+                          <YAxis allowDecimals={false} tick={{ fill: "#737373", fontSize: 12 }} />
+                          <Tooltip contentStyle={tooltipStyle} />
+                          <Legend />
+                          <Bar dataKey="open" fill="#ef4444" name="Raised" />
+                          <Bar dataKey="resolved" fill="#4ade80" name="Resolved" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
 
-            {/* Tickets by Priority */}
-            <div className="surface-card p-5">
-              <h3 className="section-title mb-4">Tickets by Priority</h3>
-              <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={ticketsByPriority}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, value }) => `${name}: ${value}`}
-                      outerRadius={80}
-                      fill="#4ade80"
-                      dataKey="value"
-                    >
-                      {ticketsByPriority.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Pie>
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: "#262626",
-                        border: "1px solid #404040",
-                        borderRadius: "8px",
-                        color: "#fff",
-                      }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
+                {/* By status */}
+                <div className="surface-card p-5">
+                  <h3 className="section-title mb-4">Escalations by Status</h3>
+                  {statusPie.length === 0 ? (
+                    <NoDataYet message="No escalations yet" />
+                  ) : (
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={statusPie}
+                            cx="50%"
+                            cy="50%"
+                            labelLine={false}
+                            label={({ name, value }) => `${String(name).replace("_", " ")}: ${value}`}
+                            outerRadius={80}
+                            dataKey="value"
+                          >
+                            {statusPie.map((entry) => (
+                              <Cell key={entry.name} fill={entry.fill} />
+                            ))}
+                          </Pie>
+                          <Tooltip contentStyle={tooltipStyle} />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Resolution Time by Priority */}
-          <div className="surface-card p-5">
-            <h3 className="section-title mb-4">Avg Resolution Time by Priority</h3>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={resolutionTime}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                  <XAxis dataKey="priority" tick={{ fill: "#737373", fontSize: 12 }} />
-                  <YAxis
-                    label={{ value: "Hours", angle: -90, position: "insideLeft", fill: "#737373" }}
-                    tick={{ fill: "#737373", fontSize: 12 }}
-                  />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "#262626",
-                      border: "1px solid #404040",
-                      borderRadius: "8px",
-                      color: "#fff",
-                    }}
-                  />
-                  <Line type="monotone" dataKey="time" stroke="#60a5fa" strokeWidth={2} name="Resolution Time (hrs)" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+              {/* Resolution Time by Priority */}
+              <div className="surface-card p-5">
+                <h3 className="section-title mb-4">Avg Resolution Time by Priority</h3>
+                <NoDataYet message="Not connected: escalations carry no priority field, so a per-priority resolution time cannot be computed." />
+              </div>
+            </>
+          )}
         </ModuleLayout>
       )}
 
-      {/* Tab 2: Staff Demand & Shift Rostering (Moved from Talent to Service) */}
+      {/* Tab 2: Staff Demand & Shift Rostering */}
       {activeTab === "scheduling" && (
-        <ServiceSchedulingView />
+        <div className="surface-card p-6">
+          <h3 className="section-title mb-4">Staff Demand & Shift Rostering</h3>
+          <NoDataYet message="Not connected: no rostering or workforce-demand service exists yet. Rosters, headcount and demand forecasts are not shown until one is wired in." />
+        </div>
       )}
 
       {/* Tab 3: Customer Experience & External Complaints Radar */}
-      {activeTab === "complaints" && (
-        <ServiceComplaintsRadar />
-      )}
+      {activeTab === "complaints" && <ServiceComplaintsRadar />}
     </div>
   )
 }

@@ -6,7 +6,6 @@ import { ModuleLayout } from "./module-layout"
 import {
     BarChart,
     Bar,
-    Line,
     XAxis,
     YAxis,
     CartesianGrid,
@@ -21,225 +20,64 @@ import {
 } from "recharts"
 import { TrendingDown, Heart, AlertTriangle, RefreshCw } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useModuleData } from "@/lib/module-data"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
+import { tileLabel, type Loadable } from "@/lib/service-state"
+import {
+    loadCrmActivities,
+    loadCrmCustomers,
+    loadCrmInsights,
+    loadCrmSummary,
+    loadCrmTasks,
+    useOps,
+} from "@/lib/ops-api"
+import {
+    allSettled,
+    atRiskCustomers,
+    dataOr,
+    fmtInt,
+    healthBuckets,
+    mrrBySegment,
+    normIssueStatus,
+    normPriority,
+    normSeverity,
+    normTaskStatus,
+    pct,
+    statusCountsFromSummary,
+    type CrmCustomerRow,
+} from "@/lib/ops-derive"
 import { JourneyBuilderDashboard } from "./journey-builder/journey-builder-dashboard"
 
-// Churn trend data over 6 months
-const defaultChurnTrendData = [
-    { month: "Jul", churnRate: 3.2, predictions: 3.5, retained: 96.8 },
-    { month: "Aug", churnRate: 2.9, predictions: 3.1, retained: 97.1 },
-    { month: "Sep", churnRate: 3.1, predictions: 2.9, retained: 96.9 },
-    { month: "Oct", churnRate: 2.7, predictions: 2.8, retained: 97.3 },
-    { month: "Nov", churnRate: 2.4, predictions: 2.5, retained: 97.6 },
-    { month: "Dec", churnRate: 2.1, predictions: 2.2, retained: 97.9 },
-]
+/**
+ * Retention. Every figure is read from the CRM service (customers, lifecycle
+ * health, churn predictions, activity feed, tasks). Nothing is sampled or
+ * illustrative: when CRM is down the tiles say so, and sections CRM has no data
+ * for (churn reasons) say "No data yet".
+ */
 
-// Churn risk segments
-const defaultChurnRiskSegments = [
-    { name: "High Risk", value: 847, fill: "#ef4444" },
-    { name: "Medium Risk", value: 2134, fill: "#f97316" },
-    { name: "Low Risk", value: 8521, fill: "#eab308" },
-    { name: "Loyal", value: 13345, fill: "#4ade80" },
-]
-
-// Churn reasons breakdown
-const defaultChurnReasons = [
-    { reason: "Price Sensitivity", count: 342, percentage: 32 },
-    { reason: "Service Issues", count: 267, percentage: 25 },
-    { reason: "Competitor Offers", count: 192, percentage: 18 },
-    { reason: "Relocation", count: 139, percentage: 13 },
-    { reason: "No Longer Needed", count: 128, percentage: 12 },
-]
-
-type ChurnReasonPayload = {
-    payload: {
-        count: number
-    }
+const HEALTH_COLORS: Record<string, string> = {
+    Excellent: "#4ade80",
+    Good: "#60a5fa",
+    "At Risk": "#f97316",
+    Critical: "#ef4444",
+    Unknown: "#737373",
 }
 
-// Customer lifetime value by segment
-const defaultClvBySegment = [
-    { segment: "Enterprise", clv: 48500, retentionRate: 94.2 },
-    { segment: "Business", clv: 24800, retentionRate: 91.5 },
-    { segment: "Premium", clv: 12400, retentionRate: 88.7 },
-    { segment: "Standard", clv: 6200, retentionRate: 85.3 },
-    { segment: "Basic", clv: 2400, retentionRate: 79.8 },
-]
+const tooltipStyle = {
+    backgroundColor: "#262626",
+    border: "1px solid #404040",
+    borderRadius: "8px",
+    color: "#fff",
+}
 
-// Retention campaigns performance
-const defaultCampaignPerformance = [
-    { campaign: "Win-Back Email", saved: 142, cost: 2840, roi: 312 },
-    { campaign: "Loyalty Discount", saved: 89, cost: 8900, roi: 156 },
-    { campaign: "Personal Outreach", saved: 67, cost: 3350, roi: 248 },
-    { campaign: "Upgrade Offer", saved: 45, cost: 1800, roi: 412 },
-]
-
-const defaultRetentionJourneys = [
-    {
-        id: "journey-1",
-        name: "Cancel Save Journey",
-        status: "active",
-        audience: "High risk • Tenure > 6 months",
-        offer: "Pause or Discount",
-        conversion: "18%",
-        saved: 142,
-        lastUpdated: "Today",
-    },
-    {
-        id: "journey-2",
-        name: "Price Sensitivity Journey",
-        status: "active",
-        audience: "Price-sensitive • Standard tier",
-        offer: "Targeted 10% offer",
-        conversion: "14%",
-        saved: 88,
-        lastUpdated: "Yesterday",
-    },
-    {
-        id: "journey-3",
-        name: "Win-back Journey",
-        status: "draft",
-        audience: "Churned < 30 days",
-        offer: "Limited-time upgrade",
-        conversion: "-",
-        saved: 0,
-        lastUpdated: "2 days ago",
-    },
-]
-
-const defaultRetentionEvents = [
-    {
-        id: "event-1",
-        type: "Cancel Initiated",
-        account: "ACC-78421",
-        customer: "Lerato Mbeki",
-        outcome: "Offer Accepted",
-        channel: "Portal",
-        time: "5 min ago",
-    },
-    {
-        id: "event-2",
-        type: "Offer Shown",
-        account: "ACC-65892",
-        customer: "Johan Pretorius",
-        outcome: "Pending",
-        channel: "Portal",
-        time: "18 min ago",
-    },
-    {
-        id: "event-3",
-        type: "Cancel Completed",
-        account: "ACC-91234",
-        customer: "Nomvula Dlamini",
-        outcome: "Churned",
-        channel: "Portal",
-        time: "1 hour ago",
-    },
-    {
-        id: "event-4",
-        type: "Offer Accepted",
-        account: "ACC-45678",
-        customer: "David Smith",
-        outcome: "Saved",
-        channel: "Success Team",
-        time: "2 hours ago",
-    },
-]
-
-const defaultWatchlist = [
-    {
-        id: "watch-1",
-        account: "ACC-78421",
-        customer: "Lerato Mbeki",
-        segment: "Premium",
-        riskScore: "94%",
-        trigger: "Service issues spike",
-        status: "Watching",
-    },
-    {
-        id: "watch-2",
-        account: "ACC-65892",
-        customer: "Johan Pretorius",
-        segment: "Business",
-        riskScore: "87%",
-        trigger: "Price sensitivity cluster",
-        status: "Outreach",
-    },
-    {
-        id: "watch-3",
-        account: "ACC-23456",
-        customer: "Sipho Nkosi",
-        segment: "Premium",
-        riskScore: "71%",
-        trigger: "Low engagement",
-        status: "Scheduled",
-    },
-]
-
-const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
-
-const defaultFlashcardKPIs = [
-    {
-        id: "1",
-        title: "Monthly Churn Rate",
-        value: "2.1%",
-        change: "-0.3%",
-        changeType: "positive" as const,
-        iconKey: "churn",
-        backTitle: "Churn Breakdown",
-        backDetails: [
-            { label: "Voluntary Churn", value: "1.4%" },
-            { label: "Involuntary Churn", value: "0.7%" },
-            { label: "Target", value: "< 2.5%" },
-        ],
-        backInsight: "Lowest churn rate in 18 months",
-    },
-    {
-        id: "2",
-        title: "At-Risk Customers",
-        value: "847",
-        change: "-12%",
-        changeType: "positive" as const,
-        iconKey: "risk",
-        backTitle: "Risk Distribution",
-        backDetails: [
-            { label: "Critical (90%+)", value: "124" },
-            { label: "High (70-89%)", value: "298" },
-            { label: "Elevated (50-69%)", value: "425" },
-        ],
-        backInsight: "AI model 87% accurate on predictions",
-    },
-    {
-        id: "3",
-        title: "Retention Rate",
-        value: "97.9%",
-        change: "+0.3%",
-        changeType: "positive" as const,
-        iconKey: "retention",
-        backTitle: "Retention by Tenure",
-        backDetails: [
-            { label: "0-6 months", value: "92.4%" },
-            { label: "6-24 months", value: "96.8%" },
-            { label: "24+ months", value: "99.2%" },
-        ],
-        backInsight: "Long-term customers most stable",
-    },
-    {
-        id: "4",
-        title: "Customers Saved",
-        value: "343",
-        change: "+28%",
-        changeType: "positive" as const,
-        iconKey: "saved",
-        backTitle: "Save Methods",
-        backDetails: [
-            { label: "Discount Offers", value: "142" },
-            { label: "Service Recovery", value: "108" },
-            { label: "Personal Outreach", value: "93" },
-        ],
-        backInsight: "R 2.1M revenue preserved this month",
-    },
+const tableColumns = [
+    { key: "account", label: "Account" },
+    { key: "customer", label: "Customer" },
+    { key: "segment", label: "Segment" },
+    { key: "health", label: "Health" },
+    { key: "status", label: "Status" },
+    { key: "mrr", label: "MRR (R)" },
 ]
 
 const retentionKpiIconMap: Record<string, JSX.Element> = {
@@ -249,286 +87,189 @@ const retentionKpiIconMap: Record<string, JSX.Element> = {
     saved: <RefreshCw className="h-5 w-5 text-blue-400" />,
 }
 
-const defaultActivities = [
-    {
-        id: "1",
-        user: "AI System",
-        action: "flagged high-risk customer",
-        target: "ACC-78421",
-        time: "5 minutes ago",
-        type: "assign" as const,
-    },
-    {
-        id: "2",
-        user: "Retention Team",
-        action: "saved customer with",
-        target: "loyalty discount",
-        time: "22 minutes ago",
-        type: "update" as const,
-    },
-    {
-        id: "3",
-        user: "Win-Back Campaign",
-        action: "re-activated",
-        target: "12 customers",
-        time: "1 hour ago",
-        type: "create" as const,
-    },
-    {
-        id: "4",
-        user: "Thabo Ndlovu",
-        action: "completed outreach for",
-        target: "ACC-65892",
-        time: "2 hours ago",
-        type: "comment" as const,
-    },
-    {
-        id: "5",
-        user: "Churn Model",
-        action: "updated predictions for",
-        target: "2,847 accounts",
-        time: "3 hours ago",
-        type: "update" as const,
-    },
-]
+const tile = (l: Loadable<unknown>, value: () => string) => (l.state === "ready" ? value() : (tileLabel(l) ?? "—"))
 
-const defaultIssues = [
-    {
-        id: "1",
-        title: "124 customers with 90%+ churn probability",
-        severity: "critical" as const,
-        status: "in-progress" as const,
-        assignee: "Retention Team",
-        time: "Active",
-    },
-    {
-        id: "2",
-        title: "Spike in service-related churn in Cape Town",
-        severity: "high" as const,
-        status: "open" as const,
-        assignee: "Regional Manager",
-        time: "2 hours ago",
-    },
-    {
-        id: "3",
-        title: "Competitor campaign detected - MTN promo",
-        severity: "high" as const,
-        status: "in-progress" as const,
-        assignee: "Marketing",
-        time: "Yesterday",
-    },
-    {
-        id: "4",
-        title: "Win-back email campaign below target",
-        severity: "medium" as const,
-        status: "open" as const,
-        assignee: "Campaign Manager",
-        time: "2 days ago",
-    },
-]
-
-const defaultSummary = `Retention performance shows strong improvement with the monthly churn rate dropping to 2.1%, the lowest in 18 months. The AI-powered churn prediction model has identified 847 at-risk customers with 87% prediction accuracy. This month, the retention team saved 343 customers, preserving R 2.1M in annual revenue. Key focus areas: 124 customers are in critical risk zone (90%+ churn probability), a service-related churn spike was detected in Cape Town requiring immediate attention, and competitor MTN is running an aggressive promotional campaign that may impact retention in budget segments.`
-
-const defaultTasks = [
-    {
-        id: "1",
-        title: "Contact 124 critical-risk customers",
-        priority: "urgent" as const,
-        status: "in-progress" as const,
-        dueDate: "Today",
-        assignee: "Retention Team",
-    },
-    {
-        id: "2",
-        title: "Launch counter-offer for MTN campaign",
-        priority: "high" as const,
-        status: "todo" as const,
-        dueDate: "Tomorrow",
-        assignee: "Marketing",
-    },
-    {
-        id: "3",
-        title: "Investigate Cape Town service issues",
-        priority: "high" as const,
-        status: "in-progress" as const,
-        dueDate: "Today",
-        assignee: "Service Manager",
-    },
-    {
-        id: "4",
-        title: "Update churn prediction model",
-        priority: "normal" as const,
-        status: "todo" as const,
-        dueDate: "This week",
-        assignee: "Data Science",
-    },
-]
-
-const defaultAiRecommendations = [
-    {
-        id: "1",
-        title: "Proactive Outreach Required",
-        description: "48 customers show declining usage patterns similar to previous churners. Initiate engagement now.",
-        impact: "high" as const,
-        category: "Prevention",
-    },
-    {
-        id: "2",
-        title: "Price Sensitivity Cluster",
-        description: "215 customers comparing competitors. Consider targeted retention offer with 15% discount.",
-        impact: "high" as const,
-        category: "Pricing",
-    },
-    {
-        id: "3",
-        title: "Service Recovery Opportunity",
-        description: "67 customers had recent negative support experiences. Personal apology call recommended.",
-        impact: "medium" as const,
-        category: "Recovery",
-    },
-    {
-        id: "4",
-        title: "Loyalty Program Gap",
-        description: "Long-term customers (3+ years) showing signs of disengagement. Launch appreciation campaign.",
-        impact: "medium" as const,
-        category: "Loyalty",
-    },
-]
-
-const defaultTableData = [
-    {
-        id: "1",
-        account: "ACC-78421",
-        customer: "Lerato Mbeki",
-        segment: "Premium",
-        riskScore: "94%",
-        tenure: "8 months",
-        reason: "Service Issues",
-        status: "Contacted",
-        lastAction: "Today",
-    },
-    {
-        id: "2",
-        account: "ACC-65892",
-        customer: "Johan Pretorius",
-        segment: "Business",
-        riskScore: "87%",
-        tenure: "14 months",
-        reason: "Price Sensitive",
-        status: "Offer Sent",
-        lastAction: "Yesterday",
-    },
-    {
-        id: "3",
-        account: "ACC-91234",
-        customer: "Nomvula Dlamini",
-        segment: "Standard",
-        riskScore: "82%",
-        tenure: "3 months",
-        reason: "Competitor Offer",
-        status: "Pending",
-        lastAction: "2 days ago",
-    },
-    {
-        id: "4",
-        account: "ACC-45678",
-        customer: "David Smith",
-        segment: "Enterprise",
-        riskScore: "76%",
-        tenure: "26 months",
-        reason: "Service Issues",
-        status: "Escalated",
-        lastAction: "Today",
-    },
-    {
-        id: "5",
-        account: "ACC-23456",
-        customer: "Sipho Nkosi",
-        segment: "Premium",
-        riskScore: "71%",
-        tenure: "11 months",
-        reason: "No Engagement",
-        status: "Scheduled",
-        lastAction: "Tomorrow",
-    },
-]
-
-const defaultTableColumns = [
-    { key: "account", label: "Account" },
-    { key: "customer", label: "Customer" },
-    { key: "segment", label: "Segment" },
-    { key: "riskScore", label: "Risk Score" },
-    { key: "tenure", label: "Tenure" },
-    { key: "reason", label: "Risk Reason" },
-    { key: "status", label: "Status" },
-    { key: "lastAction", label: "Last Action" },
-]
+const fullName = (c: CrmCustomerRow) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim() || "Unnamed customer"
 
 export function RetentionModule({ activeTabOverride }: { activeTabOverride?: string }) {
-    const { data } = useModuleData("retention", {
-        churnTrendData: defaultChurnTrendData,
-        churnRiskSegments: defaultChurnRiskSegments,
-        churnReasons: defaultChurnReasons,
-        clvBySegment: defaultClvBySegment,
-        campaignPerformance: defaultCampaignPerformance,
-        retentionJourneys: defaultRetentionJourneys,
-        retentionEvents: defaultRetentionEvents,
-        watchlist: defaultWatchlist,
-        flashcardKPIs: defaultFlashcardKPIs,
-        activities: defaultActivities,
-        issues: defaultIssues,
-        summary: defaultSummary,
-        tasks: defaultTasks,
-        aiRecommendations: defaultAiRecommendations,
-        tableData: defaultTableData,
-        tableColumns: defaultTableColumns,
-    })
-
-    const {
-        churnTrendData,
-        churnRiskSegments,
-        churnReasons,
-        clvBySegment,
-        retentionJourneys,
-        retentionEvents,
-        watchlist,
-        flashcardKPIs,
-        activities,
-        issues,
-        summary,
-        tasks,
-        aiRecommendations,
-        tableData,
-        tableColumns,
-    } = data
-
-    const flashcardKPIsWithIcons = flashcardKPIs.map((kpi) => ({
-        ...kpi,
-        icon: retentionKpiIconMap[kpi.iconKey] ?? null,
-    }))
-
-    const journeysSafe = retentionJourneys ?? defaultRetentionJourneys
-    const eventsSafe = retentionEvents ?? defaultRetentionEvents
-    const watchlistSafe = watchlist ?? defaultWatchlist
-
     const [activeTab, setActiveTab] = useState("overview")
+    const summary = useOps(loadCrmSummary)
+    const customers = useOps(loadCrmCustomers)
+    const insights = useOps(loadCrmInsights)
+    const activities = useOps(loadCrmActivities)
+    const tasks = useOps(loadCrmTasks)
 
     useEffect(() => {
         if (!activeTabOverride) return
         setActiveTab(activeTabOverride)
     }, [activeTabOverride])
 
+    const reloadAll = () => {
+        summary.reload()
+        customers.reload()
+        insights.reload()
+        activities.reload()
+        tasks.reload()
+    }
+
+    // ModuleLayout copies its list props into state on mount, so only mount it
+    // once every source has answered.
+    if (!allSettled(summary.value, customers.value, insights.value, activities.value, tasks.value)) {
+        return (
+            <div className="space-y-4" aria-busy="true" aria-label="Loading retention data">
+                <div className="h-16 animate-pulse rounded-lg bg-muted/50" />
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    {[0, 1, 2, 3].map((i) => (
+                        <div key={i} className="h-28 animate-pulse rounded-lg bg-muted/50" />
+                    ))}
+                </div>
+                <div className="h-64 animate-pulse rounded-lg bg-muted/50" />
+            </div>
+        )
+    }
+
+    const custRows: CrmCustomerRow[] = customers.value.state === "ready" ? customers.value.data.rows : []
+    const custTotal = customers.value.state === "ready" ? customers.value.data.total : 0
+    const truncated = custRows.length < custTotal
+    const watch = atRiskCustomers(custRows)
+    const buckets = healthBuckets(custRows)
+    const segments = mrrBySegment(custRows)
+    const status = summary.value.state === "ready" ? statusCountsFromSummary(summary.value.data?.flashcardKPIs) : null
+    const totalCustomers: number | null =
+        summary.value.state === "ready" && typeof summary.value.data?.totalCustomers === "number"
+            ? summary.value.data.totalCustomers
+            : null
+    const churnTrend: Array<{ month: string; churn: number }> =
+        summary.value.state === "ready" ? (summary.value.data?.customerData ?? []) : []
+    const insightData = dataOr(insights.value, { aiRecommendations: [], issues: [] })
+    const activityRows: any[] = dataOr(activities.value, [])
+    const taskRows: any[] = dataOr(tasks.value, [])
+    const sampleNote = truncated ? `Based on the first ${fmtInt(custRows.length)} of ${fmtInt(custTotal)} customers.` : "Based on all customers."
+
+    const flashcardKPIs = [
+        {
+            id: "1",
+            title: "Churned Customers",
+            value: tile(summary.value, () => (status ? fmtInt(status.churned) : "—")),
+            change: "",
+            changeType: "neutral" as const,
+            iconKey: "churn",
+            backTitle: "Customer Status",
+            backDetails: status
+                ? [
+                      { label: "Active", value: fmtInt(status.active) },
+                      { label: "Suspended", value: fmtInt(status.suspended) },
+                      { label: "Churned", value: fmtInt(status.churned) },
+                  ]
+                : [],
+            backInsight: status && totalCustomers ? `${pct(status.churned, totalCustomers)} of ${fmtInt(totalCustomers)} customers have churned.` : "No customer status data available.",
+        },
+        {
+            id: "2",
+            title: "At-Risk Customers",
+            value: tile(customers.value, () => fmtInt(watch.length)),
+            change: "",
+            changeType: "neutral" as const,
+            iconKey: "risk",
+            backTitle: "Health Distribution",
+            backDetails: buckets.map((b) => ({ label: b.name, value: fmtInt(b.value) })),
+            backInsight: `Customers whose CRM health score is below 60. ${sampleNote}`,
+        },
+        {
+            id: "3",
+            title: "Retention Rate",
+            value: tile(summary.value, () => (status && totalCustomers ? pct(totalCustomers - status.churned, totalCustomers) : "—")),
+            change: "",
+            changeType: "neutral" as const,
+            iconKey: "retention",
+            backTitle: "Retained vs Churned",
+            backDetails:
+                status && totalCustomers
+                    ? [
+                          { label: "Retained", value: fmtInt(totalCustomers - status.churned) },
+                          { label: "Churned", value: fmtInt(status.churned) },
+                      ]
+                    : [],
+            backInsight: "Share of all customers on record that have not churned.",
+        },
+        {
+            id: "4",
+            title: "Suspended Accounts",
+            value: tile(summary.value, () => (status ? fmtInt(status.suspended) : "—")),
+            change: "",
+            changeType: "neutral" as const,
+            iconKey: "saved",
+            backTitle: "Suspended",
+            backDetails: status ? [{ label: "Suspended", value: fmtInt(status.suspended) }] : [],
+            backInsight: "Accounts currently suspended; the usual precursor to churn.",
+        },
+    ].map((kpi) => ({ ...kpi, icon: retentionKpiIconMap[kpi.iconKey] ?? null }))
+
+    const summaryText =
+        summary.value.state === "ready" && status && totalCustomers !== null
+            ? `${fmtInt(totalCustomers)} customers on record: ${fmtInt(status.active)} active, ${fmtInt(status.suspended)} suspended and ${fmtInt(status.churned)} churned (${pct(status.churned, totalCustomers)}). ` +
+              (customers.value.state === "ready"
+                  ? `CRM health scoring flags ${fmtInt(watch.length)} customers as at risk. ${sampleNote}`
+                  : "Per-customer health could not be loaded.")
+            : "Retention figures are unavailable because the CRM service could not be read. Nothing is estimated in its place."
+
+    const tableData = [...custRows]
+        .sort((a, b) => Number(atRiskCustomers([b]).length) - Number(atRiskCustomers([a]).length))
+        .slice(0, 200)
+        .map((c) => ({
+            id: c.id,
+            account: c.account_number ?? "—",
+            customer: fullName(c),
+            segment: c.customer_type ?? "—",
+            health: c.health ?? "Unknown",
+            status: c.status ?? "—",
+            mrr: Math.round(c.mrr ?? 0),
+        }))
+
     return (
         <ModuleLayout
             title="Retention"
-        icon={<Heart className="h-5 w-5" />}
-        subtitle="Churn prevention, win-back campaigns, and loyalty management"
-            flashcardKPIs={flashcardKPIsWithIcons}
-            activities={activities}
-            issues={issues}
-            summary={summary}
-            tasks={tasks}
-            aiRecommendations={aiRecommendations}
+            icon={<Heart className="h-5 w-5" />}
+            subtitle="Churn prevention, win-back campaigns, and loyalty management"
+            headerActions={
+                <Button variant="outline" size="sm" onClick={reloadAll}>
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Refresh
+                </Button>
+            }
+            flashcardKPIs={flashcardKPIs}
+            activities={activityRows.map((a) => ({
+                id: String(a.id),
+                user: String(a.user ?? ""),
+                action: String(a.action ?? ""),
+                target: String(a.target ?? ""),
+                time: String(a.time ?? ""),
+                type: (["create", "update", "delete", "comment", "assign"].includes(a.type) ? a.type : "update") as "update",
+            }))}
+            issues={insightData.issues.map((i: any) => ({
+                id: String(i.id),
+                title: String(i.title ?? ""),
+                severity: normSeverity(i.severity),
+                status: normIssueStatus(i.status),
+                assignee: String(i.assignee ?? ""),
+                time: String(i.time ?? ""),
+            }))}
+            summary={summaryText}
+            tasks={taskRows.map((t: any) => ({
+                id: String(t.id),
+                title: String(t.title ?? ""),
+                priority: normPriority(t.priority),
+                status: normTaskStatus(t.status),
+                dueDate: t.dueDate ? new Date(t.dueDate).toLocaleDateString("en-ZA") : "No date",
+                assignee: String(t.assignee ?? ""),
+            }))}
+            aiRecommendations={insightData.aiRecommendations.map((r: any) => ({
+                id: String(r.id),
+                title: String(r.title ?? ""),
+                description: String(r.description ?? ""),
+                impact: (["high", "medium", "low"].includes(r.impact) ? r.impact : "medium") as "medium",
+                category: String(r.category ?? ""),
+            }))}
             tableData={tableData}
             tableColumns={tableColumns}
         >
@@ -541,128 +282,97 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                 </TabsList>
 
                 <TabsContent value="overview" className="space-y-6">
-                    {/* Charts */}
                     <div className="grid gap-6 lg:grid-cols-2">
-                        {/* Churn Trend & Prediction */}
+                        {/* Churned per month */}
                         <div className="surface-card p-5">
-                            <h3 className="section-title mb-4">Churn Rate Trend & Prediction</h3>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={churnTrendData}>
-                                        <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                                        <XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} />
-                                        <YAxis
-                                            tick={{ fill: "#737373", fontSize: 12 }}
-                                            tickFormatter={(v) => `${v}%`}
-                                            domain={[0, 5]}
-                                        />
-                                        <Tooltip
-                                            contentStyle={{
-                                                backgroundColor: "#262626",
-                                                border: "1px solid #404040",
-                                                borderRadius: "8px",
-                                                color: "#fff",
-                                            }}
-                                            formatter={(value: number, name: string) => [`${value}%`, name === "churnRate" ? "Actual Churn" : "AI Prediction"]}
-                                        />
-                                        <Legend />
-                                        <Area type="monotone" dataKey="churnRate" stroke="#ef4444" fill="#ef444433" strokeWidth={2} name="Actual Churn" />
-                                        <Area type="monotone" dataKey="predictions" stroke="#60a5fa" fill="#60a5fa22" strokeWidth={2} strokeDasharray="5 5" name="AI Prediction" />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
+                            <h3 className="section-title mb-4">Customers Churned per Month</h3>
+                            {summary.value.state !== "ready" ? (
+                                <NotConnected loadable={summary.value} service="CRM" onRetry={summary.reload} />
+                            ) : churnTrend.length === 0 ? (
+                                <NoDataYet message="No customer history yet" />
+                            ) : (
+                                <div className="h-64">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <AreaChart data={churnTrend}>
+                                            <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                                            <XAxis dataKey="month" tick={{ fill: "#737373", fontSize: 12 }} />
+                                            <YAxis allowDecimals={false} tick={{ fill: "#737373", fontSize: 12 }} />
+                                            <Tooltip contentStyle={tooltipStyle} />
+                                            <Legend />
+                                            <Area type="monotone" dataKey="churn" stroke="#ef4444" fill="#ef444433" strokeWidth={2} name="Churned customers" />
+                                        </AreaChart>
+                                    </ResponsiveContainer>
+                                </div>
+                            )}
                         </div>
 
-                        {/* Risk Segmentation */}
+                        {/* Health segmentation */}
                         <div className="surface-card p-5">
-                            <h3 className="section-title mb-4">Customer Risk Segmentation</h3>
-                            <div className="h-64">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={churnRiskSegments}
-                                            cx="50%"
-                                            cy="50%"
-                                            labelLine={false}
-                                            label={({ name, value }) => `${name}: ${value.toLocaleString()}`}
-                                            outerRadius={80}
-                                            fill="#4ade80"
-                                            dataKey="value"
-                                        >
-                                            {churnRiskSegments.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={entry.fill} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip
-                                            contentStyle={{
-                                                backgroundColor: "#262626",
-                                                border: "1px solid #404040",
-                                                borderRadius: "8px",
-                                                color: "#fff",
-                                            }}
-                                            formatter={(value: number) => [value.toLocaleString(), "Customers"]}
-                                        />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            </div>
+                            <h3 className="section-title mb-4">Customer Health Segmentation</h3>
+                            {customers.value.state !== "ready" ? (
+                                <NotConnected loadable={customers.value} service="CRM" onRetry={customers.reload} />
+                            ) : buckets.length === 0 ? (
+                                <NoDataYet message="No customers yet" />
+                            ) : (
+                                <>
+                                    <div className="h-64">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <PieChart>
+                                                <Pie
+                                                    data={buckets}
+                                                    cx="50%"
+                                                    cy="50%"
+                                                    labelLine={false}
+                                                    label={({ name, value }) => `${name}: ${Number(value).toLocaleString()}`}
+                                                    outerRadius={80}
+                                                    dataKey="value"
+                                                >
+                                                    {buckets.map((entry) => (
+                                                        <Cell key={entry.name} fill={HEALTH_COLORS[entry.name] ?? "#737373"} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => [value.toLocaleString(), "Customers"]} />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <p className="mt-2 text-xs text-muted-foreground">{sampleNote}</p>
+                                </>
+                            )}
                         </div>
                     </div>
 
-                    {/* Churn Reasons */}
+                    {/* Churn reasons: no data source */}
                     <div className="surface-card p-5">
                         <h3 className="section-title mb-4">Churn Reasons Analysis</h3>
-                        <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={churnReasons} layout="vertical">
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                                    <XAxis type="number" tick={{ fill: "#737373", fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
-                                    <YAxis type="category" dataKey="reason" tick={{ fill: "#737373", fontSize: 12 }} width={130} />
-                                        <Tooltip
-                                            contentStyle={{
-                                                backgroundColor: "#262626",
-                                                border: "1px solid #404040",
-                                                borderRadius: "8px",
-                                                color: "#fff",
-                                            }}
-                                            formatter={(value: number, name: string, props: { payload?: { count?: number } }) => {
-                                                const label = name === "percentage" ? "Churned" : name
-                                                return [`${props.payload?.count ?? 0} customers (${value}%)`, label]
-                                            }}
-                                        />
-                                    <Bar dataKey="percentage" fill="#f97316" name="Percentage" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
+                        <NoDataYet message="Not connected: churn reasons come from the Retention prediction service, which is not running." />
                     </div>
 
-                    {/* CLV by Segment */}
+                    {/* Revenue by segment */}
                     <div className="surface-card p-5">
-                        <h3 className="section-title mb-4">Customer Lifetime Value & Retention by Segment</h3>
-                        <div className="h-64">
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={clvBySegment}>
-                                    <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
-                                    <XAxis dataKey="segment" tick={{ fill: "#737373", fontSize: 12 }} />
-                                    <YAxis yAxisId="left" tick={{ fill: "#737373", fontSize: 12 }} tickFormatter={(v) => `R${v / 1000}K`} />
-                                    <YAxis yAxisId="right" orientation="right" tick={{ fill: "#737373", fontSize: 12 }} tickFormatter={(v) => `${v}%`} domain={[70, 100]} />
-                                    <Tooltip
-                                        contentStyle={{
-                                            backgroundColor: "#262626",
-                                            border: "1px solid #404040",
-                                            borderRadius: "8px",
-                                            color: "#fff",
-                                        }}
-                                        formatter={(value: number, name: string) => [
-                                            name === "clv" ? formatCurrency(value) : `${value}%`,
-                                            name === "clv" ? "Lifetime Value" : "Retention Rate"
-                                        ]}
-                                    />
-                                    <Legend />
-                                    <Bar yAxisId="left" dataKey="clv" fill="#4ade80" name="Lifetime Value" />
-                                    <Line yAxisId="right" type="monotone" dataKey="retentionRate" stroke="#a855f7" strokeWidth={3} name="Retention Rate" />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        </div>
+                        <h3 className="section-title mb-4">Average Monthly Revenue by Segment</h3>
+                        {customers.value.state !== "ready" ? (
+                            <NotConnected loadable={customers.value} service="CRM" onRetry={customers.reload} />
+                        ) : segments.length === 0 ? (
+                            <NoDataYet message="No billing data yet: no customer has a recurring revenue amount" />
+                        ) : (
+                            <div className="h-64">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={segments}>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#404040" />
+                                        <XAxis dataKey="segment" tick={{ fill: "#737373", fontSize: 12 }} />
+                                        <YAxis tick={{ fill: "#737373", fontSize: 12 }} tickFormatter={(v) => `R${v}`} />
+                                        <Tooltip
+                                            contentStyle={tooltipStyle}
+                                            formatter={(value: number, _n: string, p: { payload?: { customers?: number } }) => [
+                                                `R ${value.toLocaleString("en-ZA")} (${p.payload?.customers ?? 0} customers)`,
+                                                "Avg MRR",
+                                            ]}
+                                        />
+                                        <Bar dataKey="avgMrr" fill="#4ade80" name="Avg MRR" />
+                                    </BarChart>
+                                </ResponsiveContainer>
+                            </div>
+                        )}
                     </div>
                 </TabsContent>
 
@@ -673,56 +383,66 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                 <TabsContent value="events" className="space-y-6">
                     <div className="surface-card p-5">
                         <h3 className="section-title mb-4">Retention Events</h3>
-                        <div className="space-y-3">
-                            {eventsSafe.map((event) => (
-                                <div key={event.id} className="rounded-lg border border-border bg-secondary/30 p-3">
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                        <div>
-                                            <p className="card-title">{event.type}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                                {event.account} - {event.customer} - {event.channel}
-                                            </p>
-                                        </div>
-                                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                            <Badge variant="secondary" className="bg-secondary text-foreground">
-                                                {event.outcome}
-                                            </Badge>
-                                            <span>{event.time}</span>
+                        {activities.value.state !== "ready" ? (
+                            <NotConnected loadable={activities.value} service="CRM" onRetry={activities.reload} />
+                        ) : activityRows.length === 0 ? (
+                            <NoDataYet message="No customer events recorded yet" />
+                        ) : (
+                            <div className="space-y-3">
+                                {activityRows.map((event: any) => (
+                                    <div key={event.id} className="rounded-lg border border-border bg-secondary/30 p-3">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <div>
+                                                <p className="card-title capitalize">{event.action}</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {event.user} - {event.target}
+                                                </p>
+                                            </div>
+                                            <span className="text-xs text-muted-foreground">{event.time}</span>
                                         </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </TabsContent>
 
                 <TabsContent value="watchlist" className="space-y-6">
                     <div className="surface-card p-5">
                         <h3 className="section-title mb-4">Watchlist</h3>
-                        <div className="space-y-3">
-                            {watchlistSafe.map((item) => (
-                                <div key={item.id} className="rounded-lg border border-border bg-secondary/30 p-3">
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                        <div>
-                                            <p className="card-title">{item.customer}</p>
-                                            <p className="text-xs text-muted-foreground">
-                                                {item.account} - {item.segment}
-                                            </p>
-                                            <p className="text-xs text-muted-foreground">Trigger: {item.trigger}</p>
-                                        </div>
-                                        <div className="flex items-center gap-3 text-xs">
-                                            <Badge className="badge-warning">{item.riskScore}</Badge>
-                                            <Badge variant="secondary" className="bg-secondary text-foreground">
-                                                {item.status}
-                                            </Badge>
+                        {customers.value.state !== "ready" ? (
+                            <NotConnected loadable={customers.value} service="CRM" onRetry={customers.reload} />
+                        ) : watch.length === 0 ? (
+                            <NoDataYet message="No customers are currently flagged at risk" />
+                        ) : (
+                            <div className="space-y-3">
+                                {watch.slice(0, 50).map((c) => (
+                                    <div key={c.id} className="rounded-lg border border-border bg-secondary/30 p-3">
+                                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                            <div>
+                                                <p className="card-title">{fullName(c)}</p>
+                                                <p className="text-xs text-muted-foreground">
+                                                    {c.account_number ?? "No account number"} - {c.customer_type ?? "Unknown segment"}
+                                                </p>
+                                                <p className="text-xs text-muted-foreground">Status: {c.status ?? "unknown"}</p>
+                                            </div>
+                                            <div className="flex items-center gap-3 text-xs">
+                                                <Badge className="badge-warning">{c.health}</Badge>
+                                                <Badge variant="secondary" className="bg-secondary text-foreground">
+                                                    R {Math.round(c.mrr ?? 0).toLocaleString("en-ZA")} / month
+                                                </Badge>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                ))}
+                                {watch.length > 50 && (
+                                    <p className="text-xs text-muted-foreground">Showing 50 of {fmtInt(watch.length)} at-risk customers.</p>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </TabsContent>
             </Tabs>
-</ModuleLayout>
+        </ModuleLayout>
     )
 }

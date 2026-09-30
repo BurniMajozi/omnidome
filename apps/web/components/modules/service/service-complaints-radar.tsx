@@ -24,6 +24,7 @@ import {
   HeartCrack,
   Sparkles,
 } from "lucide-react"
+import { NoDataYet } from "@/components/ui/not-connected"
 import type { CustomerComplaintEvent } from "@/app/api/service/complaints/route"
 
 export function ServiceComplaintsRadar() {
@@ -43,7 +44,7 @@ export function ServiceComplaintsRadar() {
   const fetchComplaints = async () => {
     try {
       setLoading(true)
-      const res = await fetch("/api/service/complaints")
+      const res = await fetch("/api/service/complaints", { cache: "no-store", signal: AbortSignal.timeout(10_000) })
       if (res.ok) {
         const json = await res.json()
         setComplaints(json.complaints || [])
@@ -77,7 +78,7 @@ export function ServiceComplaintsRadar() {
         }),
       })
       if (res.ok) {
-        setToastMessage(`Firecrawl initialized: Scraped feedback from ${newLabel || newUrl}!`)
+        setToastMessage(`Source saved: ${newLabel || newUrl}. No crawler is connected yet, so nothing has been ingested.`)
         setAddUrlModalOpen(false)
         setNewUrl("")
         setNewLabel("")
@@ -149,11 +150,11 @@ export function ServiceComplaintsRadar() {
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-xl font-bold text-foreground">External Complaints & Sentiment Radar</h2>
                 <Badge variant="outline" className="border-red-500/40 text-red-400 bg-red-500/10 text-[10px] font-semibold">
-                  Live Web & Social Scraper
+                  Crawler not connected
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
-                Real-time ingestion of customer friction points from HelloPeter ZA, DownDetector, X/Twitter, Facebook, and ICASA regulatory email inboxes using Firecrawl web extraction.
+                Customer friction points from HelloPeter ZA, DownDetector, X/Twitter, Facebook, and ICASA regulatory inboxes. No crawler or feed is connected yet, so no complaints, sentiment scores or counts are shown; sources you add are saved for when one is.
               </p>
             </div>
           </div>
@@ -166,7 +167,7 @@ export function ServiceComplaintsRadar() {
               onClick={() => setAddUrlModalOpen(true)}
             >
               <Plus className="h-4 w-4" />
-              Add Complaint URL to Scrape
+              Add Source to Monitor
             </Button>
 
             <Button
@@ -237,28 +238,29 @@ export function ServiceComplaintsRadar() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-base flex items-center gap-2">
               <Globe className="h-4 w-4 text-cyan-400" />
-              Active Scraped URLs & Complaint Feeds
+              Monitored Sources
             </CardTitle>
-            <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px]">
-              Firecrawl Engine Active
+            <Badge variant="outline" className="border-amber-500/40 text-amber-400 text-[10px]">
+              Not crawled
             </Badge>
           </div>
         </CardHeader>
         <CardContent className="p-4">
+          {trackedUrls.length === 0 && !loading && <NoDataYet message="No sources added yet" />}
           <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
             {trackedUrls.map((feed) => (
               <div key={feed.url} className="rounded-lg border border-border/70 bg-background/50 p-3 text-xs space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-foreground truncate max-w-[140px]">{feed.label}</span>
-                  <Badge variant="outline" className="text-[9px] border-emerald-500/40 text-emerald-400 py-0 px-1">
-                    {feed.status}
+                  <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-400 py-0 px-1">
+                    {feed.status === "NOT_CRAWLED" ? "Not crawled" : feed.status}
                   </Badge>
                 </div>
                 <p className="text-[11px] font-mono text-muted-foreground truncate" title={feed.url}>
                   {feed.url}
                 </p>
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1 border-t border-border/40">
-                  <span>Crawled: {feed.lastCrawled}</span>
+                  <span>Crawled: {feed.lastCrawled ?? "Never"}</span>
                   <a href={feed.url} target="_blank" rel="noreferrer" className="text-cyan-400 hover:underline flex items-center gap-0.5">
                     View <ArrowUpRight className="h-2.5 w-2.5" />
                   </a>
@@ -274,13 +276,16 @@ export function ServiceComplaintsRadar() {
         <CardHeader className="pb-3 border-b border-border/60">
           <CardTitle className="text-base flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-red-400" />
-            Live Customer Escalation & Friction Stream
+            Customer Escalation & Friction Stream
           </CardTitle>
           <CardDescription className="text-xs">
             Correlated with internal tickets and shift scheduling so managers can dispatch relevant skills immediately.
           </CardDescription>
         </CardHeader>
         <CardContent className="p-4 space-y-3">
+          {complaints.length === 0 && !loading && (
+            <NoDataYet message="No complaints ingested yet: no complaint feed or crawler is connected." />
+          )}
           {complaints.map((item) => (
             <div
               key={item.id}
@@ -389,7 +394,7 @@ export function ServiceComplaintsRadar() {
                 Add External URL to Track Customer Complaints
               </CardTitle>
               <CardDescription className="text-xs">
-                Provide a HelloPeter company profile, DownDetector URL, Twitter mention feed, or regulatory email inbox.
+                Save a HelloPeter company profile, DownDetector URL, Twitter mention feed, or regulatory email inbox. It is stored as a monitored source only; no crawling happens yet.
               </CardDescription>
             </CardHeader>
             <form onSubmit={handleAddUrl}>
@@ -434,7 +439,7 @@ export function ServiceComplaintsRadar() {
                 <div className="rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-2.5 text-[11px] text-cyan-300 flex items-start gap-2">
                   <Sparkles className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
                   <span>
-                    When submitted, Firecrawl will crawl and extract live negative reviews, extract sentiment scores, and match complaints to support tickets for dispatch.
+                    This only saves the source. Crawling, sentiment scoring and ticket matching are not connected yet.
                   </span>
                 </div>
               </CardContent>
@@ -442,7 +447,7 @@ export function ServiceComplaintsRadar() {
               <div className="flex justify-end gap-2 border-t border-border p-3 bg-muted/20">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setAddUrlModalOpen(false)}>Cancel</Button>
                 <Button type="submit" variant="default" size="sm" disabled={isCrawling} className="font-semibold bg-red-600 hover:bg-red-500 text-white">
-                  {isCrawling ? "Scraping..." : "Start Tracking & Crawl"}
+                  {isCrawling ? "Saving..." : "Save Source"}
                 </Button>
               </div>
             </form>

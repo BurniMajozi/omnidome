@@ -110,9 +110,13 @@ class IoTDevice(Base):
     friendly_name: Mapped[str] = mapped_column(String(255), nullable=False)
     device_type: Mapped[str] = mapped_column(DEVICE_TYPE, nullable=False, index=True)
 
-    # Inventory link (optional — for devices that are also tracked inventory items)
+    # Inventory link (optional — for devices that are also tracked inventory items).
+    # Plain UUID, not a DB-level FK: inventory_products is owned by the inventory
+    # service, so it is not in this service's metadata and a ForeignKey here makes
+    # Base.metadata.create_all() raise NoReferencedTableError at startup (same
+    # convention as billing and customer_journey).
     product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), nullable=True
     )
 
     # Device metadata
