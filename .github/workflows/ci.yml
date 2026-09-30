@@ -52,13 +52,19 @@ jobs:
   #   agent_orchestrator: agent loop, memory, approvals, safe-SQL guards, CLI
   #   sales:              lead stages/actions/funnel, schema SQL
   #   communication:      AgentMail webhook signatures, secrets, mail helpers
+  #   fno_intelligence:   FNO imports/geo + services/common (event bus,
+  #                       OpenRouter fallback/limiter, Firecrawl client)
+  #   marketing:          Zernio client/webhooks
+  # Not here: voicebox/engine is a vendored TTS engine whose tests need torch,
+  # transformers and model downloads (GBs per run). Every other service has no
+  # test suite yet; add it to the list once it has one that needs no database.
   service-tests:
     name: Tests (${{ matrix.service }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        service: [agent_orchestrator, sales, communication]
+        service: [agent_orchestrator, sales, communication, fno_intelligence, marketing]
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
