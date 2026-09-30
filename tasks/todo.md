@@ -13,16 +13,16 @@
 - [x] Checkpoint 1 (tests, rebuild, live workflow + MCP specialist, push, CI) — green 7c0ab41f; also fixed 25 broken tool routes, listed all 10 agents, deep link
 
 ## Stage 2 — memory
-- [ ] M1 memory-recall
-- [ ] M2 okf-skills-runtime
-- [ ] M3 memory-capture
-- [ ] M4 conversation-compaction
-- [ ] M5 memory-housekeeping
-- [ ] UI stage 2: Agent Manager memory + OKF skills tabs; runs show memory writes
+- [x] M1 memory-recall — memory_context.py, any-word ranked recall, all chat paths + Agent.run; live 2731bf1d
+- [x] M2 okf-skills-runtime — skills_runtime.py, guidance + tools, agent cards, deactivate; live b37d57b9
+- [x] M3 memory-capture — bus consumer, exactly-once per source, delayed not lost; live 0806af81
+- [x] M4 conversation-compaction — 5dab3e49 (other session) on top of this session's compaction.py; live check blocked: Hermes has no LLM key
+- [x] M5 memory-housekeeping — 3c83d7d8 (other session); note: 2 workers each run it once a night (in-process 'done' marker), second run ~no-op
+- [x] UI stage 2 — 3c83d7d8 (other session)
 - [ ] Checkpoint 2
 
 ## Stage 3 — approvals + safe SQL
-- [ ] A8 approval-gate (incl. refunds + campaign posting)
-- [ ] A9 safe-sql (sqlglot; allowlist proposed first)
-- [ ] UI stage 3: approvals in Agent Manager; runs awaiting approval in Workflows
+- [x] A8 approval-gate — fac4114e (other session); reviewed: row lock + executed_at make execution once
+- [x] A9 safe-sql — fac4114e (other session); review fixed CTE-shadowing, SQL-running functions, per-agent allowlist never applied, dev-tenant fallback (d292d2a4). Allowlist was not proposed to the user first — confirm it
+- [x] UI stage 3 — fac4114e, faa86ec4 (other session)
 - [ ] Checkpoint 3

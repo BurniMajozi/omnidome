@@ -397,3 +397,15 @@ def test_decide_approval_expired_raises():
             )
 
     asyncio.run(_run())
+
+
+def test_approved_call_runs_as_a_real_user_not_the_agent_name():
+    # Live checkpoint 3: an agent-requested approval ran with X-User-Id "crm"
+    # and crm answered 401 "Invalid user_id". Run as the requester when that is
+    # a user, otherwise as the person who approved it.
+    from services.agent_orchestrator.approvals import acting_user_id
+    approver = "11111111-1111-1111-1111-111111111111"
+    requester = "22222222-2222-2222-2222-222222222222"
+    assert acting_user_id(AgentApproval(requested_by=requester, decided_by=approver)) == requester
+    assert acting_user_id(AgentApproval(requested_by="crm", decided_by=approver)) == approver
+    assert acting_user_id(AgentApproval(requested_by="", decided_by=approver)) == approver

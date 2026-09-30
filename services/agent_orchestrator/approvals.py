@@ -403,6 +403,18 @@ async def decide_approval(
     return _approval_to_dict(row)
 
 
+def acting_user_id(row: AgentApproval) -> Optional[str]:
+    """Whose identity the approved call runs under. Services need a user id: the
+    requester when a person asked, otherwise (an agent, workflow or MCP
+    specialist asked — requested_by is then the agent type) the approver."""
+    for candidate in (row.requested_by, row.decided_by):
+        try:
+            return str(uuid.UUID(str(candidate)))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 async def _execute_approved_call(session, row: AgentApproval) -> dict:
     """Execute the tool call idempotently, save result, record action, and capture in memory."""
     if row.executed_at is not None:
@@ -422,7 +434,7 @@ async def _execute_approved_call(session, row: AgentApproval) -> dict:
         result = await tool.execute(
             tool_input=row.arguments or {},
             tenant_id=str(row.tenant_id),
-            user_id=row.requested_by,
+            user_id=acting_user_id(row),
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
