@@ -25,9 +25,9 @@ echo "openrouter_len=${#OPENROUTER} telegram_token_len=${#TG_TOKEN} hermeskey_le
 
 docker rm -f hermes-agent >/dev/null 2>&1
 docker run -d --name hermes-agent --restart unless-stopped \
-  -p 8642:8642 \
+  -p 127.0.0.1:8642:8642 \
   -v /home/benedict/hermes_data:/opt/data \
-  -v /mnt/c/Users/Benedict/Desktop/OminiDome:/opt/data/workspace \
+  -v /mnt/c/Users/Benedict/Desktop/OminiDome/omnidome/Hermes-Obsidian:/opt/data/workspace/omnidome/Hermes-Obsidian \
   -e OPENROUTER_API_KEY="$OPENROUTER" \
   -e TELEGRAM_BOT_TOKEN="$TG_TOKEN" \
   -e TELEGRAM_ALLOWED_USERS="$TG_USERS" \
@@ -37,6 +37,8 @@ docker run -d --name hermes-agent --restart unless-stopped \
   -e API_SERVER_HOST=0.0.0.0 \
   nousresearch/hermes-agent:latest gateway run
 echo "RUN_EXIT=$?"
+# Give other services the DNS name `hermes` (orchestrator routes the assistant agent there).
+docker network connect --alias hermes omnidome_default hermes-agent 2>/dev/null || true
 sleep 8
 echo "=== status ==="
 docker ps -a --format "{{.Names}} {{.Status}}" | grep hermes-agent || echo "NOT RUNNING"
