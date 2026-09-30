@@ -372,14 +372,18 @@ class ZernioClient:
     def verify_webhook(self, payload_body: bytes, signature: str) -> bool:
         """Verify Zernio webhook HMAC-SHA256 signature."""
         if not self.webhook_secret:
-            logger.warning("ZERNIO_WEBHOOK_SECRET not set — skipping verification")
-            return True
+            # Fail closed (the route enforces the same policy via marketing.security).
+            if os.getenv("ZERNIO_WEBHOOK_ALLOW_UNSIGNED", "").strip().lower() in {"1", "true", "yes", "on"}:
+                logger.critical("ZERNIO_WEBHOOK_ALLOW_UNSIGNED=true — accepting unsigned webhook")
+                return True
+            logger.error("ZERNIO_WEBHOOK_SECRET not set — rejecting webhook")
+            return False
         expected = hmac.new(
             self.webhook_secret.encode(),
             payload_body,
             hashlib.sha256,
         ).hexdigest()
-        return hmac.compare_digest(expected, signature)
+        return hmac.compare_digest(expected.encode(), (signature or "").encode("utf-8", "ignore"))
 
     # ── Profiles (one per customer/tenant) ─────────────────────────────
 

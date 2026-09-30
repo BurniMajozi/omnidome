@@ -29,6 +29,10 @@ from services.common.auth import AuthContext, get_auth_context, get_current_tena
 from services.common.db import get_engine, get_async_session, run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+from services.common import suppression as suppression_lib
+from services.common.background_tasks import schedule_background
+from services.marketing import security as sec
+from services.marketing.security import require_marketing_admin, require_marketing_write
 from services.marketing.database import (
     get_session,
     init_tables,
@@ -53,7 +57,7 @@ app = FastAPI(title="OmniDome Marketing Service", version="2.0.0")
 # X-Zernio-Signature HMAC check inside the route itself (Sep 2026).
 guard = EntitlementGuard(
     module_id="marketing",
-    public_paths={"/social/webhooks/zernio/inbound", "/email/webhook"},
+    public_paths={"/social/webhooks/zernio/inbound", "/email/webhook", "/email/unsubscribe"},
 )
 
 configure_production(app)
@@ -67,6 +71,10 @@ async def lifespan(app: FastAPI):
         lambda: anyio.to_thread.run_sync(init_tables),
         logger=logger,
     )
+    try:
+        await anyio.to_thread.run_sync(lambda: _ensure_marketing_tables(get_engine()))
+    except Exception as exc:  # noqa: BLE001 - lazy per-request ensure still runs
+        logger.warning("marketing schema ensure at startup failed: %s", exc)
     logger.info("Marketing service started — tables initialized")
     yield
     logger.info("Marketing service shutting down")
@@ -124,9 +132,9 @@ class CampaignOut(BaseModel):
 class EmailSendRequest(BaseModel):
     campaign_id: Optional[uuid.UUID] = None
     template_id: Optional[uuid.UUID] = None
-    subject: str
-    body_html: str
-    recipients: List[str] = Field(..., description="List of email addresses")
+    subject: str = Field(..., min_length=1, max_length=500, pattern=r"^[^\r\n]*$")
+    body_html: str = Field(..., max_length=500_000)
+    recipients: List[str] = Field(..., min_length=1, max_length=5000, description="List of email addresses")
     from_name: Optional[str] = "OmniDome"
     from_email: Optional[str] = None
     reply_to: Optional[str] = None
@@ -138,6 +146,8 @@ class EmailSendResponse(BaseModel):
     campaign_id: Optional[uuid.UUID] = None
     total_queued: int
     status: str
+    total_suppressed: int = 0
+    total_invalid: int = 0
 
 
 class AgentMailSignUpRequest(BaseModel):
@@ -845,6 +855,7 @@ def _ensure_marketing_tables(engine) -> None:
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))
+    sec.ensure_hardening_schema(engine)
 
 
 # ─────────────────────────── Health ─────────────────────────
@@ -884,11 +895,13 @@ async def list_campaigns(
     return [dict(r) for r in rows]
 
 
-@app.post("/campaigns", response_model=CampaignOut, status_code=201)
+@app.post("/campaigns", response_model=CampaignOut, status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_campaign(
     body: CampaignCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
+    if body.channel not in sec.CAMPAIGN_CHANNELS:
+        raise HTTPException(422, f"channel must be one of {sorted(sec.CAMPAIGN_CHANNELS)}")
     engine = get_engine()
     _ensure_marketing_tables(engine)
     cid = uuid.uuid4()
@@ -919,7 +932,7 @@ async def create_campaign(
     return dict(row)
 
 
-@app.patch("/campaigns/{campaign_id}", response_model=CampaignOut)
+@app.patch("/campaigns/{campaign_id}", response_model=CampaignOut, dependencies=[Depends(require_marketing_write)])
 async def update_campaign(
     campaign_id: uuid.UUID,
     body: CampaignUpdate,
@@ -928,15 +941,30 @@ async def update_campaign(
     engine = get_engine()
     sets = []
     params: Dict[str, Any] = {"cid": str(campaign_id), "tid": str(tenant_id)}
-    for field, val in body.dict(exclude_unset=True).items():
+    changes = body.dict(exclude_unset=True)
+    if changes.get("channel") is not None and changes["channel"] not in sec.CAMPAIGN_CHANNELS:
+        raise HTTPException(422, f"channel must be one of {sorted(sec.CAMPAIGN_CHANNELS)}")
+    if "status" in changes and changes["status"] not in sec.CAMPAIGN_STATUSES:
+        raise HTTPException(422, f"status must be one of {sorted(sec.CAMPAIGN_STATUSES)}")
+    for field, val in changes.items():
         sets.append(f"{field} = :{field}")
         params[field] = float(val) if isinstance(val, Decimal) else val
     if not sets:
         raise HTTPException(400, "No fields to update")
     sets.append("updated_at = now()")
+    where = "id = :cid AND tenant_id = :tid"
     with engine.begin() as conn:
+        if "status" in changes:
+            cur = conn.execute(
+                text("SELECT status FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid FOR UPDATE"),
+                {"cid": params["cid"], "tid": params["tid"]},
+            ).first()
+            if not cur:
+                raise HTTPException(404, "Campaign not found")
+            if not sec.transition_allowed(str(cur[0]), changes["status"]):
+                raise HTTPException(409, f"Invalid status transition {cur[0]} -> {changes['status']}")
         result = conn.execute(
-            text(f"UPDATE marketing_campaigns SET {', '.join(sets)} WHERE id = :cid AND tenant_id = :tid RETURNING *"),
+            text(f"UPDATE marketing_campaigns SET {', '.join(sets)} WHERE {where} RETURNING *"),
             params,
         ).mappings().first()
     if not result:
@@ -944,7 +972,7 @@ async def update_campaign(
     return dict(result)
 
 
-@app.delete("/campaigns/{campaign_id}", status_code=204)
+@app.delete("/campaigns/{campaign_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_campaign(
     campaign_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -986,6 +1014,7 @@ async def _send_one_email(
     from_email: Optional[str],
     reply_to: Optional[str],
     tenant_id: Optional[uuid.UUID] = None,
+    headers: Optional[Dict[str, str]] = None,
 ) -> str:
     """Send one email via AgentMail. Returns the provider message id. Raises on failure.
 
@@ -995,25 +1024,120 @@ async def _send_one_email(
     creds = _tenant_agentmail_creds(tenant_id)
     try:
         return await agentmail_client.send_email(
-            to_email, subject, body_html, reply_to=reply_to, creds=creds)
+            to_email, subject, body_html, reply_to=reply_to, creds=creds, headers=headers)
     except agentmail_client.EmailNotConfigured:
         raise HTTPException(503, "Email provider not configured - set AGENTMAIL_API_KEY")
 
 
-@app.post("/email/send", response_model=EmailSendResponse, status_code=202)
+def _record_email_event(tenant_id: uuid.UUID, batch_id: uuid.UUID, email: str, event_type: str, event_data: str) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO marketing_email_events
+                    (tenant_id, batch_id, recipient_email, event_type, event_data)
+                VALUES (:tid, :bid, :email, :etype, CAST(:edata AS jsonb))
+            """),
+            {"tid": str(tenant_id), "bid": str(batch_id), "email": email, "etype": event_type, "edata": event_data},
+        )
+
+
+def _finalize_email_batch(conn, tenant_id: uuid.UUID, batch_id: uuid.UUID, cid: Optional[str],
+                          sent: int, failed: int) -> str:
+    """Write the final tallies. Send failures count as total_failed, NOT total_bounced
+    (bounces only come from provider webhooks). Every statement is tenant-scoped."""
+    final_status = "sent" if failed == 0 else ("failed" if sent == 0 else "partial")
+    conn.execute(
+        text("""
+            UPDATE marketing_email_batches
+               SET total_sent = :sent, total_failed = :failed, status = :st
+             WHERE id = :bid AND tenant_id = :tid
+        """),
+        {"sent": sent, "failed": failed, "st": final_status, "bid": str(batch_id), "tid": str(tenant_id)},
+    )
+    if cid:
+        conn.execute(
+            text("UPDATE marketing_campaigns SET total_sent = total_sent + :cnt, updated_at = now() "
+                 "WHERE id = :cid AND tenant_id = :tid"),
+            {"cnt": sent, "cid": cid, "tid": str(tenant_id)},
+        )
+    return final_status
+
+
+async def _run_email_batch(
+    *,
+    tenant_id: uuid.UUID,
+    batch_id: uuid.UUID,
+    cid: Optional[str],
+    recipients: List[str],
+    subject: str,
+    body_html: str,
+    from_name: Optional[str],
+    from_email: Optional[str],
+    reply_to: Optional[str],
+) -> None:
+    """Background delivery. Opens its own DB connections (never the request's) and always
+    leaves the batch in a terminal status."""
+    sent = failed = 0
+    try:
+        for to_email in recipients:
+            try:
+                url = sec.unsubscribe_url(tenant_id, to_email)
+                provider_id = await _send_one_email(
+                    to_email=to_email,
+                    subject=subject,
+                    body_html=sec.with_unsubscribe_footer(body_html, url),
+                    from_name=from_name,
+                    from_email=from_email,
+                    reply_to=reply_to,
+                    tenant_id=tenant_id,
+                    headers=sec.unsubscribe_headers(url),
+                )
+                sent += 1
+                event_type, event_data = "sent", json.dumps({"message_id": provider_id})
+            except Exception as e:  # noqa: BLE001 - record the failure, continue the batch
+                failed += 1
+                event_type, event_data = "failed", json.dumps({"error": str(e)[:500]})
+                logger.warning("email send failed in batch %s: %s", batch_id, e)
+            await asyncio.to_thread(_record_email_event, tenant_id, batch_id, to_email, event_type, event_data)
+    except Exception:  # noqa: BLE001
+        logger.exception("email batch %s crashed", batch_id)
+        failed += max(0, len(recipients) - sent - failed)
+    try:
+        def _fin():
+            with get_engine().begin() as conn:
+                return _finalize_email_batch(conn, tenant_id, batch_id, cid, sent, failed)
+        await asyncio.to_thread(_fin)
+    except Exception:  # noqa: BLE001
+        logger.exception("email batch %s finalize failed", batch_id)
+
+
+@app.post("/email/send", response_model=EmailSendResponse, status_code=202,
+          dependencies=[Depends(require_marketing_write)])
 async def send_email_batch(
     body: EmailSendRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Actually deliver a batch of emails via AgentMail (api.agentmail.to)."""
+    """Queue a batch of emails for delivery via AgentMail and return 202 immediately.
+
+    Recipients are validated, de-duplicated, capped (EMAIL_MAX_RECIPIENTS), filtered against
+    the tenant suppression list, and every message carries an unsubscribe link +
+    List-Unsubscribe header. Poll GET /email/batches/{batch_id} for progress.
+    """
     if not _email_provider_configured(tenant_id):
         raise HTTPException(503, "Email provider not configured — set AGENTMAIL_API_KEY")
-    from_email = body.from_email
+    try:
+        sec.unsubscribe_url(tenant_id, "probe@example.com")  # fail closed without unsubscribe support
+    except sec.UnsubscribeNotConfigured as exc:
+        logger.error("email send blocked: %s", exc)
+        raise HTTPException(503, "Unsubscribe links not configured (EMAIL_UNSUBSCRIBE_SECRET / EMAIL_UNSUBSCRIBE_BASE_URL)")
+    sec.check_email_rate(tenant_id)
+    valid, invalid = sec.clean_recipients(body.recipients)
+    if not valid:
+        raise HTTPException(422, "No valid recipient addresses")
 
     engine = get_engine()
     _ensure_marketing_tables(engine)
     batch_id = uuid.uuid4()
-    total = len(body.recipients)
 
     with engine.begin() as conn:
         cid_str = None
@@ -1022,84 +1146,37 @@ async def send_email_batch(
                 text("SELECT id FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid"),
                 {"cid": str(body.campaign_id), "tid": str(tenant_id)},
             ).first()
-            if camp:
-                cid_str = str(body.campaign_id)
-
+            if not camp:
+                raise HTTPException(404, "Campaign not found")
+            cid_str = str(body.campaign_id)
+        allowed, suppressed = suppression_lib.filter_suppressed_sync(conn, tenant_id, valid)
         conn.execute(
             text("""
                 INSERT INTO marketing_email_batches
-                    (id, tenant_id, campaign_id, subject, from_name, from_email, total_queued, status)
-                VALUES (:bid, :tid, :cid, :subj, :fn, :fe, :tq, 'sending')
+                    (id, tenant_id, campaign_id, subject, from_name, from_email, total_queued, total_suppressed, status)
+                VALUES (:bid, :tid, :cid, :subj, :fn, :fe, :tq, :ts, :st)
             """),
             {
-                "bid": str(batch_id),
-                "tid": str(tenant_id),
-                "cid": cid_str,
-                "subj": body.subject,
-                "fn": body.from_name,
-                "fe": from_email,
-                "tq": total,
+                "bid": str(batch_id), "tid": str(tenant_id), "cid": cid_str, "subj": body.subject,
+                "fn": body.from_name, "fe": body.from_email, "tq": len(allowed), "ts": len(suppressed),
+                "st": "sending" if allowed else "failed",
             },
         )
 
-    # Deliver each recipient; record a per-recipient event and tally results.
-    sent = 0
-    failed = 0
-    for to_email in body.recipients:
-        try:
-            provider_id = await _send_one_email(
-                to_email=to_email,
-                subject=body.subject,
-                body_html=body.body_html,
-                from_name=body.from_name,
-                from_email=from_email,
-                reply_to=body.reply_to,
-                tenant_id=tenant_id,
-            )
-            sent += 1
-            # provider message_id lets delivery/bounce webhooks map back to this batch
-            event_type, event_data = "sent", json.dumps({"message_id": provider_id})
-        except Exception as e:  # noqa: BLE001 - record the failure, continue the batch
-            failed += 1
-            event_type = "failed"
-            event_data = json.dumps({"error": str(e)[:500]})
-            logger.warning("email send failed to %s: %s", to_email, e)
-        with engine.begin() as conn:
-            conn.execute(
-                text("""
-                    INSERT INTO marketing_email_events
-                        (tenant_id, batch_id, recipient_email, event_type, event_data)
-                    VALUES (:tid, :bid, :email, :etype, CAST(:edata AS jsonb))
-                """),
-                {
-                    "tid": str(tenant_id),
-                    "bid": str(batch_id),
-                    "email": to_email,
-                    "etype": event_type,
-                    "edata": event_data,
-                },
-            )
-
-    final_status = "sent" if failed == 0 else ("failed" if sent == 0 else "partial")
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                UPDATE marketing_email_batches
-                   SET total_sent = :sent, total_bounced = :failed, status = :st
-                 WHERE id = :bid
-            """),
-            {"sent": sent, "failed": failed, "st": final_status, "bid": str(batch_id)},
-        )
-        conn.execute(
-            text("UPDATE marketing_campaigns SET total_sent = total_sent + :cnt, updated_at = now() WHERE id = :cid"),
-            {"cnt": sent, "cid": str(body.campaign_id)},
-        )
+    if allowed:
+        schedule_background(_run_email_batch(
+            tenant_id=tenant_id, batch_id=batch_id, cid=cid_str, recipients=allowed,
+            subject=body.subject, body_html=body.body_html, from_name=body.from_name,
+            from_email=body.from_email, reply_to=body.reply_to,
+        ))
 
     return EmailSendResponse(
         batch_id=batch_id,
         campaign_id=body.campaign_id,
-        total_queued=total,
-        status=final_status,
+        total_queued=len(allowed),
+        status="sending" if allowed else "failed",
+        total_suppressed=len(suppressed),
+        total_invalid=len(invalid),
     )
 
 
@@ -1157,7 +1234,7 @@ async def get_agentmail_status(tenant_id: uuid.UUID = Depends(get_current_tenant
     }
 
 
-@app.post("/email/agentmail/signup")
+@app.post("/email/agentmail/signup", dependencies=[Depends(require_marketing_admin)])
 async def agentmail_signup(
     body: AgentMailSignUpRequest,
     auth: AuthContext = Depends(get_auth_context),
@@ -1199,7 +1276,7 @@ async def agentmail_signup(
     }
 
 
-@app.post("/email/agentmail/verify")
+@app.post("/email/agentmail/verify", dependencies=[Depends(require_marketing_admin)])
 async def agentmail_verify(
     body: AgentMailVerifyRequest,
     auth: AuthContext = Depends(get_auth_context),
@@ -1238,7 +1315,7 @@ async def agentmail_verify(
     }
 
 
-@app.post("/email/agentmail/config")
+@app.post("/email/agentmail/config", dependencies=[Depends(require_marketing_admin)])
 async def agentmail_configure(
     body: AgentMailConfigRequest,
     auth: AuthContext = Depends(get_auth_context),
@@ -1256,11 +1333,24 @@ async def agentmail_configure(
     }
 
 
+def _svix_msg_id(headers: Any) -> str:
+    return str(headers.get("svix-id") or headers.get("webhook-id") or "")[:256]
+
+
+def _bounce_is_hard(event: Dict[str, Any]) -> bool:
+    """Suppress permanent bounces only; transient/undetermined ones may recover."""
+    info = event.get("bounce") or {}
+    btype = str(info.get("type") or info.get("bounce_type") or "").strip().lower()
+    return btype not in {"transient", "undetermined", "soft", "temporary"}
+
+
 @app.post("/email/webhook")
 async def email_webhook(request: Request):
     """AgentMail delivery events (Svix-signed: svix-id/svix-timestamp/svix-signature).
 
-    Batches are matched by the provider message_id stored on the 'sent' event.
+    Batches are matched by the provider message_id stored on the 'sent' event. Idempotent on
+    svix-id (marketing_webhook_events, provider='agentmail'); permanent bounces and complaints
+    add the recipient to the tenant suppression list.
     """
     # Cheap pre-checks first: no DB / decryption for unsigned, stale or oversized requests.
     if not agentmail_client.webhook_headers_ok(request.headers):
@@ -1280,10 +1370,10 @@ async def email_webhook(request: Request):
     counter_map = {
         "message.delivered": "total_delivered",
         "message.bounced": "total_bounced",
-        "message.complained": "total_bounced",
+        "message.complained": "total_complained",
     }
     col = counter_map.get(event_type)
-    msg = event.get("message") or {}
+    msg = event.get("message") or event.get("bounce") or event.get("complaint") or {}
     mid = str(msg.get("message_id") or "")
     if not col or not mid:
         return {"status": "ignored", "event": event_type}  # e.g. message.received belongs to communication
@@ -1307,19 +1397,121 @@ async def email_webhook(request: Request):
             secrets = []
         if not secrets or not agentmail_client.verify_svix(raw_body, request.headers, secrets):
             raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        # Idempotency (only after the signature is verified): same svix-id => no side effects.
+        if not sec.record_webhook_event(conn, "agentmail", _svix_msg_id(request.headers)):
+            return {"status": "duplicate"}
         conn.execute(
             text("""
                 INSERT INTO marketing_email_events (tenant_id, batch_id, recipient_email, event_type, event_data)
                 VALUES (:tid, :bid, :email, :etype, CAST(:edata AS jsonb))
             """),
             {"tid": str(hit["tenant_id"]), "bid": str(hit["batch_id"]), "email": hit["recipient_email"],
-             "etype": event_type.split(".", 1)[-1], "edata": json.dumps(event)},
+             "etype": event_type.split(".", 1)[-1], "edata": json.dumps(sec.bound_payload(event, event_type))},
         )
         conn.execute(
-            text(f"UPDATE marketing_email_batches SET {col} = {col} + 1 WHERE id = :bid"),
-            {"bid": str(hit["batch_id"])},
+            text(f"UPDATE marketing_email_batches SET {col} = COALESCE({col}, 0) + 1 "
+                 "WHERE id = :bid AND tenant_id = :tid"),
+            {"bid": str(hit["batch_id"]), "tid": str(hit["tenant_id"])},
         )
+        if event_type == "message.complained" or (event_type == "message.bounced" and _bounce_is_hard(event)):
+            suppression_lib.add_suppression_sync(
+                conn, hit["tenant_id"], hit["recipient_email"],
+                "complaint" if event_type == "message.complained" else "bounce",
+                f"agentmail:{event_type}",
+            )
     return {"status": "accepted"}
+
+
+# ─────────────────── Unsubscribe + suppression management ───────────────────
+
+
+def _unsub_page(title: str, body: str, form_token: Optional[str] = None) -> Response:
+    import html as _html
+    form = ""
+    if form_token:
+        form = (f'<form method="post" action="?t={_html.escape(form_token, quote=True)}">'
+                f'<button type="submit">Confirm unsubscribe</button></form>')
+    page = (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
+            f"<title>{_html.escape(title)}</title></head><body style='font-family:sans-serif;max-width:480px;"
+            f"margin:10vh auto;padding:0 16px'><h2>{_html.escape(title)}</h2><p>{_html.escape(body)}</p>{form}</body></html>")
+    return Response(content=page, media_type="text/html")
+
+
+def _token_or_error(t: Optional[str]):
+    """(tenant_id, email) or an error Response."""
+    if not t:
+        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid.")
+    try:
+        return sec.verify_unsubscribe_token(t), None
+    except sec.UnsubscribeNotConfigured:
+        return None, _unsub_page("Unavailable", "Unsubscribe is temporarily unavailable.")
+    except sec.BadUnsubscribeToken:
+        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid or has expired.")
+
+
+@app.get("/email/unsubscribe")
+async def unsubscribe_confirm(t: Optional[str] = Query(None)):
+    """Public. Shows a confirm button; mail scanners that prefetch links cannot unsubscribe anyone."""
+    ident, err = _token_or_error(t)
+    if err is not None:
+        return err
+    return _unsub_page("Unsubscribe", f"Stop receiving marketing email at {ident[1]}?", form_token=t)
+
+
+@app.post("/email/unsubscribe")
+async def unsubscribe_apply(request: Request, t: Optional[str] = Query(None)):
+    """Public. Also the RFC 8058 one-click target (POST with List-Unsubscribe=One-Click)."""
+    ident, err = _token_or_error(t)
+    if err is not None:
+        return err
+    tenant_uuid, email = ident
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        suppression_lib.add_suppression_sync(conn, tenant_uuid, email, "unsubscribe", "unsubscribe-link")
+    return _unsub_page("Unsubscribed", f"{email} will no longer receive marketing email from us.")
+
+
+class SuppressionIn(BaseModel):
+    email: str = Field(..., max_length=254)
+    reason: str = "manual"
+
+
+@app.get("/email/suppressions")
+async def list_email_suppressions(
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        return {"suppressions": suppression_lib.list_suppressions_sync(conn, tenant_id, limit, offset)}
+
+
+@app.post("/email/suppressions", status_code=201, dependencies=[Depends(require_marketing_admin)])
+async def add_email_suppression(body: SuppressionIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    email = body.email.strip().lower()
+    if not sec.valid_email(email):
+        raise HTTPException(422, "Invalid email address")
+    if body.reason not in suppression_lib.REASONS:
+        raise HTTPException(422, f"reason must be one of {list(suppression_lib.REASONS)}")
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        created = suppression_lib.add_suppression_sync(conn, tenant_id, email, body.reason, "manual-api")
+    return {"email": email, "reason": body.reason, "created": created}
+
+
+@app.delete("/email/suppressions", dependencies=[Depends(require_marketing_admin)])
+async def remove_email_suppression(email: str = Query(..., max_length=254), tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        removed = suppression_lib.remove_suppression_sync(conn, tenant_id, email)
+    if not removed:
+        raise HTTPException(404, "Address not suppressed")
+    return {"email": email.strip().lower(), "removed": True}
 
 
 # ──────────────────── Templates ──────────────────────────────
@@ -1339,7 +1531,7 @@ async def list_templates(
     return [dict(r) for r in rows]
 
 
-@app.post("/templates", status_code=201)
+@app.post("/templates", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_template(
     body: TemplateCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1383,7 +1575,7 @@ async def get_template(
     return dict(row)
 
 
-@app.put("/templates/{template_id}")
+@app.put("/templates/{template_id}", dependencies=[Depends(require_marketing_write)])
 async def update_template(
     template_id: uuid.UUID,
     body: TemplateUpdate,
@@ -1418,7 +1610,7 @@ async def update_template(
     return dict(row)
 
 
-@app.delete("/templates/{template_id}", status_code=204)
+@app.delete("/templates/{template_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_template(
     template_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1604,7 +1796,7 @@ async def list_email_journeys(
     return _EMAIL_JOURNEYS[tkey]
 
 
-@app.post("/email/journeys", status_code=201)
+@app.post("/email/journeys", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_email_journey(
     body: JourneyCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1684,7 +1876,7 @@ async def get_email_journey(
     raise HTTPException(status_code=404, detail="Journey not found")
 
 
-@app.put("/email/journeys/{journey_id}")
+@app.put("/email/journeys/{journey_id}", dependencies=[Depends(require_marketing_write)])
 async def update_email_journey(
     journey_id: str,
     body: JourneyUpdate,
@@ -1735,7 +1927,7 @@ async def update_email_journey(
     raise HTTPException(status_code=404, detail="Journey not found")
 
 
-@app.delete("/email/journeys/{journey_id}", status_code=204)
+@app.delete("/email/journeys/{journey_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_email_journey(
     journey_id: str,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1757,21 +1949,15 @@ async def delete_email_journey(
     return None
 
 
-@app.post("/email/journeys/{journey_id}/trigger")
+@app.post("/email/journeys/{journey_id}/trigger", dependencies=[Depends(require_marketing_write)])
 async def trigger_email_journey(
     journey_id: str,
     body: Dict[str, Any] = Body(default_factory=dict),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Simulate or execute an email journey for a contact or test audience."""
-    contact_email = body.get("contact_email", "test.subscriber@example.com")
-    return {
-        "status": "started",
-        "journey_id": journey_id,
-        "enrolled_contact": contact_email,
-        "message": f"Contact {contact_email} enrolled in journey successfully.",
-        "executed_at": datetime.now(timezone.utc).isoformat(),
-    }
+    """Journey enrolment is not implemented: there is no enrolment table or step executor, so
+    nothing here could honestly start a journey. Returns 501 rather than a fake success."""
+    raise HTTPException(status_code=501, detail="Journey enrolment is not implemented")
 
 
 # ──────────────────── Audience Segments ────────────────────────
@@ -1802,7 +1988,7 @@ async def list_segments(
     return [_segment_row(r) for r in rows]
 
 
-@app.post("/segments", status_code=201)
+@app.post("/segments", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_segment(
     body: AudienceSegmentCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1819,9 +2005,12 @@ async def create_segment(
     if rules["type"] == "homes":
         # Areas only: never let individual addresses into an ad audience.
         rules.pop("addresses", None)
-    member_count = body.member_count
-    if member_count is None:
-        member_count = sum(int(a.get("homes") or 0) for a in rules.get("areas") or []) if rules["type"] == "homes"             else len(rules.get("businesses") or [])
+    # Server truth: any client-supplied member_count is ignored.
+    member_count = (
+        sum(int(a.get("homes") or 0) for a in rules.get("areas") or [])
+        if rules["type"] == "homes"
+        else len(rules.get("businesses") or [])
+    )
 
     engine = get_engine()
     _ensure_marketing_tables(engine)
@@ -1841,7 +2030,7 @@ async def create_segment(
                 UPDATE marketing_audience_segments
                    SET name = :name, description = :desc, rules = CAST(:rules AS jsonb),
                        member_count = :count, updated_at = now()
-                 WHERE id = :id
+                 WHERE id = :id AND tenant_id = :tid
             """), {**params, "id": str(existing[0])})
             sid = existing[0]
         else:
@@ -1875,7 +2064,7 @@ async def get_segment(
     return _segment_row(row)
 
 
-@app.delete("/segments/{segment_id}", status_code=204)
+@app.delete("/segments/{segment_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_segment(
     segment_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1894,7 +2083,7 @@ async def delete_segment(
 # ──────────────────── Lead Scoring ─────────────────────────────
 
 
-@app.post("/leads/score")
+@app.post("/leads/score", dependencies=[Depends(require_marketing_write)])
 async def update_lead_score(
     body: LeadScoreUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1955,7 +2144,7 @@ async def list_automations(
     return [dict(r) for r in rows]
 
 
-@app.post("/automations", status_code=201)
+@app.post("/automations", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_automation(
     body: AutomationCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1991,7 +2180,7 @@ async def create_automation(
 # ──────────────────── A/B Testing ──────────────────────────────
 
 
-@app.post("/ab-tests", status_code=201)
+@app.post("/ab-tests", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_ab_test(
     body: ABTestCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2146,7 +2335,7 @@ async def list_social_accounts(
     ]
 
 
-@app.post("/social/accounts", status_code=201, response_model=Dict[str, Any])
+@app.post("/social/accounts", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def create_social_account(
     body: SocialAccountCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2209,7 +2398,7 @@ async def get_social_account(
     }
 
 
-@app.put("/social/accounts/{account_id}", response_model=Dict[str, Any])
+@app.put("/social/accounts/{account_id}", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def update_social_account(
     account_id: uuid.UUID,
     body: SocialAccountUpdate,
@@ -2245,7 +2434,7 @@ async def update_social_account(
         }
 
 
-@app.delete("/social/accounts/{account_id}", status_code=204)
+@app.delete("/social/accounts/{account_id}", status_code=204, dependencies=[Depends(require_marketing_admin)])
 async def delete_social_account(
     account_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2264,7 +2453,7 @@ async def delete_social_account(
     return None
 
 
-@app.get("/social/accounts/connect/{platform}", response_model=OAuthUrlResponse)
+@app.get("/social/accounts/connect/{platform}", response_model=OAuthUrlResponse, dependencies=[Depends(require_marketing_admin)])
 async def get_oauth_url(
     platform: str,
     redirect_url: Optional[str] = None,
@@ -2284,7 +2473,7 @@ async def get_oauth_url(
         auth_url = await client.get_connect_url(platform.lower(), profile_id=profile_id, redirect_url=redirect_url)
     except Exception as e:  # noqa: BLE001
         logger.error(f"Zernio connect URL failed for {platform}: {e}")
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
     if not auth_url:
         raise HTTPException(
             status_code=502,
@@ -2293,7 +2482,7 @@ async def get_oauth_url(
     return OAuthUrlResponse(platform=platform, auth_url=auth_url)
 
 
-@app.post("/social/accounts/{account_id}/refresh", response_model=TokenRefreshResponse)
+@app.post("/social/accounts/{account_id}/refresh", response_model=TokenRefreshResponse, dependencies=[Depends(require_marketing_admin)])
 async def refresh_social_token(
     account_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2372,6 +2561,7 @@ async def _publish_via_zernio(post, tenant_id: uuid.UUID) -> None:
     client = get_zernio_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    _require_tenant_profile(tenant_id)
     engine = get_engine()
     with engine.connect() as conn:
         rows = conn.execute(
@@ -2399,14 +2589,14 @@ async def _publish_via_zernio(post, tenant_id: uuid.UUID) -> None:
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Zernio publish failed: {e}")
+        raise _upstream_error("zernio publish", e)
     post.platform_post_ids = {"zernio_post_id": (zpost or {}).get("_id"), "platforms": (zpost or {}).get("platforms")}
     if publish_now:
         post.status = "published"
         post.published_at = datetime.now(timezone.utc)
 
 
-@app.post("/social/posts", status_code=201, response_model=Dict[str, Any])
+@app.post("/social/posts", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_social_post(
     body: SocialPostCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2490,7 +2680,7 @@ async def get_social_post(
     }
 
 
-@app.put("/social/posts/{post_id}", response_model=Dict[str, Any])
+@app.put("/social/posts/{post_id}", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def update_social_post(
     post_id: uuid.UUID,
     body: SocialPostUpdate,
@@ -2532,7 +2722,7 @@ async def update_social_post(
         }
 
 
-@app.delete("/social/posts/{post_id}", status_code=204)
+@app.delete("/social/posts/{post_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_social_post(
     post_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2551,7 +2741,7 @@ async def delete_social_post(
     return None
 
 
-@app.post("/social/posts/{post_id}/publish", response_model=Dict[str, Any])
+@app.post("/social/posts/{post_id}/publish", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def publish_post(
     post_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2582,14 +2772,20 @@ async def publish_post(
         }
 
 
-@app.post("/social/posts/{post_id}/schedule", response_model=Dict[str, Any])
+def _to_utc(dt: datetime) -> datetime:
+    """Naive input is taken as UTC; aware input is converted to UTC."""
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+@app.post("/social/posts/{post_id}/schedule", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def schedule_post(
     post_id: uuid.UUID,
     scheduled_for: datetime,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     """Schedule a social media post for later."""
-    if scheduled_for <= datetime.utcnow():
+    scheduled_for = _to_utc(scheduled_for)
+    if scheduled_for <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Scheduled time must be in the future")
 
     async with get_session() as session:
@@ -2615,7 +2811,7 @@ async def schedule_post(
         }
 
 
-@app.post("/social/posts/cross-post", response_model=CrossPostResponse)
+@app.post("/social/posts/cross-post", response_model=CrossPostResponse, dependencies=[Depends(require_marketing_write)])
 async def cross_post(
     body: CrossPostRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2777,7 +2973,7 @@ async def get_inbox_message(
     }
 
 
-@app.post("/social/inbox/{message_id}/reply", response_model=Dict[str, Any])
+@app.post("/social/inbox/{message_id}/reply", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def reply_to_message(
     message_id: uuid.UUID,
     body: InboxReplyRequest,
@@ -2835,7 +3031,7 @@ async def reply_to_message(
         }
 
 
-@app.put("/social/inbox/{message_id}/read", response_model=Dict[str, Any])
+@app.put("/social/inbox/{message_id}/read", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def mark_message_read(
     message_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -2855,7 +3051,7 @@ async def mark_message_read(
         return {"id": msg.id, "status": msg.status}
 
 
-@app.put("/social/inbox/{message_id}/archive", response_model=Dict[str, Any])
+@app.put("/social/inbox/{message_id}/archive", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def archive_message(
     message_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3087,7 +3283,7 @@ async def list_whatsapp_contacts(
     ]
 
 
-@app.post("/whatsapp/contacts", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/contacts", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_whatsapp_contact(
     body: WhatsAppContactCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3119,7 +3315,7 @@ async def create_whatsapp_contact(
         }
 
 
-@app.post("/whatsapp/contacts/bulk-import", response_model=BulkImportResponse)
+@app.post("/whatsapp/contacts/bulk-import", response_model=BulkImportResponse, dependencies=[Depends(require_marketing_write)])
 async def bulk_import_contacts(
     body: BulkImportRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3185,7 +3381,7 @@ async def list_whatsapp_broadcasts(
     ]
 
 
-@app.post("/whatsapp/broadcasts", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/broadcasts", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_whatsapp_broadcast(
     body: WhatsAppBroadcastCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3238,7 +3434,7 @@ async def create_whatsapp_broadcast(
         }
 
 
-@app.post("/whatsapp/broadcasts/{broadcast_id}/send", response_model=BroadcastSendResponse)
+@app.post("/whatsapp/broadcasts/{broadcast_id}/send", response_model=BroadcastSendResponse, dependencies=[Depends(require_marketing_write)])
 async def send_whatsapp_broadcast(
     broadcast_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3254,12 +3450,7 @@ async def send_whatsapp_broadcast(
     if client is None:
         raise HTTPException(503, "Zernio not configured (ZERNIO_API_KEY missing)")
 
-    profile_id = _get_tenant_profile(tenant_id)
-    if not profile_id:
-        raise HTTPException(
-            400,
-            "No Zernio profile for this tenant — connect a WhatsApp account under Connections first",
-        )
+    profile_id = _require_tenant_profile(tenant_id)
 
     # Resolve the tenant's connected WhatsApp account.
     engine = get_engine()
@@ -3337,7 +3528,7 @@ async def send_whatsapp_broadcast(
                 r.error_message = str(e)[:1000]
             broadcast.failed_count = len(recipients)
             await session.flush()
-            raise HTTPException(502, f"Zernio WhatsApp broadcast failed: {e}")
+            raise _upstream_error("zernio whatsapp broadcast", e)
 
         added = int((add_resp or {}).get("added") or 0)
         skipped = int((add_resp or {}).get("skipped") or 0)
@@ -3447,7 +3638,7 @@ async def list_ad_campaigns(
     ]
 
 
-@app.post("/ads/campaigns", status_code=201, response_model=Dict[str, Any])
+@app.post("/ads/campaigns", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_ad_campaign(
     body: AdCampaignCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3531,7 +3722,7 @@ async def get_ad_campaign(
     }
 
 
-@app.put("/ads/campaigns/{campaign_id}", response_model=Dict[str, Any])
+@app.put("/ads/campaigns/{campaign_id}", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def update_ad_campaign(
     campaign_id: uuid.UUID,
     body: AdCampaignUpdate,
@@ -3576,7 +3767,7 @@ async def update_ad_campaign(
         }
 
 
-@app.delete("/ads/campaigns/{campaign_id}", status_code=204)
+@app.delete("/ads/campaigns/{campaign_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_ad_campaign(
     campaign_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3661,7 +3852,7 @@ async def list_comment_automations(
     ]
 
 
-@app.post("/social/automations", status_code=201)
+@app.post("/social/automations", status_code=201, dependencies=[Depends(require_marketing_write)])
 async def create_comment_automation(
     body: CommentAutomationCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3686,7 +3877,7 @@ async def create_comment_automation(
     }
 
 
-@app.put("/social/automations/{automation_id}")
+@app.put("/social/automations/{automation_id}", dependencies=[Depends(require_marketing_write)])
 async def update_comment_automation(
     automation_id: uuid.UUID,
     body: CommentAutomationUpdate,
@@ -3709,7 +3900,7 @@ async def update_comment_automation(
     return {"id": automation.id, "name": automation.name, "is_active": automation.is_active}
 
 
-@app.delete("/social/automations/{automation_id}", status_code=204)
+@app.delete("/social/automations/{automation_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_comment_automation(
     automation_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -3737,6 +3928,13 @@ async def delete_comment_automation(
 _zernio_client = None
 
 
+def _upstream_error(context: str, exc: BaseException, status_code: int = 502) -> HTTPException:
+    """Log the upstream failure server-side; clients only get a generic message + a reference id."""
+    ref = uuid.uuid4().hex[:12]
+    logger.error("upstream error [%s] %s: %s", ref, context, exc)
+    return HTTPException(status_code=status_code, detail=f"Upstream service error (ref {ref})")
+
+
 def get_zernio_client():
     """Return a ZernioClient, or None when no API key is configured."""
     global _zernio_client
@@ -3756,6 +3954,7 @@ async def zernio_status():
         "configured": bool(os.getenv("ZERNIO_API_KEY")),
         "webhook_secret_set": bool(os.getenv("ZERNIO_WEBHOOK_SECRET")),
         "profile_ready": bool(os.getenv("ZERNIO_PROFILE_ID")),
+        "webhook_unsigned_allowed": sec._truthy("ZERNIO_WEBHOOK_ALLOW_UNSIGNED"),
         "base_url": os.getenv("ZERNIO_BASE_URL", "https://zernio.com/api/v1"),
     }
 
@@ -3846,26 +4045,48 @@ class TenantProfileIn(BaseModel):
     zernio_profile_id: str
 
 
-@app.put("/social/analytics/profile", response_model=Dict[str, Any])
+@app.put("/social/analytics/profile", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def set_tenant_profile(
     body: TenantProfileIn,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Map this tenant (customer) to its Zernio profile — the id the sync
-    worker filters every analytics pull on."""
+    """Admin only. Re-map this tenant to a Zernio profile the platform key can PROVE is its own
+    (auto-provisioned profiles are named after the tenant id). Anything else is rejected, so a
+    tenant can never adopt another customer's profile."""
+    pid = (body.zernio_profile_id or "").strip()
+    if not pid or len(pid) > 64:
+        raise HTTPException(status_code=422, detail="Invalid zernio_profile_id")
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        profiles = await client.list_profiles()
+    except Exception as e:  # noqa: BLE001
+        raise _upstream_error("zernio list_profiles", e)
+    match = next((p for p in profiles or [] if isinstance(p, dict) and str(p.get("_id") or p.get("id")) == pid), None)
+    if not match or str(match.get("name") or "") != str(tenant_id):
+        raise HTTPException(status_code=403, detail="Profile does not belong to this tenant")
+    owner = _tenant_for_profile(pid)
+    if owner and owner != str(tenant_id):
+        raise HTTPException(status_code=409, detail="Profile is already mapped to another tenant")
     engine = get_engine()
     _ensure_marketing_tables(engine)
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-                INSERT INTO marketing_tenant_profiles (tenant_id, zernio_profile_id)
-                VALUES (:tid, :pid)
-                ON CONFLICT (tenant_id)
-                DO UPDATE SET zernio_profile_id = EXCLUDED.zernio_profile_id, updated_at = now()
-            """),
-            {"tid": str(tenant_id), "pid": body.zernio_profile_id},
-        )
-    return {"tenant_id": str(tenant_id), "zernio_profile_id": body.zernio_profile_id}
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO marketing_tenant_profiles (tenant_id, zernio_profile_id)
+                    VALUES (:tid, :pid)
+                    ON CONFLICT (tenant_id)
+                    DO UPDATE SET zernio_profile_id = EXCLUDED.zernio_profile_id, updated_at = now()
+                """),
+                {"tid": str(tenant_id), "pid": pid},
+            )
+    except Exception as e:  # noqa: BLE001 - unique index on zernio_profile_id
+        if "uq_mkt_tenant_profiles_profile" in str(e) or "unique" in str(e).lower():
+            raise HTTPException(status_code=409, detail="Profile is already mapped to another tenant")
+        raise
+    return {"tenant_id": str(tenant_id), "zernio_profile_id": pid}
 
 
 @app.get("/social/analytics/overview", response_model=Dict[str, Any])
@@ -4023,8 +4244,8 @@ async def analytics_followers(
 
 
 def _get_tenant_profile(tenant_id: uuid.UUID) -> Optional[str]:
-    """Read the tenant's Zernio profile id (no creation). Falls back to the
-    shared ZERNIO_PROFILE_ID env for single-profile setups."""
+    """Read the tenant's OWN Zernio profile id (no creation). Never falls back to the shared
+    platform profile (ZERNIO_PROFILE_ID): a tenant without a profile sees/changes nothing."""
     engine = get_engine()
     _ensure_marketing_tables(engine)
     with engine.connect() as conn:
@@ -4032,9 +4253,15 @@ def _get_tenant_profile(tenant_id: uuid.UUID) -> Optional[str]:
             text("SELECT zernio_profile_id FROM marketing_tenant_profiles WHERE tenant_id = :tid"),
             {"tid": str(tenant_id)},
         ).first()
-    if row:
-        return row[0]
-    return os.getenv("ZERNIO_PROFILE_ID") or None
+    return row[0] if row else None
+
+
+def _require_tenant_profile(tenant_id: uuid.UUID) -> str:
+    """Write/destructive paths: the tenant must already have its own provisioned profile."""
+    pid = _get_tenant_profile(tenant_id)
+    if not pid:
+        raise HTTPException(status_code=409, detail="tenant profile not provisioned")
+    return pid
 
 
 async def _ensure_tenant_profile(tenant_id: uuid.UUID) -> Optional[str]:
@@ -4132,7 +4359,7 @@ def _tenant_for_profile(profile_id: str) -> Optional[str]:
     return str(row[0]) if row else None
 
 
-@app.post("/social/profile/ensure", response_model=Dict[str, Any])
+@app.post("/social/profile/ensure", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def ensure_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     """Create this tenant's Zernio profile if it doesn't have one yet, and
     return the id. Idempotent; safe to call on every login/onboarding."""
@@ -4176,7 +4403,7 @@ async def accounts_health(
         health = await client.get_accounts_health(profile_id, status=status_filter)
     except Exception as e:  # noqa: BLE001
         logger.error(f"Zernio accounts health failed: {e}")
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
     for acct in (health or {}).get("accounts", []):
         st = "error" if acct.get("needsReconnect") else acct.get("status", "connected")
         _upsert_connected_account(str(tenant_id), profile_id, acct, status=st)
@@ -4191,10 +4418,12 @@ async def social_usage(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
     profile_id = _get_tenant_profile(tenant_id)
+    if not profile_id:
+        return {"profile_id": None, "usage": None, "restricted": False}
     try:
         usage = await client.get_usage(range_="cycle", group_by="profile")
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
     groups = ((usage or {}).get("attribution") or {}).get("groups") or []
     mine = next((g for g in groups if g.get("profileId") == profile_id or g.get("id") == profile_id), None)
     return {"profile_id": profile_id, "usage": mine, "restricted": ((usage or {}).get("attribution") or {}).get("restricted", False)}
@@ -4207,7 +4436,7 @@ class ScopedKeyIn(BaseModel):
     expires_in: Optional[int] = None  # days
 
 
-@app.post("/social/api-keys", response_model=Dict[str, Any])
+@app.post("/social/api-keys", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def create_scoped_key(
     body: ScopedKeyIn,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -4227,20 +4456,18 @@ async def create_scoped_key(
             expires_in=body.expires_in,
         )
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
     return result
 
 
-@app.post("/social/profile/offboard", response_model=Dict[str, Any])
+@app.post("/social/profile/offboard", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def offboard_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     """Disconnect the tenant's accounts, then delete its Zernio profile, then
     clear local rows. Active accounts block profile deletion, so they go first."""
     client = get_zernio_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
-    profile_id = _get_tenant_profile(tenant_id)
-    if not profile_id:
-        return {"status": "nothing_to_offboard"}
+    profile_id = _require_tenant_profile(tenant_id)
     engine = get_engine()
     with engine.connect() as conn:
         account_ids = [
@@ -4259,7 +4486,7 @@ async def offboard_profile(tenant_id: uuid.UUID = Depends(get_current_tenant_id)
     try:
         await client.delete_profile(profile_id)
     except Exception as e:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Profile delete failed (disconnect accounts first?): {e}")
+        raise _upstream_error("zernio profile delete", e)
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM marketing_connected_accounts WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
         conn.execute(text("DELETE FROM marketing_tenant_profiles WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
@@ -4373,7 +4600,7 @@ async def list_queues(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     ]}
 
 
-@app.post("/social/queues", status_code=201, response_model=Dict[str, Any])
+@app.post("/social/queues", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_queue(body: QueueCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     import json as _json
     engine = get_engine()
@@ -4393,7 +4620,7 @@ async def create_queue(body: QueueCreate, tenant_id: uuid.UUID = Depends(get_cur
     return {"id": str(qid), "name": body.name, "status": body.status, "timezone": body.timezone, "slots": slots}
 
 
-@app.patch("/social/queues/{queue_id}", response_model=Dict[str, Any])
+@app.patch("/social/queues/{queue_id}", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def update_queue(queue_id: uuid.UUID, body: QueueUpdate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     import json as _json
     engine = get_engine()
@@ -4422,7 +4649,7 @@ async def update_queue(queue_id: uuid.UUID, body: QueueUpdate, tenant_id: uuid.U
     return {"id": str(queue_id), "updated": True}
 
 
-@app.delete("/social/queues/{queue_id}", status_code=204)
+@app.delete("/social/queues/{queue_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
 async def delete_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     engine = get_engine()
     _ensure_marketing_tables(engine)
@@ -4434,7 +4661,7 @@ async def delete_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_c
     return None
 
 
-@app.post("/social/queues/{queue_id}/enqueue", status_code=201, response_model=Dict[str, Any])
+@app.post("/social/queues/{queue_id}/enqueue", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def enqueue_post(
     queue_id: uuid.UUID,
     body: SocialPostCreate,
@@ -4468,20 +4695,56 @@ async def enqueue_post(
         return {"id": str(post.id), "status": post.status, "scheduled_for": post.scheduled_for.isoformat() if post.scheduled_for else slot, "queue_id": str(queue_id)}
 
 
+def _tenant_account_ids(tenant_id: uuid.UUID) -> set:
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT account_id FROM marketing_connected_accounts WHERE tenant_id = :tid AND status <> 'disconnected'"),
+            {"tid": str(tenant_id)},
+        ).all()
+    return {str(r[0]) for r in rows}
+
+
+def _filter_conversations(data: Any, mine: set) -> Any:
+    """Keep only conversations whose account belongs to the tenant; items with no identifiable
+    account are dropped (fail closed)."""
+    def acct(item: Any) -> str:
+        if not isinstance(item, dict):
+            return ""
+        a = item.get("account") if isinstance(item.get("account"), dict) else {}
+        return str(item.get("accountId") or a.get("id") or a.get("_id") or item.get("account_id") or "")
+
+    if isinstance(data, list):
+        return [i for i in data if acct(i) in mine]
+    if isinstance(data, dict):
+        out = dict(data)
+        for key in ("conversations", "data", "items"):
+            if isinstance(out.get(key), list):
+                out[key] = [i for i in out[key] if acct(i) in mine]
+        return out
+    return data
+
+
 @app.get("/social/zernio/accounts", response_model=List[Dict[str, Any]])
 async def zernio_accounts(
     platform: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Live connected accounts from Zernio (proxied, not stored)."""
+    """Live connected accounts from Zernio (proxied, not stored), restricted to THIS tenant's accounts."""
     client = get_zernio_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    mine = _tenant_account_ids(tenant_id)
+    if not mine:
+        return []
     try:
-        return await client.list_accounts(platform=platform)
+        accounts = await client.list_accounts(platform=platform)
+        return [a for a in (accounts or []) if isinstance(a, dict)
+                and str(a.get("_id") or a.get("id") or a.get("accountId") or "") in mine]
     except Exception as e:
         logger.error(f"Zernio list_accounts failed: {e}")
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
 
 
 @app.get("/social/zernio/conversations", response_model=Dict[str, Any])
@@ -4492,18 +4755,24 @@ async def zernio_conversations(
     account_id: Optional[str] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Live inbox conversations from Zernio (proxied, not stored)."""
+    """Live inbox conversations from Zernio (proxied, not stored), restricted to THIS tenant's accounts."""
     client = get_zernio_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    mine = _tenant_account_ids(tenant_id)
+    if account_id and account_id not in mine:
+        raise HTTPException(status_code=403, detail="Account does not belong to this tenant")
+    if not mine:
+        return {"conversations": []}
     try:
-        return await client.list_conversations(
+        data = await client.list_conversations(
             platform=platform, status=status_filter, limit=limit,
             account_id=account_id,
         )
+        return _filter_conversations(data, mine)
     except Exception as e:
         logger.error(f"Zernio list_conversations failed: {e}")
-        raise HTTPException(status_code=502, detail=f"Zernio upstream error: {e}")
+        raise _upstream_error("zernio", e)
 
 
 async def _resolve_inbox_account(session, tenant_id: uuid.UUID, platform: str):
@@ -4533,7 +4802,7 @@ async def _resolve_inbox_account(session, tenant_id: uuid.UUID, platform: str):
     return account
 
 
-@app.post("/social/webhooks/{platform}")
+@app.post("/social/webhooks/{platform}", dependencies=[Depends(require_marketing_write)])
 async def receive_social_webhook(
     platform: str,
     payload: Dict[str, Any],
@@ -4544,8 +4813,8 @@ async def receive_social_webhook(
         event = SocialWebhookEvent(
             tenant_id=tenant_id,
             platform=platform,
-            event_type=payload.get("event_type", "unknown"),
-            payload=payload,
+            event_type=str(payload.get("event_type", "unknown"))[:100],
+            payload=sec.bound_payload(payload, str(payload.get("event_type", "unknown"))),
             processed=False,
         )
         session.add(event)
@@ -4571,33 +4840,19 @@ async def receive_zernio_webhook(
       Header: X-Tenant-Id: <tenant uuid>  (tenant-scoped ingestion)
       Events: message.received, comment.received, mention.received
     """
-    raw_body = await request.body()
-    signature = request.headers.get("X-Zernio-Signature", "")
-    zernio_event = request.headers.get("X-Zernio-Event", "")
-    zernio_event_id = request.headers.get("X-Zernio-Event-Id", "")
-
-    secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "")
-    if secret:
-        import hashlib
-        import hmac
-        expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, signature):
-            # Debug aid (never logs the secret): distinguishes proxy-stripped
-            # headers from genuine secret mismatch on the next delivery.
-            logger.warning(
-                "Zernio signature mismatch: sig_present=%s sig_len=%d "
-                "expected_len=%d body_len=%d event=%s event_id_present=%s",
-                bool(signature), len(signature), len(expected), len(raw_body),
-                zernio_event or "missing", bool(zernio_event_id),
-            )
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
-    else:
-        logger.warning("ZERNIO_WEBHOOK_SECRET not set — accepting unsigned webhook")
+    try:
+        raw_body = await agentmail_client.read_body_capped(request, sec.WEBHOOK_MAX_BODY)
+    except agentmail_client.BodyTooLarge:
+        raise HTTPException(status_code=413, detail="Webhook body too large")
+    # Fail closed: 503 when the secret is unset (unless ZERNIO_WEBHOOK_ALLOW_UNSIGNED=true),
+    # 401 on a bad signature. Nothing below (storage, ChatEngine auto-reply) runs before this.
+    sec.verify_zernio_signature(request.headers, raw_body)
 
     try:
-        import json
         payload = json.loads(raw_body)
     except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+    if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     # Real Zernio payload keys the event as "event" and nests platform under
@@ -4605,7 +4860,28 @@ async def receive_zernio_webhook(
     from services.marketing.chat_webhooks import extract_event_meta
     event_type, platform = extract_event_meta(payload)
 
-    header_tenant = request.headers.get("X-Tenant-Id", "")
+    # Replay/duplicate protection: the scheme carries no timestamp, so dedupe on the event id.
+    event_key = sec.webhook_event_id(request.headers, payload, raw_body)
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.begin() as conn:
+        is_new = sec.record_webhook_event(conn, "zernio", event_key)
+    if not is_new:
+        return {"status": "duplicate"}
+    try:
+        return await _process_zernio_event(payload, request.headers.get("X-Tenant-Id", ""), event_type, platform)
+    except BaseException:
+        # let the provider's retry be processed instead of being swallowed as a duplicate
+        try:
+            with engine.begin() as conn:
+                sec.forget_webhook_event(conn, "zernio", event_key)
+        except Exception:  # noqa: BLE001
+            logger.warning("could not release webhook event id %s", event_key)
+        raise
+
+
+async def _process_zernio_event(payload: Dict[str, Any], header_tenant: str, event_type: str, platform: str):
+    """Runs only for verified, non-duplicate Zernio deliveries."""
 
     # ── Account lifecycle: keep the account→tenant map current, then return.
     # Routed by profileId (account events carry it), header as a fallback.
@@ -4655,7 +4931,7 @@ async def receive_zernio_webhook(
             tenant_id=tenant_id,
             platform=platform,
             event_type=event_type,
-            payload=payload,
+            payload=sec.bound_payload(payload, event_type),
             processed=False,
         )
         session.add(event)
@@ -4768,7 +5044,7 @@ async def get_customer_social_360(
     )
 
 
-@app.post("/social/inbox/{message_id}/create-ticket", response_model=CreateTicketResponse)
+@app.post("/social/inbox/{message_id}/create-ticket", response_model=CreateTicketResponse, dependencies=[Depends(require_marketing_write)])
 async def create_ticket_from_social(
     message_id: uuid.UUID,
     body: CreateTicketRequest,
@@ -4860,7 +5136,7 @@ async def list_traditional_campaigns(
     ]
 
 
-@app.post("/traditional-campaigns", status_code=201, response_model=Dict[str, Any])
+@app.post("/traditional-campaigns", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_traditional_campaign(
     body: TraditionalCampaignCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5067,7 +5343,7 @@ class WhatsAppConnectNumberRequest(BaseModel):
     display_name: Optional[str] = "OmniDome WhatsApp"
 
 
-@app.post("/whatsapp/senders/connect", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/senders/connect", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def connect_whatsapp_number(
     body: WhatsAppConnectNumberRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5121,7 +5397,7 @@ class WhatsAppTemplateCreate(BaseModel):
     buttons: List[str] = Field(default_factory=list)
 
 
-@app.post("/whatsapp/templates", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/templates", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_whatsapp_template(
     body: WhatsAppTemplateCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5157,7 +5433,7 @@ class WhatsAppFlowCreate(BaseModel):
     nodes: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-@app.post("/whatsapp/flows", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/flows", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_whatsapp_flow(
     body: WhatsAppFlowCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5196,7 +5472,7 @@ class WhatsAppGroupCreate(BaseModel):
     invite_link: Optional[str] = None
 
 
-@app.post("/whatsapp/groups", status_code=201, response_model=Dict[str, Any])
+@app.post("/whatsapp/groups", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_whatsapp_group(
     body: WhatsAppGroupCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5274,7 +5550,7 @@ async def list_sms_senders(tenant_id: uuid.UUID = Depends(get_current_tenant_id)
     return _SMS_SENDERS.get(tkey, [])
 
 
-@app.post("/sms/senders", status_code=201, response_model=Dict[str, Any])
+@app.post("/sms/senders", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def create_sms_sender(
     body: SmsSenderCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5295,7 +5571,7 @@ async def create_sms_sender(
     return sender
 
 
-@app.delete("/sms/senders/{sender_id}", status_code=200)
+@app.delete("/sms/senders/{sender_id}", status_code=200, dependencies=[Depends(require_marketing_write)])
 async def delete_sms_sender(
     sender_id: str,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5312,37 +5588,41 @@ class SmsSendRequest(BaseModel):
     message: str
 
 
-@app.post("/sms/send", status_code=200, response_model=Dict[str, Any])
+@app.post("/sms/send", status_code=200, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
 async def send_sms_message(
     body: SmsSendRequest,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(get_auth_context),
 ):
+    """Send one SMS through Twilio. Never reports success unless Twilio accepted the message.
+
+    The repo has no per-tenant Twilio credential store, so only the PLATFORM Twilio account
+    exists; it is usable by platform_admin only. Everyone else gets 501.
+    """
+    tenant_id = auth.tenant_id
+    if not sec.valid_e164(body.to):
+        raise HTTPException(status_code=422, detail="'to' must be an E.164 number, e.g. +27821234567")
+    if not body.message or len(body.message) > 1600:
+        raise HTTPException(status_code=422, detail="message must be 1-1600 characters")
     account_sid = os.getenv("TWILIO_ACCOUNT_SID")
     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+    if not (account_sid and auth_token) or not auth.is_platform_admin:
+        raise HTTPException(status_code=501, detail="SMS provider not configured")
+    sec.check_sms_rate(tenant_id)
     from_number = os.getenv("TWILIO_FROM_NUMBER", body.sender_id)
-
-    if account_sid and auth_token:
-        try:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                res = await client.post(
-                    f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
-                    auth=(account_sid, auth_token),
-                    data={"From": from_number, "To": body.to, "Body": body.message},
-                )
-                if res.status_code in (200, 201):
-                    return {"status": "sent", "provider": "twilio", "response": res.json()}
-        except Exception as err:
-            logger.warning(f"Twilio dispatch fallback: {err}")
-
-    return {
-        "status": "sent",
-        "provider": "twilio-mock",
-        "message_id": f"sms-{uuid.uuid4().hex[:12]}",
-        "sender_id": body.sender_id,
-        "to": body.to,
-        "sent_at": datetime.now(timezone.utc).isoformat(),
-    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(
+                f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json",
+                auth=(account_sid, auth_token),
+                data={"From": from_number, "To": body.to, "Body": body.message},
+            )
+    except Exception as err:  # noqa: BLE001
+        raise _upstream_error("twilio", err)
+    if res.status_code not in (200, 201):
+        logger.error("twilio rejected SMS: status=%s", res.status_code)
+        raise HTTPException(status_code=502, detail=f"SMS provider error (Twilio status {res.status_code})")
+    data = res.json()
+    return {"status": "sent", "provider": "twilio", "message_id": data.get("sid"), "to": body.to}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5363,7 +5643,7 @@ async def list_team_members(tenant_id: uuid.UUID = Depends(get_current_tenant_id
     return _TEAM_MEMBERS.get(tkey, [])
 
 
-@app.post("/team/members/invite", status_code=201, response_model=Dict[str, Any])
+@app.post("/team/members/invite", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_admin)])
 async def invite_team_member(
     body: TeamMemberInvite,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -5402,7 +5682,7 @@ async def invite_team_member(
     }
 
 
-@app.delete("/team/members/{member_id}", status_code=200)
+@app.delete("/team/members/{member_id}", status_code=200, dependencies=[Depends(require_marketing_admin)])
 async def delete_team_member(
     member_id: str,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),

@@ -113,12 +113,17 @@ def _check(resp: httpx.Response) -> None:
 # ── Send / reply ────────────────────────────────────────────────────────────
 
 async def send_email(to: str, subject: str, html: str, *, reply_to: Optional[str] = None,
-                     timeout: float = 30.0, creds: Optional[Creds] = None) -> str:
-    """Returns the provider message id. Raises on any failure (callers retry)."""
+                     timeout: float = 30.0, creds: Optional[Creds] = None,
+                     headers: Optional[dict] = None) -> str:
+    """Returns the provider message id. Raises on any failure (callers retry).
+
+    `headers` are extra RFC 5322 headers (e.g. List-Unsubscribe) passed in the send payload."""
     c = _resolve(creds)
     payload: dict = {"to": [to], "subject": subject, "html": html or ""}
     if reply_to:
         payload["reply_to"] = [reply_to]
+    if headers:
+        payload["headers"] = {str(k): str(v) for k, v in headers.items()}
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(
             f"{base_url()}/inboxes/{quote(c.inbox, safe='')}/messages/send",

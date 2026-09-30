@@ -30,8 +30,9 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   // Provider webhooks are public at the edge (HMAC-verified by the marketing service) and carry no
   // identity; everything else must arrive with the identity proxy.ts verified.
   const isPublicWebhook =
-    request.method === "POST" &&
-    (/^social\/webhooks\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/.test(pathStr) || pathStr === "email/webhook")
+    (request.method === "POST" &&
+      (/^social\/webhooks\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/.test(pathStr) || pathStr === "email/webhook")) ||
+    ((request.method === "GET" || request.method === "POST") && pathStr === "email/unsubscribe")
   if (!isPublicWebhook && (!headers.has("x-tenant-id") || !headers.has("x-user-id"))) {
     if (!ALLOW_DEV_HEADERS) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)

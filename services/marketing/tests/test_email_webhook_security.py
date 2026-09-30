@@ -41,7 +41,7 @@ class Conn:
         q = str(stmt)
         self.log.append(q)
         row = {"tenant_id": B, "batch_id": uuid.uuid4(), "recipient_email": "x@y.co"}
-        return SimpleNamespace(mappings=lambda: SimpleNamespace(first=lambda: row))
+        return SimpleNamespace(rowcount=1, mappings=lambda: SimpleNamespace(first=lambda: row))
 
 
 @pytest.fixture
@@ -80,3 +80,40 @@ def test_only_the_owning_tenants_secret_is_accepted(client):
     body = delivered()
     assert c.post("/email/webhook", content=body, headers=sign(body, SEC_A)).status_code == 401  # A forging for B
     assert c.post("/email/webhook", content=body, headers=sign(body, SEC_B)).status_code == 200
+
+
+def _evt(kind, **extra):
+    return json.dumps({"event_type": kind, "message": {"message_id": "<m>"}, **extra}).encode()
+
+
+def test_duplicate_svix_id_is_a_noop(client, monkeypatch):
+    c, log = client
+    from services.marketing import security as sec
+    monkeypatch.setattr(sec, "record_webhook_event", lambda conn, provider, eid: False)
+    body = delivered()
+    r = c.post("/email/webhook", content=body, headers=sign(body, SEC_B))
+    assert r.status_code == 200 and r.json() == {"status": "duplicate"}
+    assert not any("UPDATE marketing_email_batches" in q for q in log)
+
+
+def test_complaint_counts_separately_and_suppresses(client, monkeypatch):
+    c, log = client
+    added = []
+    monkeypatch.setattr(mk.suppression_lib, "add_suppression_sync",
+                        lambda conn, tid, email, reason, source: added.append((email, reason)))
+    body = _evt("message.complained")
+    assert c.post("/email/webhook", content=body, headers=sign(body, SEC_B)).status_code == 200
+    assert any("total_complained" in q for q in log) and not any("total_bounced" in q for q in log)
+    assert added == [("x@y.co", "complaint")]
+
+
+def test_hard_bounce_suppresses_transient_does_not(client, monkeypatch):
+    c, log = client
+    added = []
+    monkeypatch.setattr(mk.suppression_lib, "add_suppression_sync",
+                        lambda conn, tid, email, reason, source: added.append(reason))
+    hard = _evt("message.bounced", bounce={"type": "Permanent"})
+    soft = _evt("message.bounced", bounce={"type": "Transient"})
+    c.post("/email/webhook", content=hard, headers=sign(hard, SEC_B))
+    c.post("/email/webhook", content=soft, headers=sign(soft, SEC_B))
+    assert added == ["bounce"]

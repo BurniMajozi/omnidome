@@ -166,11 +166,11 @@ def test_verify_webhook_invalid():
     assert client.verify_webhook(b"{}", "0" * 64) is False
 
 
-def test_verify_webhook_no_secret_allows():
+def test_verify_webhook_no_secret_fails_closed(monkeypatch):
+    monkeypatch.delenv("ZERNIO_WEBHOOK_ALLOW_UNSIGNED", raising=False)
     client = ZernioClient(api_key="dummy", webhook_secret=None)
-    # os env may or may not have the secret; force the skip path
     client.webhook_secret = None
-    assert client.verify_webhook(b"{}", "anything") is True
+    assert client.verify_webhook(b"{}", "anything") is False
 
 
 # ── client construction ────────────────────────────────────────────────

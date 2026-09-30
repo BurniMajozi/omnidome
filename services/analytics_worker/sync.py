@@ -105,21 +105,28 @@ def _upsert_posts(tenant_id: str, profile_id: str, posts: List[Dict[str, Any]]) 
     rows = []
     for p in posts:
         a = p.get("analytics") or {}
-        platforms = p.get("platforms") or []
-        sync_status = next((pl["syncStatus"] for pl in platforms if pl.get("syncStatus")), "synced")
-        platform = p.get("platform") or (platforms[0].get("platform") if platforms else "unknown")
+        platforms = [pl for pl in (p.get("platforms") or []) if isinstance(pl, dict)]
         post_id = str(p.get("_id") or p.get("id") or "")
         if not post_id:
             continue
-        rows.append({
-            "tid": tenant_id, "pid": profile_id, "post_id": post_id, "platform": str(platform),
-            "published_at": p.get("publishedAt"), "url": p.get("platformPostUrl"),
-            "likes": _num(a, "likes"), "comments": _num(a, "comments"),
-            "impressions": _num(a, "impressions"), "reach": _num(a, "reach"),
-            "shares": _num(a, "shares"), "saves": _num(a, "saves"),
-            "clicks": _num(a, "clicks"), "views": _num(a, "views"),
-            "sync_status": sync_status,
-        })
+        if not platforms:
+            platforms = [{"platform": p.get("platform") or "unknown"}]
+        # One row per (post, platform). Per-platform analytics are used when Zernio sends them;
+        # otherwise the post-level aggregate is attributed to the first platform only (never
+        # duplicated across platforms) and the others get zeroed rows.
+        has_per_platform = any(isinstance(pl.get("analytics"), dict) for pl in platforms)
+        for idx, pl in enumerate(platforms):
+            pa = pl.get("analytics") if isinstance(pl.get("analytics"), dict) else ({} if has_per_platform or idx else a)
+            rows.append({
+                "tid": tenant_id, "pid": profile_id, "post_id": post_id,
+                "platform": str(pl.get("platform") or p.get("platform") or "unknown"),
+                "published_at": p.get("publishedAt"), "url": pl.get("platformPostUrl") or p.get("platformPostUrl"),
+                "likes": _num(pa, "likes"), "comments": _num(pa, "comments"),
+                "impressions": _num(pa, "impressions"), "reach": _num(pa, "reach"),
+                "shares": _num(pa, "shares"), "saves": _num(pa, "saves"),
+                "clicks": _num(pa, "clicks"), "views": _num(pa, "views"),
+                "sync_status": pl.get("syncStatus") or "synced",
+            })
     if not rows:
         return 0
     stmt = text("""
@@ -217,20 +224,54 @@ def _upsert_followers(tenant_id: str, profile_id: str, granularity: str, payload
     return len(rows)
 
 
+_STATE_COLS_READY = False
+
+
+def _ensure_state_columns(conn) -> None:
+    """Idempotent, once per process (marketing's startup migration normally did this already)."""
+    global _STATE_COLS_READY
+    if _STATE_COLS_READY:
+        return
+    try:
+        conn.execute(text("ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ"))
+        conn.execute(text("ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ"))
+        _STATE_COLS_READY = True
+    except Exception as e:  # noqa: BLE001
+        logger.warning("could not ensure sync-state columns: %s", e)
+
+
 def _mark_state(tenant_id: str, profile_id: str, field: str, error: Optional[str] = None) -> None:
+    """Success: stamp `field` (last_*_sync) and clear the error. Failure: record last_error /
+    last_error_at / last_attempt_at ONLY -- a failing tenant must never look freshly synced."""
     # `field` is from a fixed allow-list, never user input.
     assert field in {"last_hot_sync", "last_longtail_sync", "last_follower_sync", "backfilled_at"}
     engine = get_engine()
     with engine.begin() as conn:
-        conn.execute(
-            text(f"""
-                INSERT INTO marketing_analytics_sync_state (tenant_id, profile_id, {field}, last_error, updated_at)
-                VALUES (:tid, :pid, now(), :err, now())
-                ON CONFLICT (tenant_id) DO UPDATE SET
-                  {field} = now(), profile_id = EXCLUDED.profile_id, last_error = :err, updated_at = now()
-            """),
-            {"tid": tenant_id, "pid": profile_id, "err": error},
-        )
+        _ensure_state_columns(conn)
+        if error is None:
+            conn.execute(
+                text(f"""
+                    INSERT INTO marketing_analytics_sync_state
+                        (tenant_id, profile_id, {field}, last_error, last_error_at, last_attempt_at, updated_at)
+                    VALUES (:tid, :pid, now(), NULL, NULL, now(), now())
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                      {field} = now(), profile_id = EXCLUDED.profile_id, last_error = NULL,
+                      last_error_at = NULL, last_attempt_at = now(), updated_at = now()
+                """),
+                {"tid": tenant_id, "pid": profile_id},
+            )
+        else:
+            conn.execute(
+                text("""
+                    INSERT INTO marketing_analytics_sync_state
+                        (tenant_id, profile_id, last_error, last_error_at, last_attempt_at, updated_at)
+                    VALUES (:tid, :pid, :err, now(), now(), now())
+                    ON CONFLICT (tenant_id) DO UPDATE SET
+                      profile_id = EXCLUDED.profile_id, last_error = :err,
+                      last_error_at = now(), last_attempt_at = now(), updated_at = now()
+                """),
+                {"tid": tenant_id, "pid": profile_id, "err": error},
+            )
 
 
 # ── per-tenant sync ──────────────────────────────────────────────────────
@@ -241,7 +282,7 @@ async def sync_posts(client: ZernioClient, tenant_id: str, profile_id: str, wind
         data = await _rl(lambda pg=page: client.get_post_analytics(
             profile_id=profile_id, from_date=_days_ago(window_days), page=pg, limit=PAGE_LIMIT))
         data = data or {}
-        total += _upsert_posts(tenant_id, profile_id, data.get("posts") or [])
+        total += await asyncio.to_thread(_upsert_posts, tenant_id, profile_id, data.get("posts") or [])
         pages = int((data.get("pagination") or {}).get("pages", 1) or 1)
         if page >= pages:
             break
@@ -254,13 +295,13 @@ async def sync_daily(client: ZernioClient, tenant_id: str, profile_id: str, wind
     for attribution in ("publish", "received"):
         data = await _rl(lambda a=attribution: client.get_daily_metrics(
             profile_id=profile_id, from_date=_days_ago(window_days), attribution=a))
-        n += _upsert_daily(tenant_id, profile_id, attribution, (data or {}).get("dailyData") or [])
+        n += await asyncio.to_thread(_upsert_daily, tenant_id, profile_id, attribution, (data or {}).get("dailyData") or [])
     return n
 
 
 async def sync_followers(client: ZernioClient, tenant_id: str, profile_id: str, granularity: str = "daily") -> int:
     data = await _rl(lambda: client.get_follower_stats(profile_id=profile_id, granularity=granularity))
-    return _upsert_followers(tenant_id, profile_id, granularity, data or {})
+    return await asyncio.to_thread(_upsert_followers, tenant_id, profile_id, granularity, data or {})
 
 
 # ── passes (called by the scheduler) ─────────────────────────────────────
@@ -271,16 +312,16 @@ async def run_pass(window_days: int, field: str, followers: bool = False) -> Non
         return
     client = ZernioClient()
     try:
-        for tenant_id, profile_id in iter_tenant_profiles():
+        for tenant_id, profile_id in await asyncio.to_thread(iter_tenant_profiles):
             try:
                 posts = await sync_posts(client, tenant_id, profile_id, window_days)
                 daily = await sync_daily(client, tenant_id, profile_id, window_days)
                 foll = await sync_followers(client, tenant_id, profile_id) if followers else 0
-                _mark_state(tenant_id, profile_id, field)
+                await asyncio.to_thread(_mark_state, tenant_id, profile_id, field)
                 logger.info("synced tenant=%s posts=%d daily=%d followers=%d", tenant_id, posts, daily, foll)
             except Exception as e:  # noqa: BLE001 — one tenant's failure must not stop the rest
                 logger.error("sync failed tenant=%s: %s", tenant_id, e)
-                _mark_state(tenant_id, profile_id, field, error=str(e)[:500])
+                await asyncio.to_thread(_mark_state, tenant_id, profile_id, field, str(e)[:500])
     finally:
         await client.close()
 
@@ -309,9 +350,10 @@ async def run_backfill() -> None:
             try:
                 await sync_posts(client, tenant_id, profile_id, 366)
                 await sync_daily(client, tenant_id, profile_id, 366)
-                _mark_state(tenant_id, profile_id, "backfilled_at")
+                await asyncio.to_thread(_mark_state, tenant_id, profile_id, "backfilled_at")
                 logger.info("backfilled tenant=%s", tenant_id)
             except Exception as e:  # noqa: BLE001
                 logger.error("backfill failed tenant=%s: %s", tenant_id, e)
+                await asyncio.to_thread(_mark_state, tenant_id, profile_id, "backfilled_at", str(e)[:500])
     finally:
         await client.close()

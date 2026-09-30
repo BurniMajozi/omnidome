@@ -65,6 +65,8 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   // Zernio / social / email provider webhooks: HMAC-verified by the marketing service
   { methods: ["POST"], pattern: /^\/svc\/marketing\/social\/webhooks\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/ },
   { methods: ["POST"], pattern: /^\/svc\/marketing\/email\/webhook$/ },
+  // Recipient unsubscribe page / one-click POST: authorised by an HMAC-signed token in `?t=`
+  { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
 ]
 
 interface Identity {
