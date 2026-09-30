@@ -292,6 +292,8 @@ export const adminApi = {
   listModules: () =>
     fetchAdmin<ModuleCatalogItem[]>("/modules"),
 
+  getTenant: (tenantId: string) => fetchAdmin<Tenant>(`/tenants/${tenantId}`),
+
   listTenantModules: (tenantId: string) =>
     fetchAdmin<ModuleCatalogItem[]>(`/tenants/${tenantId}/modules`),
 

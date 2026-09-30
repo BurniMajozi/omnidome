@@ -11,10 +11,14 @@ After auth, the connection is registered in the ConnectionManager
 and all further logic is delegated to realtime.handle_connection().
 """
 
+import os
 import uuid
+from typing import Mapping, Optional, Tuple
+
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import select
 
+from services.common import internal_auth
 from services.common.auth import decode_token_payload, AuthContext
 from services.common.db import session_scope
 from services.communication.models import Channel
@@ -41,17 +45,40 @@ async def _check_channel_access(tenant_id: uuid.UUID, channel_id: uuid.UUID, use
         return False
 
 
+def authenticate_ws(
+    headers: Mapping[str, str], path: str, token: Optional[str]
+) -> Tuple[uuid.UUID, uuid.UUID]:
+    """Return (tenant_id, user_id) or raise ValueError.
+
+    AUTH_MODE=signed (the deployed mode): identity comes ONLY from the HMAC-signed
+    X-User-Id/X-Tenant-Id headers that the web tier (proxy.ts) added after verifying the
+    Supabase session; the ?token= query param is ignored (proxy.ts already consumed it) and
+    any unsigned/forged tenant is rejected. Other modes keep the legacy JWT check.
+    """
+    mode = os.getenv("AUTH_MODE", "header").strip().lower()
+    if mode == "signed":
+        try:
+            internal_auth.verify_request(headers, "GET", path, internal_auth.get_secret())
+            user = headers.get("x-user-id") or headers.get("X-User-Id")
+            tenant = headers.get("x-tenant-id") or headers.get("X-Tenant-Id")
+            return uuid.UUID(str(tenant)), uuid.UUID(str(user))
+        except Exception as exc:
+            raise ValueError("invalid signed identity") from exc
+    if not token:
+        raise ValueError("missing token")
+    payload = decode_token_payload(token)
+    return uuid.UUID(payload["tenant_id"]), uuid.UUID(payload["sub"])
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
     channel_id: uuid.UUID = Query(...),
-    token: str = Query(...),
+    token: Optional[str] = Query(None),
 ):
     # Validate the token before accepting the connection
     try:
-        payload = decode_token_payload(token)
-        tenant_id = uuid.UUID(payload["tenant_id"])
-        user_id = uuid.UUID(payload["sub"])
+        tenant_id, user_id = authenticate_ws(websocket.headers, websocket.url.path, token)
     except Exception:
         await websocket.close(code=4001, reason="Invalid or expired token")
         return

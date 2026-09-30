@@ -1,5 +1,5 @@
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 const tickets = [
   {
@@ -64,7 +64,6 @@ export function TicketsTable() {
                 <p className="text-xs text-muted-foreground">{ticket.id} • {ticket.customer}</p>
               </div>
               <Avatar className="h-7 w-7">
-                <AvatarImage src={`/.jpg?height=28&width=28&query=${ticket.assignee}`} />
                 <AvatarFallback className="text-xs">{ticket.assignee}</AvatarFallback>
               </Avatar>
             </div>
@@ -109,7 +108,6 @@ export function TicketsTable() {
                 </td>
                 <td className="px-5 py-4">
                   <Avatar className="h-7 w-7">
-                    <AvatarImage src={`/.jpg?height=28&width=28&query=${ticket.assignee}`} />
                     <AvatarFallback className="text-xs">{ticket.assignee}</AvatarFallback>
                   </Avatar>
                 </td>

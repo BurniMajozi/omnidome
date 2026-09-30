@@ -1,4 +1,4 @@
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
 const activities = [
   {
@@ -53,7 +53,6 @@ export function ActivityFeed() {
             {/* Dot indicator on timeline */}
             <div className="absolute -left-[22px] top-4 h-2.5 w-2.5 rounded-full bg-primary border-2 border-card" />
             <Avatar className="h-8 w-8 shrink-0">
-              <AvatarImage src={`/.jpg?height=32&width=32&query=${activity.user}`} />
               <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">{activity.avatar}</AvatarFallback>
             </Avatar>
             <div className="flex-1 space-y-1">

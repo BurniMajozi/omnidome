@@ -79,6 +79,7 @@ import {
   type CommissionTier,
   type CommissionTierCreate,
   type ModuleCatalogItem,
+  type SeatUsage,
   type PlatformSeatRow,
   type Tenant,
   type Whoami,
@@ -186,6 +187,7 @@ export function AdminModule() {
   const [successBanner, setSuccessBanner] = useState<string | null>(null)
   const [identity, setIdentity] = useState<Whoami | null>(null)
   const [seatRows, setSeatRows] = useState<PlatformSeatRow[]>([])
+  const [ownSeats, setOwnSeats] = useState<SeatUsage | null>(null)
   const [activeTab, setActiveTab] = useState<string | null>(null)
 
   // Protocols & Mandates
@@ -245,9 +247,23 @@ export function AdminModule() {
     setLoading(true)
     setError(null)
     try {
-      const [tenantData, moduleData, userData, auditData, tierData, ucpData, mandateData, paymentData, actionsData] = await Promise.all([
-        adminApi.listTenants().catch(() => [] as Tenant[]), // 403 for non-platform admins: Team tab still works
-        adminApi.listModules().catch(() => [] as ModuleCatalogItem[]),
+      // Identity first: platform-only endpoints (/tenants, /modules, /platform/seat-usage) are never
+      // called for tenant admins (they 403 by design); they get their own tenant's scoped reads.
+      const who = await adminApi.whoami().catch(() => null)
+      const platform = !!who?.roles?.includes("platform_admin")
+      const ownTenantId = who?.tenant_id || ""
+      const [tenantData, moduleData, seatData, userData, auditData, tierData, ucpData, mandateData, paymentData, actionsData] = await Promise.all([
+        platform
+          ? adminApi.listTenants().catch(() => [] as Tenant[])
+          : ownTenantId
+            ? adminApi.getTenant(ownTenantId).then((t) => [t]).catch(() => [] as Tenant[])
+            : Promise.resolve([] as Tenant[]),
+        platform ? adminApi.listModules().catch(() => [] as ModuleCatalogItem[]) : Promise.resolve([] as ModuleCatalogItem[]),
+        platform
+          ? adminApi.platformSeatUsage().catch(() => null)
+          : ownTenantId
+            ? adminApi.getSeats(ownTenantId).catch(() => null)
+            : Promise.resolve(null),
         adminApi.listUsers().catch(() => []),
         adminApi.listAuditLog({ limit: 50 }).catch(() => []),
         adminApi.listCommissionTiers().catch(() => []),
@@ -256,12 +272,14 @@ export function AdminModule() {
         listPaymentMandates(20).catch(() => []),
         listAgentActions({ limit: 100 }).catch(() => ({ items: [] })),
       ])
-      const [who, seatData] = await Promise.all([
-        adminApi.whoami().catch(() => null),
-        adminApi.platformSeatUsage().catch(() => null),
-      ])
       setIdentity(who)
-      setSeatRows(seatData?.tenants ?? [])
+      if (platform) {
+        setSeatRows((seatData as { tenants?: PlatformSeatRow[] } | null)?.tenants ?? [])
+        setOwnSeats(null)
+      } else {
+        setSeatRows([])
+        setOwnSeats((seatData as SeatUsage | null) ?? null)
+      }
       setTenants(tenantData)
       setModules(moduleData)
       setUsers(userData)
@@ -271,7 +289,7 @@ export function AdminModule() {
       setIntentMandates(mandateData)
       setPaymentMandates(paymentData)
       setAgentActions(actionsData.items || [])
-      const tenantId = selectedTenantId || tenantData[0]?.id || ""
+      const tenantId = platform ? selectedTenantId || tenantData[0]?.id || "" : ownTenantId
       setSelectedTenantId(tenantId)
       if (tenantId) {
         setTenantModules(await adminApi.listTenantModules(tenantId).catch(() => [] as ModuleCatalogItem[]))
@@ -541,33 +559,69 @@ export function AdminModule() {
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Tenants</p>
-              <p className="text-2xl font-semibold">{tenants.length}</p>
-            </div>
-            <Building2 className="h-5 w-5 text-cyan-400" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Active Tenants</p>
-              <p className="text-2xl font-semibold">{activeTenants}</p>
-            </div>
-            <ShieldCheck className="h-5 w-5 text-emerald-400" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Catalog Modules</p>
-              <p className="text-2xl font-semibold">{modules.length}</p>
-            </div>
-            <SlidersHorizontal className="h-5 w-5 text-amber-400" />
-          </CardContent>
-        </Card>
+        {isPlatformAdmin ? (
+          <>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Tenants</p>
+                  <p className="text-2xl font-semibold">{tenants.length}</p>
+                </div>
+                <Building2 className="h-5 w-5 text-cyan-400" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Active Tenants</p>
+                  <p className="text-2xl font-semibold">{activeTenants}</p>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-emerald-400" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Catalog Modules</p>
+                  <p className="text-2xl font-semibold">{modules.length}</p>
+                </div>
+                <SlidersHorizontal className="h-5 w-5 text-amber-400" />
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Modules Enabled</p>
+                  <p className="text-2xl font-semibold">{enabledModules}</p>
+                </div>
+                <SlidersHorizontal className="h-5 w-5 text-amber-400" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Modules Available</p>
+                  <p className="text-2xl font-semibold">{tenantModules.length}</p>
+                </div>
+                <Building2 className="h-5 w-5 text-cyan-400" />
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="flex items-center justify-between p-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Seats Used</p>
+                  <p className="text-2xl font-semibold">
+                    {ownSeats ? `${ownSeats.seats_used} / ${ownSeats.seat_limit ?? "unlimited"}` : "-"}
+                  </p>
+                </div>
+                <ShieldCheck className="h-5 w-5 text-emerald-400" />
+              </CardContent>
+            </Card>
+          </>
+        )}
         <Card>
           <CardContent className="flex items-center justify-between p-4">
             <div>
@@ -677,7 +731,7 @@ export function AdminModule() {
                       : "Modules enabled for your organization. Only the platform team can change these."}
                   </CardDescription>
                 </div>
-                <select
+                {isPlatformAdmin && <select
                   className="h-9 rounded-md border border-border bg-background px-3 text-sm font-medium"
                   value={selectedTenant?.id || ""}
                   onChange={(event) => void refreshTenantModules(event.target.value)}
@@ -685,7 +739,7 @@ export function AdminModule() {
                   {tenants.map((tenant) => (
                     <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
                   ))}
-                </select>
+                </select>}
               </div>
             </CardHeader>
             <CardContent>
