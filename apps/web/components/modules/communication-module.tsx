@@ -1,11 +1,12 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { cn } from "@/lib/utils"
 import { useChannelSocket } from "@/lib/useChannelSocket"
 import { listLoadable, type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { supabase, getSessionSafe } from "@/lib/supabase/client"
+import { displayNameFromUser, resolveAuthorLabel, nextPollDelay } from "@/lib/comm-helpers"
 import { transcribe as voiceboxTranscribe, speak as voiceboxSpeak } from "@/lib/voicebox-api"
 import { AgentArtifactChat } from "@/components/chat/agent-artifact-chat"
 import { invokeAgentAGUI, type AGUIEvent, AGENT_CATALOG } from "@/lib/orchestrator-api"
@@ -137,6 +138,7 @@ interface ActivityItem {
 interface Message {
   id: string
   channel_id?: string | null
+  user_id?: string | null
   author_name?: string | null
   author_avatar?: string | null
   content: string
@@ -311,8 +313,39 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const [replyTo, setReplyTo] = useState<Message | null>(null)
   const messageInputRef = useRef<HTMLInputElement>(null)
 
-  const currentUserName = "You"
-  const currentUserAvatar = "ME"
+  // Real identity of the signed-in user (session user_metadata/email, id from /api/whoami).
+  const [me, setMe] = useState<{ id: string | null; name: string | null }>({ id: null, name: null })
+  useEffect(() => {
+    let cancelled = false
+    getSessionSafe().then(({ data }) => {
+      const name = displayNameFromUser(data.session?.user)
+      if (!cancelled && (name || data.session?.user?.id)) {
+        setMe((p) => ({ id: data.session?.user?.id ?? p.id, name: name ?? p.name }))
+      }
+    })
+    fetch("/api/whoami", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((w) => {
+        if (!cancelled && w?.user_id) setMe((p) => ({ ...p, id: w.user_id }))
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const currentUserName = me.name ?? "You"
+  const currentUserAvatar = (me.name ?? "ME").slice(0, 2).toUpperCase()
+  // id -> display name from the tenant directory (single fetch, cached in state; no per-message lookups)
+  const directoryMap = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const u of teamUsers) if (u.id && u.name) m[u.id] = u.name
+    return m
+  }, [teamUsers])
+  const authorLabel = useCallback(
+    (userId?: string | null, authorName?: string | null) =>
+      resolveAuthorLabel({ userId, authorName, currentUserId: me.id, currentUserName: me.name, directory: directoryMap }),
+    [me, directoryMap],
+  )
   const activeChannel = channels.find((channel) => channel.name === selectedChannel) ?? channels[0]
   const activeChannelId = activeChannel?.id
   const isUuid = (value?: string | null) =>
@@ -338,11 +371,12 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     setMessages((prev) => {
       // Deduplicate — optimistic messages sent by us are already in state
       if (prev.some((m) => m.id === data.id)) return prev
-      const name = data.author_name || (data.user_id === "me" ? currentUserName : (data.user_id ?? "Teammate"))
+      const name = authorLabel(data.user_id, data.author_name)
       return [
         ...prev,
         {
           id: data.id,
+          user_id: data.user_id ?? null,
           author_name: name,
           author_avatar: data.author_avatar || name.slice(0, 2).toUpperCase(),
           content: data.content,
@@ -352,7 +386,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
         },
       ]
     })
-  }, [currentUserName])
+  }, [authorLabel])
 
   const handleTyping = useCallback(({ user_id }: { user_id: string }) => {
     setTypingUsers((prev) => new Set(prev).add(user_id))
@@ -506,15 +540,38 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     }
   }, [])
 
+  // Real member count for the selected channel (from the channel's own member list).
+  const [channelMemberCount, setChannelMemberCount] = useState<number | null>(null)
+  useEffect(() => {
+    setChannelMemberCount(null)
+    if (!isUuid(activeChannelId)) return
+    let cancelled = false
+    fetch(`/api/chat/channels/${activeChannelId}/members`, { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        const list = Array.isArray(b?.data) ? b.data : Array.isArray(b?.items) ? b.items : Array.isArray(b) ? b : null
+        if (!cancelled && list) setChannelMemberCount(list.length)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [activeChannelId])
+
   // ── Per-channel unread counts (message_count − locally-stored last-seen) ──
   const [channelUnread, setChannelUnread] = useState<Record<string, number>>({})
   const channelCounts = useRef<Record<string, number>>({})
 
-  const refreshUnread = useCallback(async () => {
+  const unreadInFlight = useRef(false)
+  // Resolves true on success (or a non-retryable result), false on 5xx/timeout/network failure.
+  const refreshUnread = useCallback(async (): Promise<boolean> => {
+    if (unreadInFlight.current) return true // never overlap requests
+    unreadInFlight.current = true
     try {
-      const r = await fetch("/api/chat/channels/summary")
-      const b = await r.json()
-      if (!Array.isArray(b.data)) return
+      const r = await fetch("/api/chat/channels/summary", { signal: AbortSignal.timeout(15_000) })
+      if (r.status >= 500) return false
+      const b = await r.json().catch(() => null)
+      if (!b || !Array.isArray(b.data)) return r.ok
       let seen: Record<string, number> = {}
       try {
         seen = JSON.parse(localStorage.getItem("comm:lastSeen") || "{}")
@@ -531,15 +588,50 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
       }
       channelCounts.current = counts
       setChannelUnread(unread)
+      return true
     } catch {
-      /* ignore */
+      return false
+    } finally {
+      unreadInFlight.current = false
     }
   }, [])
 
+  // Poll >= 30s, only while the tab is visible, back off (x2, max 5 min) after failures, stop on unmount.
   useEffect(() => {
-    void refreshUnread()
-    const t = setInterval(() => void refreshUnread(), 30_000)
-    return () => clearInterval(t)
+    let stopped = false
+    let delay = 30_000
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const schedule = () => {
+      if (stopped) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        if (stopped) return
+        if (document.visibilityState === "visible") {
+          const ok = await refreshUnread()
+          delay = nextPollDelay(delay, ok)
+        }
+        schedule()
+      }, delay)
+    }
+    let lastRun = 0
+    const run = () => {
+      lastRun = Date.now()
+      void refreshUnread().then((ok) => {
+        delay = nextPollDelay(delay, ok)
+        schedule()
+      })
+    }
+    const onVisible = () => {
+      // refresh on returning to the tab, but never more often than every 30s
+      if (document.visibilityState === "visible" && !stopped && Date.now() - lastRun >= 30_000) run()
+    }
+    run()
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener("visibilitychange", onVisible)
+    }
   }, [refreshUnread])
 
   // Opening a channel marks it read: store its current count as last-seen.
@@ -1908,19 +2000,23 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
               <div className="flex items-center gap-2">
                 <Hash className="h-5 w-5 text-muted-foreground" />
                 <h2 className="font-semibold text-foreground">{selectedChannel || "No channel selected"}</h2>
-                {/* Real-time connection indicator */}
-                <span
-                  title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
-                  className={cn(
-                    "inline-block h-2 w-2 rounded-full transition-colors",
-                    wsConnected ? "bg-emerald-500 shadow-[0_0_6px_#22c55e]" : "bg-amber-400 animate-pulse",
-                  )}
-                />
+                {/* Real-time connection indicator: only with a selected channel */}
+                {activeChannelId && (
+                  <span
+                    title={wsConnected ? "Live — real-time updates on" : "Connecting…"}
+                    className={cn(
+                      "inline-block h-2 w-2 rounded-full transition-colors",
+                      wsConnected ? "bg-emerald-500 shadow-[0_0_6px_#22c55e]" : "bg-amber-400 animate-pulse",
+                    )}
+                  />
+                )}
               </div>
-              <Badge variant="outline" className="text-xs">
-                <Users className="h-3 w-3 mr-1" />
-                {teamUsers.length + AGENT_ITEMS.length} members
-              </Badge>
+              {activeChannelId && channelMemberCount !== null && (
+                <Badge variant="outline" className="text-xs">
+                  <Users className="h-3 w-3 mr-1" />
+                  {channelMemberCount} {channelMemberCount === 1 ? "member" : "members"}
+                </Badge>
+              )}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <Button
@@ -1990,13 +2086,13 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                     >
                       <Avatar className="h-9 w-9 flex-shrink-0">
                         <AvatarFallback className="bg-primary/20 text-primary text-sm">
-                          {msg.author_avatar ?? formatInitials(msg.author_name)}
+                          {msg.author_avatar ?? formatInitials(authorLabel(msg.user_id, msg.author_name))}
                         </AvatarFallback>
                       </Avatar>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-foreground text-sm">
-                            {msg.author_name ?? "Unknown"}
+                            {authorLabel(msg.user_id, msg.author_name)}
                           </span>
                           <span className="text-xs text-muted-foreground">{formatTime(msg.created_at)}</span>
                           {msg.isPinned && <Pin className="h-3 w-3 text-yellow-500" />}

@@ -1,5 +1,6 @@
 "use client"
 
+import { corpTargetText } from "@/lib/comm-helpers"
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import type { JSX } from "react"
 import { ModuleLayout } from "./module-layout"
@@ -749,7 +750,7 @@ export function SalesModule() {
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Current Sales: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.budget)}</b> • Contributes to 60% of Exec / 20–40% of Staff Annual KPI Review
+                Current Sales: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : (corpTargetText(corpSales, fmtCorpZar) ?? "No target set")}</b> • Contributes to 60% of Exec / 20–40% of Staff Annual KPI Review
               </p>
             </div>
           </div>

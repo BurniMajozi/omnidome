@@ -7,7 +7,8 @@
  *
  * Features:
  *   - Auto-connect when channelId + token are provided
- *   - Auto-reconnect with exponential back-off (max 30 s)
+ *   - Auto-reconnect with exponential back-off + jitter (1 s -> 30 s cap); gives up after an
+ *     auth-style close (1008/4401/4403) or more than 5 consecutive failed attempts
  *   - Ping/pong keepalive (server pings every 25 s)
  *   - Emits strongly typed events: message, typing, presence, ping
  *   - sendTyping() helper for typing indicators
@@ -22,6 +23,7 @@
  */
 
 import { useEffect, useRef, useCallback, useState } from "react"
+import { reconnectDelay, shouldStopReconnect } from "@/lib/comm-helpers"
 
 // Same-origin only: /svc/communication is rewritten to the communication service
 // and gated by proxy.ts (which accepts the token query param for the WS upgrade).
@@ -31,8 +33,6 @@ function commWsBase(): string {
   return `${proto}//${window.location.host}/svc/communication`
 }
 
-const MAX_BACKOFF_MS = 30_000
-const BASE_BACKOFF_MS = 1_000
 
 // ── Event shapes (mirror realtime.py) ────────────────────────────────────
 
@@ -87,6 +87,7 @@ export function useChannelSocket(
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const attemptRef = useRef(0)
+  const openedRef = useRef(false)
   const mountedRef = useRef(true)
   const callbacksRef = useRef(callbacks)
 
@@ -106,6 +107,7 @@ export function useChannelSocket(
 
     ws.onopen = () => {
       attemptRef.current = 0
+      openedRef.current = true
       if (mountedRef.current) setConnected(true)
     }
 
@@ -136,12 +138,18 @@ export function useChannelSocket(
       }
     }
 
-    ws.onclose = () => {
+    ws.onclose = (evt) => {
       if (mountedRef.current) setConnected(false)
       if (!mountedRef.current) return
 
-      // Exponential back-off reconnect
-      const delay = Math.min(BASE_BACKOFF_MS * 2 ** attemptRef.current, MAX_BACKOFF_MS)
+      // A socket that never opened is a failed attempt (e.g. 403 on the upgrade).
+      const wasOpen = openedRef.current
+      openedRef.current = false
+      if (wasOpen) attemptRef.current = 0
+      if (shouldStopReconnect(evt.code, wasOpen ? 0 : attemptRef.current + 1)) return // auth failure / too many failures: stop
+
+      // Exponential back-off (1s -> 30s cap) with jitter
+      const delay = reconnectDelay(attemptRef.current)
       attemptRef.current += 1
       reconnectTimer.current = setTimeout(connect, delay)
     }
@@ -155,6 +163,7 @@ export function useChannelSocket(
   useEffect(() => {
     mountedRef.current = true
     attemptRef.current = 0
+    openedRef.current = false
 
     // Close any existing connection before opening a new one
     if (wsRef.current) {

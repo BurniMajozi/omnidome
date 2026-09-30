@@ -23,6 +23,7 @@ import {
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { getCorporateSalesSnapshot, type CorporateSalesSnapshot } from "@/lib/hr-api"
+import { corpTargetText } from "@/lib/comm-helpers"
 import { NotConnected } from "@/components/ui/not-connected"
 import type { Loadable } from "@/lib/service-state"
 import {
@@ -160,12 +161,12 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
                 {corpSalesLoading
                   ? "Loading..."
                   : corpSales?.achievementPct != null
-                    ? `${corpSales.achievementPct.toFixed(1)}% of ${fmtCorpZar(corpSales.budget)} Target`
+                    ? `${corpSales.achievementPct.toFixed(1)}% of ${corpTargetText(corpSales, fmtCorpZar) ?? "target"}`
                     : "Not connected"}
               </Badge>
             </div>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Actual: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.budget)}</b>
+              Actual: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : (corpTargetText(corpSales, fmtCorpZar) ?? "No target set")}</b>
             </p>
           </div>
         </div>
