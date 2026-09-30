@@ -320,6 +320,12 @@ HARDENING_STATEMENTS = [
     "ALTER TABLE marketing_email_batches ADD COLUMN IF NOT EXISTS total_failed INT DEFAULT 0",
     "ALTER TABLE marketing_email_batches ADD COLUMN IF NOT EXISTS total_suppressed INT DEFAULT 0",
     "ALTER TABLE marketing_email_batches ALTER COLUMN campaign_id DROP NOT NULL",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_queued SET DEFAULT 0",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_sent SET DEFAULT 0",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_delivered SET DEFAULT 0",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_bounced SET DEFAULT 0",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_opened SET DEFAULT 0",
+    "ALTER TABLE marketing_email_batches ALTER COLUMN total_clicked SET DEFAULT 0",
     "ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ",
     "ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ",
 ]

@@ -1425,7 +1425,7 @@ async def email_webhook(request: Request):
 # ─────────────────── Unsubscribe + suppression management ───────────────────
 
 
-def _unsub_page(title: str, body: str, form_token: Optional[str] = None) -> Response:
+def _unsub_page(title: str, body: str, form_token: Optional[str] = None, status_code: int = 200) -> Response:
     import html as _html
     form = ""
     if form_token:
@@ -1434,19 +1434,19 @@ def _unsub_page(title: str, body: str, form_token: Optional[str] = None) -> Resp
     page = (f"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width'>"
             f"<title>{_html.escape(title)}</title></head><body style='font-family:sans-serif;max-width:480px;"
             f"margin:10vh auto;padding:0 16px'><h2>{_html.escape(title)}</h2><p>{_html.escape(body)}</p>{form}</body></html>")
-    return Response(content=page, media_type="text/html")
+    return Response(content=page, media_type="text/html", status_code=status_code)
 
 
 def _token_or_error(t: Optional[str]):
     """(tenant_id, email) or an error Response."""
     if not t:
-        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid.")
+        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid.", status_code=400)
     try:
         return sec.verify_unsubscribe_token(t), None
     except sec.UnsubscribeNotConfigured:
-        return None, _unsub_page("Unavailable", "Unsubscribe is temporarily unavailable.")
+        return None, _unsub_page("Unavailable", "Unsubscribe is temporarily unavailable.", status_code=503)
     except sec.BadUnsubscribeToken:
-        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid or has expired.")
+        return None, _unsub_page("Invalid link", "This unsubscribe link is invalid or has expired.", status_code=400)
 
 
 @app.get("/email/unsubscribe")
