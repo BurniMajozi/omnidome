@@ -905,7 +905,13 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
         const result = await response.json()
         const created = Array.isArray(result.data) ? result.data[0] : null
         if (created?.id) {
-          setMessages((prev) => prev.map((m) => (m.id === optimisticId ? { ...created, id: created.id } : m)))
+          // The WebSocket echo can arrive before this response: if the real message is already
+          // in the list, drop the optimistic copy instead of replacing it (avoids a duplicate).
+          setMessages((prev) =>
+            prev.some((m) => m.id === created.id)
+              ? prev.filter((m) => m.id !== optimisticId)
+              : prev.map((m) => (m.id === optimisticId ? { ...created, id: created.id } : m)),
+          )
         }
       }
     } catch (error) {
