@@ -24,7 +24,7 @@ export function verifiedRoles(headers: Headers): string[] {
 /**
  * Roles + permissions to forward to a backend.
  * @param fullPermissions the permission set an admin of this module holds.
- * org_admin gets everything except `platform.*`; platform_admin gets all;
+ * org_admin and owner get everything except `platform.*`; platform_admin gets all;
  * anyone else only the `*.read` permissions.
  */
 export function verifiedRoleHeaders(
@@ -33,7 +33,7 @@ export function verifiedRoleHeaders(
 ): { roles: string; permissions: string } {
   const roles = verifiedRoles(headers)
   const isPlatform = roles.includes("platform_admin")
-  const isAdmin = isPlatform || roles.includes("org_admin")
+  const isAdmin = isPlatform || roles.includes("org_admin") || roles.includes("owner")
   const permissions = fullPermissions.filter((p) =>
     isAdmin ? (p.startsWith("platform.") ? isPlatform : true) : p.endsWith(".read"),
   )
