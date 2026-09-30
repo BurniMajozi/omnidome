@@ -161,6 +161,19 @@ async def send_message(to: list, subject: str, html: str, *, text: Optional[str]
 
 # ── Inbox reads (polling fallback) ─────────────────────────────────────────
 
+async def get_inbox(inbox: str, *, creds: Optional[Creds] = None, timeout: float = 15.0) -> Optional[dict]:
+    """The inbox object if `creds`' account owns it; None when the provider says it does
+    not exist / is not visible to this key (404/403). Raises on anything else (unreachable,
+    5xx, bad key) so callers can fail closed."""
+    c = _resolve(creds)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(f"{base_url()}/inboxes/{quote(inbox, safe='')}", headers=_headers(c))
+    if resp.status_code in (403, 404):
+        return None
+    _check(resp)
+    return _json(resp) or {"inbox_id": inbox}
+
+
 async def list_messages(inbox: str, *, creds: Optional[Creds] = None, limit: int = 50,
                         after: Optional[str] = None, timeout: float = 30.0) -> list[dict]:
     c = _resolve(creds)
@@ -318,6 +331,96 @@ def platform_webhook_secrets() -> list[str]:
     return [s for s in out if s]
 
 
+# ── Cheap pre-checks (run BEFORE any DB / decrypt work on an unauthenticated webhook) ──
+
+MAX_WEBHOOK_BODY_BYTES = 1_048_576  # 1 MB
+
+
+class BodyTooLarge(Exception):
+    pass
+
+
+def webhook_headers_ok(headers: Any, tolerance: int = 300) -> bool:
+    """Svix headers present, well-formed and timestamp fresh. No secrets involved."""
+    msg_id = headers.get("svix-id") or headers.get("webhook-id") or ""
+    ts = headers.get("svix-timestamp") or headers.get("webhook-timestamp") or ""
+    sig = headers.get("svix-signature") or headers.get("webhook-signature") or ""
+    if not (msg_id and ts and sig) or len(msg_id) > 256 or len(sig) > 2048:
+        return False
+    try:
+        return abs(time.time() - int(ts)) <= tolerance
+    except ValueError:
+        return False
+
+
+async def read_body_capped(request: Any, limit: int = MAX_WEBHOOK_BODY_BYTES) -> bytes:
+    """Read the request body, refusing more than `limit` bytes (Content-Length checked first,
+    then the stream is bounded so a lying/absent header cannot force a large buffer)."""
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > limit:
+                raise BodyTooLarge()
+        except ValueError:
+            raise BodyTooLarge()
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise BodyTooLarge()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+# Decrypted per-tenant webhook secrets, cached in-process so unauthenticated traffic does
+# not cause a DB read + decrypt per request. tenant_id -> (expires_at, has_own_creds, secret)
+SECRET_CACHE_TTL = 60.0
+_SECRET_CACHE: dict[str, tuple] = {}
+
+
+def invalidate_secret_cache(tenant_id=None) -> None:
+    if tenant_id is None:
+        _SECRET_CACHE.clear()
+    else:
+        _SECRET_CACHE.pop(str(tenant_id), None)
+
+
+def _cache_get(tenant_id) -> Optional[tuple]:
+    hit = _SECRET_CACHE.get(str(tenant_id))
+    if hit and hit[0] > time.monotonic():
+        return hit
+    return None
+
+
+def _cache_put(tenant_id, has_own: bool, secret: str) -> list[str]:
+    if len(_SECRET_CACHE) > 4096:
+        _SECRET_CACHE.clear()
+    _SECRET_CACHE[str(tenant_id)] = (time.monotonic() + SECRET_CACHE_TTL, has_own, secret)
+    return _owner_secrets(has_own, secret)
+
+
+def _owner_secrets(has_own: bool, secret: str) -> list[str]:
+    """Secrets that may sign for a tenant's mailbox: its own webhook secret, plus the
+    platform secret only when the tenant has no AgentMail account of its own (its mailboxes
+    live in the platform account). A tenant with its own account never accepts the platform
+    secret and no tenant's secret is ever accepted for another tenant."""
+    out = [secret] if secret else []
+    if not has_own:
+        out += platform_webhook_secrets()
+    return out
+
+
+def _row_secret(row) -> tuple[bool, str]:
+    if not row or not row["api_key_enc"]:
+        return False, ""
+    try:
+        return True, decrypt_secret(row["webhook_secret_enc"] or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Cannot decrypt AgentMail webhook secret for tenant %s: %s", row["tenant_id"], exc)
+        return True, ""
+
+
 # ── Per-tenant encrypted storage ───────────────────────────────────────────
 
 def _fernet():
@@ -392,6 +495,16 @@ def ensure_config_table_sync(conn) -> None:
     conn.execute(text(CONFIG_DDL))
 
 
+def owner_webhook_secrets_sync(conn, tenant_id) -> list[str]:
+    hit = _cache_get(tenant_id)
+    if hit:
+        return _owner_secrets(hit[1], hit[2])
+    ensure_config_table_sync(conn)
+    row = conn.execute(text(_SELECT + " WHERE tenant_id = CAST(:tid AS uuid)"),
+                       {"tid": str(tenant_id)}).mappings().first()
+    return _cache_put(tenant_id, *_row_secret(row))
+
+
 def load_creds_sync(conn, tenant_id) -> Optional[Creds]:
     ensure_config_table_sync(conn)
     row = conn.execute(text(_SELECT + " WHERE tenant_id = CAST(:tid AS uuid)"),
@@ -403,6 +516,7 @@ def save_creds_sync(conn, tenant_id, *, api_key=None, inbox=None, webhook_secret
     params = _save_params(tenant_id, api_key, inbox, webhook_secret, webhook_id)  # raises before any write
     ensure_config_table_sync(conn)
     conn.execute(text(_UPSERT), params)
+    invalidate_secret_cache(tenant_id)
 
 
 # async (communication): `session` is an AsyncSession
@@ -415,6 +529,17 @@ async def load_creds(session, tenant_id) -> Optional[Creds]:
     row = (await session.execute(text(_SELECT + " WHERE tenant_id = CAST(:tid AS uuid)"),
                                  {"tid": str(tenant_id)})).mappings().first()
     return _row_to_creds(row)
+
+
+async def owner_webhook_secrets(session, tenant_id) -> list[str]:
+    """Webhook secrets acceptable for `tenant_id`'s mail (see _owner_secrets); cached 60s."""
+    hit = _cache_get(tenant_id)
+    if hit:
+        return _owner_secrets(hit[1], hit[2])
+    await ensure_config_table(session)
+    row = (await session.execute(text(_SELECT + " WHERE tenant_id = CAST(:tid AS uuid)"),
+                                 {"tid": str(tenant_id)})).mappings().first()
+    return _cache_put(tenant_id, *_row_secret(row))
 
 
 async def load_all_creds(session) -> list[tuple[uuid.UUID, Creds]]:
@@ -432,3 +557,4 @@ async def save_creds(session, tenant_id, *, api_key=None, inbox=None, webhook_se
     params = _save_params(tenant_id, api_key, inbox, webhook_secret, webhook_id)
     await ensure_config_table(session)
     await session.execute(text(_UPSERT), params)
+    invalidate_secret_cache(tenant_id)

@@ -324,6 +324,9 @@ class AgentMailbox(Base):
     __table_args__ = (
         Index("ix_agent_mailboxes_tenant_email", "tenant_id", "email_address", unique=True),
         Index("ix_agent_mailboxes_tenant_agent", "tenant_id", "agent_type"),
+        # An address belongs to exactly one tenant, globally (webhook routing depends on it).
+        # Existing databases get this from database._ensure_mailbox_email_unique.
+        Index("uq_agent_mailboxes_email_address", "email_address", unique=True),
     )
 
 

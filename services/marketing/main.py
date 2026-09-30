@@ -1262,24 +1262,13 @@ async def email_webhook(request: Request):
 
     Batches are matched by the provider message_id stored on the 'sent' event.
     """
-    raw_body = await request.body()
-    secrets = agentmail_client.platform_webhook_secrets()
-    try:
-        with get_engine().begin() as conn:
-            agentmail_client.ensure_config_table_sync(conn)
-            for r in conn.execute(text(
-                    "SELECT tenant_id, api_key_enc, inbox, webhook_secret_enc FROM agentmail_config "
-                    "WHERE webhook_secret_enc IS NOT NULL")).mappings():
-                c = agentmail_client._row_to_creds(r)
-                if c and c.webhook_secret:
-                    secrets.append(c.webhook_secret)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("tenant webhook secrets unavailable: %s", exc)
-    if not secrets:
-        logger.error("No AgentMail webhook secret configured - rejecting email webhook")
-        raise HTTPException(status_code=503, detail="Webhook secret not configured")
-    if not agentmail_client.verify_svix(raw_body, request.headers, secrets):
+    # Cheap pre-checks first: no DB / decryption for unsigned, stale or oversized requests.
+    if not agentmail_client.webhook_headers_ok(request.headers):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    try:
+        raw_body = await agentmail_client.read_body_capped(request)
+    except agentmail_client.BodyTooLarge:
+        raise HTTPException(status_code=413, detail="Webhook body too large")
     try:
         event = json.loads(raw_body)
     except ValueError:
@@ -1309,6 +1298,15 @@ async def email_webhook(request: Request):
         ).mappings().first()
         if not hit:
             return {"status": "ignored", "reason": "unknown message"}
+        # Verify against ONLY the tenant that owns the batch (plus the platform secret if that
+        # tenant has no AgentMail account of its own); never another tenant's secret.
+        try:
+            secrets = agentmail_client.owner_webhook_secrets_sync(conn, hit["tenant_id"])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("tenant webhook secrets unavailable: %s", exc)
+            secrets = []
+        if not secrets or not agentmail_client.verify_svix(raw_body, request.headers, secrets):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
         conn.execute(
             text("""
                 INSERT INTO marketing_email_events (tenant_id, batch_id, recipient_email, event_type, event_data)

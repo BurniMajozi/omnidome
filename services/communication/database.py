@@ -16,6 +16,7 @@ async def init_tables() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _repoint_schedule_task_fk(conn)
+        await _ensure_mailbox_email_unique(conn)
 
 
 async def _repoint_schedule_task_fk(conn) -> None:
@@ -40,6 +41,37 @@ async def _repoint_schedule_task_fk(conn) -> None:
                 ))
     except Exception as exc:  # never block startup
         log.warning("Could not repoint schedule_events.linked_task_id FK: %s", exc)
+
+
+MAILBOX_UNIQUE_INDEX = "uq_agent_mailboxes_email_address"
+_MAILBOX_LOCK_KEY = 74_210_003  # pg_advisory_xact_lock key: serialises concurrent replicas' startups
+
+
+async def _ensure_mailbox_email_unique(conn) -> None:
+    """Idempotent: globally unique agent_mailboxes.email_address (a mailbox address must map to
+    exactly one tenant or inbound mail routing is ambiguous/hijackable). If duplicate rows already
+    exist the index is NOT created (a warning names the addresses); startup never fails."""
+    import logging
+    from sqlalchemy import text
+
+    log = logging.getLogger("communication.database")
+    try:
+        async with conn.begin_nested():
+            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _MAILBOX_LOCK_KEY})
+            dupes = (await conn.execute(text(
+                "SELECT email_address, count(*) FROM agent_mailboxes "
+                "GROUP BY email_address HAVING count(*) > 1 LIMIT 20"
+            ))).all()
+            if dupes:
+                log.warning(
+                    "agent_mailboxes has duplicate email_address rows (%s); NOT creating unique index %s. "
+                    "Resolve the duplicates (mail for these addresses is dropped as ambiguous) and restart.",
+                    ", ".join(f"{r[0]} x{r[1]}" for r in dupes), MAILBOX_UNIQUE_INDEX)
+                return
+            await conn.execute(text(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {MAILBOX_UNIQUE_INDEX} ON agent_mailboxes (email_address)"))
+    except Exception as exc:  # never block startup
+        log.warning("Could not ensure unique index on agent_mailboxes.email_address: %s", exc)
 
 
 # Re-export for route convenience

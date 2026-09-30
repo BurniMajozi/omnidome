@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 
 import pytest
@@ -45,6 +46,10 @@ def received(**message) -> bytes:
     return json.dumps({"event_type": "message.received", "message": msg}).encode()
 
 
+TENANT_A = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+TENANT_B = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+
+
 class Calls:
     def __init__(self):
         self.ingested, self.delivery = [], []
@@ -52,24 +57,35 @@ class Calls:
 
 @pytest.fixture
 def api(monkeypatch):
+    """Mailbox support@... is owned by TENANT_B (secret SECRET). Nothing is owned by TENANT_A
+    except OTHER_SECRET, which must never be usable for B's mail."""
     calls = Calls()
 
     @asynccontextmanager
     async def no_db(*_a, **_k):
         yield None
 
-    async def secrets(_session):
-        return [SECRET]
+    async def owner_secrets(_session, tenant_id):
+        return {TENANT_B: [SECRET], TENANT_A: [OTHER_SECRET]}.get(tenant_id, [])
 
-    async def ingest(payload):
-        calls.ingested.append(payload)
-        return type("Row", (), {"id": "email-1"})() if "nobody" not in payload.recipient else None
+    async def received_owner(recipient):
+        return [TENANT_B] if recipient == "support@omnidome.agentmail.to" else []
 
-    async def delivery(event_type, msg, detail):
-        calls.delivery.append(event_type)
+    async def delivery_owner(mid):
+        return [TENANT_B] if mid == "<x>" else []
+
+    async def ingest(tenant_id, payload):
+        calls.ingested.append((tenant_id, payload))
+        return type("Row", (), {"id": "email-1"})()
+
+    async def delivery(tenant_id, event_type, msg, detail):
+        calls.delivery.append((tenant_id, event_type))
 
     monkeypatch.setattr(mail, "get_session", no_db)
-    monkeypatch.setattr(mail, "_webhook_secrets", secrets)
+    monkeypatch.setattr(mail.agentmail_client, "owner_webhook_secrets", owner_secrets)
+    monkeypatch.setattr(mail.agentmail_client, "platform_webhook_secrets", lambda: [])
+    monkeypatch.setattr(mail, "_received_owner_tenants", received_owner)
+    monkeypatch.setattr(mail, "_delivery_owner_tenants", delivery_owner)
     monkeypatch.setattr(mail, "_ingest_for_recipient", ingest)
     monkeypatch.setattr(mail, "_apply_delivery_event", delivery)
     app = FastAPI()
@@ -86,7 +102,8 @@ def test_signed_inbound_mail_is_accepted_and_normalised(api):
     body = received()
     r = post(client, body, sign(body))
     assert r.status_code == 200 and r.json() == {"status": "accepted", "email_id": "email-1"}
-    p = calls.ingested[0]
+    tenant_id, p = calls.ingested[0]
+    assert tenant_id == TENANT_B
     assert p.sender == "Thandi Mokoena <thandi@example.com>"
     assert p.recipient == "support@omnidome.agentmail.to"
     assert p.subject == "Router blinking red" and "blinking red" in p.body_text
@@ -123,30 +140,33 @@ def test_body_changed_after_signing_is_rejected(api):
     assert r.status_code == 401 and calls.ingested == []
 
 
-def test_no_configured_secret_refuses_everything(api, monkeypatch):
+def test_owner_without_any_secret_refuses_everything(api, monkeypatch):
     client, calls = api
 
-    async def none(_session):
+    async def none(_session, _tid):
         return []
-    monkeypatch.setattr(mail, "_webhook_secrets", none)
+    monkeypatch.setattr(mail.agentmail_client, "owner_webhook_secrets", none)
     body = received()
-    assert post(client, body, sign(body)).status_code == 503 and calls.ingested == []
+    assert post(client, body, sign(body)).status_code == 401 and calls.ingested == []
 
 
 def test_delivery_events_are_applied_and_other_events_ignored(api):
     client, calls = api
     bounced = json.dumps({"event_type": "message.bounced", "message": {"message_id": "<x>"}}).encode()
     assert post(client, bounced, sign(bounced)).json()["status"] == "accepted"
-    assert calls.delivery == ["message.bounced"]
+    assert calls.delivery == [(TENANT_B, "message.bounced")]
     other = json.dumps({"event_type": "domain.verified", "message": {}}).encode()
     assert post(client, other, sign(other)).json() == {"status": "ignored", "event": "domain.verified"}
     assert calls.ingested == []
 
 
-def test_mail_for_an_unknown_mailbox_is_404(api):
-    client, _ = api
+def test_mail_for_an_unknown_mailbox_needs_the_platform_secret_then_is_404(api, monkeypatch):
+    client, calls = api
     body = received(to=["nobody@omnidome.agentmail.to"], inbox_id="nobody@omnidome.agentmail.to")
-    assert post(client, body, sign(body)).status_code == 404
+    # no owner: a tenant's secret is not enough (401), only the platform secret gets to the 404
+    assert post(client, body, sign(body, secret=OTHER_SECRET)).status_code == 401
+    monkeypatch.setattr(mail.agentmail_client, "platform_webhook_secrets", lambda: [SECRET])
+    assert post(client, body, sign(body)).status_code == 404 and calls.ingested == []
 
 
 def test_signed_but_malformed_payloads_are_400(api):
