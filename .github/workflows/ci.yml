@@ -45,13 +45,22 @@ jobs:
           pip install flake8
           flake8 services/ scripts/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
 
-  # ── Orchestrator unit tests ──────────────────────────────────────────
-  # The agent loop, memory, approvals and safe-SQL guards live here; none of
-  # it was run in CI before, so regressions (a tool pointing at a route that
-  # does not exist, an unlisted agent) only showed up live. No DB needed.
-  orchestrator-tests:
-    name: Orchestrator Tests
+  # ── Service unit tests ───────────────────────────────────────────────
+  # Service suites that need no database. Before this, CI only ran syntax,
+  # YAML and Dockerfile checks, so regressions (a tool pointing at a route
+  # that does not exist, an unlisted agent) only showed up live.
+  #   agent_orchestrator: agent loop, memory, approvals, safe-SQL guards, CLI
+  #   sales:              lead stages/actions/funnel, schema SQL
+  #   communication:      AgentMail webhook signatures, secrets, mail helpers
+  service-tests:
+    name: Tests (${{ matrix.service }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [agent_orchestrator, sales, communication]
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,14 +71,15 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        # requirements.txt's "-r ../../common/..." only resolves inside the Docker image.
+        # The services' "-r ../common/..." lines only resolve inside the Docker
+        # image, so install common explicitly and drop them (after any BOM).
         run: |
           pip install -r services/common/requirements.txt
-          grep -v '^-r' services/agent_orchestrator/requirements.txt > /tmp/orchestrator-reqs.txt
-          pip install -r /tmp/orchestrator-reqs.txt pytest
+          sed '1s/^\xEF\xBB\xBF//' services/${{ matrix.service }}/requirements.txt | grep -v '^-r' > /tmp/service-reqs.txt
+          pip install -r /tmp/service-reqs.txt pytest
 
       - name: Run tests
-        working-directory: services/agent_orchestrator
+        working-directory: services/${{ matrix.service }}
         run: python -m pytest tests -q
 
   # ── Docker Build Verification ────────────────────────────────────────
