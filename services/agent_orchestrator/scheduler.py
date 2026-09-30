@@ -43,14 +43,23 @@ async def _tick_housekeeping(now: datetime) -> None:
         got = (await s.execute(text("SELECT pg_try_advisory_xact_lock(:k)"), {"k": HOUSEKEEPING_LOCK_KEY})).scalar()
         if not got:
             return
+        from services.agent_orchestrator import memory_housekeeping
+        # The scheduler can tick before startup's background schema step has
+        # run; the tables are idempotent, and the lock serialises the DDL.
+        await memory_housekeeping.ensure_schema(s)
+        # The night is claimed in Postgres, so another worker (or this one after
+        # a restart) that gets the lock later tonight finds it taken.
+        if not await memory_housekeeping.claim_nightly(s, now.date()):
+            _last_housekeeping_date = now.date()
+            return
         _last_housekeeping_date = now.date()
         logger.info("Starting nightly memory housekeeping")
         try:
-            from services.agent_orchestrator.memory_housekeeping import run_tenant_housekeeping
             res = await s.execute(text("SELECT DISTINCT tenant_id FROM tenant_memory_entries WHERE archived_at IS NULL"))
             tenants = res.scalars().all()
             for t_id in tenants:
-                await run_tenant_housekeeping(s, t_id, dry_run=False, now=now)
+                await memory_housekeeping.run_tenant_housekeeping(s, t_id, dry_run=False, now=now, trigger="nightly")
+            await memory_housekeeping.finish_nightly(s, now.date())
             logger.info("Nightly memory housekeeping completed for %d tenants", len(tenants))
         except Exception as exc:  # noqa: BLE001
             logger.exception("Nightly memory housekeeping failed: %s", exc)

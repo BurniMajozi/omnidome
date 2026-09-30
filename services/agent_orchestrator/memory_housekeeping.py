@@ -12,6 +12,7 @@ Rules:
 
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 import logging
@@ -34,8 +35,70 @@ SUMMARY_PROMPT = (
     "concise, and objective without conversational commentary."
 )
 
-# In-memory tracking of last runs: tenant_id -> Dict[str, Any]
-_last_housekeeping_runs: Dict[str, Dict[str, Any]] = {}
+# Run history in Postgres, not process memory: the orchestrator runs several
+# uvicorn workers, so an in-process "already ran tonight" marker let each
+# worker run the nightly job, and the Agent Manager's "last run" depended on
+# which worker answered (and vanished on restart).
+#   tenant_id NULL + trigger 'nightly' = the night's claim (unique per date)
+#   tenant_id set                       = one tenant's report (nightly or manual)
+SCHEMA_SQL = [
+    """
+    CREATE TABLE IF NOT EXISTS memory_housekeeping_runs (
+        id UUID PRIMARY KEY,
+        tenant_id UUID,
+        trigger VARCHAR(20) NOT NULL,
+        run_date DATE NOT NULL,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        finished_at TIMESTAMPTZ,
+        report JSONB
+    )
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_memory_housekeeping_nightly
+        ON memory_housekeeping_runs (run_date) WHERE tenant_id IS NULL AND trigger = 'nightly'
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_memory_housekeeping_tenant ON memory_housekeeping_runs (tenant_id, finished_at DESC)",
+]
+
+
+async def ensure_schema(session: Any) -> None:
+    for statement in SCHEMA_SQL:
+        await session.execute(text(statement))
+
+
+async def claim_nightly(session: Any, run_date: Any) -> bool:
+    """True for exactly one caller per date (any worker, any restart)."""
+    row = (await session.execute(
+        text("""
+            INSERT INTO memory_housekeeping_runs (id, tenant_id, trigger, run_date)
+            VALUES (:id, NULL, 'nightly', :run_date)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+        """),
+        {"id": str(uuid.uuid4()), "run_date": run_date},
+    )).first()
+    return row is not None
+
+
+async def finish_nightly(session: Any, run_date: Any) -> None:
+    await session.execute(
+        text("""
+            UPDATE memory_housekeeping_runs SET finished_at = now()
+             WHERE tenant_id IS NULL AND trigger = 'nightly' AND run_date = :run_date
+        """),
+        {"run_date": run_date},
+    )
+
+
+async def _record_run(session: Any, tenant_id: str, trigger: str, now: datetime, report: Dict[str, Any]) -> None:
+    await session.execute(
+        text("""
+            INSERT INTO memory_housekeeping_runs (id, tenant_id, trigger, run_date, started_at, finished_at, report)
+            VALUES (:id, :tenant_id, :trigger, :run_date, :now, now(), CAST(:report AS jsonb))
+        """),
+        {"id": str(uuid.uuid4()), "tenant_id": tenant_id, "trigger": trigger, "run_date": now.date(),
+         "now": now, "report": json.dumps(report, default=str)},
+    )
 
 
 def find_duplicates(entries: List[Dict[str, Any]]) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -233,8 +296,10 @@ async def run_tenant_housekeeping(
     dry_run: bool = False,
     summariser: Optional[Summariser] = None,
     now: Optional[datetime] = None,
+    trigger: str = "manual",
 ) -> Dict[str, Any]:
-    """Run housekeeping for a tenant against the PostgreSQL database."""
+    """Run housekeeping for a tenant against the PostgreSQL database. A real
+    run (not dry_run) is recorded in memory_housekeeping_runs as `trigger`."""
     current_time = now or datetime.now(timezone.utc)
     t_id_str = str(tenant_id)
 
@@ -351,11 +416,22 @@ async def run_tenant_housekeeping(
                     {"now": current_time, "ids": entry_uuids, "tenant_id": t_id_str},
                 )
 
+        await _record_run(session, t_id_str, trigger, current_time, result)
         await session.flush()
-        _last_housekeeping_runs[t_id_str] = result
 
     return result
 
 
-def get_last_run(tenant_id: str) -> Optional[Dict[str, Any]]:
-    return _last_housekeeping_runs.get(str(tenant_id))
+async def get_last_run(session: Any, tenant_id: str) -> Optional[Dict[str, Any]]:
+    """The tenant's most recent real run (nightly or manual), from any worker."""
+    row = (await session.execute(
+        text("""
+            SELECT trigger, finished_at, report FROM memory_housekeeping_runs
+             WHERE tenant_id = :t ORDER BY finished_at DESC NULLS LAST LIMIT 1
+        """),
+        {"t": str(tenant_id)},
+    )).mappings().first()
+    if not row:
+        return None
+    return {**(row["report"] or {}), "trigger": row["trigger"],
+            "finished_at": row["finished_at"].isoformat() if row["finished_at"] else None}

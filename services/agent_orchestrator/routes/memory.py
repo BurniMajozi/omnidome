@@ -82,9 +82,10 @@ async def housekeeping_run(
 @router.get("/housekeeping/status")
 async def housekeeping_status(
     ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
 ):
     """Return the last housekeeping execution report and retention settings."""
-    last = get_last_run(str(ctx.tenant_id))
+    last = await get_last_run(session, str(ctx.tenant_id))
     return {
         "tenant_id": str(ctx.tenant_id),
         "config": {

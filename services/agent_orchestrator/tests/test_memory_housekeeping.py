@@ -142,3 +142,73 @@ def test_run_housekeeping_live_generates_summaries_for_groups():
     assert sales_call[0] == "Old sales summary"
     assert support_call[0] == ""
     assert len(result["new_summaries"]) == 2
+
+
+# ── Nightly run happens once, whichever worker gets there ───────────────────
+
+class _Result:
+    def __init__(self, scalar=None, first=None, rows=()):
+        self._scalar, self._first, self._rows = scalar, first, list(rows)
+
+    def scalar(self):
+        return self._scalar
+
+    def first(self):
+        return self._first
+
+    def scalars(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _SharedDb:
+    """What both uvicorn workers see: the nightly claim is a unique row per date."""
+    def __init__(self):
+        self.claimed_dates = set()
+
+
+class _Session:
+    def __init__(self, db):
+        self.db = db
+
+    async def execute(self, stmt, params=None):
+        sql = str(stmt)
+        if "pg_try_advisory_xact_lock" in sql:
+            return _Result(scalar=True)
+        if "INSERT INTO memory_housekeeping_runs" in sql:
+            if params["run_date"] in self.db.claimed_dates:
+                return _Result(first=None)                  # ON CONFLICT DO NOTHING
+            self.db.claimed_dates.add(params["run_date"])
+            return _Result(first=("claim-id",))
+        if "SELECT DISTINCT tenant_id" in sql:
+            return _Result(rows=["00000000-0000-0000-0000-000000000001"])
+        return _Result()
+
+
+def test_nightly_housekeeping_runs_once_across_workers_and_restarts(monkeypatch):
+    from contextlib import asynccontextmanager
+    from services.agent_orchestrator import scheduler
+
+    db, runs = _SharedDb(), []
+
+    @asynccontextmanager
+    async def session_scope():
+        yield _Session(db)
+
+    async def fake_run(session, tenant_id, dry_run=False, now=None, trigger="manual", **_):
+        runs.append((str(tenant_id), trigger, now.date()))
+        return {}
+
+    monkeypatch.setattr(scheduler, "session_scope", session_scope)
+    monkeypatch.setattr(mh, "run_tenant_housekeeping", fake_run)
+    night = datetime(2026, 9, 30, 2, 5, tzinfo=timezone.utc)
+    for _worker in range(3):                               # worker A, worker B, a restarted worker
+        monkeypatch.setattr(scheduler, "_last_housekeeping_date", None)
+        asyncio.run(scheduler._tick_housekeeping(night))
+    assert runs == [("00000000-0000-0000-0000-000000000001", "nightly", night.date())]
+
+    monkeypatch.setattr(scheduler, "_last_housekeeping_date", None)
+    asyncio.run(scheduler._tick_housekeeping(night + timedelta(days=1)))
+    assert len(runs) == 2                                  # the next night runs again

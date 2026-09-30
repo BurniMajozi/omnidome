@@ -129,6 +129,9 @@ async def startup() -> None:
                 # Agent approvals tables (spec A8).
                 from services.agent_orchestrator.approvals import ensure_schema as ensure_approvals_schema
                 await ensure_approvals_schema(s)
+                # Memory housekeeping run history / nightly claim (spec M5).
+                from services.agent_orchestrator.memory_housekeeping import ensure_schema as ensure_housekeeping_schema
+                await ensure_housekeeping_schema(s)
             # Runs workflows whose trigger_event matches incoming bus events.
             from services.agent_orchestrator.event_triggers import consumer as event_consumer
             event_consumer.start()
