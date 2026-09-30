@@ -191,6 +191,9 @@ export async function proxy(request: NextRequest) {
 
   const auth = request.headers.get("authorization")
   let token = auth && /^bearer /i.test(auth) ? auth.slice(7).trim() : ""
+  // Set when the credential came in the query string (WS upgrade): it must be stripped from the
+  // URL forwarded to the backend so it never reaches uvicorn's access log.
+  let stripQueryToken = false
   // Browsers cannot set headers on a WebSocket upgrade: accept the token from the
   // query string, for the communication WS endpoint only.
   if (
@@ -200,6 +203,7 @@ export async function proxy(request: NextRequest) {
     pathname === "/svc/communication/api/v1/ws"
   ) {
     token = request.nextUrl.searchParams.get("token")?.trim() || ""
+    stripQueryToken = true
   }
   if (!token) return json(401, "unauthorized")
 
@@ -223,6 +227,12 @@ export async function proxy(request: NextRequest) {
   // /api/*, /gateway/* and the /svc/<crm|billing|...> route handlers rebuild their own identity
   // headers and re-sign the final values with signedFetch() (lib/internal-identity.ts).
   await signHeaders(headers, method, backendPathForSvc(pathname))
+  if (stripQueryToken) {
+    // The backend authenticates via the signed headers; drop the credential from the forwarded URL.
+    const clean = request.nextUrl.clone()
+    clean.searchParams.delete("token")
+    return NextResponse.rewrite(clean, { request: { headers } })
+  }
   return NextResponse.next({ request: { headers } })
 }
 

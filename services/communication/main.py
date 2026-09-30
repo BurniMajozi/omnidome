@@ -17,6 +17,10 @@ from services.common.middleware import configure_production
 logger = logging.getLogger("communication")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
+# uvicorn's access log prints the full URL; redact ?token= / apikey / Authorization values.
+from services.communication.log_redact import install as _install_log_redaction  # noqa: E402
+_install_log_redaction()
+
 app = FastAPI(
     title="OmniDome Communication Service",
     description="Real-time communication hub — channels, messages, tasks, approvals, escalations",
