@@ -638,12 +638,12 @@ async def get_company_kpis(
         config = CompanyKPIConfig(
             tenant_id=tenant_id,
             fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
-            # Targets are editable defaults; actuals start at zero (sync from /kpis/live-actuals).
-            sales_budget_zar=3500000.0,
+            # Targets and actuals start at zero until the owner sets targets (Talent > Company Shared Setup) and syncs /kpis/live-actuals.
+            sales_budget_zar=0.0,
             sales_actual_zar=0.0,
-            cost_budget_zar=2100000.0,
+            cost_budget_zar=0.0,
             cost_actual_zar=0.0,
-            profit_budget_zar=1400000.0,
+            profit_budget_zar=0.0,
             profit_actual_zar=0.0,
             values_weight_pct=10.0,
             values_description="Ubuntu & Customer Empathy, Operational Excellence & Speed, Staff Wellness (BCEA), POPIA & Ethical Governance",
@@ -958,9 +958,9 @@ async def get_employee_kpi_sheet(
     c_res = await db.execute(cq.order_by(desc(CompanyKPIConfig.updated_at)))
     config = c_res.scalars().first()
     comp_scores = _calculate_company_scores(config) if config else {
-        "sales_budget_zar": 3500000.0, "sales_actual_zar": 0.0, "sales_achievement_pct": 0.0,
-        "cost_budget_zar": 2100000.0, "cost_actual_zar": 0.0, "cost_efficiency_pct": 100.0,
-        "profit_budget_zar": 1400000.0, "profit_actual_zar": 0.0, "profit_achievement_pct": 0.0,
+        "sales_budget_zar": 0.0, "sales_actual_zar": 0.0, "sales_achievement_pct": 0.0,
+        "cost_budget_zar": 0.0, "cost_actual_zar": 0.0, "cost_efficiency_pct": 100.0,
+        "profit_budget_zar": 0.0, "profit_actual_zar": 0.0, "profit_achievement_pct": 0.0,
         "company_shared_score_pct": 0.0, "corporate_attainment_index": 0.0, "values_weight_pct": 10.0,
         "level_weights": DEFAULT_LEVEL_WEIGHTS,
     }
