@@ -267,6 +267,26 @@ def build_agent_prompt(sender: str, subject: str, body_text: str) -> str:
     )
 
 
+def build_inbound_channel_message(tenant_id: uuid.UUID, user_id: Optional[uuid.UUID], mailbox: Any, payload: Any) -> Message:
+    """Channel Message announcing an inbound email. Uses only real Message columns
+    (tenant_id, channel_id, user_id, content); the model has no sender_name/is_agent."""
+    body = payload.body_text or ""
+    snippet = body[:300] + ("..." if len(body) > 300 else "")
+    content = (
+        "\U0001F4E7 **New Inbound Email**\n"
+        f"**From:** {payload.sender}\n"
+        f"**Subject:** {payload.subject}\n\n"
+        f"{snippet}"
+    )
+    return Message(
+        id=uuid.uuid4(),
+        tenant_id=tenant_id,
+        channel_id=mailbox.inbound_channel_id,
+        user_id=user_id or mailbox.id,
+        content=content,
+    )
+
+
 async def _process_inbound(
     tenant_id: uuid.UUID,
     user_id: Optional[uuid.UUID],
@@ -329,23 +349,7 @@ async def _process_inbound(
         await session.refresh(email_record)
 
         if mailbox.inbound_channel_id:
-            msg_content = (
-                f"📧 **New Inbound Email**\n"
-                f"**From:** {payload.sender}\n"
-                f"**Subject:** {payload.subject}\n\n"
-                f"{payload.body_text[:300]}..."
-            )
-            channel_msg = Message(
-                id=uuid.uuid4(),
-                tenant_id=tenant_id,
-                channel_id=mailbox.inbound_channel_id,
-                sender_id=user_id or mailbox.id,
-                sender_name=f"{mailbox.display_name} (Mail)",
-                sender_avatar=None,
-                content=msg_content,
-                is_agent=True,
-                agent_name=mailbox.display_name,
-            )
+            channel_msg = build_inbound_channel_message(tenant_id, user_id, mailbox, payload)
             session.add(channel_msg)
             await session.commit()
 
