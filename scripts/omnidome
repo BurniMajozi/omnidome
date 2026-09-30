@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# omnidome — agent orchestrator CLI (services/agent_orchestrator/cli.py).
+# Usage: scripts/omnidome --help     (put scripts/ on PATH to call it as `omnidome`)
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+for PY in "$REPO/.venv/Scripts/python.exe" "$REPO/.venv/bin/python" python3 python; do
+  command -v "$PY" >/dev/null 2>&1 && break
+done
+PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}" PYTHONIOENCODING=utf-8 exec "$PY" -m services.agent_orchestrator.cli "$@"
