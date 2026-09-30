@@ -49,6 +49,11 @@ def hdr(tenant, user=None, roles="admin"):
     return h
 
 
+def _utc_today():
+    """The service stamps and buckets in UTC; the host's local date differs around midnight."""
+    return datetime.utcnow().date()
+
+
 def sql(query, **params):
     with testdb.sync_engine().begin() as conn:
         return conn.execute(text(query), params).fetchall()
@@ -137,7 +142,7 @@ def test_accept_quote_needs_a_sent_unexpired_quote_and_never_reopens_a_deal(clie
     assert r.status_code == 200 and r.json()["delivery"] == "marked_sent_only"
     with testdb.sync_engine().begin() as conn:
         conn.execute(text("UPDATE quotes SET valid_until = :d WHERE id = :q"),
-                     {"d": date.today() - timedelta(days=1), "q": sent["id"]})
+                     {"d": _utc_today() - timedelta(days=1), "q": sent["id"]})
     assert client.post(f"/quotes/{sent['id']}/accept", json={}, headers=hdr(tenant)).status_code == 409  # expired
 
     deal = new_deal(client, tenant)
@@ -172,7 +177,7 @@ def test_commission_report_returns_counts_per_agent(client, tenant):
     for _ in range(2):
         d = new_deal(client, tenant, agent=agent)
         client.post(f"/deals/{d['id']}/close-won", headers=hdr(tenant))
-    today = date.today().isoformat()
+    today = _utc_today().isoformat()
     r = client.get("/commissions/report", params={"start_date": today, "end_date": today}, headers=hdr(tenant))
     assert r.status_code == 200, r.text
     row = next(x for x in r.json() if x["agent_id"] == str(agent))
@@ -267,7 +272,7 @@ def test_deals_pagination_headers_and_summary(client, tenant):
     assert page.status_code == 200 and isinstance(page.json(), list) and len(page.json()) == 2
     assert page.headers["X-Total-Count"] == "5"
 
-    today = date.today().isoformat()
+    today = _utc_today().isoformat()
     s = client.get("/deals/summary", headers=hdr(tenant)).json()
     assert (s["count"], s["won_count"], s["lost_count"], s["open_count"]) == (5, 3, 1, 1)
     assert s["won_value_zar"] == 300.30 and s["lost_value_zar"] == 50.0 and s["open_value_zar"] == 25.0
@@ -276,7 +281,7 @@ def test_deals_pagination_headers_and_summary(client, tenant):
     won_today = client.get("/deals/summary", params={"status": "WON", "closed_from": today, "closed_to": today},
                            headers=hdr(tenant)).json()
     assert won_today["count"] == 3 and won_today["won_value_zar"] == 300.30  # the end day itself is included
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (_utc_today() - timedelta(days=1)).isoformat()
     assert client.get("/deals/summary", params={"closed_to": yesterday}, headers=hdr(tenant)).json()["count"] == 0
     listed = client.get("/deals", params={"status": "WON", "closed_to": today}, headers=hdr(tenant))
     assert len(listed.json()) == 3 and listed.headers["X-Total-Count"] == "3"

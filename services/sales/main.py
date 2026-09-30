@@ -983,6 +983,14 @@ async def _ensure_contact(
     return contact_id
 
 
+def _utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Naive datetimes here are UTC (deals.closed_at is timestamptz; a value still in memory after a
+    close is naive while one read back is aware): always answer with an aware UTC value."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _deal_to_response(deal: Deal, stage_name: Optional[str], lead: Optional[Lead] = None) -> DealResponse:
     return DealResponse(
         lead_reference=lead_service.format_reference(lead.ref_no) if lead else None,
@@ -992,7 +1000,7 @@ def _deal_to_response(deal: Deal, stage_name: Optional[str], lead: Optional[Lead
         lead_id=deal.lead_id, agent_id=deal.agent_id, stage_id=deal.stage_id,
         stage_name=stage_name, package_id=deal.package_id,
         value_zar=deal.value_zar, status=deal.status, close_date=deal.close_date,
-        closed_at=deal.closed_at, close_reason=deal.close_reason, notes=deal.notes,
+        closed_at=_utc(deal.closed_at), close_reason=deal.close_reason, notes=deal.notes,
         created_at=deal.created_at, updated_at=deal.updated_at,
     )
 
