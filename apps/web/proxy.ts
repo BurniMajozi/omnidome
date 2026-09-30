@@ -17,10 +17,11 @@
  *      x-roles, x-permissions, x-org-id, x-modules, x-internal-key, x-user-email)
  *      and re-injects x-user-id / x-tenant-id from the VERIFIED user.
  *
- * Tenant resolution (lib/api-auth.ts semantics): the admin service's
- * /internal/users/by-email (authoritative backend `users` table) when reachable,
- * otherwise `app_metadata.tenant_id` (set server-side only). `user_metadata` is
- * user-editable and is NEVER trusted. No tenant -> 403.
+ * Tenant + roles resolution (lib/api-auth.ts semantics): the admin service's
+ * /internal/users/by-email (authoritative backend `users` + roles tables, incl. is_active)
+ * when reachable, otherwise `app_metadata` (a cache the admin service writes server-side
+ * only). `user_metadata` is user-editable and is NEVER trusted. No tenant -> 403;
+ * a deactivated user -> 403 account_inactive (checked on every cache miss, TTL 5s).
  *
  * Page routes (/dashboard etc.) are not handled here: the Supabase session lives
  * in localStorage (no cookie), so the server cannot see it; the dashboard page
@@ -68,9 +69,16 @@ interface Identity {
   roles?: string
 }
 
-const CACHE_TTL_MS = 30_000
+interface AdminLookup extends Identity {
+  isActive: boolean
+  // true when the admin DB holds at least one role for this user (else app_metadata roles are used)
+  rolesAuthoritative: boolean
+}
+
+// Short TTL: a role change or deactivation in the admin DB is enforced within ~5s.
+const CACHE_TTL_MS = 5_000
 const CACHE_MAX = 500
-const cache = new Map<string, { identity: Identity | "no-tenant"; expires: number }>()
+const cache = new Map<string, { identity: Identity | "no-tenant" | "inactive"; expires: number }>()
 let adminDownUntil = 0
 
 const supabase =
@@ -84,7 +92,7 @@ function json(status: number, error: string) {
   return NextResponse.json({ error }, { status, headers: { "cache-control": "no-store" } })
 }
 
-async function lookupAdmin(email: string): Promise<{ userId: string; tenantId: string } | null> {
+async function lookupAdmin(email: string): Promise<AdminLookup | null> {
   if (!INTERNAL_SERVICE_KEY || Date.now() < adminDownUntil) return null
   try {
     const res = await fetch(`${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(email)}`, {
@@ -95,7 +103,17 @@ async function lookupAdmin(email: string): Promise<{ userId: string; tenantId: s
     if (!res.ok) return null
     const body = await res.json()
     if (UUID_RE.test(body?.user_id || "") && UUID_RE.test(body?.tenant_id || "")) {
-      return { userId: body.user_id, tenantId: body.tenant_id }
+      const roles: string[] = Array.isArray(body.roles) ? body.roles.filter((r: unknown) => typeof r === "string" && /^[\w.:-]+$/.test(r as string)) : []
+      return {
+        userId: body.user_id,
+        tenantId: body.tenant_id,
+        roles: roles.join(","),
+        isActive: body.is_active !== false,
+        // Only a NON-EMPTY DB role set is authoritative. A user who is in the admin DB but has
+        // zero DB roles (never provisioned/synced, e.g. test@omnidome.local) falls back to
+        // app_metadata.roles below instead of being stripped to org_user.
+        rolesAuthoritative: roles.length > 0,
+      }
     }
     return null
   } catch {
@@ -104,8 +122,8 @@ async function lookupAdmin(email: string): Promise<{ userId: string; tenantId: s
   }
 }
 
-/** Verified identity, "no-tenant" for a valid user without a tenant, or null for an invalid token. */
-async function verify(token: string): Promise<Identity | "no-tenant" | null> {
+/** Verified identity, "no-tenant" (valid user, no tenant), "inactive" (deactivated in the admin DB), or null (invalid token). */
+async function verify(token: string): Promise<Identity | "no-tenant" | "inactive" | null> {
   const hit = cache.get(token)
   if (hit && hit.expires > Date.now()) return hit.identity
   if (!supabase) return null
@@ -114,16 +132,28 @@ async function verify(token: string): Promise<Identity | "no-tenant" | null> {
   if (error || !data.user) return null
   const user = data.user
 
-  let result: Identity | "no-tenant"
+  let result: Identity | "no-tenant" | "inactive"
   const admin = user.email ? await lookupAdmin(user.email) : null
-  if (admin) {
+  if (admin && !admin.isActive) {
+    result = "inactive"
+  } else if (admin) {
     result = { userId: admin.userId, tenantId: admin.tenantId }
+    // roles come from the admin DB; app_metadata only for users the DB has no roles for yet
+    if (admin.rolesAuthoritative) {
+      result.roles = admin.roles
+      // platform_admin is granted out of band (app_metadata, service role only), never through the
+      // tenant role tables, so keep it when the DB is authoritative for the tenant roles.
+      const meta = (user.app_metadata as Record<string, unknown> | undefined)?.roles
+      if (Array.isArray(meta) && meta.includes("platform_admin") && !(admin.roles || "").split(",").includes("platform_admin")) {
+        result.roles = admin.roles ? `${admin.roles},platform_admin` : "platform_admin"
+      }
+    }
   } else {
     // app_metadata is writable only with the service role; user_metadata is not trusted.
     const appTenant = (user.app_metadata as Record<string, unknown> | undefined)?.tenant_id
     result = typeof appTenant === "string" && UUID_RE.test(appTenant) ? { userId: user.id, tenantId: appTenant } : "no-tenant"
   }
-  if (result !== "no-tenant") {
+  if (result !== "no-tenant" && result !== "inactive" && result.roles === undefined) {
     const roles = (user.app_metadata as Record<string, unknown> | undefined)?.roles
     if (Array.isArray(roles) && roles.every((r) => typeof r === "string" && /^[\w.:-]+$/.test(r))) {
       result.roles = roles.join(",")
@@ -163,7 +193,15 @@ export async function proxy(request: NextRequest) {
 
   const identity = await verify(token)
   if (!identity) return json(401, "unauthorized")
-  if (identity === "no-tenant") return json(403, "tenant_unresolved")
+  if (identity === "inactive") return json(403, "account_inactive")
+  if (identity === "no-tenant") {
+    // A freshly signed-in invitee has no tenant yet: let them (and only them) redeem an invite.
+    // The admin service verifies the bearer token itself and matches it to the invite's email.
+    if (method === "POST" && pathname === "/svc/admin/invites/accept") {
+      return NextResponse.next({ request: { headers } })
+    }
+    return json(403, "tenant_unresolved")
+  }
 
   headers.set("x-user-id", identity.userId)
   headers.set("x-tenant-id", identity.tenantId)

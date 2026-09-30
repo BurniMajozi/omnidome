@@ -31,6 +31,8 @@ const DEV_IDENTITY: Identity = {
 export interface Identity {
   userId: string
   tenantId: string
+  /** Role names from the admin DB (authoritative); absent on the header fallback path. */
+  roles?: string[]
 }
 
 /** Resolve a verified Supabase bearer token into {userId, tenantId}, or null. */
@@ -49,7 +51,12 @@ export async function resolveIdentity(bearerToken: string): Promise<Identity | n
     if (!res.ok) return null
     const body = await res.json()
     if (!body.user_id || !body.tenant_id) return null
-    return { userId: body.user_id, tenantId: body.tenant_id }
+    if (body.is_active === false) return null // deactivated in the admin DB: no identity
+    return {
+      userId: body.user_id,
+      tenantId: body.tenant_id,
+      roles: Array.isArray(body.roles) && body.roles.length > 0 ? body.roles : undefined,
+    }
   } catch {
     return null
   }
