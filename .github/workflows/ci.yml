@@ -45,6 +45,33 @@ jobs:
           pip install flake8
           flake8 services/ scripts/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
 
+  # ── Orchestrator unit tests ──────────────────────────────────────────
+  # The agent loop, memory, approvals and safe-SQL guards live here; none of
+  # it was run in CI before, so regressions (a tool pointing at a route that
+  # does not exist, an unlisted agent) only showed up live. No DB needed.
+  orchestrator-tests:
+    name: Orchestrator Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        # requirements.txt's "-r ../../common/..." only resolves inside the Docker image.
+        run: |
+          pip install -r services/common/requirements.txt
+          grep -v '^-r' services/agent_orchestrator/requirements.txt > /tmp/orchestrator-reqs.txt
+          pip install -r /tmp/orchestrator-reqs.txt pytest
+
+      - name: Run tests
+        working-directory: services/agent_orchestrator
+        run: python -m pytest tests -q
+
   # ── Docker Build Verification ────────────────────────────────────────
   docker-build:
     name: Docker Build Verification
