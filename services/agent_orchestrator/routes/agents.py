@@ -97,6 +97,11 @@ _INTENT_ROUTES: list[tuple[str, list[str]]] = [
 ]
 
 
+# Not agents: routing modes. A request for one of these is answered by the
+# specialist _classify_agent picks, so they are not listed in the Agent Manager.
+ROUTER_AGENT_TYPES = ("auto", "orchestrator", "router", "")
+
+
 def _classify_agent(message: str) -> str:
     """Classify a user message to the best agent type. Returns agent_type string."""
     msg_lower = message.lower()
@@ -542,7 +547,7 @@ async def invoke_agent(
 
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
-    if effective_agent_type in ("auto", "orchestrator", "router", ""):
+    if effective_agent_type in ROUTER_AGENT_TYPES:
         effective_agent_type = _classify_agent(body.message or "")
         logger.info(
             "Orchestrator auto-routed prompt to specialist agent '%s' for message: %s",
@@ -704,7 +709,7 @@ async def invoke_agent_stream(
 
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
-    if effective_agent_type in ("auto", "orchestrator", "router", ""):
+    if effective_agent_type in ROUTER_AGENT_TYPES:
         effective_agent_type = _classify_agent(body.message or "")
         logger.info(
             "Orchestrator stream auto-routed prompt to specialist agent '%s' for message: %s",
@@ -758,7 +763,7 @@ async def invoke_agent_stream(
             conversation_id=conv_id,
             data={
                 "agent_type": effective_agent_type,
-                "auto_routed": body.agent_type in ("auto", "orchestrator", "router", ""),
+                "auto_routed": body.agent_type in ROUTER_AGENT_TYPES,
             },
         ))
 

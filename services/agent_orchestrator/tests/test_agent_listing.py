@@ -15,12 +15,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.p
 sys.path.insert(0, REPO_ROOT)
 
 from services.agent_orchestrator.llm import SYSTEM_PROMPTS  # noqa: E402
-from services.agent_orchestrator.routes.agents import list_agents  # noqa: E402
+from services.agent_orchestrator.routes.agents import ROUTER_AGENT_TYPES, list_agents  # noqa: E402
 
 
 def test_every_agent_with_a_system_prompt_is_listed():
+    # Routing modes (auto/orchestrator) hand the request to a specialist; not agents.
     listed = {a.agent_type for a in asyncio.run(list_agents())}
-    assert listed == set(SYSTEM_PROMPTS)
+    assert listed == set(SYSTEM_PROMPTS) - set(ROUTER_AGENT_TYPES)
 
 
 def test_listed_agents_carry_policies_and_a_named_description():

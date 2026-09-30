@@ -605,11 +605,11 @@ class ToolRegistry:
         ))
         self.register(Tool(
             name="hr.list_leave_requests",
-            description="List pending and approved employee leave requests.",
+            description="List an employee's leave requests (pending and approved), newest first.",
             service="hr",
             method="GET",
-            endpoint="/leave/requests",
-            parameters={"type": "object", "properties": {"status": {"type": "string"}}, "required": []},
+            endpoint="/employees/{emp_id}/leave",
+            parameters={"type": "object", "properties": {"emp_id": {"type": "string", "description": "Employee id"}}, "required": ["emp_id"]},
         ))
         self.register(Tool(
             name="sales.get_pipeline",
