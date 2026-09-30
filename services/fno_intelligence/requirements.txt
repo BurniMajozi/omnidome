@@ -1,6 +1,6 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.29.0
-sqlalchemy[asyncio]>=2.0.0
+fastapi>=0.110.0,<0.142  # proven 0.141.1; unbounded pulled a newer minor on fresh build
+uvicorn[standard]>=0.29.0,<0.54  # proven 0.53.0
+sqlalchemy[asyncio]>=2.0.0,<2.1  # proven 2.0.54; a fresh build otherwise resolves 2.1.x (untested)
 asyncpg>=0.29.0
 pydantic>=2.0.0
 httpx>=0.27.0
