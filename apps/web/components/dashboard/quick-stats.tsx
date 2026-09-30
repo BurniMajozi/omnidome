@@ -23,21 +23,40 @@ import {
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { getCorporateSalesSnapshot, type CorporateSalesSnapshot } from "@/lib/hr-api"
-import { corpTargetText } from "@/lib/comm-helpers"
 import { NotConnected } from "@/components/ui/not-connected"
 import type { Loadable } from "@/lib/service-state"
 import {
   bucketWonDeals,
-  dealTotals,
+  corpKpiView,
+  fmtZar,
   fmtZarCompact,
+  listOf,
+  lowerBound,
+  pipelineByStage as buildPipelineByStage,
+  resolveDealTotals,
   sumBuckets,
   type DealRow,
+  type ResolvedTotals,
 } from "@/lib/overview-derive"
+import { fmtInt } from "@/lib/ops-derive"
 
 type MetricView = "revenue" | "deals" | "pipeline"
 type TimeRange = "7D" | "30D" | "90D" | "1Y"
 
-export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onRetry?: () => void }) {
+interface QuickStatsProps {
+  deals: Loadable<DealRow[]>
+  /** Headline figures: the server summary when available, else the rows. null = neither loaded. */
+  totals?: ResolvedTotals | null
+  /** X-Total-Count of the deals list (rows may be capped). */
+  rowsTotal?: number | null
+  /** Real pipeline stage order (from /pipeline/stages); [] falls back to alphabetical. */
+  stageOrder?: string[]
+  onRetry?: () => void
+}
+
+const EMPTY_STAGES: string[] = []
+
+export function QuickStats({ deals, totals: totalsProp, rowsTotal = null, stageOrder = EMPTY_STAGES, onRetry }: QuickStatsProps) {
   const [metricView, setMetricView] = useState<MetricView>("revenue")
   const [timeRange, setTimeRange] = useState<TimeRange>("30D")
   const [corpSales, setCorpSales] = useState<CorporateSalesSnapshot | null>(null)
@@ -52,11 +71,19 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
     return () => { cancelled = true }
   }, [])
 
-  const fmtCorpZar = (v: number | null | undefined) =>
-    v === null || v === undefined ? "Not connected" : `R ${Math.round(v).toLocaleString("en-ZA")}`
+  const corp = useMemo(() => corpKpiView(corpSales), [corpSales])
 
-  const rows: DealRow[] = deals.state === "ready" && Array.isArray(deals.data) ? deals.data : []
+  const rows: DealRow[] = useMemo(
+    () => (deals.state === "ready" ? (listOf<DealRow>(deals.data) ?? []) : []),
+    [deals],
+  )
   const ready = deals.state === "ready"
+  // Headline figures come from the parent (server summary first); fall back to these rows.
+  const totals = useMemo(
+    () => totalsProp ?? resolveDealTotals(ready ? rows : null, null, rowsTotal),
+    [totalsProp, ready, rows, rowsTotal],
+  )
+  const rowsCut = ready && rowsTotal !== null && rowsTotal > rows.length
 
   // Won revenue / deals bucketed by real close dates for the selected range.
   const chartData = useMemo(
@@ -64,25 +91,14 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
     [rows, timeRange],
   )
   const period = useMemo(() => sumBuckets(chartData), [chartData])
-  const totals = useMemo(() => dealTotals(rows), [rows])
 
-  // Open pipeline by stage, from the same real deals.
-  const pipelineByStage = useMemo(() => {
-    const m = new Map<string, { month: string; revenue: number; deals: number }>()
-    for (const d of rows) {
-      const st = (d.status ?? "").toUpperCase()
-      if (st === "WON" || st === "LOST") continue
-      const key = d.stage_name || "Unstaged"
-      const cur = m.get(key) ?? { month: key, revenue: 0, deals: 0 }
-      cur.revenue += Number.parseFloat(String(d.value_zar ?? 0)) || 0
-      cur.deals += 1
-      m.set(key, cur)
-    }
-    return [...m.values()]
-  }, [rows])
+  // Open pipeline by stage (real stage order), from the same real deals.
+  const pipelineByStage = useMemo(() => buildPipelineByStage(rows, stageOrder), [rows, stageOrder])
 
-  const tileValue = (fmt: () => string) =>
-    deals.state === "loading" ? (
+  const tileValue = (fmt: () => string, headline = false) =>
+    headline && totals ? (
+      fmt()
+    ) : deals.state === "loading" ? (
       <span className="inline-block h-8 w-28 animate-pulse rounded bg-muted align-middle" aria-label="Loading" />
     ) : ready ? (
       fmt()
@@ -119,12 +135,14 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
         {/* Action controls & Time Range Filter */}
         <div className="flex flex-wrap items-center gap-2">
           {/* Time range buttons */}
-          <div className="flex rounded-lg border border-border bg-secondary/30 p-0.5 text-xs font-medium">
+          <div role="group" aria-label="Time range" className="flex rounded-lg border border-border bg-secondary/30 p-0.5 text-xs font-medium">
             {(["7D", "30D", "90D", "1Y"] as TimeRange[]).map((range) => (
               <button
                 key={range}
+                type="button"
+                aria-pressed={timeRange === range}
                 onClick={() => setTimeRange(range)}
-                className={`rounded-md px-2.5 py-1 transition-all cursor-pointer ${
+                className={`rounded-md px-2.5 py-1 transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
                   timeRange === range
                     ? "bg-primary text-primary-foreground font-semibold shadow-xs"
                     : "text-muted-foreground hover:text-foreground"
@@ -137,9 +155,10 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
 
           {/* Refresh button */}
           <button
+            type="button"
             onClick={onRetry}
             disabled={deals.state === "loading"}
-            className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary/20 px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-secondary/40 hover:text-foreground cursor-pointer"
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-secondary/20 px-2.5 py-1 text-xs font-medium text-muted-foreground transition hover:bg-secondary/40 hover:text-foreground cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             title="Refresh live sales metrics"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${deals.state === "loading" ? "animate-spin text-primary" : ""}`} />
@@ -157,16 +176,14 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs font-bold text-foreground">Corporate Sales KPI vs Target Budget</span>
-              <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-[10px]">
-                {corpSalesLoading
-                  ? "Loading..."
-                  : corpSales?.achievementPct != null
-                    ? `${corpSales.achievementPct.toFixed(1)}% of ${corpTargetText(corpSales, fmtCorpZar) ?? "target"}`
-                    : "Not connected"}
-              </Badge>
+              {!corpSalesLoading && corp.badge && (
+                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-[10px]">
+                  {corp.badge}
+                </Badge>
+              )}
             </div>
             <p className="text-[11px] text-muted-foreground mt-0.5">
-              Actual: <b className="text-foreground">{corpSalesLoading ? "Loading..." : fmtCorpZar(corpSales?.actual)}</b> • Target Budget: <b className="text-foreground">{corpSalesLoading ? "Loading..." : (corpTargetText(corpSales, fmtCorpZar) ?? "No target set")}</b>
+              Target: <b className="text-foreground">{corpSalesLoading ? "Loading..." : corp.targetText}</b> • Actual: <b className="text-foreground">{corpSalesLoading ? "Loading..." : corp.actualText}</b>
             </p>
           </div>
         </div>
@@ -184,8 +201,9 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
         {/* Card 1: Revenue */}
         <button
           type="button"
+          aria-pressed={metricView === "revenue"}
           onClick={() => setMetricView("revenue")}
-          className={`group relative flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`group relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
             metricView === "revenue"
               ? "border-primary bg-primary/10 shadow-md shadow-primary/10 ring-1 ring-primary/40"
               : "border-border bg-secondary/15 hover:border-border/80 hover:bg-secondary/25"
@@ -205,11 +223,11 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
           </div>
           <div className="mt-3">
             <span className="text-2xl font-bold tracking-tight text-foreground">
-              {tileValue(() => fmtZarCompact(period.revenue))}
+              {tileValue(() => fmtZar(period.revenue))}
             </span>
-            {ready && (
+            {totals && (
               <div className="mt-1 text-xs font-medium text-muted-foreground">
-                {totals.wonValue > 0 ? `${fmtZarCompact(totals.wonValue)} won all-time` : "No won deals yet"}
+                {totals.wonValue > 0 ? `${lowerBound(fmtZar(totals.wonValue), totals.partial)} won all-time` : "No won deals yet"}
               </div>
             )}
           </div>
@@ -218,8 +236,9 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
         {/* Card 2: Closed Deals */}
         <button
           type="button"
+          aria-pressed={metricView === "deals"}
           onClick={() => setMetricView("deals")}
-          className={`group relative flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`group relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
             metricView === "deals"
               ? "border-primary bg-primary/10 shadow-md shadow-primary/10 ring-1 ring-primary/40"
               : "border-border bg-secondary/15 hover:border-border/80 hover:bg-secondary/25"
@@ -239,11 +258,11 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
           </div>
           <div className="mt-3">
             <span className="text-2xl font-bold tracking-tight text-foreground">
-              {tileValue(() => `${period.deals} Deals`)}
+              {tileValue(() => `${fmtInt(period.deals)} Deals`)}
             </span>
-            {ready && (
+            {totals && (
               <div className="mt-1 text-xs font-medium text-muted-foreground">
-                {totals.winRate === null ? "Win rate: no closed deals yet" : `${(totals.winRate * 100).toFixed(0)}% win rate (${totals.won} won, ${totals.lost} lost)`}
+                {totals.winRate === null ? "Win rate: no closed deals yet" : `${(totals.winRate * 100).toFixed(0)}% win rate (${fmtInt(totals.won)} won, ${fmtInt(totals.lost)} lost)`}
               </div>
             )}
           </div>
@@ -252,8 +271,9 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
         {/* Card 3: Active Pipeline */}
         <button
           type="button"
+          aria-pressed={metricView === "pipeline"}
           onClick={() => setMetricView("pipeline")}
-          className={`group relative flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
+          className={`group relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary flex flex-col justify-between rounded-xl border p-4 text-left transition-all cursor-pointer ${
             metricView === "pipeline"
               ? "border-primary bg-primary/10 shadow-md shadow-primary/10 ring-1 ring-primary/40"
               : "border-border bg-secondary/15 hover:border-border/80 hover:bg-secondary/25"
@@ -273,12 +293,12 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
           </div>
           <div className="mt-3">
             <span className="text-2xl font-bold tracking-tight text-foreground">
-              {tileValue(() => fmtZarCompact(totals.openValue))}
+              {tileValue(() => (totals ? lowerBound(fmtZar(totals.openValue), totals.partial) : "—"), true)}
             </span>
-            {ready && (
+            {totals && (
               <div className="mt-1 flex items-center gap-1 text-xs font-medium text-blue-400">
                 <Sparkles className="h-3.5 w-3.5" />
-                <span>{`${totals.open} open deal${totals.open === 1 ? "" : "s"}`}</span>
+                <span>{`${lowerBound(fmtInt(totals.open), totals.partial)} open deal${totals.open === 1 ? "" : "s"}`}</span>
               </div>
             )}
           </div>
@@ -314,7 +334,7 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
                 axisLine={false}
                 tickLine={false}
                 tick={{ fill: "#94a3b8", fontSize: 12 }}
-                tickFormatter={(v) => `R${v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}`}
+                tickFormatter={(v) => fmtZarCompact(Number(v))}
               />
               <Tooltip
                 contentStyle={{
@@ -324,10 +344,7 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
                   color: "#f8fafc",
                   boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.5)",
                 }}
-                formatter={(val: any) => [
-                  `R ${Number(val).toLocaleString()}`,
-                  "Won Revenue",
-                ]}
+                formatter={(val: any) => [fmtZar(Number(val)), "Won Revenue"]}
               />
               <Area
                 type="monotone"
@@ -394,7 +411,7 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
                   borderRadius: "10px",
                   color: "#f8fafc",
                 }}
-                formatter={(val: any) => [`R ${Number(val).toLocaleString()}`, "Pipeline Value"]}
+                formatter={(val: any) => [fmtZar(Number(val)), "Pipeline Value"]}
               />
               <Bar
                 dataKey="revenue"
@@ -414,7 +431,7 @@ export function QuickStats({ deals, onRetry }: { deals: Loadable<DealRow[]>; onR
           <span className="font-medium text-foreground">Data source:</span>
           <span>
             {ready
-              ? `Sales service (${totals.count} deal${totals.count === 1 ? "" : "s"})`
+              ? `Sales service (${fmtInt(rows.length)}${rowsCut ? ` of ${fmtInt(rowsTotal ?? 0)}` : ""} deal${rows.length === 1 && !rowsCut ? "" : "s"}${rowsCut ? "; charts cover the loaded rows" : ""})`
               : deals.state === "loading"
                 ? "Loading…"
                 : "Sales service unavailable"}

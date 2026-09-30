@@ -28,31 +28,53 @@ import {
 import { Button } from "@/components/ui/button"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { tileLabel, type Loadable } from "@/lib/service-state"
-import { loadCrmInsights, loadCrmSummary, loadEscalations, loadNetworkDevices, useOps } from "@/lib/ops-api"
+import { loadCrmInsights, loadCrmSummary, loadEscalations, loadNetworkDevices } from "@/lib/ops-api"
 import {
+  CAMPAIGNS_URL,
+  CC_QUEUES_URL,
+  CC_SESSIONS_URL,
+  CRM_INSIGHTS_KEY,
+  CRM_SUMMARY_KEY,
+  CRM_TOTAL_URL,
+  DEALS_URL,
+  DEAL_SUMMARY_URL,
+  EMPLOYEES_URL,
+  ESCALATIONS_KEY,
+  NETWORK_DEVICES_KEY,
+  STAGES_URL,
   loadCcQueues,
   loadCcSessions,
   loadCrmCustomerTotal,
   loadOverviewCampaigns,
+  loadOverviewDealSummary,
   loadOverviewDeals,
   loadOverviewEmployees,
+  loadOverviewStageOrder,
+  useSharedOps,
 } from "@/lib/overview-api"
 import {
+  OPEN_ESCALATIONS_LABEL,
   buildBriefing,
   buildInsights,
   countStatus,
   customerTotalOf,
-  dealTotals,
   fmtZar,
   listOf,
+  lowerBound,
+  mapLoadable,
+  openEscalationCount,
+  resolveDealTotals,
   topDeals,
   type DealRow,
 } from "@/lib/overview-derive"
 import {
+  countText,
   escalationStats,
   fmtInt,
-  networkDeviceStats,
+  networkTile,
+  partialNote,
   statusCountsFromSummary,
+  totalText,
   type EscalationRow,
   type NetworkDeviceRow,
 } from "@/lib/ops-derive"
@@ -89,19 +111,29 @@ const dashboardModuleIconMap = {
 
 export function DashboardOverview() {
   // Every hook runs unconditionally, in the same order, on every render.
-  const deals = useOps(loadOverviewDeals)
-  const crmTotal = useOps(loadCrmCustomerTotal)
-  const crmSummary = useOps(loadCrmSummary)
-  const crmInsights = useOps(loadCrmInsights)
-  const escalations = useOps(loadEscalations)
-  const netDevices = useOps(loadNetworkDevices)
-  const ccSessions = useOps(loadCcSessions)
-  const ccQueues = useOps(loadCcQueues)
-  const campaigns = useOps(loadOverviewCampaigns)
-  const employees = useOps(loadOverviewEmployees)
+  // useSharedOps: each URL is requested once per page (escalations are also read by
+  // TicketsTable, CRM activities by ActivityFeed) and reused for 30s.
+  const deals = useSharedOps(DEALS_URL, loadOverviewDeals)
+  const dealSummary = useSharedOps(DEAL_SUMMARY_URL, loadOverviewDealSummary)
+  const stageOrder = useSharedOps(STAGES_URL, loadOverviewStageOrder)
+  const crmTotal = useSharedOps(CRM_TOTAL_URL, loadCrmCustomerTotal)
+  const crmSummary = useSharedOps(CRM_SUMMARY_KEY, loadCrmSummary)
+  const crmInsights = useSharedOps(CRM_INSIGHTS_KEY, loadCrmInsights)
+  const escalations = useSharedOps(ESCALATIONS_KEY, loadEscalations)
+  const netDevices = useSharedOps(NETWORK_DEVICES_KEY, loadNetworkDevices)
+  const ccSessions = useSharedOps(CC_SESSIONS_URL, loadCcSessions)
+  const ccQueues = useSharedOps(CC_QUEUES_URL, loadCcQueues)
+  const campaigns = useSharedOps(CAMPAIGNS_URL, loadOverviewCampaigns)
+  const employees = useSharedOps(EMPLOYEES_URL, loadOverviewEmployees)
 
-  const dealRows: DealRow[] | null = deals.value.state === "ready" ? listOf<DealRow>(deals.value.data) : null
-  const totals = dealRows ? dealTotals(dealRows) : null
+  const dealRows: DealRow[] | null = deals.value.state === "ready" ? deals.value.data.rows : null
+  const dealRowsTotal = deals.value.state === "ready" ? deals.value.data.total : null
+  const summaryData = dealSummary.value.state === "ready" ? dealSummary.value.data : null
+  // Headline deal figures: the server summary when it answers (exact), else the real rows.
+  const totals = resolveDealTotals(dealRows, summaryData, dealRowsTotal)
+  // Tiles are "ready" as soon as either source answered; otherwise they show the list's state.
+  const dealsTile: Loadable<unknown> = totals ? { state: "ready", data: null } : deals.value
+  const dealsCut = dealRows !== null && dealRowsTotal !== null && dealRowsTotal > dealRows.length
   const customerTotal: number | null = crmTotal.value.state === "ready" ? customerTotalOf(crmTotal.value.data) : null
   const crmRecs = crmInsights.value.state === "ready" ? (crmInsights.value.data?.aiRecommendations ?? []) : null
 
@@ -110,18 +142,20 @@ export function DashboardOverview() {
   const topDealRows = dealRows ? topDeals(dealRows, 4) : []
   const briefingLoading = deals.value.state === "loading" || crmTotal.value.state === "loading"
 
-  const escStats =
-    escalations.value.state === "ready" ? escalationStats(escalations.value.data.rows as EscalationRow[]) : null
-  const netStats =
-    netDevices.value.state === "ready" ? networkDeviceStats(netDevices.value.data.rows as NetworkDeviceRow[]) : null
+  const escMeta = escalations.value.state === "ready" ? escalations.value.data : null
+  const escStats = escMeta ? escalationStats(escMeta.rows as EscalationRow[]) : null
+  const netMeta = netDevices.value.state === "ready" ? netDevices.value.data : null
+  const netTile = netMeta ? networkTile(netMeta.rows as NetworkDeviceRow[], netMeta) : null
   const ccNow = new Date()
 
   const retryDeals = () => {
     deals.reload()
+    dealSummary.reload()
   }
 
-  const dealsTileText = (fmt: (t: ReturnType<typeof dealTotals>) => string) =>
-    tileText(deals.value, (d) => fmt(dealTotals(listOf<DealRow>(d) ?? [])))
+  /** Deal figure for a tile: exact from the summary, else from rows with "+" when the list was cut off. */
+  const dealsTileText = (fmt: (t: NonNullable<typeof totals>) => string) =>
+    tileText(dealsTile, () => (totals ? lowerBound(fmt(totals), totals.partial) : "—"))
 
   const modules = STATIC_MODULES.map((m) => {
     let stats: { label: string; value: string }[]
@@ -147,14 +181,18 @@ export function DashboardOverview() {
       case "service":
         stats = [
           {
-            label: "Open Escalations",
-            value: tileText(escalations.value, (d) => fmtInt(escalationStats(d.rows as EscalationRow[]).open)),
+            // Same definition as the KPI strip (open + in progress), one helper.
+            label: OPEN_ESCALATIONS_LABEL,
+            value: tileText(escalations.value, (d) =>
+              countText(openEscalationCount(escalationStats(d.rows as EscalationRow[])), d),
+            ),
           },
           {
             label: "Avg Resolution",
             value: tileText(escalations.value, (d) => {
               const h = escalationStats(d.rows as EscalationRow[]).avgResolutionHours
-              return h === null ? "No data yet" : `${h.toFixed(1)}h`
+              if (h === null) return "No data yet"
+              return `${h.toFixed(1)}h${d.loaded < d.total || d.truncated || d.failedPages.length ? " (sample)" : ""}`
             }),
           },
         ]
@@ -163,9 +201,9 @@ export function DashboardOverview() {
         stats = [
           {
             label: "Active Devices",
-            value: tileText(netDevices.value, (d) => fmtInt(networkDeviceStats(d.rows as NetworkDeviceRow[]).active)),
+            value: tileText(netDevices.value, (d) => networkTile(d.rows as NetworkDeviceRow[], d).active),
           },
-          { label: "Registered Devices", value: tileText(netDevices.value, (d) => fmtInt(d.total)) },
+          { label: "Registered Devices", value: tileText(netDevices.value, (d) => totalText(d)) },
         ]
         break
       case "call-center":
@@ -218,10 +256,13 @@ export function DashboardOverview() {
     {
       id: "revenue",
       title: "Won Revenue",
-      loadable: deals.value as Loadable<unknown>,
-      value: totals ? fmtZar(totals.wonValue) : "",
-      description: totals ? `${totals.won} won of ${totals.count} deals` : "",
+      loadable: dealsTile,
+      value: totals ? lowerBound(fmtZar(totals.wonValue), totals.partial) : "",
+      description: totals
+        ? `${totals.won} won of ${lowerBound(String(totals.count), totals.partial)} deals${totals.partial ? " (first " + fmtInt(dealRows?.length ?? 0) + " loaded)" : ""}`
+        : "",
       icon: TrendingUp,
+      note: null as string | null,
     },
     {
       id: "subscribers",
@@ -229,22 +270,25 @@ export function DashboardOverview() {
       loadable: crmTotal.value as Loadable<unknown>,
       value: customerTotal !== null ? fmtInt(customerTotal) : "",
       description: "from CRM",
+      note: null as string | null,
       icon: Users,
     },
     {
       id: "tickets",
-      title: "Open Escalations",
+      title: `Escalations (${OPEN_ESCALATIONS_LABEL})`,
       loadable: escalations.value as Loadable<unknown>,
-      value: escStats ? fmtInt(escStats.open + escStats.inProgress) : "",
-      description: escStats ? `${fmtInt(escStats.total)} total` : "",
+      value: escStats && escMeta ? countText(openEscalationCount(escStats), escMeta) : "",
+      description: escMeta ? `${totalText(escMeta)} total${partialNote(escMeta) ? " · partial" : ""}` : "",
+      note: escMeta ? partialNote(escMeta) : null,
       icon: Ticket,
     },
     {
       id: "uptime",
       title: "Active Network Devices",
       loadable: netDevices.value as Loadable<unknown>,
-      value: netStats ? `${fmtInt(netStats.active)} of ${fmtInt(netStats.total)}` : "",
-      description: "network service",
+      value: netTile ? netTile.activeOfRegistered : "",
+      description: netTile?.note ? "partial: first page(s) only" : "network service",
+      note: netTile ? netTile.note : null,
       icon: Activity,
     },
   ]
@@ -264,6 +308,7 @@ export function DashboardOverview() {
               changeType="neutral"
               icon={k.icon}
               description={st === "ready" ? k.description : undefined}
+              note={st === "ready" ? (k.note ?? undefined) : undefined}
               loading={st === "loading"}
               muted={st !== "ready"}
             />
@@ -332,8 +377,9 @@ export function DashboardOverview() {
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {suggestions.map((sug) => (
-                <div
+                <button
                   key={sug.id}
+                  type="button"
                   onClick={() => {
                     window.dispatchEvent(
                       new CustomEvent("open-agent-chat", {
@@ -341,27 +387,27 @@ export function DashboardOverview() {
                       }),
                     )
                   }}
-                  className="group flex cursor-pointer flex-col justify-between rounded-lg border border-border/80 bg-background/60 p-3 shadow-xs transition-all hover:border-primary/50 hover:bg-secondary/40"
+                  className="group flex cursor-pointer flex-col justify-between rounded-lg border border-border/80 bg-background/60 p-3 text-left shadow-xs transition-all hover:border-primary/50 hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                 >
-                  <div className="space-y-1">
-                    <div className="flex items-center justify-between">
+                  <span className="block space-y-1">
+                    <span className="flex items-center justify-between">
                       <span className="text-[10px] font-semibold uppercase text-primary">{sug.category}</span>
                       <span
                         className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${sug.impact === "high" ? "border-red-500/20 bg-red-500/10 text-red-400" : "border-blue-500/20 bg-blue-500/10 text-blue-400"}`}
                       >
                         {sug.impact} impact
                       </span>
-                    </div>
-                    <h4 className="line-clamp-2 text-xs font-semibold text-foreground transition-colors group-hover:text-primary">
+                    </span>
+                    <span className="line-clamp-2 block text-xs font-semibold text-foreground transition-colors group-hover:text-primary">
                       {sug.title}
-                    </h4>
-                    <p className="line-clamp-2 text-[11px] text-muted-foreground">{sug.description}</p>
-                  </div>
-                  <div className="mt-2.5 flex items-center justify-between border-t border-border/40 pt-2 text-[11px] font-medium text-primary">
+                    </span>
+                    <span className="line-clamp-2 block text-[11px] text-muted-foreground">{sug.description}</span>
+                  </span>
+                  <span className="mt-2.5 flex items-center justify-between border-t border-border/40 pt-2 text-[11px] font-medium text-primary">
                     <span>Review with agent</span>
                     <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-                  </div>
-                </div>
+                  </span>
+                </button>
               ))}
             </div>
           </div>
@@ -374,7 +420,13 @@ export function DashboardOverview() {
       {/* ── 4. Sales chart + deals, activity & quick actions ─────────── */}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
-          <QuickStats deals={deals.value} onRetry={retryDeals} />
+          <QuickStats
+            deals={mapLoadable(deals.value, (d) => d.rows)}
+            totals={totals}
+            rowsTotal={dealRowsTotal}
+            stageOrder={stageOrder.value.state === "ready" ? stageOrder.value.data : []}
+            onRetry={retryDeals}
+          />
 
           {/* Top deals by value (real sales rows) */}
           <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
@@ -389,7 +441,9 @@ export function DashboardOverview() {
                 </div>
               </div>
               {dealRows && (
-                <span className="text-xs font-semibold text-emerald-400">Deals ({dealRows.length})</span>
+                <span className="text-xs font-semibold text-emerald-400">
+                  {dealsCut ? `Latest ${fmtInt(dealRows.length)} of ${fmtInt(dealRowsTotal ?? 0)} deals` : `Deals (${fmtInt(dealRows.length)})`}
+                </span>
               )}
             </div>
 

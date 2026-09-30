@@ -33,16 +33,11 @@ const num = (v: unknown): number => {
 
 const up = (s: string | null | undefined) => (s ?? "").toUpperCase()
 
-export function fmtZar(n: number): string {
-  return `R ${Math.round(n).toLocaleString("en-ZA")}`
-}
-
-/** Compact currency for chart cards: R 1.25M / R 340K / R 950. */
-export function fmtZarCompact(n: number): string {
-  if (Math.abs(n) >= 1_000_000) return `R ${(n / 1_000_000).toFixed(2)}M`
-  if (Math.abs(n) >= 1_000) return `R ${(n / 1_000).toFixed(0)}K`
-  return `R ${Math.round(n).toLocaleString("en-ZA")}`
-}
+// One ZAR formatter for every Overview tile/tooltip/axis (lib/format.ts). The explicit
+// .ts extension lets node --test load this file; the bundler resolves it as normal.
+// @ts-ignore TS5097: extension imports are not enabled in tsconfig (noEmit, bundler resolution)
+import { fmtZar, fmtZarCompact } from "./format.ts"
+export { fmtZar, fmtZarCompact }
 
 export interface DealTotals {
   count: number
@@ -83,48 +78,91 @@ export function dealTotals(deals: DealRow[]): DealTotals {
 
 const DAY = 86_400_000
 
-function dealClosedAt(d: DealRow): number | null {
-  const raw = d.closed_at || d.close_date
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+/**
+ * Parses a deal date. Date-only strings ("2026-09-30", how `close_date` arrives)
+ * are LOCAL calendar dates, not UTC midnight (which would slip a day in SAST
+ * comparisons); anything with a time/offset (`closed_at`) goes through Date.
+ */
+export function parseDealDate(raw: string | null | undefined): Date | null {
   if (!raw) return null
-  const t = new Date(raw).getTime()
-  return Number.isFinite(t) ? t : null
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw.trim())
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(raw)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function dealClosedAt(d: DealRow): Date | null {
+  return parseDealDate(d.closed_at || d.close_date)
+}
+
+/** Whole local calendar days from a to b, immune to DST (works on Y/M/D components only). */
+function daysBetween(a: Date, b: Date): number {
+  return Math.round((Date.UTC(b.getFullYear(), b.getMonth(), b.getDate()) - Date.UTC(a.getFullYear(), a.getMonth(), a.getDate())) / DAY)
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0")
+const dayLabel = (d: Date) => `${pad2(d.getDate())} ${MONTHS[d.getMonth()]}`
+const dayKey = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+
+/** Monday on/before `d` (ISO week start), as a local date. */
+function isoWeekStart(d: Date): Date {
+  const back = (d.getDay() + 6) % 7
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - back)
+}
+
+export interface WonBucket {
+  /** Sortable key: YYYY-MM-DD (day, or Monday for weeks) or YYYY-MM (months). */
+  key: string
+  label: string
+  revenue: number
+  deals: number
 }
 
 /**
- * Won revenue + won deal counts bucketed by close date. 7D/30D are daily,
- * 90D weekly, 1Y monthly. Buckets with no deals are real zeros. Deals without a
- * close date are not guessed into a bucket.
+ * Won revenue + won deal counts bucketed by LOCAL calendar close date:
+ * 7D / 30D = that many local days ending today (today included), 90D = 13 ISO
+ * weeks (Mon-start) ending with the current week, 1Y = 12 calendar months
+ * ending with the current month. Boundary days are included; deals closing
+ * after today, or with no close date, are not placed. Buckets with no deals
+ * are real zeros.
  */
-export function bucketWonDeals(
-  deals: DealRow[],
-  range: TimeRange,
-  now: Date = new Date(),
-): Array<{ label: string; revenue: number; deals: number }> {
-  const end = now.getTime()
-  const spec =
-    range === "7D"
-      ? { n: 7, size: DAY }
-      : range === "30D"
-        ? { n: 30, size: DAY }
-        : range === "90D"
-          ? { n: 13, size: 7 * DAY }
-          : { n: 12, size: 30 * DAY }
-  const start = end - spec.n * spec.size
-  const buckets = Array.from({ length: spec.n }, (_, i) => {
-    const t = new Date(start + (i + 1) * spec.size)
-    const label =
-      range === "1Y"
-        ? t.toLocaleDateString("en-ZA", { month: "short", year: "2-digit" })
-        : t.toLocaleDateString("en-ZA", { day: "2-digit", month: "short" })
-    return { label, revenue: 0, deals: 0 }
-  })
+export function bucketWonDeals(deals: DealRow[], range: TimeRange, now: Date = new Date()): WonBucket[] {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  let starts: Date[]
+  let index: (t: Date) => number
+  let labelOf: (d: Date) => string
+  let keyOf: (d: Date) => string
+  if (range === "1Y") {
+    const first = new Date(today.getFullYear(), today.getMonth() - 11, 1)
+    starts = Array.from({ length: 12 }, (_, i) => new Date(first.getFullYear(), first.getMonth() + i, 1))
+    index = (t) => (t.getFullYear() - first.getFullYear()) * 12 + (t.getMonth() - first.getMonth())
+    labelOf = (d) => `${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+    keyOf = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
+  } else if (range === "90D") {
+    const first = isoWeekStart(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 12 * 7))
+    starts = Array.from({ length: 13 }, (_, i) => new Date(first.getFullYear(), first.getMonth(), first.getDate() + i * 7))
+    index = (t) => Math.floor(daysBetween(first, t) / 7)
+    labelOf = dayLabel
+    keyOf = dayKey
+  } else {
+    const n = range === "7D" ? 7 : 30
+    const first = new Date(today.getFullYear(), today.getMonth(), today.getDate() - (n - 1))
+    starts = Array.from({ length: n }, (_, i) => new Date(first.getFullYear(), first.getMonth(), first.getDate() + i))
+    index = (t) => daysBetween(first, t)
+    labelOf = dayLabel
+    keyOf = dayKey
+  }
+  const buckets: WonBucket[] = starts.map((d) => ({ key: keyOf(d), label: labelOf(d), revenue: 0, deals: 0 }))
   for (const d of deals) {
     if (up(d.status) !== "WON") continue
     const t = dealClosedAt(d)
-    if (t === null || t <= start || t > end) continue
-    const idx = Math.min(spec.n - 1, Math.floor((t - start) / spec.size))
-    buckets[idx].revenue += num(d.value_zar)
-    buckets[idx].deals += 1
+    if (!t) continue
+    if (daysBetween(today, t) > 0) continue // closes after today
+    const i = index(t)
+    if (i < 0 || i >= buckets.length) continue
+    buckets[i].revenue += num(d.value_zar)
+    buckets[i].deals += 1
   }
   return buckets
 }
@@ -138,8 +176,8 @@ export function sumBuckets(b: Array<{ revenue: number; deals: number }>): { reve
 export function dealsClosingThisMonth(deals: DealRow[], now: Date = new Date()): DealRow[] {
   return deals.filter((d) => {
     if (up(d.status) === "WON" || up(d.status) === "LOST" || !d.close_date) return false
-    const t = new Date(d.close_date)
-    return !Number.isNaN(t.getTime()) && t.getFullYear() === now.getFullYear() && t.getMonth() === now.getMonth()
+    const t = parseDealDate(d.close_date)
+    return t !== null && t.getFullYear() === now.getFullYear() && t.getMonth() === now.getMonth()
   })
 }
 
@@ -340,4 +378,139 @@ export function listOf<T>(payload: unknown): T[] | null {
   if (Array.isArray(payload)) return payload as T[]
   const items = (payload as { items?: unknown } | null)?.items
   return Array.isArray(items) ? (items as T[]) : null
+}
+
+// ── Escalations: one definition everywhere ───────────────────────────────
+
+/** The one label for the escalation headline count (module card AND KPI strip). */
+export const OPEN_ESCALATIONS_LABEL = "Open + in progress"
+
+/** Escalations that still need work: open AND in progress. Used by every Overview surface. */
+export function openEscalationCount(stats: { open: number; inProgress: number }): number {
+  return stats.open + stats.inProgress
+}
+
+// ── Deal headline totals: server summary first, real rows as fallback ────
+
+/** Contract of GET /svc/sales/deals/summary. Decimals may arrive as strings. */
+export interface DealSummary {
+  count: number | string
+  total_value_zar: number | string
+  won_count: number | string
+  won_value_zar: number | string
+  open_count: number | string
+  open_value_zar: number | string
+  lost_count: number | string
+  lost_value_zar: number | string
+}
+
+export interface ResolvedTotals extends DealTotals {
+  source: "summary" | "rows"
+  /** Rows-derived and the list was cut off (X-Total-Count > rows loaded): figures are lower bounds. */
+  partial: boolean
+}
+
+const hasNum = (v: unknown) => (typeof v === "number" && Number.isFinite(v)) || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)))
+
+/** A usable summary payload, or null (missing field => ignore it and fall back to rows). */
+export function readDealSummary(payload: unknown): DealSummary | null {
+  if (!payload || typeof payload !== "object") return null
+  const p = payload as Record<string, unknown>
+  const keys = ["count", "total_value_zar", "won_count", "won_value_zar", "open_count", "open_value_zar", "lost_count", "lost_value_zar"]
+  return keys.every((k) => hasNum(p[k])) ? (payload as DealSummary) : null
+}
+
+/**
+ * Headline deal figures. Uses the server summary when it answered (exact, no row
+ * cap); otherwise sums the loaded rows and flags `partial` if the list was truncated.
+ * null when neither source is available.
+ */
+export function resolveDealTotals(
+  rows: DealRow[] | null,
+  summary: DealSummary | null,
+  rowsTotal: number | null = null,
+): ResolvedTotals | null {
+  if (summary) {
+    const won = num(summary.won_count)
+    const lost = num(summary.lost_count)
+    return {
+      count: num(summary.count),
+      won,
+      open: num(summary.open_count),
+      lost,
+      wonValue: num(summary.won_value_zar),
+      openValue: num(summary.open_value_zar),
+      totalValue: num(summary.total_value_zar),
+      winRate: won + lost ? won / (won + lost) : null,
+      source: "summary",
+      partial: false,
+    }
+  }
+  if (!rows) return null
+  return { ...dealTotals(rows), source: "rows", partial: rowsTotal !== null && rowsTotal > rows.length }
+}
+
+/** Append "+" to a rendered figure that is only a lower bound. */
+export const lowerBound = (text: string, partial: boolean) => (partial ? `${text}+` : text)
+
+// ── Pipeline by stage, in the real stage order ───────────────────────────
+
+/** Stage names ordered by `sort_order` from /pipeline/stages; [] when unreadable. */
+export function stageNamesInOrder(payload: unknown): string[] {
+  const rows = listOf<{ name?: string; sort_order?: number }>(payload) ?? (payload as { data?: unknown })?.data
+  const list = Array.isArray(rows) ? (rows as Array<{ name?: string; sort_order?: number }>) : []
+  return list
+    .filter((r) => r && typeof r.name === "string" && r.name)
+    .map((r, i) => ({ name: r.name as string, o: typeof r.sort_order === "number" ? r.sort_order : i, i }))
+    .sort((a, b) => a.o - b.o || a.i - b.i)
+    .map((r) => r.name)
+}
+
+/**
+ * Open deals grouped by stage. Stages follow `stageOrder` (real pipeline order);
+ * stages not in it come after, alphabetically (stable, not first-seen);
+ * "Unstaged" is always last.
+ */
+export function pipelineByStage(
+  deals: DealRow[],
+  stageOrder: string[] = [],
+): Array<{ month: string; revenue: number; deals: number }> {
+  const m = new Map<string, { month: string; revenue: number; deals: number }>()
+  for (const d of deals) {
+    const st = up(d.status)
+    if (st === "WON" || st === "LOST") continue
+    const key = d.stage_name || "Unstaged"
+    const cur = m.get(key) ?? { month: key, revenue: 0, deals: 0 }
+    cur.revenue += num(d.value_zar)
+    cur.deals += 1
+    m.set(key, cur)
+  }
+  const rank = (name: string) => {
+    if (name === "Unstaged") return Number.MAX_SAFE_INTEGER
+    const i = stageOrder.indexOf(name)
+    return i === -1 ? stageOrder.length : i
+  }
+  return [...m.values()].sort((a, b) => rank(a.month) - rank(b.month) || a.month.localeCompare(b.month))
+}
+
+// ── Corporate KPI banner ─────────────────────────────────────────────────
+
+export interface CorpKpiView {
+  targetText: string
+  actualText: string
+  /** Achievement badge; only when BOTH sides are known. null otherwise (never a blanket 'Not connected'). */
+  badge: string | null
+}
+
+/** Target and actual are shown separately and truthfully; each side has its own state. */
+export function corpKpiView(
+  snap: { budget: number | null; actual: number | null; achievementPct: number | null } | null | undefined,
+): CorpKpiView {
+  const budget = snap?.budget ?? null
+  const actual = snap?.actual ?? null
+  return {
+    targetText: budget !== null && budget > 0 ? fmtZar(budget) : "No target set",
+    actualText: actual !== null ? fmtZar(actual) : "Not connected",
+    badge: snap?.achievementPct != null ? `${snap.achievementPct.toFixed(1)}% of target` : null,
+  }
 }

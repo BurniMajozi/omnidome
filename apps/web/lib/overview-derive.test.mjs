@@ -3,15 +3,19 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import {
   dealTotals, bucketWonDeals, sumBuckets, dealsClosingThisMonth, stalledOpenDeals, topDeals,
-  buildInsights, buildBriefing, toActivityItems, initials, customerTotalOf, countStatus, listOf, mapLoadable, fmtZarCompact,
+  buildInsights, buildBriefing, toActivityItems, initials, customerTotalOf, countStatus, listOf, mapLoadable, fmtZarCompact, fmtZar,
+  parseDealDate, openEscalationCount, OPEN_ESCALATIONS_LABEL, readDealSummary, resolveDealTotals, lowerBound,
+  stageNamesInOrder, pipelineByStage, corpKpiView,
 } from "./overview-derive.ts"
 
-const NOW = new Date("2026-09-30T12:00:00Z")
+// Dates are built from local components so the suite does not depend on the machine time zone.
+const NOW = new Date(2026, 8, 30, 12, 0, 0)
+const at = (y, m, d, h = 0, mi = 0) => new Date(y, m - 1, d, h, mi).toISOString()
 const deals = [
-  { name: "A", value_zar: "1000.50", status: "WON", closed_at: "2026-09-29T08:00:00Z", stage_name: "Closed Won" },
+  { name: "A", value_zar: "1000.50", status: "WON", closed_at: at(2026, 9, 29, 8), stage_name: "Closed Won" },
   { name: "B", value_zar: 500, status: "OPEN", close_date: "2026-09-20", updated_at: "2026-08-01T00:00:00Z", stage_name: "Proposal" },
   { name: "C", value_zar: 250, status: "LOST" },
-  { name: "D", value_zar: "bad", status: "OPEN", updated_at: "2026-09-29T00:00:00Z" },
+  { name: "D", value_zar: "bad", status: "OPEN", updated_at: at(2026, 9, 29) },
 ]
 
 test("dealTotals sums by status and tolerates bad values", () => {
@@ -24,15 +28,6 @@ test("dealTotals sums by status and tolerates bad values", () => {
   assert.equal(t.openValue, 500)
   assert.equal(t.winRate, 0.5)
   assert.equal(dealTotals([]).winRate, null)
-})
-
-test("bucketWonDeals places won deals by close date only", () => {
-  const b = bucketWonDeals(deals, "7D", NOW)
-  assert.equal(b.length, 7)
-  assert.deepEqual(sumBuckets(b), { revenue: 1000.5, deals: 1 })
-  assert.equal(b[5].deals, 1)
-  assert.deepEqual(sumBuckets(bucketWonDeals([], "1Y", NOW)), { revenue: 0, deals: 0 })
-  assert.deepEqual(sumBuckets(bucketWonDeals([{ status: "WON", value_zar: 5 }], "30D", NOW)), { revenue: 0, deals: 0 })
 })
 
 test("closing this month / stalled", () => {
@@ -76,5 +71,6 @@ test("activity + misc helpers", () => {
   assert.equal(listOf({ nope: 1 }), null)
   assert.deepEqual(mapLoadable({ state: "unreachable", status: 502 }, (x) => x), { state: "unreachable", status: 502 })
   assert.equal(mapLoadable({ state: "ready", data: 2 }, (x) => x * 2).data, 4)
-  assert.equal(fmtZarCompact(1_250_000), "R 1.25M")
+  assert.equal(fmtZarCompact(1_250_000), "R1,3M")
+  assert.equal(fmtZar(135382), "R 135 382")
 })

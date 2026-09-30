@@ -19,7 +19,24 @@ import {
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import { listApprovals, approveApproval, rejectApproval, ApprovalItem } from "@/lib/orchestrator-api"
+import { listApprovals, type ApprovalItem } from "@/lib/orchestrator-api"
+import { decideApproval } from "@/lib/approvals-api"
+import {
+  describeApprovalFailure,
+  readApprovalItems,
+  shouldRefreshAfter,
+  summarizeBatch,
+  type ApprovalFailure,
+  type BatchOutcome,
+} from "@/lib/approvals-derive"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 export interface ExecutiveApprovalItem {
   id: string
@@ -40,15 +57,41 @@ export interface ExecutiveApprovalItem {
 export function ExecutiveApprovalQueue() {
   const [items, setItems] = useState<ExecutiveApprovalItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
+  /** Inline alert for a failed approve / dismiss / batch (persists until dismissed). */
+  const [actionError, setActionError] = useState<string | null>(null)
+  /** Ids with a request in flight: their buttons are disabled. */
+  const [busyIds, setBusyIds] = useState<Set<string>>(new Set())
+  const [confirmBatch, setConfirmBatch] = useState(false)
+  const [batchRunning, setBatchRunning] = useState(false)
+
+  const setBusy = (ids: string[], on: boolean) =>
+    setBusyIds((prev) => {
+      const next = new Set(prev)
+      for (const id of ids) {
+        if (on) next.add(id)
+        else next.delete(id)
+      }
+      return next
+    })
+
+  const flash = (msg: string, ms = 5000) => {
+    setActionFeedback(msg)
+    setTimeout(() => setActionFeedback((cur) => (cur === msg ? null : cur)), ms)
+  }
 
   const loadApprovals = async () => {
     try {
       const res = await listApprovals("pending")
-      if (res && Array.isArray(res.items)) {
-        if (res.items.length > 0) {
-          setItems(res.items.map((i: ApprovalItem) => ({
+      const rows = readApprovalItems<ApprovalItem>(res)
+      if (rows === null) {
+        // 200 with an unexpected body is an error state, never "Queue Clear".
+        setItems([])
+        setLoadError("The orchestrator answered with an unexpected response, so the queue cannot be shown.")
+      } else {
+        setItems(
+          rows.map((i) => ({
             id: i.id,
             title: i.title || `${i.agent_type}: ${i.tool_name}`,
             agent: i.agent || i.agent_type,
@@ -59,17 +102,15 @@ export function ExecutiveApprovalQueue() {
             summary: i.summary || `${i.agent_type} requested to run ${i.tool_name}`,
             context: i.context || "Action submitted for executive authorization",
             timestamp: i.timestamp || "recent",
-            status: i.status === "pending" ? "pending" : "dismissed",
-          })))
-        } else {
-          setItems([])
-        }
+            status: "pending" as const,
+          })),
+        )
+        setLoadError(null)
       }
-      setLoadError(false)
     } catch {
       // Orchestrator unavailable: show an honest state, never sample proposals.
       setItems([])
-      setLoadError(true)
+      setLoadError("Service not running. The agent orchestrator is not reachable, so no proposals can be shown.")
     } finally {
       setLoading(false)
     }
@@ -81,30 +122,65 @@ export function ExecutiveApprovalQueue() {
 
   const pendingItems = items.filter((i) => i.status === "pending")
 
+  /** Server first: nothing is marked approved, and no success is shown, until the API says so. */
   const handleApprove = async (item: ExecutiveApprovalItem) => {
-    setItems((prev) =>
-      prev.map((i) => (i.id === item.id ? { ...i, status: "approved" as const } : i)),
-    )
-    setActionFeedback(`Approved & executed: "${item.title}". Action dispatched via ${item.agentName}.`)
-    try {
-      await approveApproval(item.id)
-    } catch {
-      // Ignore if demo id or already approved
+    if (busyIds.has(item.id)) return
+    setActionError(null)
+    setBusy([item.id], true)
+    const r = await decideApproval(item.id, "approve", {})
+    setBusy([item.id], false)
+    if (r.ok) {
+      setItems((prev) => prev.filter((i) => i.id !== item.id))
+      flash(`Approved: "${item.title}". The orchestrator accepted the approval and dispatched it via ${item.agentName}.`)
+    } else {
+      setActionError(`"${item.title}": ${describeApprovalFailure("approve", r)}`)
+      if (shouldRefreshAfter(r)) loadApprovals()
     }
-    setTimeout(() => setActionFeedback(null), 4000)
   }
 
-  const handleDismiss = async (id: string) => {
-    setItems((prev) =>
-      prev.map((i) => (i.id === id ? { ...i, status: "dismissed" as const } : i)),
-    )
-    setActionFeedback("Proposal dismissed.")
-    try {
-      await rejectApproval(id, "Dismissed by executive")
-    } catch {
-      // Ignore if demo id or already handled
+  const handleDismiss = async (item: ExecutiveApprovalItem) => {
+    if (busyIds.has(item.id)) return
+    setActionError(null)
+    setBusy([item.id], true)
+    const r = await decideApproval(item.id, "reject", { reason: "Dismissed by executive" })
+    setBusy([item.id], false)
+    if (r.ok) {
+      setItems((prev) => prev.filter((i) => i.id !== item.id))
+      flash(`Dismissed: "${item.title}".`, 4000)
+    } else {
+      setActionError(`"${item.title}": ${describeApprovalFailure("dismiss", r)}`)
+      if (shouldRefreshAfter(r)) loadApprovals()
     }
-    setTimeout(() => setActionFeedback(null), 3000)
+  }
+
+  /** Runs after the confirmation dialog: every pending item is decided independently. */
+  const runBatchApprove = async () => {
+    const targets = pendingItems.filter((i) => !busyIds.has(i.id))
+    setConfirmBatch(false)
+    if (targets.length === 0) return
+    setActionError(null)
+    setBatchRunning(true)
+    setBusy(targets.map((t) => t.id), true)
+    const settled = await Promise.allSettled(targets.map((t) => decideApproval(t.id, "approve", {})))
+    const outcomes: BatchOutcome[] = settled.map((s, i) => {
+      const t = targets[i]
+      if (s.status === "fulfilled" && s.value.ok) return { id: t.id, title: t.title, ok: true }
+      const failure: ApprovalFailure =
+        s.status === "fulfilled" && !s.value.ok
+          ? { status: s.value.status, message: s.value.message }
+          : { status: null, message: "" }
+      return { id: t.id, title: t.title, ok: false, failure }
+    })
+    setBusy(targets.map((t) => t.id), false)
+    setBatchRunning(false)
+    const okIds = new Set(outcomes.filter((o) => o.ok).map((o) => o.id))
+    setItems((prev) => prev.filter((i) => !okIds.has(i.id))) // failed items stay in the queue
+    const summary = summarizeBatch(outcomes)
+    if (summary.allOk) flash(`Batch approve: ${summary.text}.`)
+    else {
+      setActionError(`Batch approve: ${summary.text}. The failed items are still in the queue.`)
+      if (outcomes.some((o) => !o.ok && o.failure && shouldRefreshAfter(o.failure))) loadApprovals()
+    }
   }
 
   const handleDiscussInChat = (item: ExecutiveApprovalItem) => {
@@ -139,14 +215,14 @@ Please break down:
     return <div className="h-20 animate-pulse rounded-xl border border-border bg-muted/40" aria-label="Loading approvals" />
   }
 
-  if (loadError && pendingItems.length === 0) {
+  if (loadError !== null && pendingItems.length === 0) {
     return (
       <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-card p-5 shadow-xs">
         <div>
           <h3 className="text-base font-semibold text-foreground">Executive Approval Queue</h3>
-          <p className="text-xs text-muted-foreground">Service not running. The agent orchestrator is not reachable, so no proposals can be shown.</p>
+          <p className="text-xs text-muted-foreground">{loadError}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => { setLoading(true); loadApprovals() }}>
+        <Button variant="outline" size="sm" onClick={() => { setLoading(true); setLoadError(null); loadApprovals() }}>
           Retry
         </Button>
       </div>
@@ -198,23 +274,65 @@ Please break down:
           variant="outline"
           size="sm"
           className="text-xs h-8 border-primary/40 text-primary hover:bg-primary/10 gap-1.5"
-          onClick={() => {
-            items.forEach((item) => {
-              if (item.status === "pending") handleApprove(item)
-            })
-          }}
+          disabled={batchRunning || pendingItems.every((i) => busyIds.has(i.id))}
+          onClick={() => setConfirmBatch(true)}
         >
           <Check className="h-3.5 w-3.5" />
-          <span>Batch Approve All ({pendingItems.length})</span>
+          <span>{batchRunning ? "Approving..." : `Batch Approve All (${pendingItems.length})`}</span>
         </Button>
       </div>
 
       {actionFeedback && (
         <div className="rounded-md bg-primary/10 border border-primary/20 px-3 py-1.5 text-xs font-medium text-primary animate-in fade-in flex items-center justify-between">
           <span>{actionFeedback}</span>
-          <button onClick={() => setActionFeedback(null)} className="text-primary hover:text-primary/80">×</button>
+          <button type="button" aria-label="Close message" onClick={() => setActionFeedback(null)} className="text-primary hover:text-primary/80">×</button>
         </div>
       )}
+
+      {actionError && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs font-medium text-destructive"
+        >
+          <span>{actionError}</span>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setActionError(null)}
+            className="shrink-0 hover:opacity-80"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      <Dialog open={confirmBatch} onOpenChange={setConfirmBatch}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve {pendingItems.length} proposal{pendingItems.length === 1 ? "" : "s"}?</DialogTitle>
+            <DialogDescription>
+              These are autonomous actions staged by specialist agents. Approving them authorises the agents to execute
+              them now, and most cannot be undone. Each item is approved independently; any that fail stay in the queue
+              and are reported.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-48 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+            {pendingItems.map((i) => (
+              <li key={i.id} className="truncate">
+                <span className="font-medium text-foreground">{i.agentName}</span>: {i.title}
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setConfirmBatch(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={runBatchApprove}>
+              Approve {pendingItems.length} action{pendingItems.length === 1 ? "" : "s"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid gap-3">
         {pendingItems.map((item) => (
@@ -276,7 +394,8 @@ Please break down:
                   variant="ghost"
                   size="sm"
                   className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1"
-                  onClick={() => handleDismiss(item.id)}
+                  disabled={busyIds.has(item.id)}
+                  onClick={() => handleDismiss(item)}
                 >
                   <XCircle className="h-3.5 w-3.5" />
                   <span>Dismiss</span>
@@ -286,6 +405,7 @@ Please break down:
                   variant="outline"
                   size="sm"
                   className="h-7 text-xs border-primary/40 text-primary hover:bg-primary/10 gap-1"
+                  disabled={busyIds.has(item.id)}
                   onClick={() => handleDiscussInChat(item)}
                 >
                   <MessageSquare className="h-3.5 w-3.5" />
@@ -295,10 +415,11 @@ Please break down:
                 <Button
                   size="sm"
                   className="h-7 text-xs bg-primary hover:bg-primary/90 text-primary-foreground gap-1 font-semibold"
+                  disabled={busyIds.has(item.id)}
                   onClick={() => handleApprove(item)}
                 >
                   <Check className="h-3.5 w-3.5" />
-                  <span>Approve & Execute</span>
+                  <span>{busyIds.has(item.id) ? "Working..." : "Approve & Execute"}</span>
                 </Button>
               </div>
             </div>

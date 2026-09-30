@@ -2,12 +2,13 @@
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
-import { loadCrmActivities, useOps } from "@/lib/ops-api"
+import { loadCrmActivities } from "@/lib/ops-api"
+import { CRM_ACTIVITIES_KEY, useSharedOps } from "@/lib/overview-api"
 import { initials, toActivityItems } from "@/lib/overview-derive"
 
 /** Recent CRM activity events (real rows from /svc/crm/customers/activities). */
 export function ActivityFeed() {
-  const { value, reload } = useOps(loadCrmActivities)
+  const { value, reload } = useSharedOps(CRM_ACTIVITIES_KEY, loadCrmActivities)
   const items = value.state === "ready" ? toActivityItems(value.data).slice(0, 8) : []
 
   return (

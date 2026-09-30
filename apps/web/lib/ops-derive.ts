@@ -91,7 +91,79 @@ export function avg(nums: number[]): number | null {
 
 /** Tile text for a count that may be capped by page size. */
 export function fmtInt(n: number): string {
-  return n.toLocaleString("en-ZA")
+  // Plain-space thousands ("1 234"), independent of the machine ICU (en-ZA uses NBSP).
+  if (!Number.isFinite(n)) return "—"
+  const r = Math.round(Math.abs(n))
+  return `${n < 0 && r !== 0 ? "-" : ""}${String(r).replace(/\B(?=(\d{3})+(?!\d))/g, " ")}`
+}
+
+// ── Paged lists: truncation / partial-load signalling ────────────────────
+
+/** What fetchAllPages actually managed to load, so headline counts stay honest. */
+export interface PagedMeta {
+  /** Rows actually loaded. */
+  loaded: number
+  /** Server total when it reported one (body `total` or X-Total-Count), else `loaded`. */
+  total: number
+  /** True when the server reported a total (or we could tell we reached the end). */
+  totalKnown: boolean
+  /** The page cap stopped the walk before the end of the list. */
+  truncated: boolean
+  /** 1-based page numbers that failed to load (never silently dropped). */
+  failedPages: number[]
+}
+
+/** The loaded rows are a lower bound on the real list (cap hit, failed page, or short of the server total). */
+export function isPartial(m: PagedMeta): boolean {
+  return m.truncated || m.failedPages.length > 0 || m.loaded < m.total
+}
+
+/** A count computed from loaded rows: "N+" when the sample is partial (it is a lower bound). */
+export function countText(n: number, m: PagedMeta): string {
+  return `${fmtInt(n)}${isPartial(m) ? "+" : ""}`
+}
+
+/** The list size: the server total when known, else "N+" when we had to stop early. */
+export function totalText(m: PagedMeta): string {
+  return m.totalKnown ? fmtInt(m.total) : `${fmtInt(m.total)}${isPartial(m) ? "+" : ""}`
+}
+
+/** One line explaining a partial sample, or null when everything was loaded. */
+export function partialNote(m: PagedMeta): string | null {
+  if (m.failedPages.length > 0) {
+    return `Partial: ${m.failedPages.length === 1 ? "a page" : `${m.failedPages.length} pages`} failed to load, so counts may be higher.`
+  }
+  if (m.truncated || m.loaded < m.total) {
+    return m.totalKnown
+      ? `Partial: counted in the first ${fmtInt(m.loaded)} of ${fmtInt(m.total)} rows.`
+      : `Partial: counted in the first ${fmtInt(m.loaded)} rows; more exist.`
+  }
+  return null
+}
+
+/**
+ * How many pages to walk. `total` null = unknown (caller walks until a short
+ * page). Known total: pages needed, capped at maxPages, plus whether the cap
+ * truncates.
+ */
+export function planPages(total: number | null, pageSize: number, maxPages: number): { pages: number; truncated: boolean } {
+  if (total === null) return { pages: maxPages, truncated: false }
+  const needed = Math.max(1, Math.ceil(total / pageSize))
+  return { pages: Math.min(needed, maxPages), truncated: needed > maxPages }
+}
+
+/** Network tile figures that stay consistent when only the first page(s) loaded. */
+export function networkTile(
+  rows: NetworkDeviceRow[],
+  m: PagedMeta,
+): { active: string; registered: string; activeOfRegistered: string; note: string | null } {
+  const s = networkDeviceStats(rows)
+  return {
+    active: countText(s.active, m),
+    registered: totalText(m),
+    activeOfRegistered: `${countText(s.active, m)} of ${totalText(m)}`,
+    note: partialNote(m),
+  }
 }
 
 // ── Retention (CRM) ──────────────────────────────────────────────────────

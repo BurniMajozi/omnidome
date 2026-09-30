@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import { getSessionSafe } from "@/lib/supabase/client"
 import type { Loadable } from "@/lib/service-state"
-import { itemsOf, loadableFromOps } from "@/lib/ops-derive"
+import { itemsOf, loadableFromOps, planPages, type PagedMeta } from "@/lib/ops-derive"
 
 /**
  * Status-aware GETs for the Retention / Service / IoT / Network modules.
@@ -19,13 +19,24 @@ export interface OpsOptions {
 }
 
 export async function fetchOps<T>(url: string, opts: OpsOptions = {}): Promise<Loadable<T>> {
+  return (await fetchOpsMeta<T>(url, opts)).result
+}
+
+/** fetchOps plus the X-Total-Count response header (null when absent/unreadable). */
+export async function fetchOpsMeta<T>(
+  url: string,
+  opts: OpsOptions = {},
+): Promise<{ result: Loadable<T>; totalCount: number | null }> {
   let res: Response
   try {
     await getSessionSafe()
     res = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(opts.timeoutMs ?? 12_000) })
   } catch {
-    return loadableFromOps<T>(null, undefined)
+    return { result: loadableFromOps<T>(null, undefined), totalCount: null }
   }
+  const header = res.headers.get("X-Total-Count")
+  const parsed = header === null || header.trim() === "" ? NaN : Number(header)
+  const totalCount = Number.isFinite(parsed) && parsed >= 0 ? parsed : null
   if (!res.ok) {
     let message: string | undefined
     let hasJsonDetail = false
@@ -41,41 +52,87 @@ export async function fetchOps<T>(url: string, opts: OpsOptions = {}): Promise<L
     } catch {
       /* non-JSON body */
     }
-    return loadableFromOps<T>(res.status, undefined, { rewriteProxy: opts.rewriteProxy, hasJsonDetail, message })
+    return { result: loadableFromOps<T>(res.status, undefined, { rewriteProxy: opts.rewriteProxy, hasJsonDetail, message }), totalCount }
   }
   try {
-    return loadableFromOps<T>(res.status, (res.status === 204 ? null : await res.json()) as T)
+    return { result: loadableFromOps<T>(res.status, (res.status === 204 ? null : await res.json()) as T), totalCount }
   } catch {
-    return { state: "error", status: res.status, message: "Invalid response" }
+    return { result: { state: "error", status: res.status, message: "Invalid response" }, totalCount }
   }
+}
+
+export type PagedResult<T> = PagedMeta & {
+  rows: T[]
+  /** Same array as `rows` (alias). */
+  items: T[]
 }
 
 /**
  * Fetches every page of a `{items,total}` list endpoint (page + page_size query
- * params), capped at `maxPages`. Returns rows plus the real total so callers can
- * say when the sample is truncated.
+ * params), capped at `maxPages`. Never silently lossy:
+ * - `total` is the server's (body `total`, else X-Total-Count), not the loaded count;
+ * - `truncated` says the page cap stopped the walk;
+ * - `failedPages` lists pages 2+ that failed (a failed FIRST page fails the whole load).
+ * Without a server total it walks sequentially until a short page or the cap.
  */
 export async function fetchAllPages<T>(
   base: string,
   opts: OpsOptions & { pageSize?: number; maxPages?: number } = {},
-): Promise<Loadable<{ rows: T[]; total: number }>> {
+): Promise<Loadable<PagedResult<T>>> {
   const pageSize = opts.pageSize ?? 100
   const maxPages = opts.maxPages ?? 10
   const sep = base.includes("?") ? "&" : "?"
-  const first = await fetchOps<{ items?: T[]; total?: number }>(`${base}${sep}page=1&page_size=${pageSize}`, opts)
+  const pageUrl = (n: number) => `${base}${sep}page=${n}&page_size=${pageSize}`
+  const { result: first, totalCount } = await fetchOpsMeta<{ items?: T[]; total?: number }>(pageUrl(1), opts)
   if (first.state !== "ready") return first
-  const total = typeof first.data?.total === "number" ? first.data.total : itemsOf<T>(first.data).length
-  const rows = itemsOf<T>(first.data)
-  const pages = Math.min(maxPages, Math.ceil(total / pageSize))
-  if (pages > 1) {
-    const rest = await Promise.all(
-      Array.from({ length: pages - 1 }, (_, i) =>
-        fetchOps<{ items?: T[] }>(`${base}${sep}page=${i + 2}&page_size=${pageSize}`, opts),
-      ),
-    )
-    for (const r of rest) if (r.state === "ready") rows.push(...itemsOf<T>(r.data))
+  const rows = [...itemsOf<T>(first.data)]
+  const bodyTotal = (first.data as { total?: unknown } | null)?.total
+  const serverTotal = typeof bodyTotal === "number" ? bodyTotal : totalCount
+  const failedPages: number[] = []
+  let truncated = false
+  if (serverTotal !== null) {
+    const plan = planPages(serverTotal, pageSize, maxPages)
+    truncated = plan.truncated
+    if (plan.pages > 1) {
+      const rest = await Promise.all(
+        Array.from({ length: plan.pages - 1 }, (_, i) => fetchOps<{ items?: T[] }>(pageUrl(i + 2), opts)),
+      )
+      rest.forEach((r, i) => {
+        if (r.state === "ready") rows.push(...itemsOf<T>(r.data))
+        else failedPages.push(i + 2)
+      })
+    }
+  } else {
+    let page = 1
+    let lastLen = rows.length
+    while (lastLen >= pageSize) {
+      if (page >= maxPages) {
+        truncated = true
+        break
+      }
+      page += 1
+      const r = await fetchOps<{ items?: T[] }>(pageUrl(page), opts)
+      if (r.state !== "ready") {
+        failedPages.push(page)
+        break
+      }
+      const got = itemsOf<T>(r.data)
+      rows.push(...got)
+      lastLen = got.length
+    }
   }
-  return { state: "ready", data: { rows, total } }
+  return {
+    state: "ready",
+    data: {
+      rows,
+      items: rows,
+      loaded: rows.length,
+      total: serverTotal ?? rows.length,
+      totalKnown: serverTotal !== null,
+      truncated,
+      failedPages,
+    },
+  }
 }
 
 /**

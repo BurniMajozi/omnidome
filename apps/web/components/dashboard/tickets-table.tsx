@@ -2,8 +2,9 @@
 
 import { Badge } from "@/components/ui/badge"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
-import { loadEscalations, useOps } from "@/lib/ops-api"
-import { relativeTime, type EscalationRow } from "@/lib/ops-derive"
+import { loadEscalations } from "@/lib/ops-api"
+import { ESCALATIONS_KEY, useSharedOps } from "@/lib/overview-api"
+import { partialNote, relativeTime, type EscalationRow } from "@/lib/ops-derive"
 
 const statusColors: Record<string, string> = {
   open: "bg-destructive/20 text-destructive",
@@ -17,7 +18,9 @@ const shortId = (e: EscalationRow) => e.ticket_id || `ESC-${String(e.id).slice(0
 
 /** Latest escalations from the communication service (real rows only). */
 export function TicketsTable() {
-  const { value, reload } = useOps(loadEscalations)
+  // Same request as the Overview KPI strip: shared, so the page fetches escalations once.
+  const { value, reload } = useSharedOps(ESCALATIONS_KEY, loadEscalations)
+  const note = value.state === "ready" ? partialNote(value.data) : null
   const rows: EscalationRow[] =
     value.state === "ready"
       ? [...(value.data.rows as EscalationRow[])]
@@ -29,6 +32,7 @@ export function TicketsTable() {
     <div className="rounded-xl border border-border bg-card">
       <div className="border-b border-border p-5">
         <h3 className="text-lg font-semibold text-foreground">Recent Escalations</h3>
+        {note && <p className="mt-1 text-xs text-amber-400">{note} The newest rows shown may not be the latest.</p>}
       </div>
       {value.state !== "ready" ? (
         <div className="p-4">

@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils"
 import { type LucideIcon, TrendingUp, TrendingDown } from "lucide-react"
 import { useIsClient } from "@/lib/use-is-client"
+import { fmtZar } from "@/lib/format"
 
 interface StatCardProps {
   title: string
@@ -14,6 +15,8 @@ interface StatCardProps {
   loading?: boolean
   /** Value is an honest state label ('Service not running'), not a figure. */
   muted?: boolean
+  /** Extra honest caveat (e.g. "Partial: counted in the first 500 of 1 234 rows"). */
+  note?: string
 }
 
 export function StatCard({
@@ -26,13 +29,14 @@ export function StatCard({
   isCurrency = false,
   loading = false,
   muted = false,
+  note,
 }: StatCardProps) {
   const isClient = useIsClient()
 
   const displayValue = !isClient
     ? (isCurrency ? "R --" : value)
     : isCurrency
-      ? `R ${Number.parseFloat(value.replace(/[^0-9.]/g, "")).toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`
+      ? fmtZar(Number.parseFloat(value.replace(/[^0-9.]/g, "")))
       : value
 
   return (
@@ -67,6 +71,7 @@ export function StatCard({
         </div>
         {description && <span className="text-xs text-muted-foreground">{description}</span>}
       </div>
+      {note && <p className="mt-1.5 text-[11px] leading-snug text-amber-400">{note}</p>}
     </div>
   )
 }
