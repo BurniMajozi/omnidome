@@ -135,9 +135,11 @@ export function StaffAttributionTab() {
         <Card className="p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs text-muted-foreground">Pipeline Inbound Rate</p>
-              <p className="text-2xl font-bold text-cyan-400 mt-1">+18.4%</p>
-              <p className="text-[11px] text-cyan-400 mt-0.5">ad-to-sales velocity</p>
+              <p className="text-xs text-muted-foreground">Cost per lead</p>
+              <p className="text-2xl font-bold text-cyan-400 mt-1">
+                {loading ? "…" : totalConversions > 0 ? `R ${Math.round(totalBudget / totalConversions).toLocaleString()}` : "No leads yet"}
+              </p>
+              <p className="text-[11px] text-cyan-400 mt-0.5">managed budget / delivered leads</p>
             </div>
             <div className="rounded-lg bg-cyan-500/10 p-2.5 text-cyan-400">
               <TrendingUp className="h-5 w-5" />
@@ -186,13 +188,14 @@ export function StaffAttributionTab() {
                 ) : error ? (
                   <tr>
                     <td colSpan={7} className="py-6 text-center text-sm text-red-400">
-                      Error: {error}
+                      Error loading attribution: {error}
+                      <Button variant="outline" size="sm" onClick={fetchAttribution} className="ml-3 h-7 text-xs">Retry</Button>
                     </td>
                   </tr>
                 ) : filtered.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
-                      No staff attribution records match query.
+                      {staffList.length === 0 ? "No staff attribution records yet." : "No staff attribution records match the search."}
                     </td>
                   </tr>
                 ) : (
@@ -230,15 +233,11 @@ export function StaffAttributionTab() {
                         {staff.total_conversions_delivered} leads
                       </td>
                       <td className="py-3 pr-4">
-                        <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-xs">
-                          High Attribution
-                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {staff.total_conversions_delivered > 0 ? `R ${Math.round(staff.total_budget_managed_zar / staff.total_conversions_delivered).toLocaleString()} / lead` : "No leads yet"}
+                        </span>
                       </td>
-                      <td className="py-3">
-                        <Button size="sm" variant="outline" className="h-7 text-xs">
-                          Audit ROI
-                        </Button>
-                      </td>
+                      <td className="py-3" />
                     </tr>
                   ))
                 )}

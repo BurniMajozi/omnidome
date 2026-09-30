@@ -11,163 +11,23 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
-import {
-  listEmailJourneys, createEmailJourney, updateEmailJourney, deleteEmailJourney,
-  triggerEmailJourney, listEmailTemplates, type EmailJourney, type JourneyStep, type EmailTemplate
-} from "@/lib/marketing-api"
+import { writeMarketing, type EmailJourney, type JourneyStep, type EmailTemplate } from "@/lib/marketing-api"
+import { useMarketingLoad } from "@/lib/use-marketing-load"
+import { describeMutationError } from "@/lib/marketing-state"
+import { NotConnected } from "@/components/ui/not-connected"
 
 interface EmailJourneyTabProps {
   onOpenTemplateInBuilder?: (templateId: string, templateName?: string) => void
 }
 
-const DEFAULT_SEED_JOURNEYS: EmailJourney[] = [
-  {
-    id: "journey-1",
-    name: "Welcome & Onboarding Journey",
-    description: "Nurtures new subscribers and customers through account setup and key value props.",
-    trigger_type: "signup",
-    status: "active",
-    total_enrolled: 1420,
-    total_completed: 1184,
-    created_at: "2026-09-20T10:00:00Z",
-    steps: [
-      {
-        id: "step-1",
-        type: "trigger",
-        title: "Trigger: New Customer Subscribed",
-        condition: "Event: user.signup OR newsletter.optin",
-        stats: { entered: 1420, completed: 1420 },
-      },
-      {
-        id: "step-2",
-        type: "template",
-        title: "Send: Welcome & Own Your Newsletter",
-        template_name: "Own your newsletter",
-        delay_hours: 0,
-        stats: { entered: 1420, completed: 1420, open_rate: 68.4, click_rate: 31.2 },
-      },
-      {
-        id: "step-3",
-        type: "delay",
-        title: "Wait 2 Days",
-        delay_hours: 48,
-        stats: { entered: 1390, completed: 1320 },
-      },
-      {
-        id: "step-4",
-        type: "condition",
-        title: "Branch: Check if First Email Opened",
-        condition: "email.opened == true",
-        stats: { entered: 1320, completed: 1320 },
-      },
-      {
-        id: "step-5",
-        type: "template",
-        title: "Send: Pro Tips & Quick Setup Guide",
-        template_name: "Getting Started Quick Guide",
-        delay_hours: 0,
-        stats: { entered: 903, completed: 880, open_rate: 54.1, click_rate: 22.8 },
-      },
-      {
-        id: "step-6",
-        type: "action",
-        title: "Action: Add Tag 'onboarding-completed'",
-        action_type: "add_tag",
-        stats: { entered: 880, completed: 880 },
-      },
-    ],
-  },
-  {
-    id: "journey-2",
-    name: "Commercial Guarding Lead Nurture",
-    description: "Automated sales enablement sequence for high-intent commercial leads.",
-    trigger_type: "lead_tagged",
-    status: "active",
-    total_enrolled: 430,
-    total_completed: 310,
-    created_at: "2026-09-22T08:30:00Z",
-    steps: [
-      {
-        id: "lead-1",
-        type: "trigger",
-        title: "Trigger: Lead Tagged 'Commercial'",
-        condition: "Tag: Commercial",
-        stats: { entered: 430, completed: 430 },
-      },
-      {
-        id: "lead-2",
-        type: "template",
-        title: "Send: Commercial Security Assessment",
-        template_name: "Commercial Assessment Intro",
-        delay_hours: 0,
-        stats: { entered: 430, completed: 430, open_rate: 72.1, click_rate: 41.5 },
-      },
-      {
-        id: "lead-3",
-        type: "delay",
-        title: "Wait 1 Day",
-        delay_hours: 24,
-        stats: { entered: 420, completed: 410 },
-      },
-      {
-        id: "lead-4",
-        type: "template",
-        title: "Send: Case Study & Client Proof",
-        template_name: "Enterprise Security Case Study",
-        delay_hours: 0,
-        stats: { entered: 410, completed: 395, open_rate: 61.0, click_rate: 29.4 },
-      },
-    ],
-  },
-  {
-    id: "journey-3",
-    name: "Subscriber Re-engagement Sequence",
-    description: "Recovers dormant subscribers who haven't opened in 30 days.",
-    trigger_type: "inactivity",
-    status: "draft",
-    total_enrolled: 210,
-    total_completed: 95,
-    created_at: "2026-09-25T14:15:00Z",
-    steps: [
-      {
-        id: "re-1",
-        type: "trigger",
-        title: "Trigger: Inactive for 30 Days",
-        condition: "activity.last_opened > 30d",
-        stats: { entered: 210, completed: 210 },
-      },
-      {
-        id: "re-2",
-        type: "template",
-        title: "Send: We Miss You Exclusive Offer",
-        template_name: "Re-engagement Promo",
-        delay_hours: 0,
-        stats: { entered: 210, completed: 210, open_rate: 45.2, click_rate: 18.0 },
-      },
-      {
-        id: "re-3",
-        type: "delay",
-        title: "Wait 4 Days",
-        delay_hours: 96,
-        stats: { entered: 200, completed: 190 },
-      },
-      {
-        id: "re-4",
-        type: "condition",
-        title: "Branch: Check if Clicked Promo",
-        condition: "email.clicked == true",
-        stats: { entered: 190, completed: 190 },
-      },
-    ],
-  },
-]
-
 export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProps) {
-  const [journeys, setJourneys] = useState<EmailJourney[]>(DEFAULT_SEED_JOURNEYS)
-  const [selectedJourneyId, setSelectedJourneyId] = useState<string>("journey-1")
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Real journeys and templates only, each fetched once through the shared read cache.
+  const { value: journeysLoad, reload: loadJourneys } = useMarketingLoad<EmailJourney[]>("/email/journeys")
+  const { value: templatesLoad } = useMarketingLoad<EmailTemplate[]>("/templates")
+  const journeys: EmailJourney[] = journeysLoad.state === "ready" ? journeysLoad.data : []
+  const templates: EmailTemplate[] = templatesLoad.state === "ready" ? templatesLoad.data : []
+  const [selectedJourneyId, setSelectedJourneyId] = useState<string>("")
+  const [actionError, setActionError] = useState<string | null>(null)
 
   // Modals
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -179,199 +39,126 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
   const [editingStep, setEditingStep] = useState<JourneyStep | null>(null)
   const [showStepModal, setShowStepModal] = useState(false)
 
-  // Simulation modal
-  const [simulating, setSimulating] = useState(false)
-  const [simulationLogs, setSimulationLogs] = useState<string[]>([])
-  const [simContactEmail, setSimContactEmail] = useState("test.user@metromall.co.za")
+  // Enrolment modal: a real call to the journey trigger endpoint, showing its real answer
+  const [enrolling, setEnrolling] = useState(false)
+  const [enrolResult, setEnrolResult] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
+  const [simContactEmail, setSimContactEmail] = useState("")
   const [showSimModal, setShowSimModal] = useState(false)
 
   const activeJourney = journeys.find((j) => j.id === selectedJourneyId) || journeys[0] || null
 
-  const loadData = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [fetchedJourneys, fetchedTemplates] = await Promise.all([
-        listEmailJourneys().catch(() => null),
-        listEmailTemplates().catch(() => []),
-      ])
-      if (fetchedJourneys && fetchedJourneys.length > 0) {
-        setJourneys(fetchedJourneys)
-        if (!fetchedJourneys.some((j) => j.id === selectedJourneyId)) {
-          setSelectedJourneyId(fetchedJourneys[0].id)
-        }
-      }
-      setTemplates(fetchedTemplates || [])
-    } catch (e) {
-      console.warn("Using local journeys fallback", e)
-    } finally {
-      setLoading(false)
-    }
+  const saveJourneySteps = async (journeyId: string, steps: JourneyStep[]) => {
+    setActionError(null)
+    const r = await writeMarketing("PUT", `/email/journeys/${journeyId}`, { steps })
+    if (!r.ok) setActionError(describeMutationError(r.status, r.error))
+    else loadJourneys()
   }
-
-  useEffect(() => {
-    loadData()
-  }, [])
 
   const handleCreateJourney = async () => {
     if (!newJourneyName.trim()) return
-    const newJourney: EmailJourney = {
-      id: `journey-${Date.now()}`,
+    setActionError(null)
+    const r = await writeMarketing<EmailJourney>("POST", "/email/journeys", {
       name: newJourneyName,
       description: newJourneyDesc,
       trigger_type: newJourneyTrigger,
       status: "draft",
-      total_enrolled: 0,
-      total_completed: 0,
-      created_at: new Date().toISOString(),
       steps: [
         {
           id: `step-${Date.now()}-1`,
           type: "trigger",
           title: `Trigger: ${newJourneyTrigger === "signup" ? "Customer Signup" : newJourneyTrigger === "lead_tagged" ? "Lead Tagged" : "Custom Event"}`,
           condition: `Trigger rule: ${newJourneyTrigger}`,
-          stats: { entered: 0, completed: 0 },
-        },
-        {
-          id: `step-${Date.now()}-2`,
-          type: "template",
-          title: "Send: Initial Welcome Template",
-          template_name: templates[0]?.name || "Own your newsletter",
-          delay_hours: 0,
-          stats: { entered: 0, completed: 0 },
         },
       ],
+    })
+    if (!r.ok) {
+      setActionError(describeMutationError(r.status, r.error))
+      return
     }
-
-    try {
-      const created = await createEmailJourney(newJourney)
-      if (created) {
-        setJourneys([created, ...journeys])
-        setSelectedJourneyId(created.id)
-      } else {
-        setJourneys([newJourney, ...journeys])
-        setSelectedJourneyId(newJourney.id)
-      }
-    } catch (e) {
-      setJourneys([newJourney, ...journeys])
-      setSelectedJourneyId(newJourney.id)
-    }
-
+    if (r.data?.id) setSelectedJourneyId(r.data.id)
     setShowCreateModal(false)
     setNewJourneyName("")
     setNewJourneyDesc("")
+    loadJourneys()
   }
 
   const handleToggleStatus = async (journey: EmailJourney) => {
+    setActionError(null)
     const nextStatus = journey.status === "active" ? "paused" : "active"
-    const updated = journeys.map((j) => (j.id === journey.id ? { ...j, status: nextStatus as any } : j))
-    setJourneys(updated)
-    try {
-      await updateEmailJourney(journey.id, { status: nextStatus })
-    } catch (e) {
-      // optimistic
-    }
+    const r = await writeMarketing("PUT", `/email/journeys/${journey.id}`, { status: nextStatus })
+    if (!r.ok) setActionError(describeMutationError(r.status, r.error))
+    else loadJourneys()
   }
 
   const handleDeleteJourney = async (id: string) => {
-    if (journeys.length <= 1) return
-    const updated = journeys.filter((j) => j.id !== id)
-    setJourneys(updated)
-    setSelectedJourneyId(updated[0]?.id || "")
-    try {
-      await deleteEmailJourney(id)
-    } catch (e) {
-      // optimistic
+    setActionError(null)
+    const r = await writeMarketing("DELETE", `/email/journeys/${id}`)
+    if (!r.ok) {
+      setActionError(describeMutationError(r.status, r.error))
+      return
     }
+    setSelectedJourneyId("")
+    loadJourneys()
   }
 
   const handleAddStepToActive = (type: JourneyStep["type"]) => {
     if (!activeJourney) return
-    const stepNumber = (activeJourney.steps?.length || 0) + 1
     const newStep: JourneyStep = {
       id: `step-${Date.now()}`,
       type,
       title:
         type === "template"
-          ? `Send: ${templates[0]?.name || "Follow-up Template"}`
+          ? `Send: ${templates[0]?.name || "choose a template"}`
           : type === "delay"
           ? "Wait 2 Days"
           : type === "condition"
           ? "Branch: Check if Email Opened"
           : "Action: Update CRM Status",
-      template_name: type === "template" ? templates[0]?.name || "Own your newsletter" : undefined,
+      template_name: type === "template" ? templates[0]?.name : undefined,
       delay_hours: type === "delay" ? 48 : 0,
       condition: type === "condition" ? "email.opened == true" : undefined,
       action_type: type === "action" ? "add_tag" : undefined,
-      stats: { entered: 0, completed: 0 },
     }
-    const updatedSteps = [...(activeJourney.steps || []), newStep]
-    const updatedJourney = { ...activeJourney, steps: updatedSteps }
-    setJourneys(journeys.map((j) => (j.id === activeJourney.id ? updatedJourney : j)))
-    try {
-      updateEmailJourney(activeJourney.id, { steps: updatedSteps })
-    } catch (e) {}
+    void saveJourneySteps(activeJourney.id, [...(activeJourney.steps || []), newStep])
   }
 
   const handleSaveStepModal = () => {
     if (!activeJourney || !editingStep) return
     const updatedSteps = activeJourney.steps.map((s) => (s.id === editingStep.id ? editingStep : s))
-    const updatedJourney = { ...activeJourney, steps: updatedSteps }
-    setJourneys(journeys.map((j) => (j.id === activeJourney.id ? updatedJourney : j)))
     setShowStepModal(false)
     setEditingStep(null)
-    try {
-      updateEmailJourney(activeJourney.id, { steps: updatedSteps })
-    } catch (e) {}
+    void saveJourneySteps(activeJourney.id, updatedSteps)
   }
 
   const handleDeleteStep = (stepId: string) => {
     if (!activeJourney) return
-    const updatedSteps = activeJourney.steps.filter((s) => s.id !== stepId)
-    const updatedJourney = { ...activeJourney, steps: updatedSteps }
-    setJourneys(journeys.map((j) => (j.id === activeJourney.id ? updatedJourney : j)))
-    try {
-      updateEmailJourney(activeJourney.id, { steps: updatedSteps })
-    } catch (e) {}
+    void saveJourneySteps(activeJourney.id, activeJourney.steps.filter((s) => s.id !== stepId))
   }
 
-  const runSimulation = async () => {
-    if (!activeJourney) return
-    setSimulating(true)
-    setSimulationLogs([])
+  const runEnrolment = async () => {
+    if (!activeJourney || !simContactEmail.trim()) return
+    setEnrolling(true)
+    setEnrolResult(null)
     setShowSimModal(true)
-
-    const logs: string[] = []
-    const addLog = (msg: string) => {
-      logs.push(`[${new Date().toLocaleTimeString()}] ${msg}`)
-      setSimulationLogs([...logs])
+    const r = await writeMarketing<{ status: string; journey_id: string; enrolled_contact: string; message: string }>(
+      "POST",
+      `/email/journeys/${activeJourney.id}/trigger`,
+      { contact_email: simContactEmail.trim() },
+    )
+    setEnrolling(false)
+    if (!r.ok) {
+      setEnrolResult({ kind: "error", text: describeMutationError(r.status, r.error) })
+      return
     }
+    setEnrolResult({ kind: "ok", text: r.data?.message || `Server response: ${r.data?.status ?? "no status returned"}` })
+    loadJourneys()
+  }
 
-    addLog(`Initiating journey test simulation for contact: ${simContactEmail}`)
-    await new Promise((r) => setTimeout(r, 600))
+  const openRates = journeys.flatMap((j) => (j.steps || []).map((st) => st.stats?.open_rate).filter((v): v is number => typeof v === "number"))
+  const avgOpenRate = openRates.length ? `${(openRates.reduce((a, b) => a + b, 0) / openRates.length).toFixed(1)}%` : "No data yet"
 
-    for (let i = 0; i < activeJourney.steps.length; i++) {
-      const step = activeJourney.steps[i]
-      if (step.type === "trigger") {
-        addLog(`Trigger executed: ${step.title}`)
-      } else if (step.type === "template") {
-        addLog(`Dispatched email: "${step.template_name || step.title}" to ${simContactEmail}`)
-      } else if (step.type === "delay") {
-        addLog(`Timer evaluated: ${step.title} (${step.delay_hours || 24}h delay simulated)`)
-      } else if (step.type === "condition") {
-        addLog(`Condition evaluated: ${step.condition || "email.opened == true"} -> Evaluated TRUE`)
-      } else if (step.type === "action") {
-        addLog(`Applied action: ${step.title}`)
-      }
-      await new Promise((r) => setTimeout(r, 700))
-    }
-
-    addLog(`Journey run simulation completed successfully!`)
-    setSimulating(false)
-
-    try {
-      await triggerEmailJourney(activeJourney.id, { contact_email: simContactEmail })
-    } catch (e) {}
+  if (journeysLoad.state !== "ready") {
+    return <NotConnected loadable={journeysLoad} service="The marketing service" onRetry={loadJourneys} />
   }
 
   return (
@@ -388,14 +175,22 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={runSimulation} className="gap-1.5">
-            <Zap className="h-4 w-4 text-amber-500" /> Simulate Journey Run
+          <Button variant="outline" size="sm" onClick={() => { setEnrolResult(null); setShowSimModal(true) }} disabled={!activeJourney} className="gap-1.5">
+            <Zap className="h-4 w-4 text-amber-500" /> Enrol a contact
           </Button>
           <Button size="sm" onClick={() => setShowCreateModal(true)} className="bg-blue-600 hover:bg-blue-700 text-white gap-1.5">
             <Plus className="h-4 w-4" /> New Journey
           </Button>
         </div>
       </div>
+
+      {actionError && <p role="alert" className="text-sm text-red-400">{actionError}</p>}
+
+      {journeys.length === 0 && (
+        <div className="rounded-xl border border-dashed bg-card/40 p-10 text-center text-sm text-muted-foreground">
+          No journeys yet. Use New Journey to create one.
+        </div>
+      )}
 
       {/* Metrics Row */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -419,7 +214,7 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
         </div>
         <div className="rounded-xl border bg-card p-4">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Avg. Open Rate</div>
-          <div className="mt-1 text-2xl font-bold text-emerald-600">62.8%</div>
+          <div className="mt-1 text-2xl font-bold text-foreground">{avgOpenRate}</div>
         </div>
       </div>
 
@@ -771,51 +566,47 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
         </DialogContent>
       </Dialog>
 
-      {/* Simulation Modal */}
+      {/* Enrolment Modal */}
       <Dialog open={showSimModal} onOpenChange={setShowSimModal}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5 text-amber-500" /> Journey Execution Simulation
+              <Zap className="h-5 w-5 text-amber-500" /> Enrol a contact
             </DialogTitle>
             <DialogDescription>
-              Test running the entire journey logic on a test recipient.
+              Asks the marketing service to enrol this contact in the selected journey. The result below is the server&apos;s real answer.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Test Contact Email</label>
+              <label className="text-xs font-medium text-muted-foreground">Contact email</label>
               <Input
                 value={simContactEmail}
                 onChange={(e) => setSimContactEmail(e.target.value)}
-                placeholder="test.user@metromall.co.za"
-                disabled={simulating}
+                placeholder="contact@example.com"
+                disabled={enrolling}
               />
             </div>
 
-            <div className="bg-zinc-950 text-zinc-200 rounded-lg p-4 font-mono text-xs max-h-60 overflow-y-auto space-y-1.5">
-              {simulationLogs.map((log, i) => (
-                <div key={i} className="flex items-start gap-1">
-                  <span className="text-emerald-400">→</span>
-                  <span>{log}</span>
-                </div>
-              ))}
-              {simulating && (
-                <div className="flex items-center gap-2 text-amber-400 animate-pulse pt-2">
-                  <RefreshCw className="h-3 w-3 animate-spin" />
-                  <span>Processing next step...</span>
-                </div>
-              )}
-            </div>
+            {enrolling && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <RefreshCw className="h-3 w-3 animate-spin" /> Waiting for the server…
+              </div>
+            )}
+            {enrolResult && (
+              <p role={enrolResult.kind === "error" ? "alert" : "status"} className={`text-xs font-medium ${enrolResult.kind === "error" ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                {enrolResult.text}
+              </p>
+            )}
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowSimModal(false)} disabled={simulating}>
+            <Button variant="outline" onClick={() => setShowSimModal(false)} disabled={enrolling}>
               Close
             </Button>
-            <Button onClick={runSimulation} disabled={simulating} className="bg-blue-600 gap-1.5">
-              <Play className="h-4 w-4" /> Run Again
+            <Button onClick={runEnrolment} disabled={enrolling || !simContactEmail.trim()} className="bg-blue-600 gap-1.5">
+              <Play className="h-4 w-4" /> Enrol
             </Button>
           </DialogFooter>
         </DialogContent>

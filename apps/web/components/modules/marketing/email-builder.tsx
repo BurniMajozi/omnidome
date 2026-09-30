@@ -79,7 +79,7 @@ const DEFAULT_STYLES: EmailDesignStyles = {
 
 interface EmailBuilderProps {
   initialTemplate?: EmailTemplate | null
-  onSave?: (template: { name: string; subject: string; body_html: string; category?: string; styles?: EmailDesignStyles }) => Promise<void> | void
+  onSave?: (template: { name: string; subject: string; body_html: string; category?: string; styles?: EmailDesignStyles }) => Promise<void | boolean> | void | boolean
   onStartCampaign?: (campaignData: { name: string; subject: string; body_html: string; segment?: string }) => Promise<void> | void
   onBack?: () => void
   embedded?: boolean
@@ -227,8 +227,9 @@ export function EmailBuilder({
     setIsSaving(true)
     try {
       const html = generateHtml()
+      let ok: void | boolean = true
       if (onSave) {
-        await onSave({
+        ok = await onSave({
           name: templateName,
           subject,
           body_html: html,
@@ -236,8 +237,11 @@ export function EmailBuilder({
           styles,
         })
       }
-      setSaveSuccess(true)
-      setTimeout(() => setSaveSuccess(false), 2500)
+      // The parent returns false when the server rejected the save: show no success flash.
+      if (ok !== false) {
+        setSaveSuccess(true)
+        setTimeout(() => setSaveSuccess(false), 2500)
+      }
     } finally {
       setIsSaving(false)
     }
@@ -1151,7 +1155,7 @@ export function EmailBuilder({
               <Badge variant="outline" className="font-mono text-xs">Subject: {subject}</Badge>
             </DialogTitle>
             <DialogDescription>
-              Real-time HTML preview with mock personalization data applied.
+              Preview only: merge tags are replaced with placeholder values, no real contact data is used.
             </DialogDescription>
           </DialogHeader>
           <div className="border rounded-lg overflow-hidden my-4 bg-muted/10 p-4 flex justify-center">

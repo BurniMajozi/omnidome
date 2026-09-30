@@ -272,11 +272,19 @@ function NewAudienceModal({ onClose, onCreated }: { onClose: () => void; onCreat
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const [sourcesError, setSourcesError] = useState<string | null>(null)
+
   useEffect(() => {
-    fnoApi.listGeoSegments().then(setSegments).catch(() => setSegments([]))
+    let alive = true
+    const fail = (e: unknown) => {
+      // Show the real failure instead of pretending there is nothing to choose from.
+      if (alive) setSourcesError(e instanceof Error ? e.message : "Couldn't load lead sources")
+    }
+    fnoApi.listGeoSegments().then((v) => { if (alive) setSegments(v) }).catch((e) => { fail(e); if (alive) setSegments([]) })
     opportunityApi.listCompanySearches()
-      .then((all) => setSearches(all.filter((s) => s.status === "done" && s.result_count > 0)))
-      .catch(() => setSearches([]))
+      .then((all) => { if (alive) setSearches(all.filter((s) => s.status === "done" && s.result_count > 0)) })
+      .catch((e) => { fail(e); if (alive) setSearches([]) })
+    return () => { alive = false }
   }, [])
 
   const sources = type === "homes" ? segments : type === "businesses" ? searches : []
@@ -361,7 +369,7 @@ function NewAudienceModal({ onClose, onCreated }: { onClose: () => void; onCreat
                 <span className="inline-flex items-center gap-1 text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</span>
               ) : sources.length === 0 ? (
                 <p className="rounded-md border border-dashed border-border p-2 text-muted-foreground">
-                  {type === "homes"
+                  {sourcesError ? `Could not load lead sources: ${sourcesError}` : type === "homes"
                     ? "No saved segments yet. Build one in Sales → Lead sources → Homes passed."
                     : "No finished company searches yet. Run one in Sales → Lead sources → Companies."}
                 </p>

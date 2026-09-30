@@ -11,50 +11,11 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
-import {
-  listEmailTemplates, createEmailTemplate, updateEmailTemplate, deleteEmailTemplate,
-  type EmailTemplate
-} from "@/lib/marketing-api"
+import { writeMarketing, type EmailTemplate } from "@/lib/marketing-api"
+import { useMarketingLoad } from "@/lib/use-marketing-load"
+import { describeMutationError } from "@/lib/marketing-state"
+import { NotConnected } from "@/components/ui/not-connected"
 import { EmailBuilder } from "./email-builder"
-
-const DEFAULT_SEEDED_TEMPLATES: EmailTemplate[] = [
-  {
-    id: "tpl-1",
-    tenant_id: "00000000-0000-0000-0000-000000000001",
-    name: "Own your newsletter",
-    subject: "Hello world — self-host and manage your newsletter",
-    body_html: `<h1>Hello world</h1><p>Self-host and manage your own newsletter system with ease. Manage millions of subscribers on a tiny VPS instance with minimal resources.</p><p>Compose e-mails with the drag-and-drop visual editor, as richtext, raw HTML, plaintext, or markdown.</p>`,
-    category: "newsletter",
-    created_at: "2026-09-24T10:00:00Z",
-  },
-  {
-    id: "tpl-2",
-    tenant_id: "00000000-0000-0000-0000-000000000001",
-    name: "Getting Started Quick Guide",
-    subject: "Welcome aboard! Here are 3 steps to configure your dome",
-    body_html: `<h2>Welcome to OminiDome!</h2><p>Here is everything you need to get your security, monitoring, and communication channels running in less than 5 minutes.</p>`,
-    category: "onboarding",
-    created_at: "2026-09-23T14:30:00Z",
-  },
-  {
-    id: "tpl-3",
-    tenant_id: "00000000-0000-0000-0000-000000000001",
-    name: "Commercial Assessment Intro",
-    subject: "Request a complimentary security audit for your facility",
-    body_html: `<h2>Commercial Guarding & Access Audits</h2><p>Find out where your perimeter security, camera coverage, and gate access protocols can be upgraded.</p>`,
-    category: "promotional",
-    created_at: "2026-09-22T09:15:00Z",
-  },
-  {
-    id: "tpl-4",
-    tenant_id: "00000000-0000-0000-0000-000000000001",
-    name: "Re-engagement Promo",
-    subject: "We miss you — enjoy 20% off your annual service renewal",
-    body_html: `<h2>Special Re-activation Offer</h2><p>It's been a while since we connected. We would love to welcome you back with an exclusive seasonal discount.</p>`,
-    category: "retention",
-    created_at: "2026-09-21T16:00:00Z",
-  },
-]
 
 interface EmailTemplatesTabProps {
   initialEditTemplateId?: string | null
@@ -65,9 +26,10 @@ export function EmailTemplatesTab({
   initialEditTemplateId,
   onOpenComposerWithTemplate,
 }: EmailTemplatesTabProps) {
-  const [templates, setTemplates] = useState<EmailTemplate[]>(DEFAULT_SEEDED_TEMPLATES)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // Real templates only (shared read with the compose tab); no seeded samples.
+  const { value: templatesLoad, reload: loadTemplates } = useMarketingLoad<EmailTemplate[]>("/templates")
+  const templates: EmailTemplate[] = templatesLoad.state === "ready" ? templatesLoad.data : []
+  const [actionError, setActionError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
 
@@ -77,25 +39,6 @@ export function EmailTemplatesTab({
 
   // Preview modal
   const [previewingTemplate, setPreviewingTemplate] = useState<EmailTemplate | null>(null)
-
-  const loadTemplates = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listEmailTemplates()
-      if (data && data.length > 0) {
-        setTemplates(data)
-      }
-    } catch (e) {
-      console.warn("Using local fallback templates", e)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadTemplates()
-  }, [])
 
   useEffect(() => {
     if (initialEditTemplateId) {
@@ -117,59 +60,56 @@ export function EmailTemplatesTab({
     setIsBuilderOpen(true)
   }
 
+  // Returns false when the server rejected the write so the builder does not flash "Saved!".
   const handleSaveFromBuilder = async (savedData: {
     name: string
     subject: string
     body_html: string
     category?: string
-  }) => {
+  }): Promise<boolean> => {
+    setActionError(null)
     if (editingTemplate) {
-      const updated: EmailTemplate = {
-        ...editingTemplate,
-        name: savedData.name,
-        subject: savedData.subject,
-        body_html: savedData.body_html,
-        category: savedData.category || editingTemplate.category,
-        updated_at: new Date().toISOString(),
+      const r = await writeMarketing<EmailTemplate>("PUT", `/templates/${editingTemplate.id}`, savedData)
+      if (!r.ok) {
+        setActionError(describeMutationError(r.status, r.error))
+        return false
       }
-      setTemplates(templates.map((t) => (t.id === editingTemplate.id ? updated : t)))
-      setEditingTemplate(updated)
-      try {
-        await updateEmailTemplate(editingTemplate.id, savedData)
-      } catch (e) {}
+      setEditingTemplate({ ...editingTemplate, ...savedData, category: savedData.category || editingTemplate.category })
     } else {
-      const created: EmailTemplate = {
-        id: `tpl-${Date.now()}`,
-        tenant_id: "00000000-0000-0000-0000-000000000001",
-        name: savedData.name,
-        subject: savedData.subject,
-        body_html: savedData.body_html,
-        category: savedData.category || "newsletter",
-        created_at: new Date().toISOString(),
+      const r = await writeMarketing<EmailTemplate>("POST", "/templates", savedData)
+      if (!r.ok || !r.data) {
+        setActionError(describeMutationError(r.status, r.error))
+        return false
       }
-      setTemplates([created, ...templates])
-      setEditingTemplate(created)
-      try {
-        await createEmailTemplate(savedData)
-      } catch (e) {}
+      setEditingTemplate(r.data)
     }
+    loadTemplates()
+    return true
   }
 
   const handleDelete = async (id: string) => {
-    setTemplates(templates.filter((t) => t.id !== id))
-    try {
-      await deleteEmailTemplate(id)
-    } catch (e) {}
+    setActionError(null)
+    const r = await writeMarketing("DELETE", `/templates/${id}`)
+    if (!r.ok) {
+      setActionError(describeMutationError(r.status, r.error))
+      return
+    }
+    loadTemplates()
   }
 
-  const handleDuplicate = (template: EmailTemplate) => {
-    const copy: EmailTemplate = {
-      ...template,
-      id: `tpl-${Date.now()}`,
+  const handleDuplicate = async (template: EmailTemplate) => {
+    setActionError(null)
+    const r = await writeMarketing("POST", "/templates", {
       name: `${template.name} (Copy)`,
-      created_at: new Date().toISOString(),
+      subject: template.subject,
+      body_html: template.body_html,
+      category: template.category,
+    })
+    if (!r.ok) {
+      setActionError(describeMutationError(r.status, r.error))
+      return
     }
-    setTemplates([copy, ...templates])
+    loadTemplates()
   }
 
   const filtered = templates.filter((t) => {
@@ -184,6 +124,7 @@ export function EmailTemplatesTab({
   if (isBuilderOpen) {
     return (
       <div className="space-y-4">
+        {actionError && <p role="alert" className="text-sm text-red-400">{actionError}</p>}
         <div className="flex items-center justify-between pb-2">
           <Button
             variant="ghost"
@@ -255,7 +196,7 @@ export function EmailTemplatesTab({
               !categoryFilter ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground hover:bg-muted/80"
             }`}
           >
-            All ({templates.length})
+            All{templatesLoad.state === "ready" ? ` (${templates.length})` : ""}
           </button>
           {["newsletter", "onboarding", "promotional", "retention"].map((cat) => (
             <button
@@ -271,11 +212,15 @@ export function EmailTemplatesTab({
         </div>
       </div>
 
+      {actionError && <p role="alert" className="text-sm text-red-400">{actionError}</p>}
+
       {/* Templates Grid */}
-      {filtered.length === 0 ? (
+      {templatesLoad.state !== "ready" ? (
+        <NotConnected loadable={templatesLoad} service="The marketing service" onRetry={loadTemplates} />
+      ) : filtered.length === 0 ? (
         <div className="py-16 text-center border rounded-xl bg-card">
           <Mail className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
-          <h3 className="font-semibold text-base">No templates found</h3>
+          <h3 className="font-semibold text-base">{templates.length === 0 ? "No templates yet" : "No templates match"}</h3>
           <p className="text-sm text-muted-foreground mt-1 max-w-sm mx-auto">
             Get started by launching the visual builder to design your first newsletter template.
           </p>

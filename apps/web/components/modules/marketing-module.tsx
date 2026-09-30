@@ -29,29 +29,43 @@ import { EmailComposeTab } from "./marketing/email-compose-tab"
 import { EmailJourneyTab } from "./marketing/email-journey-tab"
 import { AgentMailTab } from "./marketing/agentmail-tab"
 import {
-  listCampaigns, createCampaign, listSocialAccounts, listSocialPosts, listInboxMessages,
-  getInboxUnreadCount, listWhatsAppContacts, listWhatsAppBroadcasts,
-  listAdCampaigns, listCommentAutomations,
-  createSocialPost, publishSocialPost, crossPost, deleteSocialPost, createWhatsAppBroadcast,
-  sendWhatsAppBroadcast, createCommentAutomation, replyToInboxMessage,
-  archiveInboxMessage, markInboxRead, createAdCampaign, updateAdCampaign,
-  listTraditionalCampaigns, type TraditionalCampaign,
-  listConnectors, connectSocialAccount, type MarketingConnector,
-  getAccountsHealth, type AccountHealth,
-  getSocialUsage, createScopedKey, offboardProfile,
-  listQueues, createQueue, updateQueue, deleteQueue, enqueuePost, type MarketingQueue,
-  listEmailTemplates, createEmailTemplate, sendEmailBatch, type EmailTemplate,
-  getAnalyticsOverview, getAnalyticsDaily, getAnalyticsPosts,
-  type AnalyticsOverview, type DailyMetricPoint, type AnalyticsPostRow,
-  listWhatsAppSenders, connectWhatsAppNumber, listWhatsAppTemplates, createWhatsAppTemplate,
-  listWhatsAppFlows, createWhatsAppFlow, listWhatsAppGroups, createWhatsAppGroup, listWhatsAppConversions,
-  type WhatsAppSender, type WhatsAppTemplate, type WhatsAppFlow, type WhatsAppGroup, type WhatsAppConversion,
-  listSmsSenderIds, createSmsSenderId, deleteSmsSenderId, sendSmsMessage, type SmsSenderId,
-  listTeamMembers, inviteTeamMember, deleteTeamMember, type TeamMember,
+  sendWhatsAppBroadcast,
+  type TraditionalCampaign,
+  type MarketingConnector,
+  type AccountHealth,
+  type MarketingQueue,
+  type AnalyticsOverview,
+  type DailyMetricPoint,
+  type AnalyticsPostRow,
+  type WhatsAppSender,
+  type WhatsAppTemplate,
+  type WhatsAppFlow,
+  type WhatsAppGroup,
+  type WhatsAppConversion,
+  type SmsSenderId,
 } from "@/lib/marketing-api"
-import { salesApi } from "@/lib/sales-api"
+import {
+  adminApi, adminErrorMessage, AdminApiError, grantableRoles, ROLE_LABELS,
+  type Whoami, type TenantMember, type TenantInvite,
+} from "@/lib/admin-api"
+import {
+  loadMarketing, writeMarketing, campaignsPath, socialAccountsPath, socialPostsPath,
+  inboxMessagesPath, analyticsDailyPath, analyticsPostsPath, adCampaignsPath, commentAutomationsPath, whatsAppContactsPath, whatsAppBroadcastsPath,
+} from "@/lib/marketing-api"
+import { useMarketingLoad } from "@/lib/use-marketing-load"
+import { describeMutationError } from "@/lib/marketing-state"
+import { NotConnected, NoDataYet, StatValue } from "@/components/ui/not-connected"
+import type { Loadable } from "@/lib/service-state"
 import { MarketingAudiences } from "./marketing-audiences"
 import { StaffAttributionTab } from "./marketing/staff-attribution-tab"
+
+/** One-line message for a failed Loadable (server detail verbatim where given). */
+function describeLoadableError(l: Loadable<unknown>, fallback: string): string {
+  if (l.state === "unreachable") return "Service not running. Try again once it is connected."
+  if (l.state === "denied") return `Not permitted (HTTP ${l.status}).`
+  if (l.state === "error") return l.message || `${fallback} (HTTP ${l.status ?? "?"})`
+  return fallback
+}
 
 const channelColors = ["#4ade80", "#60a5fa", "#f59e0b", "#a78bfa", "#f472b6"]
 
@@ -732,55 +746,39 @@ function ScheduleSortDropdown({
 }
 
 function ConnectionsTab() {
-  const [data, setData] = useState<{ connectable: boolean; configured: boolean; profile_ready: boolean; connectors: MarketingConnector[] } | null>(null)
-  const [loading, setLoading] = useState(true)
+  const { value: conn, reload } = useMarketingLoad<{ connectable: boolean; configured: boolean; profile_ready: boolean; connectors: MarketingConnector[] }>("/social/zernio/connectors")
+  const data = conn.state === "ready" ? conn.data : null
+  const loading = conn.state === "loading"
   const [error, setError] = useState<string | null>(null)
   const [connectingId, setConnectingId] = useState<string | null>(null)
   const [health, setHealth] = useState<AccountHealth | null>(null)
   const [checkingHealth, setCheckingHealth] = useState(false)
-
-  const load = async () => {
-    setLoading(true)
-    try {
-      const res = await listConnectors()
-      setData(res)
-      setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load connectors")
-    } finally {
-      setLoading(false)
-    }
-  }
+  const load = reload
 
   const checkHealth = async () => {
     setCheckingHealth(true)
-    try {
-      setHealth(await getAccountsHealth())
+    const res = await loadMarketing<AccountHealth>("/social/accounts-health", { force: true })
+    if (res.state === "ready") {
+      setHealth(res.data)
       setError(null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Health check failed")
-    } finally {
-      setCheckingHealth(false)
+    } else {
+      setError(describeLoadableError(res, "Health check failed"))
     }
+    setCheckingHealth(false)
   }
-
-  useEffect(() => { load() }, [])
 
   const handleConnect = async (id: string) => {
     setConnectingId(id)
     setError(null)
-    try {
-      const res = await connectSocialAccount(id)
-      if (res?.auth_url) {
-        window.open(res.auth_url, "_blank", "noopener,noreferrer")
-      } else {
-        setError("Zernio returned no connect URL for this platform.")
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to start connection")
-    } finally {
-      setConnectingId(null)
+    const res = await loadMarketing<{ platform: string; auth_url: string }>(`/social/accounts/connect/${encodeURIComponent(id)}`, { force: true })
+    if (res.state === "ready" && res.data?.auth_url) {
+      window.open(res.data.auth_url, "_blank", "noopener,noreferrer")
+    } else if (res.state === "ready") {
+      setError("Zernio returned no connect URL for this platform.")
+    } else {
+      setError(describeLoadableError(res, "Failed to start connection"))
     }
+    setConnectingId(null)
   }
 
   const connectors = data?.connectors ?? []
@@ -793,7 +791,7 @@ function ConnectionsTab() {
         <div>
           <h3 className="text-base font-semibold text-foreground">Connections</h3>
           <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : `${connectedCount} connected · ${connectors.length} platforms available via Zernio`}
+            {loading ? "Loading…" : conn.state === "ready" ? `${connectedCount} connected · ${connectors.length} platforms available via Zernio` : "Connection status unavailable"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -840,6 +838,8 @@ function ConnectionsTab() {
           <p className="text-sm text-red-400">{error}</p>
         </div>
       )}
+
+      {conn.state !== "ready" && <NotConnected loadable={conn} service="The marketing service" onRetry={reload} />}
 
       {data && !data.connectable && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
@@ -923,17 +923,8 @@ const RESOURCE_GROUPS = [
 ]
 
 function UsageTab() {
-  const [data, setData] = useState<{ profile_id: string | null; usage: Record<string, unknown> | null; restricted: boolean } | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    ;(async () => {
-      try { setData(await getSocialUsage()) }
-      catch (e) { setError(e instanceof Error ? e.message : "Failed to load usage") }
-      finally { setLoading(false) }
-    })()
-  }, [])
+  const { value: usage, reload } = useMarketingLoad<{ profile_id: string | null; usage: Record<string, unknown> | null; restricted: boolean }>("/social/usage")
+  const data = usage.state === "ready" ? usage.data : null
 
   return (
     <div className="max-w-2xl space-y-4">
@@ -941,13 +932,8 @@ function UsageTab() {
         <h3 className="text-base font-semibold text-foreground">Usage &amp; Cost</h3>
         <p className="text-sm text-muted-foreground">This customer&apos;s share of your Zernio bill for the current cycle, by profile.</p>
       </div>
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" /><p className="text-sm text-red-400">{error}</p>
-        </div>
-      )}
-      {loading ? (
-        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      {usage.state !== "ready" ? (
+        <NotConnected loadable={usage} service="The marketing service" onRetry={reload} />
       ) : !data?.usage ? (
         <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
           <DollarSign className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
@@ -990,19 +976,15 @@ function ApiKeysTab() {
   const submit = async () => {
     if (!name) return
     setCreating(true); setError(null); setCreated(null)
-    try {
-      const res = await createScopedKey({
-        name,
-        permission: readOnly ? "read" : undefined,
-        disabled_resource_groups: disabled.length ? disabled : undefined,
-        expires_in: expiresIn ? Number(expiresIn) : undefined,
-      })
-      setCreated(res as Record<string, any>)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to create key")
-    } finally {
-      setCreating(false)
-    }
+    const res = await writeMarketing<Record<string, any>>("POST", "/social/api-keys", {
+      name,
+      permission: readOnly ? "read" : undefined,
+      disabled_resource_groups: disabled.length ? disabled : undefined,
+      expires_in: expiresIn ? Number(expiresIn) : undefined,
+    })
+    if (res.ok && res.data) setCreated(res.data)
+    else setError(describeMutationError(res.status, res.error))
+    setCreating(false)
   }
 
   const keyStr = created ? String(created.apiKey?.key ?? created.key ?? "") : ""
@@ -1080,17 +1062,17 @@ function OffboardTab() {
 
   const run = async () => {
     setRunning(true); setError(null); setResult(null)
-    try {
-      const res = await offboardProfile()
+    const r = await writeMarketing<{ status: string; disconnected_accounts?: number }>("POST", "/social/profile/offboard")
+    if (!r.ok) {
+      setError(describeMutationError(r.status, r.error))
+    } else {
+      const res = r.data
       setResult(res?.status === "offboarded"
         ? `Offboarded — disconnected ${res.disconnected_accounts ?? 0} account(s) and deleted the profile.`
-        : "Nothing to offboard.")
+        : `Server response: ${res?.status ?? "no status returned"}`)
       setAck(false)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Offboarding failed")
-    } finally {
-      setRunning(false)
     }
+    setRunning(false)
   }
 
   return (
@@ -1136,47 +1118,38 @@ function OffboardTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function CampaignsTab() {
-  const [campaigns, setCampaigns] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
   const [channel, setChannel] = useState<string>("all")
   const [showCreate, setShowCreate] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [newCampaign, setNewCampaign] = useState({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
-
-  useEffect(() => {
-    loadCampaigns()
-  }, [channel])
-
-  const loadCampaigns = async () => {
-    setLoading(true)
-    try {
-      const data = await listCampaigns(channel !== "all" ? { channel } : undefined)
-      setCampaigns(data || [])
-    } catch (e) {
-      console.error("Failed to load campaigns:", e)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const { value: camp, reload } = useMarketingLoad<any[]>(campaignsPath(channel !== "all" ? { channel } : undefined))
+  const loading = camp.state === "loading"
+  const campaigns: any[] = camp.state === "ready" ? camp.data : []
 
   const handleCreate = async () => {
     if (!newCampaign.name) return
-    try {
-      await createCampaign({
-        ...newCampaign,
-        budget_zar: newCampaign.budget_zar ? Number(newCampaign.budget_zar) : undefined,
-      })
-      await loadCampaigns()
-      setShowCreate(false)
-      setNewCampaign({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
-    } catch (e) {
-      console.error("Failed to create campaign:", e)
+    setCreating(true)
+    setCreateError(null)
+    const res = await writeMarketing("POST", "/campaigns", {
+      ...newCampaign,
+      budget_zar: newCampaign.budget_zar ? Number(newCampaign.budget_zar) : undefined,
+    })
+    setCreating(false)
+    if (!res.ok) {
+      setCreateError(describeMutationError(res.status, res.error))
+      return
     }
+    reload()
+    setShowCreate(false)
+    setNewCampaign({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
   }
 
   const activeCount = campaigns.filter((c: any) => c.status === "active").length
   const totalSent = campaigns.reduce((sum: number, c: any) => sum + (c.total_sent || 0), 0)
   const totalConversions = campaigns.reduce((sum: number, c: any) => sum + (c.total_conversions || 0), 0)
-  const avgROI = campaigns.length > 0 ? (campaigns.reduce((sum: number, c: any) => sum + (c.total_conversions > 0 ? c.total_conversions / Math.max(c.total_sent, 1) * 100 : 0), 0) / campaigns.length).toFixed(1) : "0"
+  // Real conversion rate across all campaigns' sends; "No sends yet" when nothing has been sent.
+  const conversionRate = totalSent > 0 ? `${((totalConversions / totalSent) * 100).toFixed(1)}%` : "No sends yet"
 
   const channelDistribution = Object.entries(
     campaigns.reduce((acc: Record<string, number>, c: any) => {
@@ -1199,7 +1172,7 @@ function CampaignsTab() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Active Campaigns</p>
-                <p className="text-2xl font-semibold text-foreground">{activeCount}</p>
+                <p className="text-2xl font-semibold text-foreground"><StatValue loadable={camp}>{() => activeCount}</StatValue></p>
               </div>
               <div className="rounded-lg bg-emerald-500/10 p-2"><Megaphone className="h-5 w-5 text-emerald-500" /></div>
             </div>
@@ -1210,7 +1183,7 @@ function CampaignsTab() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Total Sent</p>
-                <p className="text-2xl font-semibold text-foreground">{totalSent.toLocaleString()}</p>
+                <p className="text-2xl font-semibold text-foreground"><StatValue loadable={camp}>{() => totalSent.toLocaleString()}</StatValue></p>
               </div>
               <div className="rounded-lg bg-blue-500/10 p-2"><Send className="h-5 w-5 text-blue-500" /></div>
             </div>
@@ -1221,7 +1194,7 @@ function CampaignsTab() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs text-muted-foreground">Conversions</p>
-                <p className="text-2xl font-semibold text-foreground">{totalConversions.toLocaleString()}</p>
+                <p className="text-2xl font-semibold text-foreground"><StatValue loadable={camp}>{() => totalConversions.toLocaleString()}</StatValue></p>
               </div>
               <div className="rounded-lg bg-purple-500/10 p-2"><UserCheck className="h-5 w-5 text-purple-500" /></div>
             </div>
@@ -1231,8 +1204,8 @@ function CampaignsTab() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-xs text-muted-foreground">Avg ROI</p>
-                <p className="text-2xl font-semibold text-foreground">{avgROI}%</p>
+                <p className="text-xs text-muted-foreground">Conversion rate</p>
+                <p className="text-2xl font-semibold text-foreground"><StatValue loadable={camp}>{() => conversionRate}</StatValue></p>
               </div>
               <div className="rounded-lg bg-amber-500/10 p-2"><TrendingUp className="h-5 w-5 text-amber-500" /></div>
             </div>
@@ -1269,9 +1242,10 @@ function CampaignsTab() {
               <Input placeholder="Budget (ZAR)" value={newCampaign.budget_zar} onChange={(e) => setNewCampaign({ ...newCampaign, budget_zar: e.target.value })} />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleCreate}>Create</Button>
+              <Button size="sm" onClick={handleCreate} disabled={creating || !newCampaign.name}>{creating ? "Creating…" : "Create"}</Button>
               <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
             </div>
+            {createError && <p className="text-sm text-red-400" role="alert">{createError}</p>}
           </CardContent>
         </Card>
       )}
@@ -1280,10 +1254,10 @@ function CampaignsTab() {
       <Card className="border-border bg-card">
         <CardHeader><CardTitle>Campaigns</CardTitle></CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="py-12 text-center text-muted-foreground">Loading campaigns...</div>
+          {camp.state !== "ready" ? (
+            <NotConnected loadable={camp} service="The marketing service" onRetry={reload} />
           ) : campaigns.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">No campaigns found. Create your first campaign.</div>
+            <div className="py-12 text-center text-muted-foreground">No campaigns yet. Use New Campaign to create one.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full min-w-[800px]">
@@ -1304,7 +1278,7 @@ function CampaignsTab() {
                       <td className="py-3 pr-4 text-foreground font-medium">{c.name}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.channel}</td>
                       <td className="py-3 pr-4"><Badge variant="outline" className={statusColor[c.status] || "border-muted text-muted-foreground"}>{c.status}</Badge></td>
-                      <td className="py-3 pr-4 text-muted-foreground">R {(c.budget_zar || 0).toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-muted-foreground">{c.budget_zar ? `R ${Number(c.budget_zar).toLocaleString()}` : "—"}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.total_sent || 0}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.total_conversions || 0}</td>
                       <td className="py-3 text-muted-foreground text-xs">{c.start_date ? new Date(c.start_date).toLocaleDateString() : "—"}</td>
@@ -1321,11 +1295,11 @@ function CampaignsTab() {
       <div className="grid gap-6 lg:grid-cols-2">
         <Card className="border-border bg-card">
           <CardHeader><CardTitle>Channel Distribution</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={channelDistribution} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}`}>{channelDistribution.map((e, i) => <Cell key={i} fill={channelColors[i % channelColors.length]} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div></CardContent>
+          <CardContent>{channelDistribution.length === 0 ? <NoDataYet message={camp.state === "ready" ? "No campaigns yet" : "No data to chart"} /> : <div className="h-64"><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={channelDistribution} cx="50%" cy="50%" outerRadius={80} dataKey="value" label={({ name, value }) => `${name}: ${value}`}>{channelDistribution.map((e, i) => <Cell key={i} fill={channelColors[i % channelColors.length]} />)}</Pie><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /></PieChart></ResponsiveContainer></div>}</CardContent>
         </Card>
         <Card className="border-border bg-card">
           <CardHeader><CardTitle>Budget by Campaign</CardTitle></CardHeader>
-          <CardContent><div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={campaignBudgets}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="campaign" tick={{ fill: "#737373", fontSize: 10 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="budget" fill="#4ade80" name="Budget (R)" /></BarChart></ResponsiveContainer></div></CardContent>
+          <CardContent>{campaignBudgets.length === 0 ? <NoDataYet message={camp.state === "ready" ? "No campaign has a budget set" : "No data to chart"} /> : <div className="h-64"><ResponsiveContainer width="100%" height="100%"><BarChart data={campaignBudgets}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="campaign" tick={{ fill: "#737373", fontSize: 10 }} /><YAxis tick={{ fill: "#737373", fontSize: 12 }} /><Tooltip contentStyle={{ backgroundColor: "#262626", border: "1px solid #404040", borderRadius: "8px", color: "#fff" }} /><Bar dataKey="budget" fill="#4ade80" name="Budget (R)" /></BarChart></ResponsiveContainer></div>}</CardContent>
         </Card>
       </div>
     </div>
@@ -1339,8 +1313,8 @@ function CampaignsTab() {
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 function QueuesTab() {
-  const [queues, setQueues] = useState<MarketingQueue[]>([])
-  const [loading, setLoading] = useState(true)
+  const { value: qLoad, reload: load } = useMarketingLoad<{ queues: MarketingQueue[] }>("/social/queues")
+  const queues: MarketingQueue[] = qLoad.state === "ready" ? (qLoad.data?.queues ?? []) : []
   const [showCreate, setShowCreate] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState("")
@@ -1350,14 +1324,6 @@ function QueuesTab() {
   const [time, setTime] = useState("09:00")
   const [slots, setSlots] = useState<{ day: number; time: string }[]>([])
   const [saving, setSaving] = useState(false)
-
-  const load = async () => {
-    setLoading(true)
-    try { setQueues((await listQueues())?.queues ?? []) }
-    catch (e) { setError(e instanceof Error ? e.message : "Failed to load queues") }
-    finally { setLoading(false) }
-  }
-  useEffect(() => { load() }, [])
 
   const toggleDay = (d: number) => setDays((ds) => (ds.includes(d) ? ds.filter((x) => x !== d) : [...ds, d]))
   const addSlots = () => {
@@ -1376,18 +1342,24 @@ function QueuesTab() {
   const save = async () => {
     if (!name || slots.length === 0) return
     setSaving(true); setError(null)
-    try {
-      await createQueue({ name, description: description || undefined, timezone: tz, slots })
-      setShowCreate(false); resetForm(); load()
-    } catch (e) { setError(e instanceof Error ? e.message : "Failed to create queue") }
-    finally { setSaving(false) }
+    const r = await writeMarketing("POST", "/social/queues", { name, description: description || undefined, timezone: tz, slots })
+    if (r.ok) { setShowCreate(false); resetForm(); load() }
+    else setError(describeMutationError(r.status, r.error))
+    setSaving(false)
   }
 
   const toggleStatus = async (q: MarketingQueue) => {
-    await updateQueue(q.id, { status: q.status === "active" ? "paused" : "active" }).catch(() => {})
-    load()
+    setError(null)
+    const r = await writeMarketing("PATCH", `/social/queues/${q.id}`, { status: q.status === "active" ? "paused" : "active" })
+    if (!r.ok) setError(describeMutationError(r.status, r.error))
+    else load()
   }
-  const remove = async (id: string) => { await deleteQueue(id).catch(() => {}); load() }
+  const remove = async (id: string) => {
+    setError(null)
+    const r = await writeMarketing("DELETE", `/social/queues/${id}`)
+    if (!r.ok) setError(describeMutationError(r.status, r.error))
+    else load()
+  }
 
   return (
     <div className="space-y-4">
@@ -1521,8 +1493,8 @@ function QueuesTab() {
         </Card>
       )}
 
-      {loading ? (
-        <div className="py-12 text-center text-muted-foreground">Loading…</div>
+      {qLoad.state !== "ready" ? (
+        <NotConnected loadable={qLoad} service="The marketing service" onRetry={load} />
       ) : queues.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border bg-card/40 p-10 text-center">
           <Clock className="mx-auto mb-3 h-8 w-8 text-muted-foreground" />
@@ -1565,98 +1537,40 @@ function QueuesTab() {
 }
 
 function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } = {}) {
-  const [posts, setPosts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { value: postsLoad, reload: load } = useMarketingLoad<any[]>(socialPostsPath({ status: "scheduled" }))
+  const loading = postsLoad.state === "loading"
+  const [removed, setRemoved] = useState<string[]>([])
+  const posts: any[] = postsLoad.state === "ready" ? postsLoad.data.filter((p: any) => !removed.includes(p.id)) : []
   const [cancelling, setCancelling] = useState<string | null>(null)
-  const [sourceFilter, setSourceFilter] = useState("omnidome")
+  const [cancelError, setCancelError] = useState<string | null>(null)
   const [platformFilter, setPlatformFilter] = useState("all")
-  const [profileFilter, setProfileFilter] = useState("all")
-  const [userFilter, setUserFilter] = useState("all")
   const [dateFilter, setDateFilter] = useState("all")
   const [sortBy, setSortBy] = useState("scheduled-newest")
   const [viewMode, setViewMode] = useState<"grid" | "list" | "calendar">("grid")
   const [zoomScale, setZoomScale] = useState(4)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await listSocialPosts({ status: "scheduled" }).catch(() => [])
-      if (data && data.length > 0) {
-        setPosts(data)
-      } else {
-        setPosts([
-          {
-            id: "sched-1",
-            content: "⚡ Power outages won't stop your business. OmniDome Enterprise Dual-WAN Failover ensures 99.999% uptime for call centers and branches.",
-            platforms: ["linkedin", "twitter"],
-            status: "scheduled",
-            scheduled_for: new Date(Date.now() + 3600 * 1000 * 5).toISOString(),
-            created_at: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
-            brand_handle: "OmniDome Telecoms",
-            likes: 0,
-            comments: 0,
-            shares: 0,
-          },
-          {
-            id: "sched-2",
-            content: "🚀 Gigabit Fibre is expanding into Rosebank and Menlyn! Sign up this week and get the first 3 months with a free Wi-Fi 6 mesh router. #OmniDome #FiberInternet",
-            platforms: ["facebook", "instagram", "twitter"],
-            status: "scheduled",
-            scheduled_for: new Date(Date.now() + 3600 * 1000 * 26).toISOString(),
-            created_at: new Date(Date.now() - 3600 * 1000 * 4).toISOString(),
-            brand_handle: "@OmniDomeHQ",
-            likes: 0,
-            comments: 0,
-            shares: 0,
-          },
-          {
-            id: "sched-3",
-            content: "📱 Introducing our self-service eSIM activation directly inside WhatsApp! Scan the QR or message us to activate within 60 seconds.",
-            platforms: ["whatsapp", "instagram", "tiktok"],
-            status: "scheduled",
-            scheduled_for: new Date(Date.now() + 3600 * 1000 * 52).toISOString(),
-            created_at: new Date(Date.now() - 3600 * 1000 * 8).toISOString(),
-            brand_handle: "@OmniDome_SA",
-            likes: 0,
-            comments: 0,
-            shares: 0,
-          },
-          {
-            id: "sched-4",
-            content: "💼 Tech Tip Tuesday: How QoS prioritization prevents VoIP jitter on high-concurrency branch offices.",
-            platforms: ["linkedin"],
-            status: "scheduled",
-            scheduled_for: new Date(Date.now() + 3600 * 1000 * 75).toISOString(),
-            created_at: new Date(Date.now() - 3600 * 1000 * 12).toISOString(),
-            brand_handle: "OmniDome Telecoms",
-            likes: 0,
-            comments: 0,
-            shares: 0,
-          },
-        ])
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => { load() }, [])
-
   const cancel = async (id: string) => {
     setCancelling(id)
-    try {
-      await deleteSocialPost(id).catch(() => {})
-      setPosts((prev) => prev.filter((p) => p.id !== id))
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setCancelling(null)
-    }
+    setCancelError(null)
+    const r = await writeMarketing("DELETE", `/social/posts/${id}`)
+    if (r.ok) setRemoved((prev) => [...prev, id])
+    else setCancelError(describeMutationError(r.status, r.error))
+    setCancelling(null)
   }
 
   const filteredPosts = useMemo(() => {
     const result = posts.filter((p) => {
       if (platformFilter !== "all" && !p.platforms?.some((plat: string) => plat.toLowerCase() === platformFilter.toLowerCase())) return false
+      if (dateFilter !== "all") {
+        const t = p.scheduled_for ? new Date(p.scheduled_for).getTime() : NaN
+        if (!Number.isFinite(t)) return false
+        const now = new Date()
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+        const day = 86_400_000
+        if (dateFilter === "today" && !(t >= startOfDay && t < startOfDay + day)) return false
+        if (dateFilter === "this-week" && !(t >= startOfDay && t < startOfDay + 7 * day)) return false
+        if (dateFilter === "this-month" && !(t >= startOfDay && t < startOfDay + 31 * day)) return false
+      }
       return true
     })
 
@@ -1726,44 +1640,11 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
       {/* Filters Bar matching Zernio screenshot */}
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         <div className="flex flex-wrap items-center gap-2">
-          {/* Source */}
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="omnidome">OmniDome posts</option>
-            <option value="all">All sources</option>
-            <option value="partner">Partner posts</option>
-          </select>
-
-          {/* Platform with authentic Brand Icons */}
+          {/* Platform */}
           <PlatformBrandDropdown
             value={platformFilter}
             onChange={setPlatformFilter}
           />
-
-          {/* Profile */}
-          <select
-            value={profileFilter}
-            onChange={(e) => setProfileFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All profiles</option>
-            <option value="default">00000000-0000... (Default)</option>
-            <option value="brand-main">Brand Main OmniDome</option>
-          </select>
-
-          {/* User */}
-          <select
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All users</option>
-            <option value="benedict">Benedict Majozi</option>
-            <option value="bot">Marketing Automation Bot</option>
-          </select>
 
           {/* Dates */}
           <select
@@ -1819,8 +1700,9 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
         </div>
       </div>
 
-      {loading ? (
-        <div className="py-16 text-center text-xs text-muted-foreground">Loading scheduled posts…</div>
+      {cancelError && <p className="text-sm text-red-400" role="alert">{cancelError}</p>}
+      {postsLoad.state !== "ready" ? (
+        <NotConnected loadable={postsLoad} service="The marketing service" onRetry={load} />
       ) : filteredPosts.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card/30 py-16 px-6 text-center">
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
@@ -1882,7 +1764,7 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                       <p className="line-clamp-2 text-foreground font-medium">{p.content}</p>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground font-mono text-[11px]">
-                      {p.brand_handle || "@OmniDomeHQ"}
+                      {p.brand_handle || "—"}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Button
@@ -1988,7 +1870,7 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                 </div>
                 <div className="mt-4 pt-3 border-t border-border/60 flex items-center justify-between text-xs">
                   <span className="text-[11px] text-muted-foreground font-mono truncate max-w-[120px]">
-                    {post.brand_handle || "@OmniDomeHQ"}
+                    {post.brand_handle || "—"}
                   </span>
                   <Button
                     size="sm"
@@ -2014,76 +1896,30 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
-  const [posts, setPosts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [sourceFilter, setSourceFilter] = useState("omnidome")
+  const { value: postsLoad, reload } = useMarketingLoad<any[]>(socialPostsPath())
+  const { value: accountsLoad } = useMarketingLoad<any[]>(socialAccountsPath())
+  const posts: any[] = postsLoad.state === "ready" ? postsLoad.data : []
   const [postStatusFilter, setPostStatusFilter] = useState("all")
   const [platformFilter, setPlatformFilter] = useState("all")
-  const [profileFilter, setProfileFilter] = useState("all")
-  const [userFilter, setUserFilter] = useState("all")
   const [dateFilter, setDateFilter] = useState("all")
   const [sortBy, setSortBy] = useState("scheduled-newest")
   const [viewMode, setViewMode] = useState<"grid" | "list" | "calendar">("grid")
   const [zoomScale, setZoomScale] = useState(4)
 
-  useEffect(() => {
-    ;(async () => {
-      setLoading(true)
-      try {
-        const fetched = await listSocialPosts().catch(() => [])
-        if (fetched && fetched.length > 0) {
-          setPosts(fetched)
-        } else {
-          // Demo posts tailored to OmniDome telco / fiber operations
-          setPosts([
-            {
-              id: "post-1",
-              content: "🚀 Lightning-fast Gigabit fibre packages now active across Sandton, Rosebank & Pretoria East! Check coverage and unlock your upgrade today. #OmniDome #FiberInternet",
-              platforms: ["twitter", "linkedin", "facebook"],
-              status: "scheduled",
-              scheduled_for: new Date(Date.now() + 3600 * 1000 * 4).toISOString(),
-              created_at: new Date().toISOString(),
-              likes: 42,
-              comments: 8,
-              shares: 14,
-              brand_handle: "@OmniDomeHQ",
-            },
-            {
-              id: "post-2",
-              content: "Power outages won't stop your business. OmniDome Enterprise Dual-WAN Failover ensures 99.999% uptime for call centers and branches.",
-              platforms: ["linkedin", "twitter"],
-              status: "published",
-              scheduled_for: new Date(Date.now() - 3600 * 1000 * 24).toISOString(),
-              created_at: new Date(Date.now() - 3600 * 1000 * 24).toISOString(),
-              likes: 128,
-              comments: 19,
-              shares: 32,
-              brand_handle: "OmniDome Telecoms",
-            },
-            {
-              id: "post-3",
-              content: "Weekend special: Double data bonus on all OmniDome prepaid SIMs and LTE bundles this Saturday and Sunday. Grab yours via WhatsApp!",
-              platforms: ["instagram", "facebook", "tiktok"],
-              status: "draft",
-              scheduled_for: null,
-              created_at: new Date(Date.now() - 3600 * 1000 * 48).toISOString(),
-              likes: 0,
-              comments: 0,
-              shares: 0,
-              brand_handle: "@OmniDome",
-            },
-          ])
-        }
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [])
-
   const filteredPosts = useMemo(() => {
     const result = posts.filter((p) => {
       if (postStatusFilter !== "all" && p.status?.toLowerCase() !== postStatusFilter.toLowerCase()) return false
       if (platformFilter !== "all" && !p.platforms?.some((plat: string) => plat.toLowerCase() === platformFilter.toLowerCase())) return false
+      if (dateFilter !== "all") {
+        const t = new Date(p.scheduled_for || p.published_at || p.created_at || 0).getTime()
+        if (!Number.isFinite(t) || t === 0) return false
+        const now = new Date()
+        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+        const day = 86_400_000
+        if (dateFilter === "today" && !(t >= startOfDay && t < startOfDay + day)) return false
+        if (dateFilter === "this-week" && !(t >= startOfDay - 6 * day && t < startOfDay + day)) return false
+        if (dateFilter === "this-month" && !(t >= startOfDay - 30 * day && t < startOfDay + day)) return false
+      }
       return true
     })
 
@@ -2160,30 +1996,28 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
         </div>
       </div>
 
-      {/* Connected Platforms & Social Brand Safety Bar */}
+      {/* Connected accounts (real, from /social/accounts) */}
       <div className="rounded-lg border border-border bg-card/60 p-3.5 shadow-xs">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-emerald-500 shrink-0" />
-            <span className="text-xs font-semibold text-foreground">Brand Safety & Verified Profiles</span>
-            <Badge variant="outline" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] py-0 px-2">
-              Protected Identity
-            </Badge>
+            <ShieldCheck className="h-4 w-4 text-muted-foreground shrink-0" />
+            <span className="text-xs font-semibold text-foreground">Connected accounts</span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {[
-              { plat: "twitter", handle: "@OmniDomeHQ", color: "#1DA1F2" },
-              { plat: "instagram", handle: "@OmniDome", color: "#E4405F" },
-              { plat: "facebook", handle: "OmniDome Official", color: "#1877F2" },
-              { plat: "linkedin", handle: "OmniDome Telecoms", color: "#0A66C2" },
-              { plat: "whatsapp", handle: "+27 82 123 4567", color: "#25D366" },
-              { plat: "tiktok", handle: "@OmniDome_SA", color: "#111111" },
-            ].map((b) => (
-              <span key={b.plat} className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground font-mono">
-                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: b.color }} />
-                {b.handle}
-              </span>
-            ))}
+            {accountsLoad.state === "loading" ? (
+              <span className="h-6 w-40 animate-pulse rounded-full bg-muted" aria-label="Loading" />
+            ) : accountsLoad.state !== "ready" ? (
+              <span className="text-[11px] text-muted-foreground">{accountsLoad.state === "unreachable" ? "Service not running" : "Could not load accounts"}</span>
+            ) : accountsLoad.data.length === 0 ? (
+              <span className="text-[11px] text-muted-foreground">No accounts connected. Connect one under Connections.</span>
+            ) : (
+              accountsLoad.data.map((a: any) => (
+                <span key={a.id} className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-background/80 px-2.5 py-1 text-[11px] text-muted-foreground font-mono">
+                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[String(a.platform).toLowerCase()] || "#737373" }} />
+                  {a.account_handle || a.account_name || a.platform}
+                </span>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -2192,17 +2026,6 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
       <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
         {/* Left Filter Dropdowns */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Source */}
-          <select
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="omnidome">OmniDome posts</option>
-            <option value="all">All sources</option>
-            <option value="partner">Partner posts</option>
-          </select>
-
           {/* Status */}
           <select
             value={postStatusFilter}
@@ -2221,28 +2044,6 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
             value={platformFilter}
             onChange={setPlatformFilter}
           />
-
-          {/* Profile */}
-          <select
-            value={profileFilter}
-            onChange={(e) => setProfileFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All profiles</option>
-            <option value="default">00000000-0000... (Default)</option>
-            <option value="brand-main">Brand Main OmniDome</option>
-          </select>
-
-          {/* User */}
-          <select
-            value={userFilter}
-            onChange={(e) => setUserFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-2.5 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All users</option>
-            <option value="benedict">Benedict Majozi</option>
-            <option value="bot">Marketing Automation Bot</option>
-          </select>
 
           {/* Dates */}
           <select
@@ -2300,7 +2101,9 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
       </div>
 
       {/* Main Content: Empty State OR Populated Grid/List/Calendar */}
-      {filteredPosts.length === 0 ? (
+      {postsLoad.state !== "ready" ? (
+        <NotConnected loadable={postsLoad} service="The marketing service" onRetry={reload} />
+      ) : filteredPosts.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card/30 py-20 px-6 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
             <Edit className="h-6 w-6" />
@@ -2333,7 +2136,7 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
                   <tr key={p.id} className="hover:bg-muted/20 transition-colors">
                     <td className="px-4 py-3 max-w-sm">
                       <p className="font-medium text-foreground line-clamp-2">{p.content}</p>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">{p.brand_handle || "@OmniDome"}</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">{p.brand_handle || "—"}</p>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
@@ -2420,7 +2223,7 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
                       O
                     </div>
                     <div>
-                      <p className="text-xs font-semibold text-foreground">{p.brand_handle || "@OmniDome"}</p>
+                      <p className="text-xs font-semibold text-foreground">{p.brand_handle || "—"}</p>
                       <div className="flex items-center gap-1 mt-0.5">
                         {p.platforms?.map((plat: string) => (
                           <span key={plat} className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: platformColors[plat.toLowerCase()] || "#666" }} title={plat} />
@@ -2450,8 +2253,14 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
 }
 
 function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void } = {}) {
-  const [accounts, setAccounts] = useState<any[]>([])
-  const [posts, setPosts] = useState<any[]>([])
+  const { value: accountsLoad, reload: reloadAccounts } = useMarketingLoad<any[]>(socialAccountsPath())
+  const { value: postsLoad, reload: reloadPosts } = useMarketingLoad<any[]>(socialPostsPath())
+  const { value: queuesLoad, reload: reloadQueues } = useMarketingLoad<{ queues: MarketingQueue[] }>("/social/queues")
+  const accounts: any[] = accountsLoad.state === "ready" ? accountsLoad.data : []
+  const posts: any[] = postsLoad.state === "ready" ? postsLoad.data : []
+  const queues: MarketingQueue[] = queuesLoad.state === "ready" ? (queuesLoad.data?.queues ?? []) : []
+  const loading = postsLoad.state === "loading"
+  const loadData = () => { reloadAccounts(); reloadPosts(); reloadQueues() }
   const [content, setContent] = useState("")
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
   // Default the picker to ~1 hour ahead, formatted for <input type="datetime-local">.
@@ -2461,47 +2270,11 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
   }
   const [scheduleAt, setScheduleAt] = useState(defaultScheduleAt)
   const [mode, setMode] = useState<"now" | "schedule" | "queue" | "draft">("schedule")
-  const [queues, setQueues] = useState<MarketingQueue[]>([])
   const [queueId, setQueueId] = useState("")
-  const [loading, setLoading] = useState(true)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [mediaDropPreview, setMediaDropPreview] = useState<string | null>(null)
-  const [selectedTimezone, setSelectedTimezone] = useState("Africa/Johannesburg")
-  const [profileSelect, setProfileSelect] = useState("00000000-0000-0000-0000-000000000001")
+  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const browserTimezone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return "local time" } })()
   const [showReuseModal, setShowReuseModal] = useState(false)
-
-  const TIMEZONE_OPTIONS = [
-    { value: "Africa/Johannesburg", label: "Africa/Johannesburg (GMT+2)" },
-    { value: "UTC", label: "UTC (GMT+0)" },
-    { value: "Europe/London", label: "Europe/London (GMT+1)" },
-    { value: "Europe/Paris", label: "Europe/Paris (GMT+2)" },
-    { value: "America/New_York", label: "America/New_York (EST)" },
-    { value: "America/Los_Angeles", label: "America/Los_Angeles (PST)" },
-    { value: "Asia/Dubai", label: "Asia/Dubai (GST+4)" },
-    { value: "Asia/Singapore", label: "Asia/Singapore (SGT+8)" },
-  ]
-
-  useEffect(() => {
-    loadData()
-  }, [])
-
-  const loadData = async () => {
-    setLoading(true)
-    try {
-      const [accData, postData, qData] = await Promise.all([
-        listSocialAccounts().catch(() => []),
-        listSocialPosts().catch(() => []),
-        listQueues().catch(() => null),
-      ])
-      setAccounts(accData || [])
-      setPosts(postData || [])
-      setQueues(qData?.queues ?? [])
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const togglePlatform = (platform: string) => {
     setSelectedPlatforms((prev) =>
@@ -2517,46 +2290,32 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
   const submitLabel = { now: "Publish Now", schedule: "Schedule Post", queue: "Add to Queue", draft: "Save Draft" }[mode]
 
   const handlePublish = async () => {
-    if (!canSubmit) return
+    if (!canSubmit || submitting) return
     setNotice(null)
-    try {
-      const base = { account_id: accounts[0]?.id, content, platforms: selectedPlatforms }
-      let res: any = null
-      if (mode === "now") {
-        res = await createSocialPost({ ...base, status: "published" })
-      } else if (mode === "schedule") {
-        res = await createSocialPost({ ...base, status: "scheduled", scheduled_for: scheduledFor() })
-      } else if (mode === "draft") {
-        await createSocialPost({ ...base, status: "draft" })
-      } else if (mode === "queue") {
-        res = await enqueuePost(queueId, { ...base, status: "scheduled" })
-        if (res?.scheduled_for) setNotice(`Queued for ${new Date(res.scheduled_for).toLocaleString()}`)
-      }
-      // Real publish/schedule can fail (e.g. no connected account) — surface it.
-      if (res?.publish_error) {
-        setNotice(`Saved, but publishing failed: ${res.publish_error}`)
-        loadData()
-        return
-      }
-      setContent("")
-      setSelectedPlatforms([])
-      loadData()
-    } catch (e) {
-      console.error("Failed to publish:", e)
-      setNotice(e instanceof Error ? e.message : "Failed to publish")
+    setSubmitting(true)
+    const base = { account_id: accounts[0]?.id, content, platforms: selectedPlatforms }
+    let r
+    if (mode === "now") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "published" })
+    else if (mode === "schedule") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "scheduled", scheduled_for: scheduledFor() })
+    else if (mode === "draft") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "draft" })
+    else r = await writeMarketing<any>("POST", `/social/queues/${queueId}/enqueue`, { ...base, status: "scheduled" })
+    setSubmitting(false)
+    if (!r.ok) {
+      setNotice({ kind: "error", text: describeMutationError(r.status, r.error) })
+      return
     }
-  }
-
-  const handleCrossPost = async () => {
-    if (!content.trim() || selectedPlatforms.length === 0 || scheduleInvalid) return
-    try {
-      await crossPost({ content, platforms: selectedPlatforms, schedule_minutes: mode === "schedule" ? Math.max(1, Math.round((new Date(scheduleAt).getTime() - Date.now()) / 60000)) : undefined })
-      setContent("")
-      setSelectedPlatforms([])
-      loadData()
-    } catch (e) {
-      console.error("Failed to cross-post:", e)
+    const res = r.data
+    // Real publish/schedule can fail (e.g. no connected account) - surface it.
+    if (res?.publish_error) {
+      setNotice({ kind: "error", text: `Saved, but publishing failed: ${res.publish_error}` })
+    } else if (mode === "queue" && res?.scheduled_for) {
+      setNotice({ kind: "ok", text: `Queued for ${new Date(res.scheduled_for).toLocaleString()}` })
+      setContent(""); setSelectedPlatforms([])
+    } else {
+      setNotice({ kind: "ok", text: `Saved (server status: ${res?.status ?? "unknown"}).` })
+      setContent(""); setSelectedPlatforms([])
     }
+    loadData()
   }
 
   const handleReusePost = (pastPostText: string) => {
@@ -2616,12 +2375,13 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
             {/* Media Dropzone matching Screenshot 5 */}
             <div>
               <div
-                onClick={() => setMediaDropPreview(mediaDropPreview ? null : "image_mock.png")}
-                className="flex items-center justify-center rounded-xl border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-pointer"
+                aria-disabled="true"
+                title="Media upload is not available yet"
+                className="flex items-center justify-center rounded-xl border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-not-allowed opacity-60"
               >
-                <div className="flex items-center gap-2 text-muted-foreground hover:text-foreground">
+                <div className="flex items-center gap-2 text-muted-foreground">
                   <Plus className="h-4 w-4" />
-                  <span className="text-xs font-medium">{mediaDropPreview ? "1 media attached (click to remove)" : "Add media"}</span>
+                  <span className="text-xs font-medium">Media upload is not available yet</span>
                 </div>
               </div>
             </div>
@@ -2629,30 +2389,16 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
 
           {/* RIGHT COLUMN: Profiles, Platforms & Publishing */}
           <div className="p-6 space-y-5">
-            {/* Profiles */}
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-1.5">profiles</label>
-              <p className="text-[11px] text-muted-foreground mb-2">Select one or more profiles to post to their connected accounts</p>
-              <select
-                value={profileSelect}
-                onChange={(e) => setProfileSelect(e.target.value)}
-                className="w-full rounded-md border border-border bg-card px-3 py-2 text-xs font-mono text-foreground focus:outline-none"
-              >
-                <option value="00000000-0000-0000-0000-000000000001">🟡 00000000-0000-0000-0000-000000000001 (Default)</option>
-                <option value="brand-main">🟢 Brand Main OmniDome</option>
-              </select>
-            </div>
-
             {/* Platforms matching Screenshot 5 */}
             <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-2">platforms (from 1 profile)</label>
+              <label className="text-xs font-semibold text-muted-foreground block mb-2">platforms (connected accounts)</label>
               {accounts.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card/40 p-8 text-center">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground mb-2">
                     <Plus className="h-5 w-5" />
                   </div>
                   <p className="text-xs font-semibold text-foreground">no connected accounts</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">connect accounts to your selected profile first</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">{accountsLoad.state === "ready" ? "connect an account under Connections first" : accountsLoad.state === "loading" ? "loading accounts…" : "accounts could not be loaded (service not running or errored)"}</p>
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-2">
@@ -2714,15 +2460,7 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
                   </div>
                   <div>
                     <label className="text-[11px] font-medium text-muted-foreground block mb-1">timezone</label>
-                    <select
-                      value={selectedTimezone}
-                      onChange={(e) => setSelectedTimezone(e.target.value)}
-                      className="w-full rounded-md border border-border bg-card px-2.5 py-2 text-xs text-foreground focus:outline-none"
-                    >
-                      {TIMEZONE_OPTIONS.map((tz) => (
-                        <option key={tz.value} value={tz.value}>{tz.label}</option>
-                      ))}
-                    </select>
+                    <p className="rounded-md border border-border bg-card px-2.5 py-2 text-xs text-muted-foreground">{browserTimezone} (your browser)</p>
                   </div>
                 </div>
               )}
@@ -2731,7 +2469,9 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
               {mode === "queue" && (
                 <div className="mt-3">
                   <label className="text-[11px] font-medium text-muted-foreground block mb-1">select queue</label>
-                  {queues.length === 0 ? (
+                  {queuesLoad.state !== "ready" ? (
+                    <p className="text-xs text-amber-500">{queuesLoad.state === "loading" ? "Loading queues…" : "Queues could not be loaded."}</p>
+                  ) : queues.length === 0 ? (
                     <p className="text-xs text-amber-500">No queues yet — create one under Queues first.</p>
                   ) : (
                     <select
@@ -2751,7 +2491,7 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
               {mode === "draft" && (
                 <p className="mt-2 text-xs text-muted-foreground">Post will be stored as draft and can be scheduled or modified later.</p>
               )}
-              {notice && <p className="mt-2 text-xs text-emerald-500">{notice}</p>}
+              {notice && <p role={notice.kind === "error" ? "alert" : "status"} className={`mt-2 text-xs ${notice.kind === "error" ? "text-red-400" : "text-emerald-500"}`}>{notice.text}</p>}
             </div>
           </div>
         </div>
@@ -2770,7 +2510,7 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
           </Button>
           <Button
             size="sm"
-            disabled={!canSubmit}
+            disabled={!canSubmit || submitting}
             onClick={handlePublish}
             className="bg-muted-foreground text-background hover:bg-foreground hover:text-background font-medium"
           >
@@ -2814,8 +2554,8 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
         <CardHeader><CardTitle className="text-sm">Recent Posts</CardTitle></CardHeader>
         <CardContent>
           <ScrollArea className="h-64">
-            {loading ? (
-              <div className="py-8 text-center text-muted-foreground text-xs">Loading...</div>
+            {postsLoad.state !== "ready" ? (
+              <NotConnected loadable={postsLoad} service="The marketing service" onRetry={reloadPosts} />
             ) : posts.length === 0 ? (
               <div className="py-8 text-center text-muted-foreground text-xs">No posts yet</div>
             ) : (
@@ -2847,90 +2587,65 @@ function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function InboxContactsTab() {
-  const [contacts, setContacts] = useState<any[]>([
-    {
-      id: "cnt-1",
-      name: "Bene Majozi",
-      identifier: "Bene Majozi (89759166...)",
-      platform: "telegram",
-      email: "burnibraai@gmail.com",
-      company: "OmniDome Ltd",
-      tags: ["vip", "fiber-lead"],
-      status: "subscribed",
-      lastActive: "Sep 12, 2026",
-    },
-    {
-      id: "cnt-2",
-      name: "Sipho Dlamini",
-      identifier: "+27 82 555 0192",
-      platform: "whatsapp",
-      email: "sipho.d@apextelecom.co.za",
-      company: "Apex Telecoms",
-      tags: ["enterprise", "active"],
-      status: "subscribed",
-      lastActive: "Sep 11, 2026",
-    },
-    {
-      id: "cnt-3",
-      name: "Elena Rostova",
-      identifier: "@elena_omni",
-      platform: "instagram",
-      email: "elena@designstudio.za",
-      company: "Studio Nova",
-      tags: ["lead"],
-      status: "subscribed",
-      lastActive: "Sep 10, 2026",
-    },
-  ])
-  const [loading, setLoading] = useState(false)
+  // Real sources only: saved WhatsApp contacts + people who have messaged an
+  // inbox-connected account. Nothing is seeded.
+  const { value: waLoad, reload: reloadWa } = useMarketingLoad<any[]>(whatsAppContactsPath())
+  const { value: inboxLoad, reload: reloadInbox } = useMarketingLoad<any[]>(inboxMessagesPath())
+  const contacts = useMemo(() => {
+    const out: any[] = []
+    const seen = new Set<string>()
+    if (waLoad.state === "ready") {
+      for (const c of waLoad.data) {
+        seen.add("wa|" + String(c.phone_number || "").replace(/\s+/g, ""))
+        out.push({
+          id: `wa-${c.id}`,
+          name: c.name,
+          identifier: c.phone_number,
+          platform: "whatsapp",
+          email: c.email || "",
+          company: "",
+          tags: c.tags || [],
+          status: c.opt_in_status || "",
+          lastActive: c.created_at ? new Date(c.created_at).toLocaleDateString() : "",
+        })
+      }
+    }
+    if (inboxLoad.state === "ready") {
+      for (const m of inboxLoad.data) {
+        const key = (m.sender_handle || m.sender_name || "unknown") + "|" + (m.platform || "")
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push({
+          id: `msg-cnt-${m.id}`,
+          name: m.sender_name || m.sender_handle || "Unknown sender",
+          identifier: m.sender_handle ? `@${m.sender_handle}` : (m.sender_name || "Unknown"),
+          platform: m.platform?.toLowerCase() || "other",
+          email: "",
+          company: "",
+          tags: ["inbox"],
+          status: "",
+          lastActive: m.created_at ? new Date(m.created_at).toLocaleDateString() : "",
+        })
+      }
+    }
+    return out
+  }, [waLoad, inboxLoad])
+  const loadState: Loadable<unknown> =
+    waLoad.state === "ready" || inboxLoad.state === "ready" ? { state: "ready", data: null }
+    : waLoad.state === "loading" || inboxLoad.state === "loading" ? { state: "loading" }
+    : waLoad
+  const reloadAll = () => { reloadWa(); reloadInbox() }
   const [searchQuery, setSearchQuery] = useState("")
-  const [profileFilter, setProfileFilter] = useState("all")
   const [platformFilter, setPlatformFilter] = useState("all")
   const [showDrawer, setShowDrawer] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [creatingContact, setCreatingContact] = useState(false)
 
-  // New Contact Drawer Form State (matching media_1789290179411.png)
+  // New contact drawer (persisted as a WhatsApp contact: name + phone are required by the API)
   const [formName, setFormName] = useState("")
+  const [formPhone, setFormPhone] = useState("")
   const [formEmail, setFormEmail] = useState("")
-  const [formCompany, setFormCompany] = useState("")
   const [formTags, setFormTags] = useState("")
-  const [formNotes, setFormNotes] = useState("")
-  const [formSubscribed, setFormSubscribed] = useState(true)
-  const [formAccount, setFormAccount] = useState("no-platform")
-
-  useEffect(() => {
-    ;(async () => {
-      try {
-        const msgs = await listInboxMessages().catch(() => [])
-        if (msgs && msgs.length > 0) {
-          const byKey: Record<string, any> = {}
-          for (const m of msgs) {
-            const key = (m.sender_handle || m.sender_name || "unknown") + "|" + (m.platform || "")
-            if (!byKey[key]) {
-              byKey[key] = {
-                id: `msg-cnt-${m.id}`,
-                name: m.sender_name || "Unknown User",
-                identifier: m.sender_handle ? `@${m.sender_handle}` : (m.sender_name || "Unknown"),
-                platform: m.platform?.toLowerCase() || "other",
-                email: "",
-                company: "Customer",
-                tags: ["inbox"],
-                status: "subscribed",
-                lastActive: m.created_at ? new Date(m.created_at).toLocaleDateString() : "Recent",
-              }
-            }
-          }
-          const loaded = Object.values(byKey)
-          setContacts((prev) => {
-            const existingIds = new Set(prev.map((c) => c.name.toLowerCase()))
-            const additions = loaded.filter((l) => !existingIds.has(l.name.toLowerCase()))
-            return [...prev, ...additions]
-          })
-        }
-      } catch (e) {
-        console.error(e)
-      }
-    })()
-  }, [])
 
   const filtered = useMemo(() => {
     return contacts.filter((c) => {
@@ -2949,53 +2664,26 @@ function InboxContactsTab() {
     })
   }, [contacts, searchQuery, platformFilter])
 
-  const handleCreateContact = (e: React.FormEvent) => {
+  const handleCreateContact = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!formName.trim()) return
-
-    const parsedTags = formTags
-      .split(",")
-      .map((t) => t.trim())
-      .filter(Boolean)
-
-    let inferredPlatform = "other"
-    let identifier = formEmail || formName
-    if (formAccount.includes("whatsapp")) {
-      inferredPlatform = "whatsapp"
-      identifier = "+27 82 123 4567"
-    } else if (formAccount.includes("telegram")) {
-      inferredPlatform = "telegram"
-      identifier = `@${formName.toLowerCase().replace(/\s+/g, "_")}`
-    } else if (formAccount.includes("instagram")) {
-      inferredPlatform = "instagram"
-      identifier = `@${formName.toLowerCase().replace(/\s+/g, "")}`
-    } else if (formAccount.includes("facebook")) {
-      inferredPlatform = "facebook"
-      identifier = formName
-    }
-
-    const newEntry = {
-      id: `contact-${Date.now()}`,
+    if (!formName.trim() || !formPhone.trim()) return
+    setCreatingContact(true)
+    setCreateError(null)
+    const tags = formTags.split(",").map((t) => t.trim()).filter(Boolean)
+    const r = await writeMarketing("POST", "/whatsapp/contacts", {
       name: formName.trim(),
-      email: formEmail.trim(),
-      company: formCompany.trim(),
-      identifier,
-      platform: inferredPlatform,
-      tags: parsedTags.length > 0 ? parsedTags : ["lead"],
-      status: formSubscribed ? "subscribed" : "unsubscribed",
-      lastActive: "Just now",
-      notes: formNotes,
+      phone_number: formPhone.trim(),
+      email: formEmail.trim() || undefined,
+      tags: tags.length ? tags : undefined,
+    })
+    setCreatingContact(false)
+    if (!r.ok) {
+      setCreateError(describeMutationError(r.status, r.error))
+      return
     }
-
-    setContacts((prev) => [newEntry, ...prev])
+    reloadAll()
     setShowDrawer(false)
-    setFormName("")
-    setFormEmail("")
-    setFormCompany("")
-    setFormTags("")
-    setFormNotes("")
-    setFormSubscribed(true)
-    setFormAccount("no-platform")
+    setFormName(""); setFormPhone(""); setFormEmail(""); setFormTags("")
   }
 
   return (
@@ -3007,12 +2695,9 @@ function InboxContactsTab() {
           <p className="text-xs text-muted-foreground">Manage contacts across all platforms</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" className="text-xs h-9 border-border bg-card">
-            <Upload className="mr-1.5 h-3.5 w-3.5" /> Import CSV
-          </Button>
           <Button
             size="sm"
-            onClick={() => setShowDrawer(true)}
+            onClick={() => { setCreateError(null); setShowDrawer(true) }}
             className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-4 h-9 shadow-sm"
           >
             <Plus className="mr-1.5 h-4 w-4" /> Add Contact
@@ -3036,16 +2721,6 @@ function InboxContactsTab() {
         {/* Dropdowns on Right */}
         <div className="flex items-center gap-2">
           <select
-            value={profileFilter}
-            onChange={(e) => setProfileFilter(e.target.value)}
-            className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-          >
-            <option value="all">All profiles</option>
-            <option value="default">00000000-0000... (Default)</option>
-            <option value="brand-main">OmniDome Main Brand</option>
-          </select>
-
-          <select
             value={platformFilter}
             onChange={(e) => setPlatformFilter(e.target.value)}
             className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
@@ -3064,6 +2739,9 @@ function InboxContactsTab() {
       </div>
 
       {/* Table matching media_1789288816985.png */}
+      {loadState.state !== "ready" ? (
+        <NotConnected loadable={loadState} service="The marketing service" onRetry={reloadAll} />
+      ) : (
       <Card className="border-border bg-card overflow-hidden">
         <CardContent className="p-0 overflow-x-auto">
           <table className="w-full min-w-[650px] text-xs">
@@ -3128,9 +2806,9 @@ function InboxContactsTab() {
 
                     {/* Status badge: subscribed (soft green) */}
                     <td className="px-4 py-3">
-                      <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
-                        {c.status || "subscribed"}
-                      </span>
+                      {!c.status ? <span className="text-muted-foreground">—</span> : <span className="inline-flex items-center rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                        {c.status}
+                      </span>}
                     </td>
 
                     {/* Last Active */}
@@ -3152,10 +2830,11 @@ function InboxContactsTab() {
 
           {/* Footer count matching screenshot */}
           <div className="border-t border-border px-4 py-3 text-center text-xs text-muted-foreground">
-            {filtered.length} {filtered.length === 1 ? "contact" : "contacts"}
+            {filtered.length === 0 ? "No contacts yet. Add one, or they appear here when someone messages a connected account." : `${filtered.length} ${filtered.length === 1 ? "contact" : "contacts"}`}
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Flyout Drawer matching media_1789290179411.png */}
       {showDrawer && (
@@ -3196,11 +2875,14 @@ function InboxContactsTab() {
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-foreground block mb-1.5">Company</label>
+                <label className="text-xs font-semibold text-foreground block mb-1.5">
+                  Phone number (WhatsApp) <span className="text-red-500">*</span>
+                </label>
                 <Input
-                  placeholder="Company name"
-                  value={formCompany}
-                  onChange={(e) => setFormCompany(e.target.value)}
+                  required
+                  placeholder="+country code and number"
+                  value={formPhone}
+                  onChange={(e) => setFormPhone(e.target.value)}
                   className="text-xs h-9 bg-background border-border"
                 />
               </div>
@@ -3215,50 +2897,7 @@ function InboxContactsTab() {
                 />
               </div>
 
-              <div>
-                <label className="text-xs font-semibold text-foreground block mb-1.5">Notes</label>
-                <Textarea
-                  placeholder="Add notes about this contact..."
-                  value={formNotes}
-                  onChange={(e) => setFormNotes(e.target.value)}
-                  rows={4}
-                  className="text-xs bg-background border-border resize-none"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="contact-subscribed"
-                  checked={formSubscribed}
-                  onChange={(e) => setFormSubscribed(e.target.checked)}
-                  className="rounded border-border text-primary focus:ring-0 h-4 w-4"
-                />
-                <label htmlFor="contact-subscribed" className="text-xs font-medium text-foreground cursor-pointer">
-                  Subscribed <span className="text-muted-foreground font-normal">(eligible for broadcasts)</span>
-                </label>
-              </div>
-
-              <div className="pt-3 border-t border-border space-y-2">
-                <div>
-                  <h4 className="text-xs font-semibold text-foreground">Platform Channel (optional)</h4>
-                  <p className="text-[11px] text-muted-foreground">Link this contact to a platform identity for messaging</p>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground block mb-1">Account</label>
-                  <select
-                    value={formAccount}
-                    onChange={(e) => setFormAccount(e.target.value)}
-                    className="w-full rounded-md border border-border bg-background px-3 py-2 text-xs text-foreground focus:outline-none"
-                  >
-                    <option value="no-platform">No platform channel</option>
-                    <option value="whatsapp-omnidome">WhatsApp (OmniDome SA - +27 82 123 4567)</option>
-                    <option value="telegram-omnidome">Telegram (@OmniDome)</option>
-                    <option value="instagram-omnidome">Instagram (@OmniDomeSA)</option>
-                    <option value="facebook-omnidome">Facebook (OmniDome Telecoms)</option>
-                  </select>
-                </div>
-              </div>
+              {createError && <p role="alert" className="text-xs text-red-400">{createError}</p>}
 
               {/* Drawer Actions at Bottom */}
               <div className="flex items-center justify-end gap-3 pt-6 border-t border-border mt-auto">
@@ -3274,10 +2913,10 @@ function InboxContactsTab() {
                 <Button
                   type="submit"
                   size="sm"
-                  disabled={!formName.trim()}
+                  disabled={!formName.trim() || !formPhone.trim() || creatingContact}
                   className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-5 h-9"
                 >
-                  Create
+                  {creatingContact ? "Creating…" : "Create"}
                 </Button>
               </div>
             </form>
@@ -3304,248 +2943,103 @@ const INBOX_PLATFORMS = [
   { id: "tiktok", label: "TikTok", icon: Video, color: "#000000" },
 ]
 
+/** "5m ago", "3h ago", "2d ago" from a real timestamp; empty when unknown. */
+function timeAgo(iso?: string | null): string {
+  if (!iso) return ""
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return ""
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000))
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 48) return `${hrs}h ago`
+  return `${Math.round(hrs / 24)}d ago`
+}
+
 function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" | "reviews" }) {
-  const [messages, setMessages] = useState<any[]>([])
+  const messageType = INBOX_KIND_TYPE[kind] || "DM"
+  const { value: inboxLoad, reload: loadInbox } = useMarketingLoad<any[]>(inboxMessagesPath({ message_type: messageType }))
+  const { value: accountsLoad } = useMarketingLoad<any[]>(socialAccountsPath())
+  const messages: any[] = inboxLoad.state === "ready" ? inboxLoad.data : []
+  const accountName = (id?: string) => {
+    if (accountsLoad.state !== "ready") return ""
+    const a = accountsLoad.data.find((x: any) => x.id === id)
+    return a ? (a.account_handle || a.account_name || "") : ""
+  }
   const [selectedPlatform, setSelectedPlatform] = useState<string>("all")
-  const [platformDropdownOpen, setPlatformDropdownOpen] = useState(false)
-  const [selectedProfile, setSelectedProfile] = useState("all")
   const [selectedAccount, setSelectedAccount] = useState("all")
   const [searchQuery, setSearchQuery] = useState("")
   const [sortBy, setSortBy] = useState("newest")
-  const [selectedMessage, setSelectedMessage] = useState<any>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [replyText, setReplyText] = useState("")
-  const [chatHistory, setChatHistory] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const messageType = INBOX_KIND_TYPE[kind] || "DM"
+  // Replies the server accepted this session, keyed by message id.
+  const [sentReplies, setSentReplies] = useState<Record<string, { text: string; time: string }[]>>({})
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
 
   // Title based on kind
   const titleLabel = kind === "comments" ? "Comments" : kind === "reviews" ? "Reviews" : "Messages"
 
-  useEffect(() => {
-    loadInbox()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind])
-
-  const loadInbox = async () => {
-    setLoading(true)
-    try {
-      if (kind === "reviews") {
-        // Authentic reviews specifically from review platforms (Google Business & Facebook)
-        const reviewsData = [
-          {
-            id: "rev-1",
-            sender_name: "Dr. Sarah Jenkins",
-            sender_handle: "sarahjenkins_md",
-            platform: "googlebusiness",
-            rating: 5,
-            content: "OmniDome installed our 1Gbps dedicated fiber line in Sandton yesterday. Exceptional speeds, zero packet drop, and the technician was courteous and professional. Highly recommended!",
-            status: "REPLIED",
-            message_type: "REVIEW",
-            created_at: new Date(Date.now() - 3600 * 1000 * 24).toISOString(),
-            history: [
-              {
-                sender: "Dr. Sarah Jenkins",
-                role: "customer",
-                rating: 5,
-                text: "OmniDome installed our 1Gbps dedicated fiber line in Sandton yesterday. Exceptional speeds, zero packet drop, and the technician was courteous and professional. Highly recommended!",
-                time: "Yesterday, 14:30",
-              },
-              {
-                sender: "OmniDome Support",
-                role: "agent",
-                text: "Thank you Dr. Jenkins! We're thrilled to keep your clinic connected at top speed. Reach out anytime if you need dedicated support.",
-                time: "Yesterday, 15:10",
-              },
-            ],
-          },
-          {
-            id: "rev-2",
-            sender_name: "Thabo Mokoena (Mokoena Logistics)",
-            sender_handle: "mokoena_logistics",
-            platform: "facebook",
-            rating: 5,
-            content: "Switched our 12 branch offices from our old ISP to OmniDome SD-WAN & Dual-LTE failover. Cost went down by 30% and uptime has been 100% since migration.",
-            status: "REPLIED",
-            message_type: "REVIEW",
-            created_at: new Date(Date.now() - 3600 * 1000 * 48).toISOString(),
-            history: [
-              {
-                sender: "Thabo Mokoena",
-                role: "customer",
-                rating: 5,
-                text: "Switched our 12 branch offices from our old ISP to OmniDome SD-WAN & Dual-LTE failover. Cost went down by 30% and uptime has been 100% since migration.",
-                time: "2 days ago",
-              },
-              {
-                sender: "OmniDome Business Team",
-                role: "agent",
-                text: "Thanks Thabo! Glad we could empower Mokoena Logistics with seamless multi-branch connectivity.",
-                time: "2 days ago",
-              },
-            ],
-          },
-          {
-            id: "rev-3",
-            sender_name: "Kagiso Ndlovu",
-            sender_handle: "kagiso_ndlovu",
-            platform: "googlebusiness",
-            rating: 4,
-            content: "Fiber connection is blazingly fast. Initial installation was delayed by one day due to municipal duct approval, but customer care kept me updated throughout.",
-            status: "UNREAD",
-            message_type: "REVIEW",
-            created_at: new Date(Date.now() - 3600 * 1000 * 6).toISOString(),
-            history: [
-              {
-                sender: "Kagiso Ndlovu",
-                role: "customer",
-                rating: 4,
-                text: "Fiber connection is blazingly fast. Initial installation was delayed by one day due to municipal duct approval, but customer care kept me updated throughout.",
-                time: "6 hours ago",
-              },
-            ],
-          },
-          {
-            id: "rev-4",
-            sender_name: "Lerato Khumalo",
-            sender_handle: "leratok",
-            platform: "googlebusiness",
-            rating: 5,
-            content: "Best customer support in Johannesburg! When our router lost power during storm repairs, OmniDome dispatched a field engineer within 90 minutes.",
-            status: "UNREAD",
-            message_type: "REVIEW",
-            created_at: new Date(Date.now() - 3600 * 1000 * 18).toISOString(),
-            history: [
-              {
-                sender: "Lerato Khumalo",
-                role: "customer",
-                rating: 5,
-                text: "Best customer support in Johannesburg! When our router lost power during storm repairs, OmniDome dispatched a field engineer within 90 minutes.",
-                time: "18 hours ago",
-              },
-            ],
-          },
-        ]
-        setMessages(reviewsData)
-        setSelectedMessage(reviewsData[0])
-        setChatHistory(reviewsData[0].history)
-        return
-      }
-
-      const msgData = await listInboxMessages({ message_type: messageType }).catch(() => [])
-      if (msgData && msgData.length > 0) {
-        setMessages(msgData)
-        setSelectedMessage(msgData[0])
-      } else {
-        // Fallback sample conversation matching media_1789290079115.png
-        const defaultConv = {
-          id: "msg-demo-1",
-          sender_name: "Bene Majozi",
-          sender_handle: "benemajozi",
-          platform: "telegram",
-          content: "yoyoyooyo",
-          status: "READ",
-          message_type: messageType,
-          created_at: new Date(Date.now() - 3600 * 1000 * 12).toISOString(),
-          history: [
-            { sender: "Bene Majozi", role: "customer", text: "Here we go again!!", time: "09:12 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "Hola", time: "09:27 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "WTK just the , caused all this! 😅", time: "10:20 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "Welele...", time: "10:37 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "Welele space>?", time: "10:40 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "blabalbalbalbla", time: "10:55 PM" },
-            { sender: "Bene Majozi", role: "customer", text: "yoyoyooyo", time: "11:06 PM" },
-          ],
-        }
-        const secondConv = {
-          id: "msg-demo-2",
-          sender_name: "Sipho Dlamini",
-          sender_handle: "siphodlamini",
-          platform: "whatsapp",
-          content: "Hi, can I get quotation for business 500Mbps fiber in Morningside?",
-          status: "UNREAD",
-          message_type: messageType,
-          created_at: new Date(Date.now() - 3600 * 1000 * 2).toISOString(),
-          history: [
-            { sender: "Sipho Dlamini", role: "customer", text: "Hi, can I get quotation for business 500Mbps fiber in Morningside?", time: "02:15 PM" },
-          ],
-        }
-        setMessages([defaultConv, secondConv])
-        setSelectedMessage(defaultConv)
-        setChatHistory(defaultConv.history)
-      }
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
-  }
+  const selectedMessage = messages.find((m) => m.id === selectedId) ?? messages[0] ?? null
+  const chatHistory: any[] = selectedMessage
+    ? [
+        { sender: selectedMessage.sender_name || selectedMessage.sender_handle || "Sender", role: "customer", text: selectedMessage.content, rating: typeof selectedMessage.rating === "number" ? selectedMessage.rating : undefined, time: timeAgo(selectedMessage.created_at) },
+        ...(sentReplies[selectedMessage.id] ?? []).map((r) => ({ sender: "You", role: "agent", text: r.text, time: r.time })),
+      ]
+    : []
 
   const handleMarkRead = async (id: string) => {
-    try {
-      await markInboxRead(id)
-      loadInbox()
-    } catch (e) {
-      console.error(e)
-    }
+    setActionError(null)
+    const r = await writeMarketing("PUT", `/social/inbox/${id}/read`)
+    if (!r.ok) setActionError(describeMutationError(r.status, r.error))
+    else loadInbox()
   }
 
   const handleArchive = async (id: string) => {
-    try {
-      await archiveInboxMessage(id)
-      loadInbox()
-    } catch (e) {
-      console.error(e)
-    }
+    setActionError(null)
+    const r = await writeMarketing("PUT", `/social/inbox/${id}/archive`)
+    if (!r.ok) setActionError(describeMutationError(r.status, r.error))
+    else loadInbox()
   }
 
-  useEffect(() => {
-    if (selectedMessage) {
-      if (selectedMessage.history) {
-        setChatHistory(selectedMessage.history)
-      } else {
-        setChatHistory([
-          { sender: selectedMessage.sender_name, role: "customer", text: selectedMessage.content, time: "Earlier" },
-        ])
-      }
-    }
-  }, [selectedMessage])
-
   const filteredMessages = useMemo(() => {
-    return messages.filter((m) => {
+    const ts = (m: any) => new Date(m.created_at || 0).getTime()
+    const ordered = [...messages].sort((a, b) =>
+      sortBy === "oldest" ? ts(a) - ts(b)
+      : sortBy === "unread" ? ((b.status === "UNREAD" ? 1 : 0) - (a.status === "UNREAD" ? 1 : 0)) || ts(b) - ts(a)
+      : ts(b) - ts(a))
+    return ordered.filter((m) => {
       // Reviews must only come from review platforms (Google Business & Facebook)
       if (kind === "reviews") {
         const isReviewPlatform = m.platform === "googlebusiness" || m.platform === "facebook"
         if (!isReviewPlatform) return false
       }
       if (selectedPlatform !== "all" && m.platform?.toLowerCase() !== selectedPlatform.toLowerCase()) return false
+      if (selectedAccount !== "all" && m.account_id !== selectedAccount) return false
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
         if (!m.sender_name?.toLowerCase().includes(q) && !m.content?.toLowerCase().includes(q)) return false
       }
       return true
     })
-  }, [messages, selectedPlatform, searchQuery, kind])
+  }, [messages, selectedPlatform, selectedAccount, searchQuery, kind, sortBy])
 
   const handleSendReply = async () => {
-    if (!selectedMessage || !replyText.trim()) return
+    if (!selectedMessage || !replyText.trim() || sending) return
     const textToSend = replyText.trim()
+    setSending(true)
+    setActionError(null)
+    const r = await writeMarketing("POST", `/social/inbox/${selectedMessage.id}/reply`, { content: textToSend })
+    setSending(false)
+    if (!r.ok) {
+      setActionError(describeMutationError(r.status, r.error))
+      return
+    }
     setReplyText("")
-
-    // Optimistically update conversation bubbles
-    const newBubble = {
-      sender: kind === "reviews" ? "OmniDome (Owner Reply)" : "@OmniDome",
-      role: "agent",
-      text: textToSend,
-      time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-    }
-    setChatHistory((prev) => [...prev, newBubble])
-
-    try {
-      await replyToInboxMessage(selectedMessage.id, textToSend)
-    } catch (e) {
-      console.error(e)
-    }
+    setSentReplies((prev) => ({
+      ...prev,
+      [selectedMessage.id]: [...(prev[selectedMessage.id] ?? []), { text: textToSend, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }],
+    }))
   }
 
   return (
@@ -3572,17 +3066,6 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
           options={kind === "reviews" ? REVIEW_PLATFORMS : ALL_BRAND_PLATFORMS}
         />
 
-        {/* Profiles Dropdown */}
-        <select
-          value={selectedProfile}
-          onChange={(e) => setSelectedProfile(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-        >
-          <option value="all">All profiles</option>
-          <option value="default">00000000-0000... (Default)</option>
-          <option value="brand-main">OmniDome Main Brand</option>
-        </select>
-
         {/* Accounts Dropdown */}
         <select
           value={selectedAccount}
@@ -3590,8 +3073,9 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
           className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
         >
           <option value="all">All accounts</option>
-          <option value="omnidome-hq">@OmniDomeHQ</option>
-          <option value="omnidome-direct">OmniDome Direct WhatsApp</option>
+          {accountsLoad.state === "ready" && accountsLoad.data.map((a: any) => (
+            <option key={a.id} value={a.id}>{a.account_handle || a.account_name || a.platform}</option>
+          ))}
         </select>
       </div>
 
@@ -3622,10 +3106,10 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
       <div className="grid grid-cols-1 lg:grid-cols-[380px_1fr] border border-border rounded-xl bg-card overflow-hidden min-h-[560px]">
         {/* Left Column: Conversation / Review List */}
         <div className="border-r border-border divide-y divide-border/60 overflow-y-auto max-h-[640px]">
-          {loading ? (
-            <div className="py-12 text-center text-xs text-muted-foreground">Loading {titleLabel.toLowerCase()}...</div>
+          {inboxLoad.state !== "ready" ? (
+            <NotConnected loadable={inboxLoad} service="The marketing service" onRetry={loadInbox} className="m-3" />
           ) : filteredMessages.length === 0 ? (
-            <div className="py-12 text-center text-xs text-muted-foreground">No {titleLabel.toLowerCase()} found</div>
+            <div className="py-12 text-center text-xs text-muted-foreground">{messages.length === 0 ? `No ${titleLabel.toLowerCase()} yet` : `No ${titleLabel.toLowerCase()} match the filters`}</div>
           ) : (
             filteredMessages.map((m) => {
               const isSelected = selectedMessage?.id === m.id
@@ -3636,7 +3120,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
               return (
                 <button
                   key={m.id}
-                  onClick={() => setSelectedMessage(m)}
+                  onClick={() => setSelectedId(m.id)}
                   className={`w-full text-left p-3.5 transition-colors flex items-start gap-3 ${
                     isSelected ? "bg-accent/70 border-l-2 border-l-[#EA3829]" : "hover:bg-muted/20"
                   }`}
@@ -3648,20 +3132,20 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                     <div className="flex items-center justify-between mb-0.5">
                       <span className="font-semibold text-xs text-foreground truncate">{m.sender_name}</span>
                       <span className="text-[10px] text-muted-foreground shrink-0">
-                        {kind === "reviews" ? "verified" : "12h"}
+                        {timeAgo(m.created_at)}
                       </span>
                     </div>
 
                     {/* Star ratings for reviews */}
-                    {kind === "reviews" && (
+                    {kind === "reviews" && typeof m.rating === "number" && (
                       <div className="flex items-center gap-0.5 mb-1">
                         {Array.from({ length: 5 }).map((_, si) => (
                           <Star
                             key={si}
-                            className={`h-3 w-3 ${si < (m.rating || 5) ? "fill-amber-400 text-amber-400" : "text-muted-foreground/30"}`}
+                            className={`h-3 w-3 ${si < m.rating ? "fill-amber-400 text-amber-400" : "text-muted-foreground/30"}`}
                           />
                         ))}
-                        <span className="ml-1 text-[10px] font-bold text-foreground">{m.rating || 5}.0</span>
+                        <span className="ml-1 text-[10px] font-bold text-foreground">{m.rating}.0</span>
                       </div>
                     )}
 
@@ -3671,7 +3155,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                       <span>
                         {kind === "reviews"
                           ? m.platform === "googlebusiness" ? "Google Review" : "Facebook Review"
-                          : "· via @OmniDome"}
+                          : (accountName(m.account_id) ? `via ${accountName(m.account_id)}` : (m.platform || ""))}
                       </span>
                     </div>
                   </div>
@@ -3698,12 +3182,12 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                         const Icon = platformIcons[selectedMessage.platform?.toLowerCase()] || Globe
                         return <Icon className="h-3 w-3" style={{ color: platformColors[selectedMessage.platform?.toLowerCase()] || "#666" }} />
                       })()}
-                      {kind === "reviews" && (
+                      {kind === "reviews" && typeof selectedMessage.rating === "number" && (
                         <span className="flex items-center gap-0.5 ml-1">
                           {Array.from({ length: 5 }).map((_, si) => (
                             <Star
                               key={si}
-                              className={`h-3 w-3 ${si < (selectedMessage.rating || 5) ? "fill-amber-400 text-amber-400" : "text-muted-foreground/30"}`}
+                              className={`h-3 w-3 ${si < selectedMessage.rating ? "fill-amber-400 text-amber-400" : "text-muted-foreground/30"}`}
                             />
                           ))}
                         </span>
@@ -3712,7 +3196,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                     <p className="text-[11px] text-muted-foreground">
                       {kind === "reviews"
                         ? `Public review on ${selectedMessage.platform === "googlebusiness" ? "Google Business Profile" : "Facebook Pages"}`
-                        : "Replying as @OmniDome · Active 12h"}
+                        : `${accountName(selectedMessage.account_id) ? `Replying as ${accountName(selectedMessage.account_id)} · ` : ""}Received ${timeAgo(selectedMessage.created_at)}`}
                     </p>
                   </div>
                 </div>
@@ -3757,7 +3241,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                         )}
                         {isAgent && (
                           <div className="text-[10px] font-semibold text-white/90 mb-0.5">
-                            {kind === "reviews" ? "OmniDome Response (Public)" : "@OmniDome"}
+                            {kind === "reviews" ? "Your response (public)" : "You"}
                           </div>
                         )}
                         <p className="leading-relaxed whitespace-pre-wrap">{bubble.text}</p>
@@ -3776,6 +3260,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
 
               {/* Bottom Reply Composer */}
               <div className="p-4 border-t border-border bg-card/60">
+                {actionError && <p role="alert" className="mb-2 text-xs text-red-400">{actionError}</p>}
                 <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-1.5 shadow-xs focus-within:border-primary/60">
                   <Input
                     placeholder={kind === "reviews" ? "Reply publicly to this customer review as OmniDome..." : "Type a message..."}
@@ -3800,7 +3285,7 @@ function SocialInboxTab({ kind = "messages" }: { kind?: "messages" | "comments" 
                   </Button>
                   <button
                     onClick={handleSendReply}
-                    disabled={!replyText.trim()}
+                    disabled={!replyText.trim() || sending}
                     className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#EA3829] text-white hover:bg-[#d02e20] transition-colors disabled:opacity-40"
                     title={kind === "reviews" ? "Post public reply" : "Send"}
                   >
@@ -3833,53 +3318,59 @@ const DAILY_METRICS: { key: keyof DailyMetricPoint["metrics"]; label: string; co
   { key: "views", label: "Views", color: "#22d3ee" },
 ]
 
+const WINDOW_DAYS: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90, "1y": 365 }
+
 function SocialAnalyticsTab() {
   const [subTab, setSubTab] = useState<"posting" | "inbox">("posting")
   const [platformFilter, setPlatformFilter] = useState("all")
-  const [profileFilter, setProfileFilter] = useState("all")
-  const [sourceFilter, setSourceFilter] = useState("all")
   const [timeWindow, setTimeWindow] = useState("30d")
   const [likesMetric, setLikesMetric] = useState("likes")
+  const [attribution] = useState<"publish" | "received">("publish")
+  const days = WINDOW_DAYS[timeWindow] ?? 30
 
-  const [overview, setOverview] = useState<AnalyticsOverview | null>(null)
-  const [daily, setDaily] = useState<DailyMetricPoint[]>([])
-  const [posts, setPosts] = useState<AnalyticsPostRow[]>([])
-  const [attribution, setAttribution] = useState<"publish" | "received">("publish")
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // One loader per data set; the marketing read cache shares results with other tabs.
+  const { value: overviewLoad, reload: reloadOverview } = useMarketingLoad<{ overview: AnalyticsOverview }>("/social/analytics/overview")
+  const { value: postsLoad } = useMarketingLoad<{ posts: AnalyticsPostRow[] }>(analyticsPostsPath({ limit: 20 }))
+  const { value: dailyLoad } = useMarketingLoad<{ dailyData: DailyMetricPoint[] }>(analyticsDailyPath({ attribution, days }))
+  const { value: inboxLoad, reload: reloadInbox } = useMarketingLoad<any[]>(subTab === "inbox" ? inboxMessagesPath() : null)
 
-  const loadDaily = async (attr: "publish" | "received") => {
-    const d = await getAnalyticsDaily({ attribution: attr, days: 30 }).catch(() => null)
-    setDaily(d?.dailyData ?? [])
-  }
+  const overview = overviewLoad.state === "ready" ? overviewLoad.data?.overview ?? null : null
+  const allPosts: AnalyticsPostRow[] = postsLoad.state === "ready" ? postsLoad.data?.posts ?? [] : []
+  const posts = platformFilter === "all" ? allPosts : allPosts.filter((p) => p.platform?.toLowerCase() === platformFilter.toLowerCase())
+  const daily: DailyMetricPoint[] = dailyLoad.state === "ready" ? dailyLoad.data?.dailyData ?? [] : []
 
-  useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      setLoading(true)
-      try {
-        const [ov, pg] = await Promise.all([
-          getAnalyticsOverview().catch(() => null),
-          getAnalyticsPosts({ limit: 20 }).catch(() => null),
-        ])
-        if (cancelled) return
-        setOverview(ov?.overview ?? null)
-        setPosts(pg?.posts ?? [])
-        await loadDaily(attribution)
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load analytics")
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Real aggregates derived from synced posts / daily rows
+  const postsPerPlatform = Object.entries(
+    posts.reduce((acc: Record<string, number>, p) => { acc[p.platform] = (acc[p.platform] ?? 0) + 1; return acc }, {}),
+  ).map(([platform, count]) => ({ platform, count }))
+  const metricPerPlatform = Object.entries(
+    posts.reduce((acc: Record<string, number>, p) => { acc[p.platform] = (acc[p.platform] ?? 0) + (Number(p.analytics?.[likesMetric]) || 0); return acc }, {}),
+  ).map(([platform, value]) => ({ platform, value }))
+  const dailySeries = daily.map((d) => ({
+    date: d.date,
+    posts: d.postCount,
+    interactions: likesMetric in d.metrics ? (d.metrics as Record<string, number>)[likesMetric] : 0,
+  }))
 
-  useEffect(() => { loadDaily(attribution) }, [attribution])
+  // Inbox analytics from real messages
+  const inboxMsgs: any[] = inboxLoad.state === "ready" ? inboxLoad.data : []
+  const inboxTotal = inboxMsgs.length
+  const inboxReplied = inboxMsgs.filter((m) => m.status === "REPLIED").length
+  const inboxUnread = inboxMsgs.filter((m) => m.status === "UNREAD").length
+  const inboxContacts = new Set(inboxMsgs.map((m) => `${m.sender_handle || m.sender_name || "?"}|${m.platform}`)).size
+  const inboxByPlatform = Object.entries(
+    inboxMsgs.reduce((acc: Record<string, number>, m) => { const k = m.platform || "other"; acc[k] = (acc[k] ?? 0) + 1; return acc }, {}),
+  ).map(([platform, messages]) => ({ platform, messages }))
+  const inboxByDay = Object.entries(
+    inboxMsgs.reduce((acc: Record<string, number>, m) => {
+      const d = m.created_at ? new Date(m.created_at).toISOString().slice(0, 10) : null
+      if (d) acc[d] = (acc[d] ?? 0) + 1
+      return acc
+    }, {}),
+  ).sort(([a], [b]) => a.localeCompare(b)).map(([date, inbound]) => ({ date, inbound }))
 
   return (
     <div className="space-y-5">
-      {/* Title & Subtitle matching media_1789290137514.png */}
       <div>
         <h2 className="text-xl font-bold tracking-tight text-foreground">Analytics</h2>
         <p className="text-xs text-muted-foreground">
@@ -3887,14 +3378,11 @@ function SocialAnalyticsTab() {
         </p>
       </div>
 
-      {/* Sub-tabs: Posting analytics vs Inbox analytics */}
       <div className="flex border-b border-border text-xs font-semibold">
         <button
           onClick={() => setSubTab("posting")}
           className={`pb-2.5 px-3 transition-colors border-b-2 ${
-            subTab === "posting"
-              ? "border-foreground text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground"
+            subTab === "posting" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
           }`}
         >
           Posting analytics
@@ -3902,43 +3390,15 @@ function SocialAnalyticsTab() {
         <button
           onClick={() => setSubTab("inbox")}
           className={`pb-2.5 px-3 transition-colors border-b-2 ${
-            subTab === "inbox"
-              ? "border-foreground text-foreground"
-              : "border-transparent text-muted-foreground hover:text-foreground"
+            subTab === "inbox" ? "border-foreground text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"
           }`}
         >
           Inbox analytics
         </button>
       </div>
 
-      {/* Filter Row matching media_1789290137514.png */}
       <div className="flex flex-wrap items-center gap-2">
-        {/* Platform with authentic Brand Icons (media_1789297905856.png) */}
-        <PlatformBrandDropdown
-          value={platformFilter}
-          onChange={setPlatformFilter}
-        />
-
-        <select
-          value={profileFilter}
-          onChange={(e) => setProfileFilter(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-        >
-          <option value="all">All profiles</option>
-          <option value="default">00000000-0000... (Default)</option>
-          <option value="brand-main">OmniDome Main Brand</option>
-        </select>
-
-        <select
-          value={sourceFilter}
-          onChange={(e) => setSourceFilter(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-        >
-          <option value="all">All sources</option>
-          <option value="omnidome">OmniDome native</option>
-          <option value="external">External / Zernio sync</option>
-        </select>
-
+        <PlatformBrandDropdown value={platformFilter} onChange={setPlatformFilter} />
         <select
           value={timeWindow}
           onChange={(e) => setTimeWindow(e.target.value)}
@@ -3953,12 +3413,11 @@ function SocialAnalyticsTab() {
 
       {subTab === "posting" ? (
         <>
-          {/* 5 KPI Metric Cards Strip matching media_1789290137514.png */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-0 rounded-lg border border-border bg-card divide-y md:divide-y-0 md:divide-x divide-border overflow-hidden">
             <div className="p-4">
               <p className="text-xs text-muted-foreground mb-1">Engagement rate</p>
               <p className="text-xl font-bold text-foreground">
-                {overview?.engagementRate ? `${overview.engagementRate.toFixed(1)}%` : "0.0%"}
+                <StatValue loadable={overviewLoad}>{(d) => `${(d?.overview?.engagementRate ?? 0).toFixed(1)}%`}</StatValue>
               </p>
             </div>
             <div className="p-4">
@@ -3966,7 +3425,7 @@ function SocialAnalyticsTab() {
               <div className="flex items-center gap-1.5">
                 <Eye className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xl font-bold text-foreground">
-                  {overview?.reach ? overview.reach.toLocaleString() : "0"}
+                  <StatValue loadable={overviewLoad}>{(d) => (d?.overview?.reach ?? 0).toLocaleString()}</StatValue>
                 </span>
               </div>
             </div>
@@ -3975,7 +3434,7 @@ function SocialAnalyticsTab() {
               <div className="flex items-center gap-1.5">
                 <Users className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xl font-bold text-foreground">
-                  {overview?.followers ? overview.followers.toLocaleString() : "0"}
+                  <StatValue loadable={overviewLoad}>{(d) => (d?.overview?.followers ?? 0).toLocaleString()}</StatValue>
                 </span>
               </div>
             </div>
@@ -3984,64 +3443,78 @@ function SocialAnalyticsTab() {
               <div className="flex items-center gap-1.5">
                 <FileText className="h-4 w-4 text-muted-foreground" />
                 <span className="text-xl font-bold text-foreground">
-                  {overview?.totalPosts ? overview.totalPosts.toLocaleString() : "0"}
+                  <StatValue loadable={overviewLoad}>{(d) => (d?.overview?.totalPosts ?? 0).toLocaleString()}</StatValue>
                 </span>
               </div>
             </div>
             <div className="p-4">
               <p className="text-xs text-muted-foreground mb-1">Best post</p>
               <p className="text-base font-semibold text-muted-foreground truncate">
-                {overview?.bestPost || "No data"}
+                <StatValue loadable={overviewLoad} className="text-base">{(d) => d?.overview?.bestPost || "No data yet"}</StatValue>
               </p>
             </div>
           </div>
+          {overview && (overview.lastSync || overview.lastError) && (
+            <p className="text-[11px] text-muted-foreground">
+              {overview.lastSync ? `Last synced ${new Date(overview.lastSync).toLocaleString()}` : "Not synced yet"}
+              {overview.lastError ? ` · last sync error: ${overview.lastError}` : ""}
+            </p>
+          )}
 
-          {/* 2x2 Charts Grid matching media_1789290137514.png */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Top Left: Posts per platform */}
             <Card className="border-border bg-card">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold">Posts per platform</CardTitle>
-                <CardDescription className="text-xs">No posts in this window</CardDescription>
+                <CardDescription className="text-xs">From the latest synced posts</CardDescription>
               </CardHeader>
-              <CardContent className="h-56 flex items-center justify-center">
-                <div className="text-center text-xs text-muted-foreground">
-                  <p>No posts yet</p>
-                </div>
+              <CardContent className="h-56">
+                {postsLoad.state !== "ready" ? (
+                  <NotConnected loadable={postsLoad} service="The marketing service" className="h-56" />
+                ) : postsPerPlatform.length === 0 ? (
+                  <NoDataYet message="No posts yet" className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={postsPerPlatform}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="platform" tick={{ fill: "#888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Bar dataKey="count" fill="#60a5fa" name="Posts" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
-            {/* Top Right: Posts over time */}
             <Card className="border-border bg-card">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold">Posts over time</CardTitle>
-                <CardDescription className="text-xs">Posts per week · last 30 days</CardDescription>
+                <CardDescription className="text-xs">Posts per day · last {days} days</CardDescription>
               </CardHeader>
               <CardContent className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={[
-                    { date: "Aug 15", posts: 0 },
-                    { date: "Aug 22", posts: 0 },
-                    { date: "Aug 29", posts: 0 },
-                    { date: "Sep 5", posts: 0 },
-                    { date: "Sep 12", posts: 0 },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#333333" />
-                    <XAxis dataKey="date" tick={{ fill: "#888888", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "#888888", fontSize: 11 }} domain={[0, 5]} allowDecimals={false} />
-                    <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
-                    <Line type="monotone" dataKey="posts" stroke="#60a5fa" strokeWidth={2} dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
+                {dailyLoad.state !== "ready" ? (
+                  <NotConnected loadable={dailyLoad} service="The marketing service" className="h-56" />
+                ) : dailySeries.length === 0 ? (
+                  <NoDataYet message="No synced activity in this window" className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={dailySeries}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333333" />
+                      <XAxis dataKey="date" tick={{ fill: "#888888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Line type="monotone" dataKey="posts" stroke="#60a5fa" strokeWidth={2} dot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
-            {/* Bottom Left: Likes per platform */}
             <Card className="border-border bg-card">
               <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
                 <div className="flex items-center gap-1.5">
                   <Heart className="h-4 w-4 text-muted-foreground" />
-                  <CardTitle className="text-sm font-semibold">Likes per platform</CardTitle>
+                  <CardTitle className="text-sm font-semibold">{likesMetric.charAt(0).toUpperCase() + likesMetric.slice(1)} per platform</CardTitle>
                 </div>
                 <select
                   value={likesMetric}
@@ -4054,43 +3527,53 @@ function SocialAnalyticsTab() {
                   <option value="clicks">Clicks</option>
                 </select>
               </CardHeader>
-              <CardContent className="h-56 flex items-center justify-center">
-                <div className="text-center text-xs text-muted-foreground">
-                  <p>No {likesMetric} recorded yet</p>
-                </div>
+              <CardContent className="h-56">
+                {postsLoad.state !== "ready" ? (
+                  <NotConnected loadable={postsLoad} service="The marketing service" className="h-56" />
+                ) : metricPerPlatform.every((r) => r.value === 0) ? (
+                  <NoDataYet message={`No ${likesMetric} recorded yet`} className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={metricPerPlatform}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="platform" tick={{ fill: "#888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Bar dataKey="value" fill="#f472b6" name={likesMetric} radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
-            {/* Bottom Right: Likes over time */}
             <Card className="border-border bg-card">
               <CardHeader className="pb-2">
                 <div className="flex items-center gap-1.5">
                   <Heart className="h-4 w-4 text-muted-foreground" />
-                  <CardTitle className="text-sm font-semibold">Likes over time</CardTitle>
+                  <CardTitle className="text-sm font-semibold">{likesMetric.charAt(0).toUpperCase() + likesMetric.slice(1)} over time</CardTitle>
                 </div>
-                <CardDescription className="text-xs">Interaction volume · last 30 days</CardDescription>
+                <CardDescription className="text-xs">Daily · last {days} days</CardDescription>
               </CardHeader>
               <CardContent className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={[
-                    { date: "Aug 15", interactions: 0 },
-                    { date: "Aug 22", interactions: 0 },
-                    { date: "Aug 29", interactions: 0 },
-                    { date: "Sep 5", interactions: 0 },
-                    { date: "Sep 12", interactions: 0 },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#333333" />
-                    <XAxis dataKey="date" tick={{ fill: "#888888", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "#888888", fontSize: 11 }} domain={[0, 10]} allowDecimals={false} />
-                    <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
-                    <Line type="monotone" dataKey="interactions" stroke="#f472b6" strokeWidth={2} dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
+                {dailyLoad.state !== "ready" ? (
+                  <NotConnected loadable={dailyLoad} service="The marketing service" className="h-56" />
+                ) : dailySeries.length === 0 ? (
+                  <NoDataYet message="No synced activity in this window" className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={dailySeries}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333333" />
+                      <XAxis dataKey="date" tick={{ fill: "#888888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Line type="monotone" dataKey="interactions" stroke="#f472b6" strokeWidth={2} dot={{ r: 3 }} name={likesMetric} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
           </div>
 
-          {/* Synced Posts List if available */}
           {posts.length > 0 && (
             <Card className="border-border bg-card">
               <CardHeader><CardTitle className="text-sm">Recent Posts Performance</CardTitle></CardHeader>
@@ -4122,7 +3605,7 @@ function SocialAnalyticsTab() {
                           <td className="py-3 pr-4 text-muted-foreground">{p.analytics.impressions ?? 0}</td>
                           <td className="py-3">
                             <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-500">
-                              synced
+                              {p.syncStatus || "synced"}
                             </Badge>
                           </td>
                         </tr>
@@ -4134,38 +3617,40 @@ function SocialAnalyticsTab() {
             </Card>
           )}
         </>
+      ) : inboxLoad.state !== "ready" ? (
+        <NotConnected loadable={inboxLoad} service="The marketing service" onRetry={reloadInbox} />
       ) : (
         <>
-          {/* Inbox Analytics View */}
+          {/* Inbox analytics: every figure is derived from real inbox messages */}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-0 rounded-lg border border-border bg-card divide-y md:divide-y-0 md:divide-x divide-border overflow-hidden">
             <div className="p-4">
               <p className="text-xs text-muted-foreground mb-1">Response rate</p>
-              <p className="text-xl font-bold text-emerald-500">98.4%</p>
+              <p className="text-xl font-bold text-foreground">{inboxTotal > 0 ? `${((inboxReplied / inboxTotal) * 100).toFixed(1)}%` : "No messages yet"}</p>
             </div>
             <div className="p-4">
-              <p className="text-xs text-muted-foreground mb-1">Total reach</p>
+              <p className="text-xs text-muted-foreground mb-1">Unread</p>
               <div className="flex items-center gap-1.5">
                 <Eye className="h-4 w-4 text-muted-foreground" />
-                <span className="text-xl font-bold text-foreground">1,240</span>
+                <span className="text-xl font-bold text-foreground">{inboxUnread.toLocaleString()}</span>
               </div>
             </div>
             <div className="p-4">
               <p className="text-xs text-muted-foreground mb-1">Total contacts</p>
               <div className="flex items-center gap-1.5">
                 <Users className="h-4 w-4 text-muted-foreground" />
-                <span className="text-xl font-bold text-foreground">84</span>
+                <span className="text-xl font-bold text-foreground">{inboxContacts.toLocaleString()}</span>
               </div>
             </div>
             <div className="p-4">
-              <p className="text-xs text-muted-foreground mb-1">Messages this period</p>
+              <p className="text-xs text-muted-foreground mb-1">Messages</p>
               <div className="flex items-center gap-1.5">
                 <MessageSquare className="h-4 w-4 text-muted-foreground" />
-                <span className="text-xl font-bold text-foreground">312</span>
+                <span className="text-xl font-bold text-foreground">{inboxTotal.toLocaleString()}</span>
               </div>
             </div>
             <div className="p-4">
               <p className="text-xs text-muted-foreground mb-1">Avg response time</p>
-              <p className="text-xl font-bold text-foreground">4m 12s</p>
+              <p className="text-base font-semibold text-muted-foreground">Not tracked</p>
             </div>
           </div>
 
@@ -4176,58 +3661,45 @@ function SocialAnalyticsTab() {
                 <CardDescription className="text-xs">Inbound channel distribution</CardDescription>
               </CardHeader>
               <CardContent className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={[
-                    { platform: "WhatsApp", messages: 142, fill: "#25D366" },
-                    { platform: "Telegram", messages: 88, fill: "#0088CC" },
-                    { platform: "Instagram", messages: 46, fill: "#E4405F" },
-                    { platform: "Facebook", messages: 24, fill: "#1877F2" },
-                    { platform: "SMS", messages: 12, fill: "#10B981" },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                    <XAxis dataKey="platform" tick={{ fill: "#888", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "#888", fontSize: 11 }} />
-                    <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
-                    <Bar dataKey="messages" radius={[4, 4, 0, 0]}>
-                      {[
-                        { fill: "#25D366" },
-                        { fill: "#0088CC" },
-                        { fill: "#E4405F" },
-                        { fill: "#1877F2" },
-                        { fill: "#10B981" },
-                      ].map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.fill} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                {inboxByPlatform.length === 0 ? (
+                  <NoDataYet message="No messages yet" className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={inboxByPlatform}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="platform" tick={{ fill: "#888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Bar dataKey="messages" radius={[4, 4, 0, 0]}>
+                        {inboxByPlatform.map((r) => (
+                          <Cell key={r.platform} fill={platformColors[r.platform.toLowerCase()] || "#737373"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
             <Card className="border-border bg-card">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold">Messages over time</CardTitle>
-                <CardDescription className="text-xs">Inbound vs Outgoing volume</CardDescription>
+                <CardDescription className="text-xs">Inbound messages per day</CardDescription>
               </CardHeader>
               <CardContent className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={[
-                    { date: "Mon", inbound: 24, replied: 24 },
-                    { date: "Tue", inbound: 38, replied: 37 },
-                    { date: "Wed", inbound: 52, replied: 51 },
-                    { date: "Thu", inbound: 46, replied: 45 },
-                    { date: "Fri", inbound: 64, replied: 62 },
-                    { date: "Sat", inbound: 41, replied: 41 },
-                    { date: "Sun", inbound: 47, replied: 46 },
-                  ]}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#333" />
-                    <XAxis dataKey="date" tick={{ fill: "#888", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "#888", fontSize: 11 }} />
-                    <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
-                    <Line type="monotone" dataKey="inbound" stroke="#60a5fa" strokeWidth={2} name="Inbound" dot={{ r: 3 }} />
-                    <Line type="monotone" dataKey="replied" stroke="#4ade80" strokeWidth={2} name="Replied" dot={{ r: 3 }} />
-                  </LineChart>
-                </ResponsiveContainer>
+                {inboxByDay.length === 0 ? (
+                  <NoDataYet message="No messages yet" className="h-56 flex items-center justify-center" />
+                ) : (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={inboxByDay}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                      <XAxis dataKey="date" tick={{ fill: "#888", fontSize: 11 }} />
+                      <YAxis tick={{ fill: "#888", fontSize: 11 }} allowDecimals={false} />
+                      <Tooltip contentStyle={{ backgroundColor: "#1f1f1f", borderColor: "#444", fontSize: "11px" }} />
+                      <Line type="monotone" dataKey="inbound" stroke="#60a5fa" strokeWidth={2} name="Inbound" dot={{ r: 3 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -4246,15 +3718,38 @@ function SocialAnalyticsTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "groups" | "conversions" | "broadcasts" | "contacts" }) {
-  // Senders / Numbers state
-  const [senders, setSenders] = useState<WhatsAppSender[]>([])
-  const [templates, setTemplates] = useState<WhatsAppTemplate[]>([])
-  const [flows, setFlows] = useState<WhatsAppFlow[]>([])
-  const [groups, setGroups] = useState<WhatsAppGroup[]>([])
-  const [conversions, setConversions] = useState<WhatsAppConversion[]>([])
-  const [contacts, setContacts] = useState<any[]>([])
-  const [broadcasts, setBroadcasts] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  // Each view fetches only what it shows, through the shared marketing read cache.
+  const needSenders = view === "overview" || view === "groups"
+  const { value: sendersLoad, reload: reloadSenders } = useMarketingLoad<WhatsAppSender[]>(needSenders ? "/whatsapp/senders" : null)
+  const { value: templatesLoad, reload: reloadTemplates } = useMarketingLoad<WhatsAppTemplate[]>(view === "templates" ? "/whatsapp/templates" : null)
+  const { value: flowsLoad, reload: reloadFlows } = useMarketingLoad<WhatsAppFlow[]>(view === "flows" ? "/whatsapp/flows" : null)
+  const { value: groupsLoad, reload: reloadGroups } = useMarketingLoad<WhatsAppGroup[]>(view === "groups" ? "/whatsapp/groups" : null)
+  const { value: conversionsLoad, reload: reloadConversions } = useMarketingLoad<WhatsAppConversion[]>(view === "conversions" ? "/whatsapp/conversions" : null)
+  const { value: contactsLoad, reload: reloadContacts } = useMarketingLoad<any[]>(view === "contacts" ? whatsAppContactsPath() : null)
+  const { value: broadcastsLoad, reload: reloadBroadcasts } = useMarketingLoad<any[]>(view === "broadcasts" ? whatsAppBroadcastsPath() : null)
+  const senders: WhatsAppSender[] = sendersLoad.state === "ready" ? sendersLoad.data : []
+  const templates: WhatsAppTemplate[] = templatesLoad.state === "ready" ? templatesLoad.data : []
+  const flows: WhatsAppFlow[] = flowsLoad.state === "ready" ? flowsLoad.data : []
+  const groups: WhatsAppGroup[] = groupsLoad.state === "ready" ? groupsLoad.data : []
+  const conversions: WhatsAppConversion[] = conversionsLoad.state === "ready" ? conversionsLoad.data : []
+  const contacts: any[] = contactsLoad.state === "ready" ? contactsLoad.data : []
+  const broadcasts: any[] = broadcastsLoad.state === "ready" ? broadcastsLoad.data : []
+  const primaryLoad: Loadable<unknown> =
+    view === "overview" ? sendersLoad
+    : view === "templates" ? templatesLoad
+    : view === "flows" ? flowsLoad
+    : view === "groups" ? (sendersLoad.state !== "ready" ? sendersLoad : groupsLoad)
+    : view === "conversions" ? conversionsLoad
+    : view === "contacts" ? contactsLoad
+    : broadcastsLoad
+  const loadAll = () => { reloadSenders(); reloadTemplates(); reloadFlows(); reloadGroups(); reloadConversions(); reloadContacts(); reloadBroadcasts() }
+  const [actionError, setActionError] = useState<string | null>(null)
+  const runWrite = async (method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body: unknown): Promise<boolean> => {
+    setActionError(null)
+    const r = await writeMarketing(method, path, body)
+    if (!r.ok) { setActionError(describeMutationError(r.status, r.error)); return false }
+    return true
+  }
 
   // Modals
   const [showConnectModal, setShowConnectModal] = useState(false)
@@ -4267,17 +3762,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
   // Groups create state
   const [showCreateGroup, setShowCreateGroup] = useState(false)
   const [newGroup, setNewGroup] = useState({ name: "", invite_link: "" })
-
-  // Conversions simulator state
-  const [showSimulateLead, setShowSimulateLead] = useState(false)
-  const [simLead, setSimLead] = useState({
-    customer_name: "",
-    phone_number: "",
-    deal_name: "",
-    deal_value_zar: 15000,
-    flow_or_template: "Customer Welcome & Quote",
-  })
-  const [isSyncingLead, setIsSyncingLead] = useState(false)
 
   // Templates create state
   const [showCreateTemplate, setShowCreateTemplate] = useState(false)
@@ -4305,194 +3789,121 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
   const [newBroadcast, setNewBroadcast] = useState({ name: "", content: "", template_name: "" })
   const [sendNotice, setSendNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
 
-  useEffect(() => {
-    loadAll()
-  }, [])
-
-  const loadAll = async () => {
-    setLoading(true)
-    try {
-      const [snd, tpl, flw, grp, conv, cnt, bcast] = await Promise.all([
-        listWhatsAppSenders().catch(() => []),
-        listWhatsAppTemplates().catch(() => []),
-        listWhatsAppFlows().catch(() => []),
-        listWhatsAppGroups().catch(() => []),
-        listWhatsAppConversions().catch(() => []),
-        listWhatsAppContacts().catch(() => []),
-        listWhatsAppBroadcasts().catch(() => []),
-      ])
-      setSenders(snd || [])
-      setTemplates(tpl || [])
-      setFlows(flw || [])
-      setGroups(grp || [])
-      setConversions(conv || [])
-      setContacts(cnt || [])
-      setBroadcasts(bcast || [])
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const handleCreateGroup = async () => {
     if (!newGroup.name.trim()) return
-    try {
-      const activeSender = senders[0]
-      await createWhatsAppGroup({
-        name: newGroup.name.trim(),
-        sender_id: activeSender?.id,
-        invite_link: newGroup.invite_link || undefined,
-      })
+    const ok = await runWrite("POST", "/whatsapp/groups", {
+      name: newGroup.name.trim(),
+      sender_id: senders[0]?.id,
+      invite_link: newGroup.invite_link || undefined,
+    })
+    if (ok) {
       setShowCreateGroup(false)
       setNewGroup({ name: "", invite_link: "" })
-      loadAll()
-    } catch (e) {
-      console.error(e)
-    }
-  }
-
-  const handleSimulateWhatsAppLead = async () => {
-    if (!simLead.customer_name || !simLead.phone_number) return
-    setIsSyncingLead(true)
-    try {
-      const names = simLead.customer_name.trim().split(" ")
-      const firstName = names[0] || "WhatsApp"
-      const lastName = names.slice(1).join(" ") || "Lead"
-
-      // 1. Sync to Sales CRM Dome under "MARKETING" channel
-      await salesApi.createLead({
-        first_name: firstName,
-        last_name: lastName,
-        phone: simLead.phone_number,
-        source: "MARKETING",
-        notes: `WhatsApp Lead via ${simLead.flow_or_template}. Projected value: R ${simLead.deal_value_zar.toLocaleString("en-ZA")}`,
-      })
-
-      // 2. Add to WhatsApp conversions feed
-      const newConv: WhatsAppConversion = {
-        id: `conv-${Date.now()}`,
-        customer_name: simLead.customer_name,
-        phone_number: simLead.phone_number,
-        deal_name: simLead.deal_name || "Fiber Service Inquiry",
-        deal_value_zar: Number(simLead.deal_value_zar),
-        event_type: "LEAD_CAPTURED",
-        flow_or_template: simLead.flow_or_template,
-        sales_channel: "MARKETING",
-        status: "DEAL_CREATED",
-        created_at: new Date().toISOString(),
-      }
-      setConversions((prev) => [newConv, ...prev])
-      setShowSimulateLead(false)
-      setSimLead({
-        customer_name: "",
-        phone_number: "",
-        deal_name: "",
-        deal_value_zar: 15000,
-        flow_or_template: "Customer Welcome & Quote",
-      })
-    } catch (e) {
-      console.error("Failed to sync lead to Sales Dome:", e)
-    } finally {
-      setIsSyncingLead(false)
+      reloadGroups()
     }
   }
 
   const handleConnectNumber = async () => {
     if (!connectMode) return
     setIsConnecting(true)
-    try {
-      await connectWhatsAppNumber({
-        mode: connectMode,
-        country_code: selectedCountry,
-        phone_number: customPhone || undefined,
-        display_name: customDisplayName || undefined,
-      })
+    const ok = await runWrite("POST", "/whatsapp/senders/connect", {
+      mode: connectMode,
+      country_code: selectedCountry,
+      phone_number: customPhone || undefined,
+      display_name: customDisplayName || undefined,
+    })
+    setIsConnecting(false)
+    if (ok) {
       setShowConnectModal(false)
       setConnectMode(null)
       setCustomPhone("")
       setCustomDisplayName("")
-      loadAll()
-    } finally {
-      setIsConnecting(false)
+      reloadSenders()
     }
   }
 
   const handleCreateTemplate = async () => {
     if (!newTemplate.name || !newTemplate.body) return
-    try {
-      await createWhatsAppTemplate({
-        ...newTemplate,
-        buttons: newTemplate.buttons ? newTemplate.buttons.split(",").map((b) => b.trim()).filter(Boolean) : [],
-      })
+    const ok = await runWrite("POST", "/whatsapp/templates", {
+      ...newTemplate,
+      buttons: newTemplate.buttons ? newTemplate.buttons.split(",").map((b) => b.trim()).filter(Boolean) : [],
+    })
+    if (ok) {
       setShowCreateTemplate(false)
       setNewTemplate({ name: "", category: "MARKETING", language: "en_US", header: "", body: "", footer: "", buttons: "" })
-      loadAll()
-    } catch (e) {
-      console.error(e)
+      reloadTemplates()
     }
   }
 
   const handleCreateFlow = async () => {
     if (!newFlow.name || !newFlow.trigger) return
-    try {
-      await createWhatsAppFlow({
-        name: newFlow.name,
-        trigger: newFlow.trigger,
-        nodes: [
-          { id: "node-1", type: "trigger", label: newFlow.trigger },
-          { id: "node-2", type: "menu", label: newFlow.firstStep || "Present Options Menu" },
-          { id: "node-3", type: "action", label: newFlow.responseStep || "Execute Automated Action" },
-        ],
-      })
+    const ok = await runWrite("POST", "/whatsapp/flows", {
+      name: newFlow.name,
+      trigger: newFlow.trigger,
+      nodes: [
+        { id: "node-1", type: "trigger", label: newFlow.trigger },
+        { id: "node-2", type: "menu", label: newFlow.firstStep || "Present Options Menu" },
+        { id: "node-3", type: "action", label: newFlow.responseStep || "Execute Automated Action" },
+      ],
+    })
+    if (ok) {
       setShowCreateFlow(false)
       setNewFlow({ name: "", trigger: "", firstStep: "", responseStep: "" })
-      loadAll()
-    } catch (e) {
-      console.error(e)
+      reloadFlows()
     }
   }
 
   const handleCreateBroadcast = async () => {
     if (!newBroadcast.name || !newBroadcast.content) return
-    try {
-      await createWhatsAppBroadcast(newBroadcast)
+    const ok = await runWrite("POST", "/whatsapp/broadcasts", newBroadcast)
+    if (ok) {
       setShowCreateBroadcast(false)
       setNewBroadcast({ name: "", content: "", template_name: "" })
-      loadAll()
-    } catch (e) {
-      console.error(e)
+      reloadBroadcasts()
     }
   }
 
   const handleSendBroadcast = async (id: string) => {
     setSendNotice(null)
-    try {
-      const res = await sendWhatsAppBroadcast(id)
-      if (!res.ok) {
-        setSendNotice({ kind: "error", text: res.error || "Failed to send broadcast" })
-      } else if (res.data?.status === "FAILED") {
-        setSendNotice({ kind: "error", text: "Broadcast failed for all recipients — check the WhatsApp connection and template." })
-      } else if (res.data?.status === "PARTIAL") {
-        setSendNotice({ kind: "error", text: "Broadcast sent with some failures. See recipient statuses." })
-      } else if (res.data?.status === "SENDING") {
-        setSendNotice({ kind: "ok", text: "Broadcast submitted to WhatsApp — delivery is tracked per recipient." })
-      } else {
-        setSendNotice({ kind: "ok", text: "Broadcast sent." })
-      }
-      loadAll()
-    } catch (e) {
-      setSendNotice({ kind: "error", text: e instanceof Error ? e.message : "Failed to send broadcast" })
+    const res = await sendWhatsAppBroadcast(id)
+    if (!res.ok) {
+      setSendNotice({ kind: "error", text: describeMutationError(res.status, res.error) })
+    } else if (res.data?.status === "FAILED") {
+      setSendNotice({ kind: "error", text: "Broadcast failed for all recipients — check the WhatsApp connection and template." })
+    } else if (res.data?.status === "PARTIAL") {
+      setSendNotice({ kind: "error", text: "Broadcast sent with some failures. See recipient statuses." })
+    } else if (res.data?.status === "SENDING") {
+      setSendNotice({ kind: "ok", text: "Broadcast submitted to WhatsApp — delivery is tracked per recipient." })
+    } else {
+      setSendNotice({ kind: "ok", text: `Server reports broadcast status: ${res.data?.status ?? "unknown"}.` })
     }
+    reloadBroadcasts()
+  }
+
+  if (primaryLoad.state !== "ready") {
+    return (
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold tracking-tight text-foreground">WhatsApp</h2>
+        <NotConnected loadable={primaryLoad} service="The marketing service" onRetry={loadAll} />
+      </div>
+    )
   }
 
   return (
     <div className="space-y-6">
+      {actionError && (
+        <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+          <p className="text-sm text-red-400">{actionError}</p>
+        </div>
+      )}
       {/* 1. OVERVIEW VIEW matching Screenshot 4 */}
       {view === "overview" && (
         <div className="space-y-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h2 className="text-xl font-bold tracking-tight text-foreground">WhatsApp</h2>
-              <p className="text-xs text-muted-foreground">{senders.length} live senders</p>
+              <p className="text-xs text-muted-foreground">{senders.length} {senders.length === 1 ? "sender" : "senders"}</p>
             </div>
             <Button
               className="bg-[#25D366] hover:bg-[#1ebd5a] text-black font-semibold shadow-sm"
@@ -4544,7 +3955,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                             </div>
                             <div>
                               <p className="font-semibold text-xs text-foreground">{s.name}</p>
-                              <p className="text-[11px] text-muted-foreground">Shared test sender</p>
+                              <p className="text-[11px] text-muted-foreground">{s.type}</p>
                             </div>
                           </div>
                         </td>
@@ -4634,6 +4045,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             </Card>
           )}
 
+          {templates.length === 0 && <NoDataYet message="No templates yet. Create one to get started." />}
           <div className="grid gap-4 sm:grid-cols-2">
             {templates.map((tpl) => (
               <Card key={tpl.id} className="border-border bg-card">
@@ -4712,6 +4124,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             </Card>
           )}
 
+          {flows.length === 0 && <NoDataYet message="No flows yet. Create one to get started." />}
           <div className="space-y-4">
             {flows.map((flow) => (
               <Card key={flow.id} className="border-border bg-card">
@@ -4774,9 +4187,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             </Card>
           )}
 
-          {loading ? (
-            <div className="py-12 text-center text-muted-foreground">Loading...</div>
-          ) : broadcasts.length === 0 ? (
+          {broadcasts.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">No broadcasts yet</div>
           ) : (
             <div className="space-y-3">
@@ -4814,9 +4225,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
       {view === "contacts" && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">{contacts.length} contacts</p>
-          {loading ? (
-            <div className="py-12 text-center text-muted-foreground">Loading...</div>
-          ) : contacts.length === 0 ? (
+          {contacts.length === 0 ? (
             <div className="py-12 text-center text-muted-foreground">No contacts yet</div>
           ) : (
             <div className="overflow-x-auto">
@@ -4911,7 +4320,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                   <span className="text-muted-foreground">{senders[0]?.name} ({senders[0]?.number})</span>
                 </div>
                 <Badge variant="outline" className="border-emerald-500/40 text-emerald-500 text-[10px]">
-                  {groups.length} Groups Synced
+                  {groups.length} {groups.length === 1 ? "group" : "groups"}
                 </Badge>
               </div>
 
@@ -4939,7 +4348,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                           <span className="flex items-center gap-1">
                             <Users className="h-3.5 w-3.5 text-primary" /> {g.participant_count} participants
                           </span>
-                          <span className="text-[11px] text-emerald-500">Live Sync</span>
                         </div>
                         {g.invite_link && (
                           <a
@@ -4971,13 +4379,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                 Automated deal creation and sales revenue attributed to WhatsApp flows and lead captures
               </p>
             </div>
-            <Button
-              size="sm"
-              className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-              onClick={() => setShowSimulateLead(true)}
-            >
-              <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Simulate Customer Lead
-            </Button>
           </div>
 
           {/* Notice banner highlighting feed to Sales Dome under Marketing channel */}
@@ -4988,9 +4389,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                 All WhatsApp CTA inquires and campaign leads feed directly into <strong>Sales Dome</strong> under channel <strong>"Marketing Campaigns" (MARKETING)</strong>.
               </span>
             </div>
-            <Badge variant="outline" className="border-primary/40 text-primary text-[10px]">
-              CRM Live Bridge
-            </Badge>
           </div>
 
           {/* Quick Metrics */}
@@ -4998,14 +4396,13 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             <Card className="border-border bg-card">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground">WhatsApp Leads</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{conversions.length + 34}</p>
-                <span className="text-[10px] text-emerald-500 font-medium">+18% this month</span>
+                <p className="text-2xl font-bold text-foreground mt-1">{conversions.length}</p>
               </CardContent>
             </Card>
             <Card className="border-border bg-card">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground">Deals Created in Sales</p>
-                <p className="text-2xl font-bold text-foreground mt-1">{conversions.length + 22}</p>
+                <p className="text-2xl font-bold text-foreground mt-1">{conversions.filter((c) => c.status === "DEAL_CREATED" || c.status === "CONVERTED").length}</p>
                 <span className="text-[10px] text-cyan-400 font-medium">Channel: MARKETING</span>
               </CardContent>
             </Card>
@@ -5013,7 +4410,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground">Attributed Pipeline</p>
                 <p className="text-2xl font-bold text-foreground mt-1">
-                  R {(conversions.reduce((acc, c) => acc + (c.deal_value_zar || 0), 0) + 480000).toLocaleString("en-ZA")}
+                  R {conversions.reduce((acc, c) => acc + (c.deal_value_zar || 0), 0).toLocaleString("en-ZA")}
                 </p>
                 <span className="text-[10px] text-muted-foreground">ZAR Closed & In-Flight</span>
               </CardContent>
@@ -5021,8 +4418,10 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             <Card className="border-border bg-card">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground">Flow Conversion Rate</p>
-                <p className="text-2xl font-bold text-foreground mt-1">34.8%</p>
-                <span className="text-[10px] text-emerald-500 font-medium">Industry avg 14%</span>
+                <p className="text-2xl font-bold text-foreground mt-1">
+                  {conversions.length > 0 ? `${((conversions.filter((c) => c.status === "CONVERTED").length / conversions.length) * 100).toFixed(1)}%` : "No leads yet"}
+                </p>
+                <span className="text-[10px] text-muted-foreground">Converted / all leads</span>
               </CardContent>
             </Card>
           </div>
@@ -5032,7 +4431,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold">Attributed WhatsApp Deals</CardTitle>
               <CardDescription className="text-xs">
-                Real-time deals synchronized with the Sales Pipeline board
+                Deals attributed to WhatsApp
               </CardDescription>
             </CardHeader>
             <CardContent className="p-0">
@@ -5050,6 +4449,9 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/60">
+                    {conversions.length === 0 && (
+                      <tr><td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">No WhatsApp conversions yet.</td></tr>
+                    )}
                     {conversions.map((conv) => (
                       <tr key={conv.id} className="hover:bg-muted/10 transition-colors">
                         <td className="px-4 py-3 font-medium text-foreground">{conv.customer_name}</td>
@@ -5087,82 +4489,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
               </div>
             </CardContent>
           </Card>
-
-          {/* Simulate WhatsApp Lead Modal */}
-          {showSimulateLead && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-              <div className="relative flex w-full max-w-md flex-col rounded-xl border border-border bg-background shadow-2xl p-6 space-y-4">
-                <div className="flex items-start justify-between border-b border-border pb-3">
-                  <div>
-                    <h3 className="text-base font-bold text-foreground">Simulate Inbound Lead</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Creates a lead routed to Sales Dome with channel <strong>"MARKETING"</strong>
-                    </p>
-                  </div>
-                  <button onClick={() => setShowSimulateLead(false)} className="text-muted-foreground hover:text-foreground">
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-                <div className="space-y-3 text-xs">
-                  <div>
-                    <label className="font-medium text-foreground block mb-1">Customer Full Name</label>
-                    <Input
-                      placeholder="e.g. Kgomotso Dlamini"
-                      value={simLead.customer_name}
-                      onChange={(e) => setSimLead({ ...simLead, customer_name: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-foreground block mb-1">Phone Number</label>
-                    <Input
-                      placeholder="e.g. +27 82 555 1234"
-                      value={simLead.phone_number}
-                      onChange={(e) => setSimLead({ ...simLead, phone_number: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-foreground block mb-1">Inquired Package</label>
-                    <Input
-                      placeholder="e.g. 500Mbps MetroFibre Business"
-                      value={simLead.deal_name}
-                      onChange={(e) => setSimLead({ ...simLead, deal_name: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-foreground block mb-1">Estimated Value (ZAR)</label>
-                    <Input
-                      type="number"
-                      value={simLead.deal_value_zar}
-                      onChange={(e) => setSimLead({ ...simLead, deal_value_zar: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-foreground block mb-1">Triggering Flow / Template</label>
-                    <select
-                      value={simLead.flow_or_template}
-                      onChange={(e) => setSimLead({ ...simLead, flow_or_template: e.target.value })}
-                      className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
-                    >
-                      <option value="Customer Welcome & Quote">Customer Welcome & Quote</option>
-                      <option value="fiber_cart_recovery">fiber_cart_recovery</option>
-                      <option value="welcome_onboarding">welcome_onboarding</option>
-                      <option value="Support Triage">Support Triage</option>
-                    </select>
-                  </div>
-                </div>
-                <div className="flex justify-end gap-2 pt-2 border-t border-border">
-                  <Button variant="ghost" size="sm" onClick={() => setShowSimulateLead(false)}>Cancel</Button>
-                  <Button
-                    size="sm"
-                    disabled={!simLead.customer_name || !simLead.phone_number || isSyncingLead}
-                    onClick={handleSimulateWhatsAppLead}
-                  >
-                    {isSyncingLead ? "Syncing to Sales…" : "Push to Sales Dome"}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -5245,7 +4571,7 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                   {connectMode === "own_number" && (
                     <div className="pt-3 space-y-2">
                       <Input
-                        placeholder="Your phone number (+27 82 123 4567)"
+                        placeholder="Your phone number (with country code)"
                         value={customPhone}
                         onChange={(e) => setCustomPhone(e.target.value)}
                         className="text-xs bg-background border-border"
@@ -5289,14 +4615,14 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
 
 function AdsTab() {
   const [activeSubTab, setActiveSubTab] = useState<"campaigns" | "audiences" | "lead-forms">("campaigns")
-  const [ads, setAds] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { value: adsLoad, reload: loadAds } = useMarketingLoad<any[]>(adCampaignsPath())
+  const { value: accountsLoad } = useMarketingLoad<any[]>(socialAccountsPath())
+  const ads: any[] = adsLoad.state === "ready" ? adsLoad.data : []
+  const socialAccounts: any[] = accountsLoad.state === "ready" ? accountsLoad.data : []
   const [showCreateModal, setShowCreateModal] = useState(false)
-  const [socialAccounts, setSocialAccounts] = useState<any[]>([])
+  const [adError, setAdError] = useState<string | null>(null)
 
   // Filters matching Screenshot 2: All profiles | All ads | All platforms | All accounts | All statuses | Last 30 days | Newest first
-  const [filterProfile, setFilterProfile] = useState("all")
-  const [filterType, setFilterType] = useState("all")
   const [filterPlatform, setFilterPlatform] = useState("all")
   const [filterAccount, setFilterAccount] = useState("all")
   const [filterStatus, setFilterStatus] = useState("all")
@@ -5308,146 +4634,62 @@ function AdsTab() {
   const [headline, setHeadline] = useState("")
   const [destinationUrl, setDestinationUrl] = useState("")
   const [mediaFile, setMediaFile] = useState<string | null>(null)
-  const [profileName, setProfileName] = useState("Default")
   const [adName, setAdName] = useState("")
   const [selectedGoal, setSelectedGoal] = useState<"Engagement" | "Traffic" | "Awareness" | "Video Views">("Engagement")
   const [budgetAmount, setBudgetAmount] = useState("5")
   const [budgetType, setBudgetType] = useState<"daily" | "total">("daily")
-  const [selectedAudience, setSelectedAudience] = useState("All audiences")
+  const [selectedAudience, setSelectedAudience] = useState("")
   const [createAsPaused, setCreateAsPaused] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
   // Boost Post Modal state matching media_1789288184604.png
   const [showBoostModal, setShowBoostModal] = useState(false)
-  const [boostProfile, setBoostProfile] = useState("Default")
   const [boostAdName, setBoostAdName] = useState("My Boosted Post")
   const [boostGoal, setBoostGoal] = useState<"Engagement" | "Traffic" | "Awareness" | "Video Views">("Engagement")
   const [boostBudget, setBoostBudget] = useState("5")
   const [boostBudgetType, setBoostBudgetType] = useState<"daily" | "total">("daily")
-  const [boostCountries, setBoostCountries] = useState("US, GB, CA, ZA")
-  const [boostAgeMin, setBoostAgeMin] = useState("18")
-  const [boostAgeMax, setBoostAgeMax] = useState("65")
+  const [boostCountries, setBoostCountries] = useState("")
+  const [boostAgeMin, setBoostAgeMin] = useState("")
+  const [boostAgeMax, setBoostAgeMax] = useState("")
   const [boostGender, setBoostGender] = useState("All")
   const [isBoosting, setIsBoosting] = useState(false)
-
-  const [leadForms, setLeadForms] = useState([
-    { id: "lf-1", name: "Home Fiber Instant Quote Form", leads: 142, completionRate: "38.4%", platform: "facebook", status: "ACTIVE" },
-    { id: "lf-2", name: "Business Internet Inquiry 2026", leads: 68, completionRate: "29.1%", platform: "linkedin", status: "ACTIVE" },
-  ])
-
-  // Lead Form simulation modal
-  const [showSimulateLeadForm, setShowSimulateLeadForm] = useState(false)
-  const [activeFormForSim, setActiveFormForSim] = useState<any>(null)
-  const [leadFormData, setLeadFormData] = useState({
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    address: "",
-    notes: "Requested 100Mbps Home Fiber via Instant Lead Form",
-  })
-  const [isSubmittingLead, setIsSubmittingLead] = useState(false)
-  const [leadSubmitSuccess, setLeadSubmitSuccess] = useState(false)
-
-  const handleSimulateLeadSubmit = async () => {
-    if (!leadFormData.firstName || !leadFormData.phone) return
-    setIsSubmittingLead(true)
-    try {
-      await salesApi.createLead({
-        first_name: leadFormData.firstName,
-        last_name: leadFormData.lastName || "Lead",
-        email: leadFormData.email || undefined,
-        phone: leadFormData.phone,
-        address: leadFormData.address || undefined,
-        source: "MARKETING", // Directly routes to Sales Dome as Marketing channel
-        notes: `Native Lead Form: ${activeFormForSim?.name || "Instant Quote"}. ${leadFormData.notes}`,
-      })
-      // Increment lead count on the form
-      if (activeFormForSim) {
-        setLeadForms((prev) =>
-          prev.map((lf) => (lf.id === activeFormForSim.id ? { ...lf, leads: lf.leads + 1 } : lf))
-        )
-      }
-      setLeadSubmitSuccess(true)
-      setTimeout(() => {
-        setLeadSubmitSuccess(false)
-        setShowSimulateLeadForm(false)
-        setLeadFormData({
-          firstName: "",
-          lastName: "",
-          email: "",
-          phone: "",
-          address: "",
-          notes: "Requested 100Mbps Home Fiber via Instant Lead Form",
-        })
-      }, 1400)
-    } catch (e) {
-      console.error("Failed to submit lead to Sales Dome:", e)
-    } finally {
-      setIsSubmittingLead(false)
-    }
-  }
-
-  useEffect(() => {
-    loadAds()
-    listSocialAccounts().then((accs) => setSocialAccounts(accs || [])).catch(() => {})
-  }, [])
-
-  const loadAds = async () => {
-    setLoading(true)
-    try {
-      const data = await listAdCampaigns().catch(() => [])
-      setAds(data || [])
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleCreateAd = async () => {
     if (!adName.trim()) return
     setSubmitting(true)
-    try {
-      const budgetNum = parseFloat(budgetAmount) || 0
-      await createAdCampaign({
-        name: adName,
-        platform: "facebook",
-        objective: selectedGoal.toUpperCase().replace(/\s+/g, "_"),
-        budget_zar: budgetType === "total" ? budgetNum : undefined,
-        daily_budget_zar: budgetType === "daily" ? budgetNum : undefined,
-        status: createAsPaused ? "PAUSED" : "ACTIVE",
-        creative: {
-          primary_text: primaryText,
-          headline: headline,
-          destination_url: destinationUrl,
-          media_url: mediaFile,
-        },
-        targeting: {
-          audience: selectedAudience,
-          profile: profileName,
-        },
-      })
-      setShowCreateModal(false)
-      // Reset
-      setPrimaryText("")
-      setHeadline("")
-      setDestinationUrl("")
-      setMediaFile(null)
-      setAdName("")
-      setBudgetAmount("5")
-      setCreateAsPaused(true)
-      loadAds()
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setSubmitting(false)
+    setAdError(null)
+    const budgetNum = parseFloat(budgetAmount) || 0
+    const r = await writeMarketing("POST", "/ads/campaigns", {
+      name: adName,
+      platform: "facebook",
+      objective: selectedGoal.toUpperCase().replace(/\s+/g, "_"),
+      budget_zar: budgetType === "total" ? budgetNum : undefined,
+      daily_budget_zar: budgetType === "daily" ? budgetNum : undefined,
+      status: createAsPaused ? "PAUSED" : "ACTIVE",
+      creative: {
+        primary_text: primaryText,
+        headline: headline,
+        destination_url: destinationUrl,
+      },
+      targeting: selectedAudience.trim() ? { audience: selectedAudience.trim() } : undefined,
+    })
+    setSubmitting(false)
+    if (!r.ok) {
+      setAdError(describeMutationError(r.status, r.error))
+      return
     }
+    setShowCreateModal(false)
+    setPrimaryText("")
+    setHeadline("")
+    setDestinationUrl("")
+    setMediaFile(null)
+    setAdName("")
+    setBudgetAmount("5")
+    setCreateAsPaused(true)
+    loadAds()
   }
 
   const clearFilters = () => {
-    setFilterProfile("all")
-    setFilterType("all")
     setFilterPlatform("all")
     setFilterAccount("all")
     setFilterStatus("all")
@@ -5455,11 +4697,25 @@ function AdsTab() {
     setFilterSort("newest")
   }
 
-  const filteredAds = ads.filter((ad: any) => {
-    if (filterStatus !== "all" && ad.status?.toLowerCase() !== filterStatus.toLowerCase()) return false
-    if (filterPlatform !== "all" && ad.platform?.toLowerCase() !== filterPlatform.toLowerCase()) return false
-    return true
-  })
+  const filteredAds = ads
+    .filter((ad: any) => {
+      if (filterStatus !== "all" && ad.status?.toLowerCase() !== filterStatus.toLowerCase()) return false
+      if (filterPlatform !== "all" && ad.platform?.toLowerCase() !== filterPlatform.toLowerCase()) return false
+      if (filterAccount !== "all" && ad.account_id && ad.account_id !== filterAccount) return false
+      if (filterDateRange !== "all") {
+        const days = filterDateRange === "7d" ? 7 : filterDateRange === "90d" ? 90 : 30
+        const t = new Date(ad.created_at || 0).getTime()
+        if (Number.isFinite(t) && t > 0 && Date.now() - t > days * 86_400_000) return false
+      }
+      return true
+    })
+    .sort((a: any, b: any) => {
+      const ts = (x: any) => new Date(x.created_at || 0).getTime()
+      if (filterSort === "oldest") return ts(a) - ts(b)
+      if (filterSort === "spend_high") return (b.spend_zar || 0) - (a.spend_zar || 0)
+      if (filterSort === "roas_high") return (b.roas || 0) - (a.roas || 0)
+      return ts(b) - ts(a)
+    })
 
   return (
     <div className="space-y-6">
@@ -5524,25 +4780,6 @@ function AdsTab() {
 
           {/* Zernio Filter Bar matching Screenshot 2 */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <select
-              value={filterProfile}
-              onChange={(e) => setFilterProfile(e.target.value)}
-              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
-            >
-              <option value="all">All profiles</option>
-              <option value="default">Default Profile</option>
-            </select>
-
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="rounded-md border border-border bg-card px-2.5 py-1.5 text-foreground hover:border-border/80 focus:outline-none"
-            >
-              <option value="all">All ads</option>
-              <option value="standalone">Standalone Ads</option>
-              <option value="boosted">Boosted Posts</option>
-            </select>
-
             <select
               value={filterPlatform}
               onChange={(e) => setFilterPlatform(e.target.value)}
@@ -5610,8 +4847,8 @@ function AdsTab() {
           </div>
 
           {/* Ads List or Empty State matching Screenshot 2 */}
-          {loading ? (
-            <div className="py-20 text-center text-sm text-muted-foreground">Loading ads…</div>
+          {adsLoad.state !== "ready" ? (
+            <NotConnected loadable={adsLoad} service="The marketing service" onRetry={loadAds} />
           ) : filteredAds.length === 0 ? (
             <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/40 py-20 text-center">
               <Megaphone className="h-10 w-10 text-muted-foreground/50 mb-3" />
@@ -5627,7 +4864,7 @@ function AdsTab() {
                 >
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Create Ad
                 </Button>
-                <Button size="sm" variant="outline">
+                <Button size="sm" variant="outline" onClick={() => setShowBoostModal(true)}>
                   <Sparkles className="mr-1.5 h-3.5 w-3.5 text-amber-500" /> Boost Post
                 </Button>
               </div>
@@ -5665,170 +4902,11 @@ function AdsTab() {
 
       {activeSubTab === "lead-forms" && (
         <div className="space-y-4">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Instant Lead Forms</h3>
-              <p className="text-xs text-muted-foreground">In-feed native forms syncing customer inquiries into OmniDome CRM</p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-                onClick={() => {
-                  setActiveFormForSim(leadForms[0])
-                  setShowSimulateLeadForm(true)
-                }}
-              >
-                <Sparkles className="mr-1.5 h-3.5 w-3.5" /> Simulate Lead Submission
-              </Button>
-              <Button size="sm" variant="outline"><Plus className="mr-1.5 h-3.5 w-3.5" /> New Lead Form</Button>
-            </div>
+          <div>
+            <h3 className="text-base font-semibold text-foreground">Instant Lead Forms</h3>
+            <p className="text-xs text-muted-foreground">In-feed native forms for customer inquiries</p>
           </div>
-
-          {/* Banner: Automatic routing to Sales Dome under channel MARKETING */}
-          <div className="flex items-center justify-between rounded-lg border border-[#e03131]/30 bg-[#e03131]/5 px-4 py-3 text-xs">
-            <div className="flex items-center gap-2">
-              <Megaphone className="h-4 w-4 text-[#e03131]" />
-              <span className="text-foreground">
-                All submitted lead forms are automatically ingested into <strong>Sales Dome</strong> under channel <strong>"Marketing Campaigns" (MARKETING)</strong> and queued for sales agent follow-up.
-              </span>
-            </div>
-            <Badge variant="outline" className="border-[#e03131]/40 text-[#e03131] text-[10px]">
-              Live CRM Ingestion
-            </Badge>
-          </div>
-
-          <div className="space-y-3">
-            {leadForms.map((lf) => (
-              <Card key={lf.id} className="border-border bg-card">
-                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                  <div className="space-y-1">
-                    <p className="font-semibold text-sm text-foreground">{lf.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      Platform: <span className="capitalize text-foreground font-medium">{lf.platform}</span> · {lf.completionRate} completion
-                    </p>
-                    <div className="flex items-center gap-2 pt-1 text-[11px] text-muted-foreground">
-                      <Badge variant="outline" className="text-[10px] border-[#e03131]/40 text-[#e03131]">
-                        Feeds Sales: MARKETING
-                      </Badge>
-                      <span>Auto-assigns deals to Sales Agent</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-4 self-end sm:self-center">
-                    <div className="text-right">
-                      <p className="text-lg font-bold text-foreground">{lf.leads} leads</p>
-                      <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-500">Live</Badge>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs"
-                      onClick={() => {
-                        setActiveFormForSim(lf)
-                        setShowSimulateLeadForm(true)
-                      }}
-                    >
-                      Test Submit
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {/* SIMULATE LEAD SUBMISSION MODAL */}
-          {showSimulateLeadForm && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-              <div className="relative flex w-full max-w-md flex-col rounded-xl border border-border bg-background shadow-2xl p-6 space-y-4">
-                <div className="flex items-start justify-between border-b border-border pb-3">
-                  <div>
-                    <h3 className="text-base font-bold text-foreground">Simulate Lead Form Submission</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Form: <strong>{activeFormForSim?.name}</strong> → Routes to Sales Dome as <strong>"MARKETING"</strong>
-                    </p>
-                  </div>
-                  <button onClick={() => setShowSimulateLeadForm(false)} className="text-muted-foreground hover:text-foreground">
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-
-                {leadSubmitSuccess ? (
-                  <div className="py-8 text-center space-y-2">
-                    <CheckCircle className="h-10 w-10 text-emerald-500 mx-auto animate-bounce" />
-                    <p className="font-semibold text-sm text-foreground">Lead Created Successfully!</p>
-                    <p className="text-xs text-muted-foreground">
-                      Pushed into Sales Dome under channel <strong>Marketing Campaigns</strong>.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-3 text-xs">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="font-medium text-foreground block mb-1">First Name</label>
-                          <Input
-                            placeholder="John"
-                            value={leadFormData.firstName}
-                            onChange={(e) => setLeadFormData({ ...leadFormData, firstName: e.target.value })}
-                          />
-                        </div>
-                        <div>
-                          <label className="font-medium text-foreground block mb-1">Last Name</label>
-                          <Input
-                            placeholder="Smith"
-                            value={leadFormData.lastName}
-                            onChange={(e) => setLeadFormData({ ...leadFormData, lastName: e.target.value })}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="font-medium text-foreground block mb-1">Email Address</label>
-                        <Input
-                          placeholder="john.smith@example.co.za"
-                          value={leadFormData.email}
-                          onChange={(e) => setLeadFormData({ ...leadFormData, email: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="font-medium text-foreground block mb-1">Phone Number</label>
-                        <Input
-                          placeholder="+27 82 123 4567"
-                          value={leadFormData.phone}
-                          onChange={(e) => setLeadFormData({ ...leadFormData, phone: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="font-medium text-foreground block mb-1">Installation Address</label>
-                        <Input
-                          placeholder="124 Kloof St, Gardens, Cape Town"
-                          value={leadFormData.address}
-                          onChange={(e) => setLeadFormData({ ...leadFormData, address: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <label className="font-medium text-foreground block mb-1">Inquiry Details</label>
-                        <Input
-                          value={leadFormData.notes}
-                          onChange={(e) => setLeadFormData({ ...leadFormData, notes: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    <div className="flex justify-end gap-2 pt-2 border-t border-border">
-                      <Button variant="ghost" size="sm" onClick={() => setShowSimulateLeadForm(false)}>Cancel</Button>
-                      <Button
-                        size="sm"
-                        disabled={!leadFormData.firstName || !leadFormData.phone || isSubmittingLead}
-                        onClick={handleSimulateLeadSubmit}
-                        className="bg-[#e03131] hover:bg-[#c92a2a] text-white"
-                      >
-                        {isSubmittingLead ? "Submitting to Sales…" : "Submit & Sync to Sales"}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          )}
+          <NoDataYet message="No lead forms yet. Lead form syncing is not connected to a backend, so no forms or lead counts are shown." />
         </div>
       )}
 
@@ -5878,8 +4956,8 @@ function AdsTab() {
                     <label className="text-xs font-semibold text-foreground mb-1.5 block">media</label>
                     <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-pointer">
                       <Image className="h-9 w-9 text-muted-foreground/60 mb-2" />
-                      <p className="text-xs font-medium text-foreground">Drop an image here or click to browse</p>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">JPG or PNG, recommended 1200x628px, max 30MB</p>
+                      <p className="text-xs font-medium text-foreground">Media upload is not available yet</p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">The ad is created without an image.</p>
                     </div>
                   </div>
 
@@ -5912,21 +4990,6 @@ function AdsTab() {
 
                 {/* RIGHT COLUMN: Targeting, Budget & Profile */}
                 <div className="space-y-5">
-                  {/* Profile */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">profile</label>
-                    <div className="relative">
-                      <select
-                        value={profileName}
-                        onChange={(e) => setProfileName(e.target.value)}
-                        className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none"
-                      >
-                        <option value="Default">🟡 Default</option>
-                        <option value="Brand">🟢 Brand Main</option>
-                      </select>
-                    </div>
-                  </div>
-
                   {/* Ad name */}
                   <div>
                     <label className="text-xs font-semibold text-foreground mb-1.5 block">ad name</label>
@@ -5983,7 +5046,7 @@ function AdsTab() {
                     <label className="text-xs font-semibold text-foreground mb-1.5 block">budget</label>
                     <div className="flex items-center gap-2">
                       <div className="relative flex-1">
-                        <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">$</span>
+                        <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">R</span>
                         <Input
                           type="number"
                           value={budgetAmount}
@@ -6017,21 +5080,18 @@ function AdsTab() {
                   {/* Targeting */}
                   <div>
                     <label className="text-xs font-semibold text-foreground mb-1.5 block">targeting</label>
-                    <div className="flex items-center justify-between rounded-md border border-border bg-card p-3 text-xs">
-                      <span className="text-foreground">{selectedAudience}</span>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedAudience("South Africa 18-50 (Broad)")}
-                        className="text-[#e03131] hover:underline font-medium flex items-center gap-1"
-                      >
-                        <Edit className="h-3 w-3" /> Edit audience
-                      </button>
-                    </div>
+                    <Input
+                      placeholder="Audience description (optional)"
+                      value={selectedAudience}
+                      onChange={(e) => setSelectedAudience(e.target.value)}
+                      className="text-xs bg-card border-border"
+                    />
                   </div>
                 </div>
               </div>
             </div>
 
+            {adError && <p role="alert" className="border-t border-border bg-red-500/5 px-6 py-2 text-xs text-red-400">{adError}</p>}
             {/* Modal Footer */}
             <div className="flex items-center justify-between border-t border-border bg-card/30 px-6 py-4">
               <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
@@ -6086,19 +5146,6 @@ function AdsTab() {
 
             {/* Modal Body */}
             <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Profile */}
-              <div>
-                <label className="text-xs font-semibold text-muted-foreground block mb-1.5">profile</label>
-                <select
-                  value={boostProfile}
-                  onChange={(e) => setBoostProfile(e.target.value)}
-                  className="w-full rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground focus:outline-none"
-                >
-                  <option value="Default">🟡 Default</option>
-                  <option value="Brand">🟢 Brand Main OmniDome</option>
-                </select>
-              </div>
-
               {/* Account warning with Go to Connections button */}
               <div>
                 <label className="text-xs font-semibold text-muted-foreground block mb-1">account</label>
@@ -6158,7 +5205,7 @@ function AdsTab() {
                 <label className="text-xs font-semibold text-muted-foreground block mb-1.5">budget</label>
                 <div className="flex items-center gap-2">
                   <div className="relative flex-1">
-                    <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">$</span>
+                    <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">R</span>
                     <Input
                       type="number"
                       value={boostBudget}
@@ -6195,7 +5242,7 @@ function AdsTab() {
                 <div>
                   <label className="text-[11px] font-medium text-muted-foreground block mb-1 uppercase tracking-wider">Countries</label>
                   <Input
-                    placeholder="US, GB, CA, ZA"
+                    placeholder="Countries, e.g. ZA, GB"
                     value={boostCountries}
                     onChange={(e) => setBoostCountries(e.target.value)}
                     className="bg-card border-border text-xs"
@@ -6236,6 +5283,7 @@ function AdsTab() {
               </div>
             </div>
 
+            {adError && <p role="alert" className="border-t border-border bg-red-500/5 px-6 py-2 text-xs text-red-400">{adError}</p>}
             {/* Modal Footer */}
             <div className="flex items-center justify-end gap-2 border-t border-border bg-card/30 px-6 py-4">
               <Button
@@ -6250,19 +5298,21 @@ function AdsTab() {
                 disabled={!boostAdName.trim() || isBoosting}
                 onClick={async () => {
                   setIsBoosting(true)
-                  try {
-                    await createAdCampaign({
-                      name: boostAdName,
-                      platform: "facebook",
-                      objective: boostGoal.toUpperCase(),
-                      budget_zar: Number(boostBudget) * 18,
-                      targeting: { countries: boostCountries, age_min: boostAgeMin, age_max: boostAgeMax, gender: boostGender },
-                    })
-                    setShowBoostModal(false)
-                    loadAds()
-                  } finally {
-                    setIsBoosting(false)
+                  setAdError(null)
+                  const r = await writeMarketing("POST", "/ads/campaigns", {
+                    name: boostAdName,
+                    platform: "facebook",
+                    objective: boostGoal.toUpperCase(),
+                    ...(boostBudgetType === "total" ? { budget_zar: Number(boostBudget) } : { daily_budget_zar: Number(boostBudget) }),
+                    targeting: { countries: boostCountries, age_min: boostAgeMin, age_max: boostAgeMax, gender: boostGender },
+                  })
+                  setIsBoosting(false)
+                  if (!r.ok) {
+                    setAdError(describeMutationError(r.status, r.error))
+                    return
                   }
+                  setShowBoostModal(false)
+                  loadAds()
                 }}
                 className="bg-muted-foreground text-background hover:bg-foreground hover:text-background font-medium"
               >
@@ -6282,46 +5332,35 @@ function AdsTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function AutomationsTab() {
-  const [automations, setAutomations] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
+  const { value: autoLoad, reload: loadAutomations } = useMarketingLoad<any[]>(commentAutomationsPath())
+  const automations: any[] = autoLoad.state === "ready" ? autoLoad.data : []
   const [showCreate, setShowCreate] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
   const [newAuto, setNewAuto] = useState({ name: "", account_id: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
-
-  useEffect(() => {
-    loadAutomations()
-  }, [])
-
-  const loadAutomations = async () => {
-    setLoading(true)
-    try {
-      const data = await listCommentAutomations().catch(() => [])
-      setAutomations(data || [])
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleCreate = async () => {
     if (!newAuto.name || !newAuto.response_template) return
-    try {
-      await createCommentAutomation({
-        ...newAuto,
-        trigger_keywords: newAuto.trigger_keywords.split(",").map((k) => k.trim()).filter(Boolean),
-      })
-      setShowCreate(false)
-      setNewAuto({ name: "", account_id: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
-      loadAutomations()
-    } catch (e) {
-      console.error(e)
+    setCreating(true)
+    setCreateError(null)
+    const r = await writeMarketing("POST", "/social/automations", {
+      ...newAuto,
+      trigger_keywords: newAuto.trigger_keywords.split(",").map((k) => k.trim()).filter(Boolean),
+    })
+    setCreating(false)
+    if (!r.ok) {
+      setCreateError(describeMutationError(r.status, r.error))
+      return
     }
+    setShowCreate(false)
+    setNewAuto({ name: "", account_id: "", trigger_type: "KEYWORD", trigger_keywords: "", response_template: "" })
+    loadAutomations()
   }
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{automations.length} automations</p>
+        <p className="text-sm text-muted-foreground">{autoLoad.state === "ready" ? `${automations.length} automations` : ""}</p>
         <Button size="sm" onClick={() => setShowCreate(!showCreate)}><Plus className="mr-2 h-4 w-4" /> New Automation</Button>
       </div>
 
@@ -6340,15 +5379,16 @@ function AutomationsTab() {
             )}
             <Textarea placeholder="Response template..." value={newAuto.response_template} onChange={(e) => setNewAuto({ ...newAuto, response_template: e.target.value })} rows={3} className="resize-none" />
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleCreate}>Create</Button>
+              <Button size="sm" onClick={handleCreate} disabled={creating}>{creating ? "Creating…" : "Create"}</Button>
               <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
             </div>
+            {createError && <p role="alert" className="text-sm text-red-400">{createError}</p>}
           </CardContent>
         </Card>
       )}
 
-      {loading ? (
-        <div className="py-12 text-center text-muted-foreground">Loading...</div>
+      {autoLoad.state !== "ready" ? (
+        <NotConnected loadable={autoLoad} service="The marketing service" onRetry={loadAutomations} />
       ) : automations.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">No automations yet</div>
       ) : (
@@ -6389,15 +5429,8 @@ const radioTypeColors: Record<string, string> = {
 }
 
 function TraditionalTab() {
-  const [campaigns, setCampaigns] = useState<TraditionalCampaign[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    listTraditionalCampaigns().then((data) => {
-      setCampaigns(data ?? [])
-      setLoading(false)
-    })
-  }, [])
+  const { value: tradLoad, reload: reloadTrad } = useMarketingLoad<TraditionalCampaign[]>("/traditional-campaigns")
+  const campaigns: TraditionalCampaign[] = tradLoad.state === "ready" ? tradLoad.data : []
 
   const radioCampaigns = campaigns.filter((c) => c.medium === "radio")
   const oohCampaigns = campaigns.filter((c) => c.medium === "billboard" || c.medium === "ooh_screen")
@@ -6431,8 +5464,8 @@ function TraditionalTab() {
     { label: "Active Mediums", value: String(activeMediums), icon: Radio, color: "text-purple-400", bg: "bg-purple-500/10" },
   ]
 
-  if (loading) {
-    return <div className="py-12 text-center text-sm text-muted-foreground">Loading traditional media data...</div>
+  if (tradLoad.state !== "ready") {
+    return <NotConnected loadable={tradLoad} service="The marketing service" onRetry={reloadTrad} />
   }
 
   return (
@@ -6541,92 +5574,67 @@ function TraditionalTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function SmsSenderIdsTab() {
-  const [senders, setSenders] = useState<SmsSenderId[]>([])
-  const [loading, setLoading] = useState(true)
+  const { value: sendersLoad, reload: load } = useMarketingLoad<SmsSenderId[]>("/sms/senders")
+  const senders: SmsSenderId[] = sendersLoad.state === "ready" ? sendersLoad.data : []
+  const loading = sendersLoad.state === "loading"
   const [isDrawerOpen, setIsDrawerOpen] = useState(false)
   const [senderInput, setSenderInput] = useState("")
   const [creating, setCreating] = useState(false)
+  const [smsError, setSmsError] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [testModalOpen, setTestModalOpen] = useState(false)
   const [selectedSenderForTest, setSelectedSenderForTest] = useState<SmsSenderId | null>(null)
-  const [testRecipient, setTestRecipient] = useState("+27 82 123 4567")
-  const [testMessage, setTestMessage] = useState("OmniDome: Your verification code is 849201. Valid for 5 minutes.")
+  const [testRecipient, setTestRecipient] = useState("")
+  const [testMessage, setTestMessage] = useState("")
   const [sendingTest, setSendingTest] = useState(false)
-  const [testNotice, setTestNotice] = useState<string | null>(null)
-
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await listSmsSenderIds().catch(() => null)
-      if (data && data.length > 0) {
-        setSenders(data)
-      } else {
-        setSenders([])
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    load()
-  }, [])
+  const [testNotice, setTestNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
 
   const handleCreateSender = async () => {
     const clean = senderInput.trim().replace(/[^a-zA-Z0-9]/g, "")
     if (!clean) return
     setCreating(true)
-    try {
-      const created = await createSmsSenderId(clean).catch(() => null)
-      if (created) {
-        setSenders((prev) => [...prev, created])
-      } else {
-        const localSender: SmsSenderId = {
-          id: `sms-snd-${Date.now()}`,
-          sender_id: clean,
-          status: "active",
-          type: "Alphanumeric (International)",
-          created_at: new Date().toISOString(),
-        }
-        setSenders((prev) => [...prev, localSender])
-      }
-      setSenderInput("")
-      setIsDrawerOpen(false)
-    } finally {
-      setCreating(false)
+    setSmsError(null)
+    const r = await writeMarketing("POST", "/sms/senders", { sender_id: clean })
+    setCreating(false)
+    if (!r.ok) {
+      setSmsError(describeMutationError(r.status, r.error))
+      return
     }
+    setSenderInput("")
+    setIsDrawerOpen(false)
+    load()
   }
 
   const handleDelete = async (id: string) => {
     setDeletingId(id)
-    try {
-      await deleteSmsSenderId(id).catch(() => null)
-      setSenders((prev) => prev.filter((s) => s.id !== id && s.sender_id !== id))
-    } finally {
-      setDeletingId(null)
+    setSmsError(null)
+    const r = await writeMarketing("DELETE", `/sms/senders/${encodeURIComponent(id)}`)
+    setDeletingId(null)
+    if (!r.ok) {
+      setSmsError(describeMutationError(r.status, r.error))
+      return
     }
+    load()
   }
 
   const handleSendTestSms = async () => {
     if (!selectedSenderForTest || !testRecipient.trim() || !testMessage.trim()) return
     setSendingTest(true)
     setTestNotice(null)
-    try {
-      const res = await sendSmsMessage({
-        sender_id: selectedSenderForTest.sender_id,
-        to: testRecipient.trim(),
-        message: testMessage.trim(),
-      })
-      if (res) {
-        setTestNotice(`SMS dispatched successfully via ${res.provider || "Twilio"}! (ID: ${res.message_id || "ok"})`)
-      } else {
-        setTestNotice("SMS simulated successfully with Sender ID: " + selectedSenderForTest.sender_id)
-      }
-    } catch {
-      setTestNotice("Simulated SMS dispatch completed.")
-    } finally {
-      setSendingTest(false)
+    const r = await writeMarketing<{ status: string; message_id?: string; provider?: string }>("POST", "/sms/send", {
+      sender_id: selectedSenderForTest.sender_id,
+      to: testRecipient.trim(),
+      message: testMessage.trim(),
+    })
+    setSendingTest(false)
+    if (!r.ok) {
+      setTestNotice({ kind: "error", text: describeMutationError(r.status, r.error) })
+      return
     }
+    setTestNotice({
+      kind: "ok",
+      text: `Server accepted the SMS (status: ${r.data?.status ?? "unknown"}${r.data?.provider ? `, provider: ${r.data.provider}` : ""}${r.data?.message_id ? `, id: ${r.data.message_id}` : ""}).`,
+    })
   }
 
   return (
@@ -6651,8 +5659,9 @@ function SmsSenderIdsTab() {
       </div>
 
       {/* Main Container: Empty state or Table */}
-      {loading ? (
-        <div className="py-20 text-center text-xs text-muted-foreground">Loading sender IDs...</div>
+      {smsError && <p role="alert" className="text-sm text-red-400">{smsError}</p>}
+      {sendersLoad.state !== "ready" ? (
+        <NotConnected loadable={sendersLoad} service="The marketing service" onRetry={load} />
       ) : senders.length === 0 ? (
         /* Empty state matching media_1789297416997.png */
         <div className="rounded-xl border border-border bg-card/40 py-24 px-6 text-center shadow-xs">
@@ -6705,7 +5714,7 @@ function SmsSenderIdsTab() {
                       </Badge>
                     </td>
                     <td className="px-5 py-3.5 text-muted-foreground">
-                      {s.created_at ? new Date(s.created_at).toLocaleDateString() : "Just now"}
+                      {s.created_at ? new Date(s.created_at).toLocaleDateString() : "—"}
                     </td>
                     <td className="px-5 py-3.5 text-right space-x-2">
                       <Button
@@ -6848,7 +5857,7 @@ function SmsSenderIdsTab() {
                 <Input
                   value={testRecipient}
                   onChange={(e) => setTestRecipient(e.target.value)}
-                  placeholder="+27 82 123 4567"
+                  placeholder="+country code and number"
                   className="mt-1 h-9 text-xs"
                 />
               </div>
@@ -6864,8 +5873,8 @@ function SmsSenderIdsTab() {
               </div>
 
               {testNotice && (
-                <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-emerald-600 dark:text-emerald-400 text-xs">
-                  {testNotice}
+                <div role={testNotice.kind === "error" ? "alert" : "status"} className={testNotice.kind === "error" ? "rounded-lg bg-red-500/10 border border-red-500/30 p-2.5 text-red-400 text-xs" : "rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-2.5 text-emerald-600 dark:text-emerald-400 text-xs"}>
+                  {testNotice.text}
                 </div>
               )}
             </div>
@@ -6895,132 +5904,160 @@ function SmsSenderIdsTab() {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function TeamUsersTab() {
-  const [members, setMembers] = useState<TeamMember[]>([])
-  const [loading, setLoading] = useState(true)
+  // Real members and invites come from the admin service (the same source as
+  // Admin > Team). Nothing here is seeded, and an invite link is shown only
+  // when the server returned one.
+  const [identity, setIdentity] = useState<Whoami | null>(null)
+  const [members, setMembers] = useState<Loadable<TenantMember[]>>({ state: "loading" })
+  const [invites, setInvites] = useState<TenantInvite[]>([])
+  const [tick, setTick] = useState(0)
   const [searchQuery, setSearchQuery] = useState("")
   const [roleFilter, setRoleFilter] = useState("all")
-  const [accessFilter, setAccessFilter] = useState("all")
 
   // Invite drawer state
   const [isInviteOpen, setIsInviteOpen] = useState(false)
   const [inviteEmails, setInviteEmails] = useState("")
-  const [selectedRole, setSelectedRole] = useState<"Member" | "Admin" | "Billing Manager" | "Viewer">("Member")
-  const [allProfilesToggle, setAllProfilesToggle] = useState(true)
-  const [generating, setGenerating] = useState(false)
-  const [generatedLink, setGeneratedLink] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [selectedRole, setSelectedRole] = useState("org_user")
+  const [sending, setSending] = useState(false)
+  const [inviteResults, setInviteResults] = useState<{ email: string; ok: boolean; text: string; link?: string }[]>([])
+  const [copiedLink, setCopiedLink] = useState<string | null>(null)
+  const [rowError, setRowError] = useState<string | null>(null)
 
-  const load = async () => {
-    setLoading(true)
-    try {
-      const data = await listTeamMembers().catch(() => null)
-      if (data && data.length > 0) {
-        setMembers(data)
-      } else {
-        setMembers([
-          {
-            id: "mem-1",
-            name: "Burni",
-            email: "burnibraai@gmail.com",
-            role: "Owner",
-            access: "Full access",
-            access_all_profiles: true,
-            created_at: new Date().toISOString(),
-          },
-        ])
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
+  const tenantId = identity?.tenant_id ?? ""
+  const grantable = useMemo(() => grantableRoles(identity?.roles ?? []), [identity])
+  const canInvite = grantable.length > 0
 
   useEffect(() => {
-    load()
-  }, [])
+    let alive = true
+    setMembers({ state: "loading" })
+    ;(async () => {
+      try {
+        const who = await adminApi.whoami()
+        if (!alive) return
+        setIdentity(who)
+        const [m, i] = await Promise.allSettled([adminApi.listMembers(who.tenant_id), adminApi.listInvites(who.tenant_id)])
+        if (!alive) return
+        if (m.status === "fulfilled") setMembers({ state: "ready", data: m.value })
+        else setMembers(adminFailureToLoadable(m.reason))
+        setInvites(i.status === "fulfilled" ? i.value.filter((x) => x.status === "pending") : [])
+      } catch (e) {
+        if (alive) setMembers(adminFailureToLoadable(e))
+      }
+    })()
+    return () => { alive = false }
+  }, [tick])
 
-  const filteredMembers = useMemo(() => {
-    return members.filter((m) => {
-      if (roleFilter !== "all" && m.role.toLowerCase() !== roleFilter.toLowerCase()) return false
-      if (accessFilter === "full" && !m.access_all_profiles) return false
-      if (accessFilter === "selected" && m.access_all_profiles) return false
+  const reload = () => setTick((t) => t + 1)
+
+  const rows = useMemo(() => {
+    const out: { key: string; name: string; email: string; role: string; state: "active" | "inactive" | "invited"; isOwner: boolean; inviteId?: string }[] = []
+    if (members.state === "ready") {
+      for (const m of members.data) {
+        out.push({
+          key: m.id,
+          name: m.name || m.email.split("@")[0],
+          email: m.email,
+          role: m.roles.map((r) => ROLE_LABELS[r] || r).join(", ") || "No role",
+          state: m.is_active ? "active" : "inactive",
+          isOwner: !!m.is_owner || m.roles.includes("owner"),
+        })
+      }
+    }
+    for (const inv of invites) {
+      out.push({
+        key: `inv-${inv.id}`,
+        name: inv.email.split("@")[0],
+        email: inv.email,
+        role: inv.roles.map((r) => ROLE_LABELS[r] || r).join(", "),
+        state: "invited",
+        isOwner: false,
+        inviteId: inv.id,
+      })
+    }
+    return out
+  }, [members, invites])
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((r) => {
+      if (roleFilter !== "all" && !r.role.toLowerCase().includes((ROLE_LABELS[roleFilter] || roleFilter).toLowerCase())) return false
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase()
-        if (!m.name.toLowerCase().includes(q) && !m.email.toLowerCase().includes(q)) return false
+        if (!r.name.toLowerCase().includes(q) && !r.email.toLowerCase().includes(q)) return false
       }
       return true
     })
-  }, [members, roleFilter, accessFilter, searchQuery])
+  }, [rows, roleFilter, searchQuery])
 
-  const handleGenerateLink = async () => {
-    setGenerating(true)
-    try {
-      const res = await inviteTeamMember({
-        emails: inviteEmails.trim() || undefined,
-        role: selectedRole,
-        access_all_profiles: allProfilesToggle,
-      }).catch(() => null)
-
-      const link = res?.invite_link || `https://app.omnidome.io/invite/join?token=omni_inv_${Math.random().toString(36).slice(2, 12)}`
-      setGeneratedLink(link)
-
-      if (inviteEmails.trim()) {
-        const items = inviteEmails.split(",").map((e) => e.trim()).filter(Boolean)
-        const newOnes: TeamMember[] = items.map((email, idx) => ({
-          id: `mem-inv-${Date.now()}-${idx}`,
-          name: email.split("@")[0].replace(".", " "),
+  const handleSendInvites = async () => {
+    const emails = inviteEmails.split(/[,\s;]+/).map((e) => e.trim()).filter(Boolean)
+    if (emails.length === 0 || !tenantId) return
+    setSending(true)
+    setInviteResults([])
+    const results: { email: string; ok: boolean; text: string; link?: string }[] = []
+    for (const email of emails) {
+      try {
+        const res = await adminApi.createInvite(tenantId, { email, roles: [selectedRole], send_email: true })
+        results.push({
           email,
-          role: selectedRole,
-          access: allProfilesToggle ? "Full access" : "Selected profiles",
-          access_all_profiles: allProfilesToggle,
-          status: "invited",
-          created_at: new Date().toISOString(),
-        }))
-        setMembers((prev) => [...prev, ...newOnes])
+          ok: true,
+          text: res.email_requested
+            ? res.email_error ? `Invite created; email not sent: ${res.email_error}` : "Invite created and email requested."
+            : "Invite created.",
+          link: res.accept_link,
+        })
+      } catch (e) {
+        results.push({ email, ok: false, text: adminErrorMessage(e) })
       }
-    } finally {
-      setGenerating(false)
+    }
+    setInviteResults(results)
+    setSending(false)
+    if (results.some((r) => r.ok)) {
+      setInviteEmails("")
+      reload()
     }
   }
 
-  const handleCopyLink = () => {
-    if (!generatedLink) return
-    navigator.clipboard.writeText(generatedLink)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2500)
+  const handleCopyLink = (link: string) => {
+    void navigator.clipboard.writeText(link)
+    setCopiedLink(link)
+    setTimeout(() => setCopiedLink(null), 2500)
   }
 
-  const handleDeleteMember = async (id: string) => {
-    await deleteTeamMember(id).catch(() => null)
-    setMembers((prev) => prev.filter((m) => m.id !== id))
+  const handleRevoke = async (inviteId: string) => {
+    setRowError(null)
+    try {
+      await adminApi.revokeInvite(inviteId)
+      reload()
+    } catch (e) {
+      setRowError(adminErrorMessage(e))
+    }
   }
 
   return (
     <div className="space-y-5">
-      {/* Header matching media_1789298463219.png */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold tracking-tight text-foreground">Team</h2>
           <p className="text-xs text-muted-foreground mt-0.5">
-            {members.length} {members.length === 1 ? "member" : "members"}
+            {members.state === "ready" ? `${rows.length} ${rows.length === 1 ? "member or invite" : "members and invites"}` : "Team members come from the admin service"}
           </p>
         </div>
         <Button
           onClick={() => {
             setInviteEmails("")
-            setSelectedRole("Member")
-            setAllProfilesToggle(true)
-            setGeneratedLink(null)
+            setSelectedRole(grantable.includes("org_user") ? "org_user" : grantable[0] ?? "org_user")
+            setInviteResults([])
             setIsInviteOpen(true)
           }}
+          disabled={!canInvite}
+          title={canInvite ? undefined : "Your role cannot invite members"}
           className="bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-4 h-9 shadow-sm"
         >
           <Plus className="mr-1.5 h-4 w-4" /> Invite member
         </Button>
       </div>
 
-      {/* Filter Row matching media_1789298463219.png */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* Search bar */}
         <div className="relative min-w-[240px] flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <Input
@@ -7030,295 +6067,151 @@ function TeamUsersTab() {
             className="pl-9 h-9 text-xs"
           />
         </div>
-
-        {/* Roles Filter */}
         <select
           value={roleFilter}
           onChange={(e) => setRoleFilter(e.target.value)}
           className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
         >
           <option value="all">All roles</option>
-          <option value="owner">Owner</option>
-          <option value="admin">Admin</option>
-          <option value="member">Member</option>
-          <option value="billing manager">Billing Manager</option>
-          <option value="viewer">Viewer</option>
-        </select>
-
-        {/* Access Filter */}
-        <select
-          value={accessFilter}
-          onChange={(e) => setAccessFilter(e.target.value)}
-          className="rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground focus:outline-none"
-        >
-          <option value="all">All access</option>
-          <option value="full">Full access</option>
-          <option value="selected">Selected profiles</option>
+          {Object.keys(ROLE_LABELS).map((r) => (
+            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+          ))}
         </select>
       </div>
 
-      {/* Members Table */}
-      <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[650px] text-xs">
-            <thead>
-              <tr className="border-b border-border text-left text-muted-foreground bg-muted/20">
-                <th className="px-5 py-3 font-semibold">Member</th>
-                <th className="px-5 py-3 font-semibold">Email</th>
-                <th className="px-5 py-3 font-semibold">Role</th>
-                <th className="px-5 py-3 font-semibold">Access</th>
-                <th className="px-5 py-3 font-semibold text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border">
-              {filteredMembers.map((m) => {
-                const initial = (m.name || m.email || "U")[0].toUpperCase()
-                const isOwner = m.role.toLowerCase() === "owner"
-                return (
-                  <tr key={m.id} className="hover:bg-muted/10 transition-colors">
-                    <td className="px-5 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">
-                          {initial}
-                        </div>
-                        <div>
+      {rowError && <p role="alert" className="text-sm text-red-400">{rowError}</p>}
+
+      {members.state !== "ready" ? (
+        <NotConnected loadable={members} service="The admin service" onRetry={reload} />
+      ) : (
+        <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[650px] text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-muted-foreground bg-muted/20">
+                  <th className="px-5 py-3 font-semibold">Member</th>
+                  <th className="px-5 py-3 font-semibold">Email</th>
+                  <th className="px-5 py-3 font-semibold">Role</th>
+                  <th className="px-5 py-3 font-semibold">Status</th>
+                  <th className="px-5 py-3 font-semibold text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {filteredRows.length === 0 && (
+                  <tr><td colSpan={5} className="px-5 py-10 text-center text-muted-foreground">{rows.length === 0 ? "No team members yet." : "No members match the filters."}</td></tr>
+                )}
+                {filteredRows.map((r) => {
+                  const initial = (r.name || r.email || "U")[0].toUpperCase()
+                  const isYou = identity?.user_id && r.key === identity.user_id
+                  return (
+                    <tr key={r.key} className="hover:bg-muted/10 transition-colors">
+                      <td className="px-5 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className="h-8 w-8 rounded-full bg-blue-600 text-white font-bold text-xs flex items-center justify-center shrink-0">{initial}</div>
                           <p className="font-semibold text-foreground flex items-center gap-1.5">
-                            {m.name}
-                            {isOwner && <span className="text-[10px] text-muted-foreground font-normal">(You)</span>}
+                            {r.name}
+                            {isYou && <span className="text-[10px] text-muted-foreground font-normal">(You)</span>}
                           </p>
                         </div>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5 text-muted-foreground font-mono text-[11px]">
-                      {m.email}
-                    </td>
-                    <td className="px-5 py-3.5">
-                      {isOwner ? (
-                        <span className="inline-flex items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold text-amber-500">
-                          Owner
-                        </span>
-                      ) : m.role === "Admin" ? (
-                        <span className="inline-flex items-center rounded-md border border-indigo-500/30 bg-indigo-500/10 px-2 py-0.5 text-[11px] font-semibold text-indigo-400">
-                          Admin
-                        </span>
-                      ) : m.role === "Billing Manager" ? (
-                        <span className="inline-flex items-center rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-400">
-                          Billing Manager
-                        </span>
-                      ) : m.role === "Viewer" ? (
-                        <span className="inline-flex items-center rounded-md border border-zinc-500/30 bg-zinc-500/10 px-2 py-0.5 text-[11px] font-semibold text-zinc-400">
-                          Viewer
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
-                          Member
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3.5 text-muted-foreground">
-                      <div className="flex items-center gap-1.5">
-                        <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                        <span>{m.access || (m.access_all_profiles ? "Full access" : "Selected profiles")}</span>
-                      </div>
-                    </td>
-                    <td className="px-5 py-3.5 text-right">
-                      {!isOwner && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleDeleteMember(m.id)}
-                          className="h-7 px-2 text-red-400 hover:text-red-300"
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                      </td>
+                      <td className="px-5 py-3.5 text-muted-foreground font-mono text-[11px]">{r.email}</td>
+                      <td className="px-5 py-3.5">
+                        <span className="inline-flex items-center rounded-md border border-border bg-muted/40 px-2 py-0.5 text-[11px] font-semibold text-foreground">{r.role}</span>
+                      </td>
+                      <td className="px-5 py-3.5 text-muted-foreground">
+                        {r.state === "invited" ? "Invite pending" : r.state === "active" ? "Active" : "Deactivated"}
+                      </td>
+                      <td className="px-5 py-3.5 text-right">
+                        {r.inviteId && canInvite && (
+                          <Button size="sm" variant="ghost" onClick={() => handleRevoke(r.inviteId!)} className="h-7 px-2 text-red-400 hover:text-red-300 text-xs">
+                            <Trash2 className="mr-1 h-3 w-3" /> Revoke
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-border px-5 py-2.5 text-[11px] text-muted-foreground">
+            To change roles or deactivate a member, use Admin &gt; Team.
+          </p>
         </div>
-      </div>
+      )}
 
-      {/* Slide-over Drawer Invite team member (media_1789298463219.png) */}
       {isInviteOpen && (
         <div className="fixed inset-0 z-50 flex items-stretch justify-end bg-black/70 backdrop-blur-xs">
           <div className="w-full max-w-md bg-card border-l border-border h-full flex flex-col p-6 shadow-2xl overflow-y-auto animate-in slide-in-from-right duration-200">
-            {/* Header */}
             <div className="flex items-start justify-between gap-3 mb-2">
               <h3 className="text-lg font-bold text-foreground">Invite team member</h3>
-              <button
-                onClick={() => setIsInviteOpen(false)}
-                className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-              >
+              <button onClick={() => setIsInviteOpen(false)} className="rounded p-1 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
                 <X className="h-5 w-5" />
               </button>
             </div>
-
             <p className="text-xs text-muted-foreground mb-6 leading-relaxed">
-              Generate an invite link to share with your team. Choose what they can access.
+              Each email gets a real invitation from the admin service. An invite holds a seat until it is accepted or revoked.
             </p>
 
-            {/* Email Field */}
             <div className="space-y-1 mb-6">
-              <label className="text-xs font-semibold text-foreground">
-                Email <span className="font-normal text-muted-foreground">(optional)</span>
-              </label>
+              <label className="text-xs font-semibold text-foreground">Email</label>
               <Input
                 value={inviteEmails}
                 onChange={(e) => setInviteEmails(e.target.value)}
                 placeholder="teammate@company.com, another@company.com"
                 className="h-10 text-xs"
               />
-              <p className="text-[11px] text-muted-foreground pt-0.5">
-                One or more emails (comma-separated). Leave blank to share a link yourself.
-              </p>
+              <p className="text-[11px] text-muted-foreground pt-0.5">One or more emails, comma-separated.</p>
             </div>
 
-            {/* Roles Section with 4 Cards */}
             <div className="space-y-2.5 mb-6">
               <label className="text-xs font-semibold text-foreground">Role</label>
-
-              {/* Role 1: Member */}
-              <div
-                onClick={() => setSelectedRole("Member")}
-                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
-                  selectedRole === "Member"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                    : "border-border bg-card hover:bg-accent/40"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <Users className="h-4 w-4 text-primary shrink-0" />
-                    <span className="text-xs font-bold text-foreground">Member</span>
-                  </div>
-                  {selectedRole === "Member" && <Check className="h-3.5 w-3.5 text-primary" />}
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
-                  Publish posts and use the app within the profiles you give them. No billing access.
-                </p>
-              </div>
-
-              {/* Role 2: Admin */}
-              <div
-                onClick={() => setSelectedRole("Admin")}
-                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
-                  selectedRole === "Admin"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                    : "border-border bg-card hover:bg-accent/40"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-indigo-400 shrink-0" />
-                    <span className="text-xs font-bold text-foreground">Admin</span>
-                  </div>
-                  {selectedRole === "Admin" && <Check className="h-3.5 w-3.5 text-primary" />}
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
-                  Everything a Member can do, plus manage the team (invite/remove members, roles, access) and billing. Cannot transfer ownership or delete the account.
-                </p>
-              </div>
-
-              {/* Role 3: Billing Manager */}
-              <div
-                onClick={() => setSelectedRole("Billing Manager")}
-                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
-                  selectedRole === "Billing Manager"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                    : "border-border bg-card hover:bg-accent/40"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <CreditCard className="h-4 w-4 text-emerald-400 shrink-0" />
-                    <span className="text-xs font-bold text-foreground">Billing Manager</span>
-                  </div>
-                  {selectedRole === "Billing Manager" && <Check className="h-3.5 w-3.5 text-primary" />}
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
-                  Everything a Member can do, plus manage subscription, payment methods and invoices. No team management.
-                </p>
-              </div>
-
-              {/* Role 4: Viewer */}
-              <div
-                onClick={() => setSelectedRole("Viewer")}
-                className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
-                  selectedRole === "Viewer"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary/30"
-                    : "border-border bg-card hover:bg-accent/40"
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <Link2 className="h-4 w-4 text-zinc-400 shrink-0" />
-                    <span className="text-xs font-bold text-foreground">Viewer</span>
-                  </div>
-                  {selectedRole === "Viewer" && <Check className="h-3.5 w-3.5 text-primary" />}
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed pl-6">
-                  View posts and analytics within the profiles you give them. Cannot publish, edit, or connect accounts.
-                </p>
-              </div>
-            </div>
-
-            {/* Access Level Section */}
-            <div className="space-y-2 mb-8">
-              <label className="text-xs font-semibold text-foreground">Access level</label>
-              <div className="flex items-center justify-between rounded-xl border border-border bg-card p-3.5">
-                <div className="flex items-center gap-2">
-                  <Globe className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-medium text-foreground">All profiles</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setAllProfilesToggle((prev) => !prev)}
-                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                    allProfilesToggle ? "bg-[#EA3829]" : "bg-muted"
+              {grantable.map((role) => (
+                <div
+                  key={role}
+                  onClick={() => setSelectedRole(role)}
+                  className={`cursor-pointer rounded-xl border p-3.5 transition-colors ${
+                    selectedRole === role ? "border-primary bg-primary/5 ring-1 ring-primary/30" : "border-border bg-card hover:bg-accent/40"
                   }`}
                 >
-                  <span
-                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
-                      allProfilesToggle ? "translate-x-4" : "translate-x-0"
-                    }`}
-                  />
-                </button>
-              </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-primary shrink-0" />
+                      <span className="text-xs font-bold text-foreground">{ROLE_LABELS[role] || role}</span>
+                    </div>
+                    {selectedRole === role && <Check className="h-3.5 w-3.5 text-primary" />}
+                  </div>
+                </div>
+              ))}
             </div>
 
-            {/* Link Generation Result */}
-            {generatedLink && (
-              <div className="mb-6 rounded-xl border border-border bg-accent/20 p-4 space-y-2">
-                <p className="text-xs font-semibold text-foreground">Share this invite link:</p>
-                <div className="flex items-center gap-2">
-                  <Input
-                    readOnly
-                    value={generatedLink}
-                    className="h-8 text-xs font-mono select-all bg-card"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleCopyLink}
-                    className="h-8 text-xs bg-primary text-primary-foreground shrink-0"
-                  >
-                    {copied ? "Copied!" : <><Copy className="mr-1 h-3 w-3" /> Copy</>}
-                  </Button>
-                </div>
+            {inviteResults.length > 0 && (
+              <div className="mb-6 rounded-xl border border-border bg-accent/20 p-4 space-y-3">
+                {inviteResults.map((r) => (
+                  <div key={r.email} className="space-y-1.5">
+                    <p className={`text-xs font-semibold ${r.ok ? "text-foreground" : "text-red-400"}`}>{r.email}</p>
+                    <p role={r.ok ? "status" : "alert"} className={`text-[11px] ${r.ok ? "text-muted-foreground" : "text-red-400"}`}>{r.text}</p>
+                    {r.link && (
+                      <div className="flex items-center gap-2">
+                        <Input readOnly value={r.link} className="h-8 text-xs font-mono select-all bg-card" />
+                        <Button size="sm" onClick={() => handleCopyLink(r.link!)} className="h-8 text-xs bg-primary text-primary-foreground shrink-0">
+                          {copiedLink === r.link ? "Copied!" : <><Copy className="mr-1 h-3 w-3" /> Copy</>}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
 
-            {/* Bottom Actions */}
-            <div className="mt-auto pt-6 border-t border-border flex items-center justify-between">
+            <div className="mt-auto pt-6 border-t border-border">
               <Button
-                onClick={handleGenerateLink}
-                disabled={generating}
+                onClick={handleSendInvites}
+                disabled={sending || !inviteEmails.trim() || !selectedRole}
                 className="w-full bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs h-10 shadow-sm"
               >
-                <Link2 className="mr-2 h-4 w-4" />
-                {generating ? "Generating..." : "Generate link"}
+                <Mail className="mr-2 h-4 w-4" />
+                {sending ? "Sending…" : "Send invitation"}
               </Button>
             </div>
           </div>
@@ -7326,4 +6219,16 @@ function TeamUsersTab() {
       )}
     </div>
   )
+}
+
+/** Admin-service failure (thrown AdminApiError / network error) -> honest Loadable state. */
+function adminFailureToLoadable(err: unknown): Loadable<never> {
+  const status = err instanceof AdminApiError ? err.status : null
+  if (status === null && !(err instanceof AdminApiError)) {
+    // timeout / network failure
+    return { state: "unreachable", status: null }
+  }
+  if (status === 502 || status === 503 || status === 504) return { state: "unreachable", status }
+  if (status === 401 || status === 403) return { state: "denied", status: status as number }
+  return { state: "error", status, message: adminErrorMessage(err) }
 }

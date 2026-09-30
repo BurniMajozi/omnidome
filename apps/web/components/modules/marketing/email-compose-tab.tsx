@@ -12,10 +12,10 @@ import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
-import {
-  listCampaigns, listEmailTemplates, sendEmailBatch,
-  type EmailTemplate, type Campaign
-} from "@/lib/marketing-api"
+import { type EmailTemplate, type AgentMailStatus } from "@/lib/marketing-api"
+import { useMarketingLoad } from "@/lib/use-marketing-load"
+import { useEmailBatch } from "@/lib/use-email-batch"
+import { NotConnected } from "@/components/ui/not-connected"
 import { EmailBuilder } from "./email-builder"
 
 interface EmailComposeTabProps {
@@ -23,47 +23,44 @@ interface EmailComposeTabProps {
 }
 
 export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
-  const [campaigns, setCampaigns] = useState<any[]>([])
-  const [templates, setTemplates] = useState<EmailTemplate[]>([])
+  // One fetch per data set, shared with the other email tabs through the marketing read cache.
+  const { value: templatesLoad, reload: reloadTemplates } = useMarketingLoad<EmailTemplate[]>("/templates")
+  const { value: mailStatusLoad } = useMarketingLoad<AgentMailStatus>("/email/agentmail/status")
+  const templates: EmailTemplate[] = templatesLoad.state === "ready" ? templatesLoad.data : []
+  const agentInbox = mailStatusLoad.state === "ready" && mailStatusLoad.data.configured ? mailStatusLoad.data.inbox_id : ""
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(initialTemplate?.id || "")
-  
+
   // Fields
-  const [campaignId, setCampaignId] = useState("")
+  const [campaignId] = useState("")
   const [subject, setSubject] = useState(initialTemplate?.subject || "")
   const [bodyHtml, setBodyHtml] = useState(initialTemplate?.body_html || "")
-  const [recipientsRaw, setRecipientsRaw] = useState("ops@sandtonhoa.co.za, facilities@metromall.co.za, info@omnidome.co.za")
-  const [fromName, setFromName] = useState("OminiDome Marketing")
-  const [fromEmail, setFromEmail] = useState("news@omnidome.co.za")
+  const [recipientsRaw, setRecipientsRaw] = useState("")
+  const [fromName, setFromName] = useState("")
+  const [fromEmailEdit, setFromEmailEdit] = useState<string | null>(null)
+  const fromEmail = fromEmailEdit ?? agentInbox
+  const setFromEmail = (v: string) => setFromEmailEdit(v)
 
-  // State
-  const [sending, setSending] = useState(false)
-  const [testSending, setTestSending] = useState(false)
-  const [testEmail, setTestEmail] = useState("admin@omnidome.co.za")
-  const [result, setResult] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  
+  // State: each send is tracked to completion (202 -> poll batch status)
+  const { view: campaignView, send: sendCampaign } = useEmailBatch()
+  const { view: testView, send: sendTest } = useEmailBatch()
+  const sending = campaignView.phase === "sending" || campaignView.phase === "tracking"
+  const testSending = testView.phase === "sending" || testView.phase === "tracking"
+  const [testEmail, setTestEmail] = useState("")
+
   // Builder switch
   const [isBuilderOpen, setIsBuilderOpen] = useState(false)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
 
   useEffect(() => {
-    listCampaigns()
-      .then((c) => setCampaigns((c || []).filter((x: any) => (x.channel || "").toLowerCase() === "email" || true)))
-      .catch(() => {})
-
-    listEmailTemplates()
-      .then((t) => {
-        const list = t || []
-        setTemplates(list)
-        if (!selectedTemplateId && list.length > 0) {
-          const first = list[0]
-          setSelectedTemplateId(first.id)
-          setSubject(first.subject)
-          setBodyHtml(first.body_html)
-        }
-      })
-      .catch(() => {})
-  }, [])
+    // Preselect the first real template once, only when nothing was chosen.
+    if (!selectedTemplateId && templates.length > 0) {
+      const first = templates[0]
+      setSelectedTemplateId(first.id)
+      setSubject(first.subject)
+      setBodyHtml(first.body_html)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templatesLoad.state])
 
   const recipients = useMemo(
     () =>
@@ -85,50 +82,25 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
 
   const handleSendTest = async () => {
     if (!testEmail || !subject) return
-    setTestSending(true)
-    setError(null)
-    setResult(null)
-    try {
-      await sendEmailBatch({
-        subject: `[TEST] ${subject}`,
-        body_html: bodyHtml,
-        recipients: [testEmail],
-        from_name: fromName || undefined,
-        from_email: fromEmail || undefined,
-      })
-      setResult(`Test email successfully dispatched to ${testEmail}`)
-    } catch (e) {
-      // optimistic simulation for local dev
-      setResult(`Simulated test dispatch to ${testEmail} delivered successfully.`)
-    } finally {
-      setTestSending(false)
-    }
+    await sendTest({
+      subject: `[TEST] ${subject}`,
+      body_html: bodyHtml,
+      recipients: [testEmail],
+      from_name: fromName || undefined,
+      from_email: fromEmail || undefined,
+    })
   }
 
   const handleSendCampaign = async () => {
     if (!subject || recipients.length === 0) return
-    setSending(true)
-    setResult(null)
-    setError(null)
-    try {
-      const res = await sendEmailBatch({
-        campaign_id: campaignId || undefined,
-        subject,
-        body_html: bodyHtml,
-        recipients,
-        from_name: fromName || undefined,
-        from_email: fromEmail || undefined,
-      })
-      if (!res.ok) {
-        setResult(`Dispatched campaign to ${recipients.length} recipients (simulated local execution).`)
-      } else {
-        setResult(`Sent campaign batch to ${recipients.length} recipient(s).`)
-      }
-    } catch (e) {
-      setResult(`Dispatched campaign to ${recipients.length} recipients successfully.`)
-    } finally {
-      setSending(false)
-    }
+    await sendCampaign({
+      campaign_id: campaignId || undefined,
+      subject,
+      body_html: bodyHtml,
+      recipients,
+      from_name: fromName || undefined,
+      from_email: fromEmail || undefined,
+    })
   }
 
   if (isBuilderOpen) {
@@ -169,8 +141,8 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
             <h2 className="text-xl font-bold flex items-center gap-2">
               <Mail className="h-5 w-5 text-blue-600" /> Send Email Campaign
             </h2>
-            <Badge variant="outline" className="border-emerald-500 text-emerald-600 bg-emerald-500/10 text-[11px] font-mono gap-1">
-              <CheckCircle2 className="h-3 w-3" /> AgentMail: omnidome@agentmail.to
+            <Badge variant="outline" className="text-[11px] font-mono gap-1">
+              {agentInbox ? <><CheckCircle2 className="h-3 w-3" /> AgentMail: {agentInbox}</> : mailStatusLoad.state === "loading" ? "AgentMail: checking…" : mailStatusLoad.state === "ready" ? "AgentMail: not configured" : "AgentMail: status unavailable"}
             </Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-1">
@@ -187,18 +159,20 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
         </Button>
       </div>
 
-      {result && (
-        <div className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-4 text-sm text-emerald-600">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <p>{result}</p>
+      {campaignView.message && (
+        <div role="status" className={`flex items-center gap-2 rounded-lg border p-4 text-sm ${campaignView.phase === "done" ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-600" : "border-blue-500/30 bg-blue-500/5 text-blue-500"}`}>
+          {campaignView.phase === "done" ? <CheckCircle2 className="h-4 w-4 shrink-0" /> : <RefreshCw className="h-4 w-4 shrink-0 animate-spin" />}
+          <p>{campaignView.message}</p>
         </div>
       )}
-
-      {error && (
-        <div className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-500">
+      {campaignView.error && (
+        <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-500">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <p>{error}</p>
+          <p>{campaignView.error}</p>
         </div>
+      )}
+      {templatesLoad.state !== "ready" && templatesLoad.state !== "loading" && (
+        <NotConnected loadable={templatesLoad} service="The marketing service" onRetry={reloadTemplates} />
       )}
 
       <div className="grid gap-6 md:grid-cols-3">
@@ -218,10 +192,6 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
                     className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
                   >
                     <option value="">Blank / Custom HTML</option>
-                    <option value="tpl-1">Own your newsletter (Visual Builder default)</option>
-                    <option value="tpl-2">Getting Started Quick Guide</option>
-                    <option value="tpl-3">Commercial Assessment Intro</option>
-                    <option value="tpl-4">Re-engagement Promo</option>
                     {templates.map((t) => (
                       <option key={t.id} value={t.id}>
                         {t.name}
@@ -246,11 +216,11 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">From Name</label>
-                  <Input value={fromName} onChange={(e) => setFromName(e.target.value)} />
+                  <Input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="Sender name" />
                 </div>
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-muted-foreground">From Email</label>
-                  <Input value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} />
+                  <Input value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} placeholder={agentInbox ? "" : "Connect an AgentMail inbox first"} />
                 </div>
               </div>
 
@@ -292,23 +262,6 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
                 rows={3}
                 className="font-mono text-xs"
               />
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                <span>Quick Add Segments:</span>
-                <button
-                  type="button"
-                  onClick={() => setRecipientsRaw((prev) => prev + ", residential-hoa@example.com")}
-                  className="underline hover:text-foreground"
-                >
-                  + Residential HOA
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRecipientsRaw((prev) => prev + ", commercial-clients@example.com")}
-                  className="underline hover:text-foreground"
-                >
-                  + Commercial Clients
-                </button>
-              </div>
             </CardContent>
           </Card>
         </div>
@@ -327,7 +280,7 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
               >
                 {sending ? (
                   <>
-                    <RefreshCw className="h-4 w-4 animate-spin" /> Dispatching...
+                    <RefreshCw className="h-4 w-4 animate-spin" /> Sending…
                   </>
                 ) : (
                   <>
@@ -353,8 +306,14 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
                   disabled={testSending || !testEmail || !subject}
                   className="w-full text-xs gap-1.5"
                 >
-                  {testSending ? "Sending Test..." : "Send Test to My Inbox"}
+                  {testSending ? "Sending…" : "Send Test"}
                 </Button>
+                {testView.message && (
+                  <p role="status" className="text-xs text-muted-foreground">{testView.message}</p>
+                )}
+                {testView.error && (
+                  <p role="alert" className="text-xs text-red-400">{testView.error}</p>
+                )}
               </div>
             </CardContent>
           </Card>

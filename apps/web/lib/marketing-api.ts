@@ -1,6 +1,8 @@
 "use client"
 
 import { getSessionSafe } from "@/lib/supabase/client"
+import { createGetCache } from "@/lib/marketing-state"
+import { loadableFromStatus, type Loadable } from "@/lib/service-state"
 
 /**
  * Marketing API client — campaigns, social media, WhatsApp, ads,
@@ -28,27 +30,20 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
 // calls that reach a third-party API (e.g. Zernio health checks).
 const FETCH_TIMEOUT_MS = 15000
 
-async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | null> {
-  try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: { ...(await getAuthHeaders()), "Content-Type": "application/json" },
-      ...init,
-    })
-    if (!res.ok) {
-      console.warn(`Marketing API error ${res.status} for ${path}`)
-      return null
-    }
-    return res.json()
-  } catch (error) {
-    console.warn(`Marketing API unreachable for ${path}`, error)
-    return null
-  }
+// Every GET goes through one shared cache: concurrent identical reads from
+// different components (campaigns, dashboard, social/posts were each fetched
+// 2-4x on entering Marketing) collapse into one request, results are reused for
+// 20s and a failed read for 3s. Any write clears the cache so the next read is
+// fresh. Pass { force: true } (via loadMarketing) for an explicit Retry/refresh.
+const readCache = createGetCache<MarketingResult<unknown>>(20_000, 3_000, (r) => !r.ok)
+
+function isGet(init?: RequestInit): boolean {
+  return !init?.method || init.method.toUpperCase() === "GET"
 }
 
-// Like fetchMarketing but preserves the outcome so callers can surface the real
-// error detail (e.g. a 503 "provider not configured") instead of a silent null.
+// Preserves the outcome so callers can surface the real error detail (e.g. a
+// 503 "provider not configured") instead of a silent null. status 0 = network
+// failure or timeout.
 export interface MarketingResult<T> {
   ok: boolean
   status: number
@@ -56,7 +51,7 @@ export interface MarketingResult<T> {
   error: string | null
 }
 
-async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promise<MarketingResult<T>> {
+async function rawRequest<T>(path: string, init?: RequestInit): Promise<MarketingResult<T>> {
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
@@ -68,7 +63,9 @@ async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promis
     try { body = await res.json() } catch { /* no body */ }
     if (!res.ok) {
       const detail = (body && typeof body === "object" && "detail" in body)
-        ? String((body as { detail: unknown }).detail)
+        ? (typeof (body as { detail: unknown }).detail === "string"
+            ? (body as { detail: string }).detail
+            : JSON.stringify((body as { detail: unknown }).detail))
         : `Request failed (${res.status})`
       return { ok: false, status: res.status, data: null, error: detail }
     }
@@ -76,6 +73,44 @@ async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promis
   } catch (error) {
     return { ok: false, status: 0, data: null, error: error instanceof Error ? error.message : "Network error" }
   }
+}
+
+async function request<T>(path: string, init?: RequestInit, opts?: { force?: boolean }): Promise<MarketingResult<T>> {
+  if (isGet(init)) {
+    return readCache.get(path, () => rawRequest<unknown>(path, init), opts) as Promise<MarketingResult<T>>
+  }
+  const r = await rawRequest<T>(path, init)
+  readCache.clear()
+  return r
+}
+
+async function fetchMarketingResult<T>(path: string, init?: RequestInit): Promise<MarketingResult<T>> {
+  return request<T>(path, init)
+}
+
+/** Legacy null-on-failure client. Prefer loadMarketing() where the UI must tell "empty" from "down". */
+async function fetchMarketing<T>(path: string, init?: RequestInit): Promise<T | null> {
+  const r = await request<T>(path, init)
+  if (!r.ok) {
+    console.warn(`Marketing API error ${r.status} for ${path}`)
+    return null
+  }
+  return r.data
+}
+
+/**
+ * Status-aware GET: distinguishes loading / ready (200 + [] is ready-and-empty) /
+ * unreachable (network, timeout, 502-504) / denied / error. Shares the read cache.
+ */
+export async function loadMarketing<T>(path: string, opts?: { force?: boolean }): Promise<Loadable<T>> {
+  const r = await request<T>(path, undefined, opts)
+  if (r.ok && r.data === null) return { state: "error", status: r.status, message: "Invalid response" }
+  return loadableFromStatus<T>(r.status === 0 ? null : r.status, r.data ?? undefined, r.error ?? undefined)
+}
+
+/** Drop cached reads (call after an out-of-band change). */
+export function invalidateMarketingCache(): void {
+  readCache.clear()
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -548,14 +583,17 @@ export interface AudienceSegmentCreate {
 
 // ── Campaigns ────────────────────────────────────────────────────────
 
-export const listCampaigns = (params?: { channel?: string; status?: string; limit?: number; offset?: number }) => {
+export const campaignsPath = (params?: { channel?: string; status?: string; limit?: number; offset?: number }) => {
   const q = new URLSearchParams()
   if (params?.channel) q.set("channel", params.channel)
   if (params?.status) q.set("status", params.status)
   if (params?.limit != null) q.set("limit", String(params.limit))
   if (params?.offset != null) q.set("offset", String(params.offset))
-  return fetchMarketing<Campaign[]>(`/campaigns?${q}`)
+  return `/campaigns?${q}`
 }
+
+export const listCampaigns = (params?: { channel?: string; status?: string; limit?: number; offset?: number }) =>
+  fetchMarketing<Campaign[]>(campaignsPath(params))
 
 export const createCampaign = (data: CampaignCreate) =>
   fetchMarketing<Campaign>("/campaigns", {
@@ -579,12 +617,15 @@ export const deleteCampaign = (id: string) =>
 
 // ── Social Media Accounts ────────────────────────────────────────────
 
-export const listSocialAccounts = (params?: { platform?: string; status?: string }) => {
+export const socialAccountsPath = (params?: { platform?: string; status?: string }) => {
   const q = new URLSearchParams()
   if (params?.platform) q.set("platform", params.platform)
   if (params?.status) q.set("status", params.status)
-  return fetchMarketing<SocialAccount[]>(`/social/accounts?${q}`)
+  return `/social/accounts?${q}`
 }
+
+export const listSocialAccounts = (params?: { platform?: string; status?: string }) =>
+  fetchMarketing<SocialAccount[]>(socialAccountsPath(params))
 
 export const createSocialAccount = (data: SocialAccountCreate) =>
   fetchMarketing<SocialAccount>("/social/accounts", {
@@ -617,13 +658,16 @@ export const disconnectSocialAccount = (id: string) =>
 
 // ── Social Posts ─────────────────────────────────────────────────────
 
-export const listSocialPosts = (params?: { status?: string; account_id?: string; campaign_id?: string }) => {
+export const socialPostsPath = (params?: { status?: string; account_id?: string; campaign_id?: string }) => {
   const q = new URLSearchParams()
   if (params?.status) q.set("status", params.status)
   if (params?.account_id) q.set("account_id", params.account_id)
   if (params?.campaign_id) q.set("campaign_id", params.campaign_id)
-  return fetchMarketing<SocialPost[]>(`/social/posts?${q}`)
+  return `/social/posts?${q}`
 }
+
+export const listSocialPosts = (params?: { status?: string; account_id?: string; campaign_id?: string }) =>
+  fetchMarketing<SocialPost[]>(socialPostsPath(params))
 
 export const createSocialPost = (data: SocialPostCreate) =>
   fetchMarketing<SocialPost>("/social/posts", {
@@ -691,14 +735,17 @@ export const enqueuePost = (queueId: string, body: SocialPostCreate) =>
 
 // ── Social Inbox ─────────────────────────────────────────────────────
 
-export const listInboxMessages = (params?: { status?: string; platform?: string; message_type?: string; account_id?: string }) => {
+export const inboxMessagesPath = (params?: { status?: string; platform?: string; message_type?: string; account_id?: string }) => {
   const q = new URLSearchParams()
   if (params?.status) q.set("status", params.status)
   if (params?.platform) q.set("platform", params.platform)
   if (params?.message_type) q.set("message_type", params.message_type)
   if (params?.account_id) q.set("account_id", params.account_id)
-  return fetchMarketing<InboxMessage[]>(`/social/inbox?${q}`)
+  return `/social/inbox?${q}`
 }
+
+export const listInboxMessages = (params?: { status?: string; platform?: string; message_type?: string; account_id?: string }) =>
+  fetchMarketing<InboxMessage[]>(inboxMessagesPath(params))
 
 export const getInboxMessage = (id: string) =>
   fetchMarketing<InboxMessage>(`/social/inbox/${id}`)
@@ -750,12 +797,15 @@ export const getEngagementSummary = (params?: { from_date?: string; to_date?: st
 
 // ── WhatsApp ─────────────────────────────────────────────────────────
 
-export const listWhatsAppContacts = (params?: { tag?: string; opt_in_status?: string }) => {
+export const whatsAppContactsPath = (params?: { tag?: string; opt_in_status?: string }) => {
   const q = new URLSearchParams()
   if (params?.tag) q.set("tag", params.tag)
   if (params?.opt_in_status) q.set("opt_in_status", params.opt_in_status)
-  return fetchMarketing<WhatsAppContact[]>(`/whatsapp/contacts?${q}`)
+  return `/whatsapp/contacts?${q}`
 }
+
+export const listWhatsAppContacts = (params?: { tag?: string; opt_in_status?: string }) =>
+  fetchMarketing<WhatsAppContact[]>(whatsAppContactsPath(params))
 
 export const createWhatsAppContact = (data: WhatsAppContactCreate) =>
   fetchMarketing<WhatsAppContact>("/whatsapp/contacts", {
@@ -769,11 +819,14 @@ export const bulkImportWhatsAppContacts = (contacts: WhatsAppContactCreate[]) =>
     body: JSON.stringify({ contacts }),
   })
 
-export const listWhatsAppBroadcasts = (params?: { status?: string }) => {
+export const whatsAppBroadcastsPath = (params?: { status?: string }) => {
   const q = new URLSearchParams()
   if (params?.status) q.set("status", params.status)
-  return fetchMarketing<WhatsAppBroadcast[]>(`/whatsapp/broadcasts?${q}`)
+  return `/whatsapp/broadcasts?${q}`
 }
+
+export const listWhatsAppBroadcasts = (params?: { status?: string }) =>
+  fetchMarketing<WhatsAppBroadcast[]>(whatsAppBroadcastsPath(params))
 
 export const createWhatsAppBroadcast = (data: WhatsAppBroadcastCreate) =>
   fetchMarketing<WhatsAppBroadcast>("/whatsapp/broadcasts", {
@@ -832,12 +885,15 @@ export const listWhatsAppConversions = () =>
 
 // ── Ad Campaigns ─────────────────────────────────────────────────────
 
-export const listAdCampaigns = (params?: { platform?: string; status?: string }) => {
+export const adCampaignsPath = (params?: { platform?: string; status?: string }) => {
   const q = new URLSearchParams()
   if (params?.platform) q.set("platform", params.platform)
   if (params?.status) q.set("status", params.status)
-  return fetchMarketing<AdCampaign[]>(`/ads/campaigns?${q}`)
+  return `/ads/campaigns?${q}`
 }
+
+export const listAdCampaigns = (params?: { platform?: string; status?: string }) =>
+  fetchMarketing<AdCampaign[]>(adCampaignsPath(params))
 
 export const createAdCampaign = (data: AdCampaignCreate) =>
   fetchMarketing<AdCampaign>("/ads/campaigns", {
@@ -861,12 +917,15 @@ export const getAdCampaignAnalytics = (id: string) =>
 
 // ── Comment Automations ──────────────────────────────────────────────
 
-export const listCommentAutomations = (params?: { account_id?: string; is_active?: boolean }) => {
+export const commentAutomationsPath = (params?: { account_id?: string; is_active?: boolean }) => {
   const q = new URLSearchParams()
   if (params?.account_id) q.set("account_id", params.account_id)
   if (params?.is_active != null) q.set("is_active", String(params.is_active))
-  return fetchMarketing<CommentAutomation[]>(`/social/automations?${q}`)
+  return `/social/automations?${q}`
 }
+
+export const listCommentAutomations = (params?: { account_id?: string; is_active?: boolean }) =>
+  fetchMarketing<CommentAutomation[]>(commentAutomationsPath(params))
 
 export const createCommentAutomation = (data: CommentAutomationCreate) =>
   fetchMarketing<CommentAutomation>("/social/automations", {
@@ -1100,25 +1159,29 @@ export interface FollowerPoint {
 export const getAnalyticsOverview = () =>
   fetchMarketing<{ overview: AnalyticsOverview }>("/social/analytics/overview")
 
-export const getAnalyticsDaily = (params?: { attribution?: "publish" | "received"; days?: number; platform?: string }) => {
+export const analyticsDailyPath = (params?: { attribution?: "publish" | "received"; days?: number; platform?: string }) => {
   const q = new URLSearchParams()
   if (params?.attribution) q.set("attribution", params.attribution)
   if (params?.days != null) q.set("days", String(params.days))
   if (params?.platform) q.set("platform", params.platform)
-  return fetchMarketing<{ attribution: string; platform: string; dailyData: DailyMetricPoint[] }>(
-    `/social/analytics/daily?${q}`,
-  )
+  return `/social/analytics/daily?${q}`
 }
 
-export const getAnalyticsPosts = (params?: { page?: number; limit?: number; platform?: string }) => {
+export const getAnalyticsDaily = (params?: { attribution?: "publish" | "received"; days?: number; platform?: string }) =>
+  fetchMarketing<{ attribution: string; platform: string; dailyData: DailyMetricPoint[] }>(analyticsDailyPath(params))
+
+export const analyticsPostsPath = (params?: { page?: number; limit?: number; platform?: string }) => {
   const q = new URLSearchParams()
   if (params?.page != null) q.set("page", String(params.page))
   if (params?.limit != null) q.set("limit", String(params.limit))
   if (params?.platform) q.set("platform", params.platform)
-  return fetchMarketing<{ posts: AnalyticsPostRow[]; pagination: { page: number; limit: number; total: number; pages: number } }>(
-    `/social/analytics/posts?${q}`,
-  )
+  return `/social/analytics/posts?${q}`
 }
+
+export const getAnalyticsPosts = (params?: { page?: number; limit?: number; platform?: string }) =>
+  fetchMarketing<{ posts: AnalyticsPostRow[]; pagination: { page: number; limit: number; total: number; pages: number } }>(
+    analyticsPostsPath(params),
+  )
 
 export const getAnalyticsFollowers = (params?: { granularity?: "daily" | "weekly" | "monthly"; days?: number }) => {
   const q = new URLSearchParams()
@@ -1256,3 +1319,27 @@ export const deleteTeamMember = (member_id: string) =>
     method: "DELETE",
   })
 
+
+// ── Status-preserving writes (show the real server error, never a fake success) ──
+
+/** POST/PUT/PATCH/DELETE that returns the real outcome (status + server detail). */
+export function writeMarketing<T = unknown>(
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  body?: unknown,
+): Promise<MarketingResult<T>> {
+  return request<T>(path, { method, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
+}
+
+export const agentMailSignUpResult = (data: { human_email: string; username: string }) =>
+  writeMarketing<{ status: string; api_key?: string; inbox_id: string; message: string }>("POST", "/email/agentmail/signup", data)
+
+export const agentMailVerifyResult = (data: { otp_code: string }) =>
+  writeMarketing<{ status: string; inbox_id: string; is_verified: boolean; message: string }>("POST", "/email/agentmail/verify", data)
+
+export const agentMailConfigureResult = (data: { api_key?: string; inbox_id?: string }) =>
+  writeMarketing<{ status: string; inbox_id: string; configured: boolean }>("POST", "/email/agentmail/config", data)
+
+/** Live batch row for polling: always bypasses the read cache. */
+export const getEmailBatch = (batchId: string) =>
+  request<Record<string, unknown>>(`/email/batches/${encodeURIComponent(batchId)}`, undefined, { force: true })

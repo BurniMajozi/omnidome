@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState } from "react"
 import {
   Mail, Key, CheckCircle2, AlertCircle, ShieldCheck, Zap, Copy,
   ExternalLink, RefreshCw, Send, Sparkles, Inbox, Server, Code,
@@ -11,161 +11,114 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { AgentMailView } from "../communication/mail/agentmail-view"
-import {
-  getAgentMailStatus, agentMailSignUp, agentMailVerify, agentMailConfigure,
-  sendEmailBatch, type AgentMailStatus
-} from "@/lib/marketing-api"
+import { agentMailSignUpResult, agentMailVerifyResult, agentMailConfigureResult, type AgentMailStatus } from "@/lib/marketing-api"
+import { useMarketingLoad } from "@/lib/use-marketing-load"
+import { useEmailBatch } from "@/lib/use-email-batch"
+import { describeMutationError } from "@/lib/marketing-state"
+import { NotConnected } from "@/components/ui/not-connected"
+
+type Notice = { kind: "ok" | "error"; text: string } | null
 
 export function AgentMailTab() {
-  const [status, setStatus] = useState<AgentMailStatus>({
-    configured: true,
-    inbox_id: "omnidome@agentmail.to",
-    is_verified: true,
-    base_url: "https://api.agentmail.to/v0",
-    provider: "agentmail",
-  })
-  const [loading, setLoading] = useState(false)
+  // Real provider state only. While it loads, or when the service is down, we
+  // show that, never a pretend-configured inbox.
+  const { value: statusLoad, reload: reloadStatus } = useMarketingLoad<AgentMailStatus>("/email/agentmail/status")
+  const [statusOverride, setStatusOverride] = useState<Partial<AgentMailStatus>>({})
+  const baseStatus: AgentMailStatus =
+    statusLoad.state === "ready"
+      ? statusLoad.data
+      : { configured: false, inbox_id: "", is_verified: false, base_url: "", provider: "" }
+  const status: AgentMailStatus = { ...baseStatus, ...statusOverride }
   const [copiedMcp, setCopiedMcp] = useState(false)
 
   // Sign up form
   const [humanEmail, setHumanEmail] = useState("")
-  const [username, setUsername] = useState("omnidome-agent")
+  const [username, setUsername] = useState("")
   const [signingUp, setSigningUp] = useState(false)
-  const [signUpResult, setSignUpResult] = useState<{ api_key?: string; inbox_id?: string; message?: string } | null>(null)
+  const [signUpNotice, setSignUpNotice] = useState<Notice>(null)
 
   // OTP verification form
   const [otpCode, setOtpCode] = useState("")
   const [verifying, setVerifying] = useState(false)
-  const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
+  const [verifyNotice, setVerifyNotice] = useState<Notice>(null)
 
   // Manual API Key config
   const [manualKey, setManualKey] = useState("")
   const [manualInbox, setManualInbox] = useState("")
   const [savingConfig, setSavingConfig] = useState(false)
-  const [configSuccess, setConfigSuccess] = useState(false)
+  const [configNotice, setConfigNotice] = useState<Notice>(null)
 
   // Test email sender
-  const [testRecipient, setTestRecipient] = useState("ops@omnidome.co.za")
-  const [sendingTest, setSendingTest] = useState(false)
-  const [testStatus, setTestStatus] = useState<string | null>(null)
+  const [testRecipient, setTestRecipient] = useState("")
+  const { view: testView, send: sendTestBatch } = useEmailBatch()
   const [surfaceMode, setSurfaceMode] = useState<"workspace" | "config">("workspace")
-
-  const loadStatus = async () => {
-    setLoading(true)
-    try {
-      const res = await getAgentMailStatus()
-      if (res) setStatus(res)
-    } catch (e) {
-      console.warn("Using local AgentMail state", e)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadStatus()
-  }, [])
 
   const handleSignUp = async () => {
     if (!humanEmail || !username) return
     setSigningUp(true)
-    setSignUpResult(null)
-    setVerifyMessage(null)
-    try {
-      const res = await agentMailSignUp({
-        human_email: humanEmail,
-        username: username.toLowerCase().replace(/[^a-z0-9_-]/g, ""),
-      })
-      if (res) {
-        setSignUpResult(res)
-        setStatus((prev) => ({
-          ...prev,
-          configured: true,
-          inbox_id: res.inbox_id,
-          is_verified: false,
-        }))
-      }
-    } catch (e) {
-      // optimistic simulation for local testing
-      const fakeInbox = `${username.toLowerCase()}@agentmail.to`
-      setSignUpResult({
-        api_key: "am_live_sample_key_unverified",
-        inbox_id: fakeInbox,
-        message: `6-digit OTP code dispatched to ${humanEmail}. Enter code below to complete verification.`,
-      })
-      setStatus((prev) => ({
-        ...prev,
-        configured: true,
-        inbox_id: fakeInbox,
-        is_verified: false,
-      }))
-    } finally {
-      setSigningUp(false)
+    setSignUpNotice(null)
+    setVerifyNotice(null)
+    const res = await agentMailSignUpResult({
+      human_email: humanEmail,
+      username: username.toLowerCase().replace(/[^a-z0-9_-]/g, ""),
+    })
+    setSigningUp(false)
+    if (!res.ok || !res.data) {
+      setSignUpNotice({ kind: "error", text: describeMutationError(res.status, res.error) })
+      return
     }
+    // The API key in the response is never rendered; only the real message.
+    setSignUpNotice({ kind: "ok", text: res.data.message || "Sign-up accepted by the provider." })
+    setStatusOverride((prev) => ({ ...prev, configured: true, inbox_id: res.data!.inbox_id, is_verified: false }))
+    reloadStatus()
   }
 
   const handleVerify = async () => {
     if (!otpCode || otpCode.length < 4) return
     setVerifying(true)
-    try {
-      const res = await agentMailVerify({ otp_code: otpCode })
-      setVerifyMessage(res?.message || "AgentMail verified successfully! Full external sending is enabled.")
-      setStatus((prev) => ({
-        ...prev,
-        is_verified: true,
-      }))
-    } catch (e) {
-      setVerifyMessage("AgentMail verified successfully! Full external sending is enabled.")
-      setStatus((prev) => ({
-        ...prev,
-        is_verified: true,
-      }))
-    } finally {
-      setVerifying(false)
+    setVerifyNotice(null)
+    const res = await agentMailVerifyResult({ otp_code: otpCode })
+    setVerifying(false)
+    if (!res.ok || !res.data) {
+      setVerifyNotice({ kind: "error", text: describeMutationError(res.status, res.error) })
+      return
+    }
+    if (res.data.is_verified) {
+      setVerifyNotice({ kind: "ok", text: res.data.message || "The provider confirmed the code." })
+      setStatusOverride((prev) => ({ ...prev, is_verified: true }))
+      reloadStatus()
+    } else {
+      setVerifyNotice({ kind: "error", text: res.data.message || "The provider did not verify this code." })
     }
   }
 
   const handleSaveManualConfig = async () => {
     setSavingConfig(true)
-    try {
-      await agentMailConfigure({
-        api_key: manualKey || undefined,
-        inbox_id: manualInbox || undefined,
-      })
-      setStatus((prev) => ({
-        ...prev,
-        configured: true,
-        inbox_id: manualInbox || prev.inbox_id,
-        is_verified: true,
-      }))
-      setConfigSuccess(true)
-      setTimeout(() => setConfigSuccess(false), 2500)
-    } catch (e) {
-      setConfigSuccess(true)
-      setTimeout(() => setConfigSuccess(false), 2500)
-    } finally {
-      setSavingConfig(false)
+    setConfigNotice(null)
+    const res = await agentMailConfigureResult({
+      api_key: manualKey || undefined,
+      inbox_id: manualInbox || undefined,
+    })
+    setSavingConfig(false)
+    if (!res.ok || !res.data) {
+      setConfigNotice({ kind: "error", text: describeMutationError(res.status, res.error) })
+      return
     }
+    setConfigNotice({ kind: "ok", text: `Saved (configured: ${res.data.configured ? "yes" : "no"}).` })
+    setManualKey("")
+    setStatusOverride({})
+    reloadStatus()
   }
 
   const handleSendTest = async () => {
-    if (!testRecipient) return
-    setSendingTest(true)
-    setTestStatus(null)
-    try {
-      await sendEmailBatch({
-        subject: `[AgentMail] Verification & Health Check from ${status.inbox_id}`,
-        body_html: `<h2>AgentMail Health Check</h2><p>Your AI Agent inbox (<b>${status.inbox_id}</b>) is connected and operating properly.</p>`,
-        recipients: [testRecipient],
-        from_name: "OminiDome Agent",
-        from_email: status.inbox_id,
-      })
-      setTestStatus(`Dispatched message from ${status.inbox_id} to ${testRecipient}`)
-    } catch (e) {
-      setTestStatus(`Dispatched message from ${status.inbox_id} to ${testRecipient}`)
-    } finally {
-      setSendingTest(false)
-    }
+    if (!testRecipient || !status.inbox_id) return
+    await sendTestBatch({
+      subject: `[AgentMail] Health check from ${status.inbox_id}`,
+      body_html: `<h2>AgentMail health check</h2><p>Test message from the inbox <b>${status.inbox_id}</b>.</p>`,
+      recipients: [testRecipient],
+      from_name: "OmniDome Agent",
+      from_email: status.inbox_id,
+    })
   }
 
   const copyMcpConfig = () => {
@@ -214,7 +167,7 @@ export function AgentMailTab() {
         </div>
 
         <Badge variant="secondary" className="text-xs bg-primary/10 text-primary border-primary/20">
-          AgentMail v0 Active
+          {statusLoad.state === "loading" ? "Checking…" : statusLoad.state !== "ready" ? "Status unavailable" : status.is_verified ? "AgentMail verified" : status.configured ? "AgentMail configured" : "AgentMail not configured"}
         </Badge>
       </div>
 
@@ -224,6 +177,9 @@ export function AgentMailTab() {
         </div>
       ) : (
         <div className="space-y-6">
+          {statusLoad.state !== "ready" && statusLoad.state !== "loading" && (
+            <NotConnected loadable={statusLoad} service="The marketing service" onRetry={reloadStatus} />
+          )}
           {/* Header */}
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -260,20 +216,20 @@ export function AgentMailTab() {
             <Inbox className="h-4 w-4 text-blue-600" />
           </div>
           <div className="mt-2 text-base font-bold font-mono text-foreground truncate">
-            {status.inbox_id}
+            {status.inbox_id || "Not configured"}
           </div>
           <p className="text-[11px] text-muted-foreground mt-1">Native sending & reply address</p>
         </div>
 
         <div className="p-4 rounded-xl border bg-card">
           <div className="flex items-center justify-between text-xs text-muted-foreground uppercase font-medium">
-            <span>Free Tier Quota</span>
+            <span>Provider</span>
             <Sparkles className="h-4 w-4 text-amber-500" />
           </div>
-          <div className="mt-2 text-base font-bold text-foreground">
-            3 Inboxes · 3,000 msgs/mo
+          <div className="mt-2 text-base font-bold text-foreground truncate">
+            {status.provider || "Not reported"}
           </div>
-          <p className="text-[11px] text-muted-foreground mt-1">Included for development & testing</p>
+          <p className="text-[11px] text-muted-foreground mt-1 truncate">{status.base_url || "No provider URL reported"}</p>
         </div>
 
         <div className="p-4 rounded-xl border bg-card">
@@ -336,6 +292,11 @@ export function AgentMailTab() {
               {signingUp ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Mail className="h-4 w-4 mr-2" />}
               Sign Up AI Agent
             </Button>
+            {signUpNotice && (
+              <p role={signUpNotice.kind === "error" ? "alert" : "status"} className={`text-xs font-medium ${signUpNotice.kind === "error" ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                {signUpNotice.text}
+              </p>
+            )}
 
             {/* OTP Verification Block */}
             <div className="pt-4 border-t space-y-3">
@@ -365,9 +326,9 @@ export function AgentMailTab() {
                   {verifying ? "Verifying..." : "Verify OTP"}
                 </Button>
               </div>
-              {verifyMessage && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                  {verifyMessage}
+              {verifyNotice && (
+                <p role={verifyNotice.kind === "error" ? "alert" : "status"} className={`text-xs font-medium ${verifyNotice.kind === "error" ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                  {verifyNotice.text}
                 </p>
               )}
             </div>
@@ -410,8 +371,13 @@ export function AgentMailTab() {
                 disabled={savingConfig || (!manualKey && !manualInbox)}
                 className="w-full text-xs"
               >
-                {configSuccess ? "Saved Successfully!" : "Save Credentials"}
+                {savingConfig ? "Saving…" : "Save Credentials"}
               </Button>
+              {configNotice && (
+                <p role={configNotice.kind === "error" ? "alert" : "status"} className={`text-xs font-medium ${configNotice.kind === "error" ? "text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                  {configNotice.text}
+                </p>
+              )}
             </CardContent>
           </Card>
 
@@ -433,18 +399,21 @@ export function AgentMailTab() {
                   />
                   <Button
                     onClick={handleSendTest}
-                    disabled={sendingTest || !testRecipient}
+                    disabled={testView.phase === "sending" || testView.phase === "tracking" || !testRecipient || !status.inbox_id}
                     size="sm"
                     className="bg-[#0066cc] text-white shrink-0"
                   >
-                    {sendingTest ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Send"}
+                    {testView.phase === "sending" || testView.phase === "tracking" ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Send"}
                   </Button>
                 </div>
               </div>
-              {testStatus && (
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                  {testStatus}
+              {testView.message && (
+                <p role="status" className={`text-xs font-medium ${testView.info && testView.info.failed ? "text-amber-500" : "text-emerald-600 dark:text-emerald-400"}`}>
+                  {testView.message}
                 </p>
+              )}
+              {testView.error && (
+                <p role="alert" className="text-xs font-medium text-red-400">{testView.error}</p>
               )}
             </CardContent>
           </Card>
