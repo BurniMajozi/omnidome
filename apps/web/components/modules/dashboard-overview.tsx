@@ -1,6 +1,5 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import { StatCard } from "@/components/dashboard/stat-card"
 import { ModuleCard } from "@/components/dashboard/module-card"
 import { ActivityFeed } from "@/components/dashboard/activity-feed"
@@ -27,181 +26,54 @@ import {
   Bot,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { useModuleData } from "@/lib/module-data"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
+import { tileLabel, type Loadable } from "@/lib/service-state"
+import { loadCrmInsights, loadCrmSummary, loadEscalations, loadNetworkDevices, useOps } from "@/lib/ops-api"
+import {
+  loadCcQueues,
+  loadCcSessions,
+  loadCrmCustomerTotal,
+  loadOverviewCampaigns,
+  loadOverviewDeals,
+  loadOverviewEmployees,
+} from "@/lib/overview-api"
+import {
+  buildBriefing,
+  buildInsights,
+  countStatus,
+  customerTotalOf,
+  dealTotals,
+  fmtZar,
+  listOf,
+  topDeals,
+  type DealRow,
+} from "@/lib/overview-derive"
+import {
+  escalationStats,
+  fmtInt,
+  networkDeviceStats,
+  statusCountsFromSummary,
+  type EscalationRow,
+  type NetworkDeviceRow,
+} from "@/lib/ops-derive"
+import { avgWaitSeconds, callsToday, formatDuration, unwrapList, type CcQueue, type CcSession } from "@/lib/call-center-metrics"
 
-const defaultModuleCards = [
-  {
-    title: "Sales",
-    description: "Track deals, manage pipeline and forecast revenue",
-    iconKey: "sales",
-    stats: [
-      { label: "Monthly Revenue", value: "R2.84M" },
-      { label: "New Deals", value: "47" },
-    ],
-    features: ["Lead tracking", "Quote generation", "Commission reports"],
-  },
-  {
-    title: "CRM",
-    description: "Manage customer relationships and interactions",
-    iconKey: "crm",
-    stats: [
-      { label: "Total Customers", value: "12,847" },
-      { label: "Active Leads", value: "342" },
-    ],
-    features: ["Contact management", "Customer timeline", "Segmentation"],
-  },
-  {
-    title: "Service",
-    description: "Handle support tickets and service requests",
-    iconKey: "service",
-    stats: [
-      { label: "Open Tickets", value: "128" },
-      { label: "Avg Resolution", value: "4.2h" },
-    ],
-    features: ["Ticket queue", "SLA tracking", "Knowledge base"],
-  },
-  {
-    title: "Network",
-    description: "Monitor infrastructure and network performance",
-    iconKey: "network",
-    stats: [
-      { label: "Uptime", value: "99.97%" },
-      { label: "Active Nodes", value: "1,247" },
-    ],
-    features: ["Real-time monitoring", "Outage alerts", "Capacity planning"],
-  },
-  {
-    title: "Call Center",
-    description: "Manage inbound and outbound call operations",
-    iconKey: "call-center",
-    stats: [
-      { label: "Calls Today", value: "1,847" },
-      { label: "Avg Wait Time", value: "42s" },
-    ],
-    features: ["Call routing", "Agent performance", "Call recording"],
-  },
-  {
-    title: "Marketing",
-    description: "Run campaigns and track marketing performance",
-    iconKey: "marketing",
-    stats: [
-      { label: "Active Campaigns", value: "12" },
-      { label: "Conversion Rate", value: "3.2%" },
-    ],
-    features: ["Email campaigns", "Analytics", "A/B testing"],
-  },
-  {
-    title: "Compliance",
-    description: "Ensure regulatory compliance and data security",
-    iconKey: "compliance",
-    stats: [
-      { label: "Compliance Score", value: "94%" },
-      { label: "Open Issues", value: "7" },
-    ],
-    features: ["Audit trails", "Policy management", "Risk assessment"],
-  },
-  {
-    title: "Talent",
-    description: "Manage HR, recruitment and employee performance",
-    iconKey: "talent",
-    stats: [
-      { label: "Total Employees", value: "248" },
-      { label: "Open Positions", value: "14" },
-    ],
-    features: ["Recruitment", "Performance reviews", "Training"],
-  },
-  {
-    title: "Finance",
-    description: "GAAP reporting, revenue recognition, and FP&A",
-    iconKey: "finance",
-    stats: [
-      { label: "EBITA Margin", value: "38.5%" },
-      { label: "Cash Runway", value: "14 months" },
-    ],
-    features: ["Statements", "Scenario planning", "Expense controls"],
-  },
-]
-
-const defaultDashboardStats = [
-  {
-    id: "revenue",
-    title: "Total Revenue (ARR/MRR)",
-    value: "R22.5M",
-    change: "+18.5%",
-    changeType: "positive" as const,
-    iconKey: "revenue",
-    description: "vs last month",
-  },
-  {
-    id: "subscribers",
-    title: "Active Subscribers",
-    value: "24,847",
-    change: "+8.2%",
-    changeType: "positive" as const,
-    iconKey: "subscribers",
-    description: "vs last month",
-  },
-  {
-    id: "tickets",
-    title: "Open Tickets",
-    value: "128",
-    change: "-24%",
-    changeType: "positive" as const,
-    iconKey: "tickets",
-    description: "vs last week",
-  },
-  {
-    id: "uptime",
-    title: "Network Uptime",
-    value: "99.97%",
-    change: "+0.02%",
-    changeType: "positive" as const,
-    iconKey: "uptime",
-    description: "operational",
-  },
-]
-
-const recentHighValueDeals = [
-  {
-    client: "Telkom SA",
-    type: "Fiber Backbone Expansion",
-    amount: "R 850,000",
-    stage: "Closed Won",
-    stageColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    rep: "John Smith",
-  },
-  {
-    client: "MTN Group",
-    type: "Enterprise Bundle (50 Sites)",
-    amount: "R 1,200,000",
-    stage: "Negotiation",
-    stageColor: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-    rep: "Sarah Jones",
-  },
-  {
-    client: "Vodacom",
-    type: "Primary Data Center Link",
-    amount: "R 2,400,000",
-    stage: "Proposal Sent",
-    stageColor: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-    rep: "Mike Brown",
-  },
-  {
-    client: "Dimension Data",
-    type: "Managed Cloud Connectivity",
-    amount: "R 680,000",
-    stage: "Closed Won",
-    stageColor: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-    rep: "Lisa Chen",
-  },
-]
-
-const dashboardStatIconMap = {
-  revenue: TrendingUp,
-  subscribers: Users,
-  tickets: Ticket,
-  uptime: Activity,
+/** Text for a tile value slot: the figure when ready, an honest state label otherwise. */
+function tileText<T>(l: Loadable<T>, fmt: (d: T) => string): string {
+  return l.state === "ready" ? fmt(l.data) : (tileLabel(l) ?? "—")
 }
+
+const STATIC_MODULES = [
+  { title: "Sales", description: "Track deals, manage pipeline and forecast revenue", iconKey: "sales", features: ["Lead tracking", "Quote generation", "Commission reports"] },
+  { title: "CRM", description: "Manage customer relationships and interactions", iconKey: "crm", features: ["Contact management", "Customer timeline", "Segmentation"] },
+  { title: "Service", description: "Handle support tickets and service requests", iconKey: "service", features: ["Ticket queue", "SLA tracking", "Knowledge base"] },
+  { title: "Network", description: "Monitor infrastructure and network performance", iconKey: "network", features: ["Real-time monitoring", "Outage alerts", "Capacity planning"] },
+  { title: "Call Center", description: "Manage inbound and outbound call operations", iconKey: "call-center", features: ["Call routing", "Agent performance", "Call recording"] },
+  { title: "Marketing", description: "Run campaigns and track marketing performance", iconKey: "marketing", features: ["Email campaigns", "Analytics", "A/B testing"] },
+  { title: "Compliance", description: "Ensure regulatory compliance and data security", iconKey: "compliance", features: ["Audit trails", "Policy management", "Risk assessment"] },
+  { title: "Talent", description: "Manage HR, recruitment and employee performance", iconKey: "talent", features: ["Recruitment", "Performance reviews", "Training"] },
+  { title: "Finance", description: "GAAP reporting, revenue recognition, and FP&A", iconKey: "finance", features: ["Statements", "Scenario planning", "Expense controls"] },
+] as const
 
 const dashboardModuleIconMap = {
   sales: DollarSign,
@@ -216,81 +88,218 @@ const dashboardModuleIconMap = {
 }
 
 export function DashboardOverview() {
-  const { data } = useModuleData("dashboard", {
-    stats: defaultDashboardStats,
-    modules: defaultModuleCards,
+  // Every hook runs unconditionally, in the same order, on every render.
+  const deals = useOps(loadOverviewDeals)
+  const crmTotal = useOps(loadCrmCustomerTotal)
+  const crmSummary = useOps(loadCrmSummary)
+  const crmInsights = useOps(loadCrmInsights)
+  const escalations = useOps(loadEscalations)
+  const netDevices = useOps(loadNetworkDevices)
+  const ccSessions = useOps(loadCcSessions)
+  const ccQueues = useOps(loadCcQueues)
+  const campaigns = useOps(loadOverviewCampaigns)
+  const employees = useOps(loadOverviewEmployees)
+
+  const dealRows: DealRow[] | null = deals.value.state === "ready" ? listOf<DealRow>(deals.value.data) : null
+  const totals = dealRows ? dealTotals(dealRows) : null
+  const customerTotal: number | null = crmTotal.value.state === "ready" ? customerTotalOf(crmTotal.value.data) : null
+  const crmRecs = crmInsights.value.state === "ready" ? (crmInsights.value.data?.aiRecommendations ?? []) : null
+
+  const briefing = buildBriefing(dealRows, customerTotal)
+  const suggestions = buildInsights(dealRows, crmRecs)
+  const topDealRows = dealRows ? topDeals(dealRows, 4) : []
+  const briefingLoading = deals.value.state === "loading" || crmTotal.value.state === "loading"
+
+  const escStats =
+    escalations.value.state === "ready" ? escalationStats(escalations.value.data.rows as EscalationRow[]) : null
+  const netStats =
+    netDevices.value.state === "ready" ? networkDeviceStats(netDevices.value.data.rows as NetworkDeviceRow[]) : null
+  const ccNow = new Date()
+
+  const retryDeals = () => {
+    deals.reload()
+  }
+
+  const dealsTileText = (fmt: (t: ReturnType<typeof dealTotals>) => string) =>
+    tileText(deals.value, (d) => fmt(dealTotals(listOf<DealRow>(d) ?? [])))
+
+  const modules = STATIC_MODULES.map((m) => {
+    let stats: { label: string; value: string }[]
+    switch (m.iconKey) {
+      case "sales":
+        stats = [
+          { label: "Won Revenue", value: dealsTileText((t) => fmtZar(t.wonValue)) },
+          { label: "Open Deals", value: dealsTileText((t) => fmtInt(t.open)) },
+        ]
+        break
+      case "crm":
+        stats = [
+          { label: "Total Customers", value: tileText(crmTotal.value, (d) => fmtInt(customerTotalOf(d) ?? 0)) },
+          {
+            label: "Active Customers",
+            value: tileText(crmSummary.value, (d) => {
+              const c = statusCountsFromSummary(d?.flashcardKPIs)
+              return c ? fmtInt(c.active) : "No data yet"
+            }),
+          },
+        ]
+        break
+      case "service":
+        stats = [
+          {
+            label: "Open Escalations",
+            value: tileText(escalations.value, (d) => fmtInt(escalationStats(d.rows as EscalationRow[]).open)),
+          },
+          {
+            label: "Avg Resolution",
+            value: tileText(escalations.value, (d) => {
+              const h = escalationStats(d.rows as EscalationRow[]).avgResolutionHours
+              return h === null ? "No data yet" : `${h.toFixed(1)}h`
+            }),
+          },
+        ]
+        break
+      case "network":
+        stats = [
+          {
+            label: "Active Devices",
+            value: tileText(netDevices.value, (d) => fmtInt(networkDeviceStats(d.rows as NetworkDeviceRow[]).active)),
+          },
+          { label: "Registered Devices", value: tileText(netDevices.value, (d) => fmtInt(d.total)) },
+        ]
+        break
+      case "call-center":
+        stats = [
+          {
+            label: "Calls Today",
+            value: tileText(ccSessions.value, (d) => fmtInt(callsToday(unwrapList<CcSession>(d, "sessions"), ccNow))),
+          },
+          {
+            label: "Avg Wait Time",
+            value: tileText(ccQueues.value, (d) => {
+              const w = avgWaitSeconds(unwrapList<CcQueue>(d, "queues"))
+              return w === null ? "No data yet" : formatDuration(w)
+            }),
+          },
+        ]
+        break
+      case "marketing":
+        stats = [
+          {
+            label: "Active Campaigns",
+            value: tileText(campaigns.value, (d) => fmtInt(countStatus(listOf<{ status?: string }>(d) ?? [], "active"))),
+          },
+          { label: "Total Campaigns", value: tileText(campaigns.value, (d) => fmtInt((listOf(d) ?? []).length)) },
+        ]
+        break
+      case "talent":
+        stats = [
+          { label: "Total Employees", value: tileText(employees.value, (d) => fmtInt((listOf(d) ?? []).length)) },
+          {
+            label: "Active Employees",
+            value: tileText(employees.value, (d) => fmtInt(countStatus(listOf<{ status?: string }>(d) ?? [], "active"))),
+          },
+        ]
+        break
+      default:
+        // Compliance / Finance: live figures are shown inside their modules.
+        stats = [{ label: "Live figures", value: "In module" }]
+    }
+    return {
+      ...m,
+      features: [...m.features],
+      stats,
+      icon: dashboardModuleIconMap[m.iconKey as keyof typeof dashboardModuleIconMap] ?? DollarSign,
+    }
   })
 
-  // Headline KPI stats come from the real backend (sales + crm), not the
-  // Supabase module_data blob above -- see app/api/dashboard-stats. Falls
-  // back to the blob/defaults if the live fetch fails, same resilience
-  // pattern as useModuleData itself.
-  const [liveStats, setLiveStats] = useState<typeof defaultDashboardStats | null>(null)
-  const [liveDeals, setLiveDeals] = useState<typeof recentHighValueDeals | null>(null)
-  const [executiveSummary, setExecutiveSummary] = useState<string | null>(null)
-  const [aiSuggestions, setAiSuggestions] = useState<any[] | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    fetch("/api/dashboard-stats", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((payload) => {
-        if (!cancelled && payload) {
-          if (payload.stats) setLiveStats(payload.stats)
-          if (payload.recentDeals) setLiveDeals(payload.recentDeals)
-          if (payload.executiveSummary) setExecutiveSummary(payload.executiveSummary)
-          if (payload.aiSuggestions) setAiSuggestions(payload.aiSuggestions)
-        }
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  const statsWithIcons = (liveStats ?? data.stats).map((stat) => ({
-    ...stat,
-    icon: dashboardStatIconMap[stat.iconKey as keyof typeof dashboardStatIconMap] ?? TrendingUp,
-  }))
-
-  const modulesWithIcons = data.modules.map((module) => ({
-    ...module,
-    icon: dashboardModuleIconMap[module.iconKey as keyof typeof dashboardModuleIconMap] ?? DollarSign,
-  }))
+  // KPI strip: real values or an honest state. Trend chips are omitted (no history is read).
+  const kpis = [
+    {
+      id: "revenue",
+      title: "Won Revenue",
+      loadable: deals.value as Loadable<unknown>,
+      value: totals ? fmtZar(totals.wonValue) : "",
+      description: totals ? `${totals.won} won of ${totals.count} deals` : "",
+      icon: TrendingUp,
+    },
+    {
+      id: "subscribers",
+      title: "Customers",
+      loadable: crmTotal.value as Loadable<unknown>,
+      value: customerTotal !== null ? fmtInt(customerTotal) : "",
+      description: "from CRM",
+      icon: Users,
+    },
+    {
+      id: "tickets",
+      title: "Open Escalations",
+      loadable: escalations.value as Loadable<unknown>,
+      value: escStats ? fmtInt(escStats.open + escStats.inProgress) : "",
+      description: escStats ? `${fmtInt(escStats.total)} total` : "",
+      icon: Ticket,
+    },
+    {
+      id: "uptime",
+      title: "Active Network Devices",
+      loadable: netDevices.value as Loadable<unknown>,
+      value: netStats ? `${fmtInt(netStats.active)} of ${fmtInt(netStats.total)}` : "",
+      description: "network service",
+      icon: Activity,
+    },
+  ]
 
   return (
     <div className="space-y-6">
       {/* ── 1. Top KPI Command Strip ─────────────────────────────────── */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {statsWithIcons.map((stat) => (
-          <StatCard
-            key={stat.id}
-            title={stat.title}
-            value={stat.value}
-            change={stat.change}
-            changeType={stat.changeType}
-            icon={stat.icon}
-            description={stat.description}
-          />
-        ))}
+        {kpis.map((k) => {
+          const st = k.loadable.state
+          return (
+            <StatCard
+              key={k.id}
+              title={k.title}
+              value={st === "ready" ? k.value : (tileLabel(k.loadable) ?? "")}
+              change=""
+              changeType="neutral"
+              icon={k.icon}
+              description={st === "ready" ? k.description : undefined}
+              loading={st === "loading"}
+              muted={st !== "ready"}
+            />
+          )
+        })}
       </div>
 
-      {/* ── 2. AI Executive Briefing & Autonomous Suggestions (Driven by Orchestrator) ── */}
+      {/* ── 2. Executive briefing + suggested actions (real data only) ── */}
       <div className="rounded-xl border border-primary/30 bg-gradient-to-r from-primary/10 via-background to-secondary/30 p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1.5 max-w-3xl">
+          <div className="max-w-3xl space-y-1.5">
             <div className="flex items-center gap-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/20 text-primary">
                 <Sparkles className="h-4 w-4" />
               </div>
-              <h2 className="text-base font-bold text-foreground">Executive AI Briefing (InsightDome)</h2>
-              <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400 border border-emerald-500/20">
-                Orchestrator Connected
-              </span>
+              <h2 className="text-base font-bold text-foreground">Executive Briefing</h2>
+              {briefing && (
+                <span className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-400">
+                  From live sales and CRM data
+                </span>
+              )}
             </div>
-            <p className="text-xs leading-relaxed text-muted-foreground font-medium">
-              {executiveSummary || "AI Agent Orchestrator is synthesizing telemetry, pipeline data, and workforce status across all operational units..."}
-            </p>
+            {briefingLoading && !briefing ? (
+              <div className="h-4 w-80 max-w-full animate-pulse rounded bg-muted" aria-label="Loading" />
+            ) : briefing ? (
+              <p className="text-xs font-medium leading-relaxed text-muted-foreground">{briefing}</p>
+            ) : (
+              <div className="flex items-center gap-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Not connected. The sales and CRM services are not reachable, so no briefing can be produced.
+                </p>
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { deals.reload(); crmTotal.reload() }}>
+                  Retry
+                </Button>
+              </div>
+            )}
           </div>
           <Button
             size="sm"
@@ -304,56 +313,53 @@ export function DashboardOverview() {
                 }),
               )
             }}
-            className="h-8 gap-1.5 text-xs bg-primary hover:bg-primary/90 text-primary-foreground font-semibold shadow-xs shrink-0"
+            className="h-8 shrink-0 gap-1.5 bg-primary text-xs font-semibold text-primary-foreground shadow-xs hover:bg-primary/90"
           >
             <Bot className="h-3.5 w-3.5" />
             Chat with InsightDome
           </Button>
         </div>
 
-        {/* AI Actionable Suggestions Grid */}
-        {aiSuggestions && aiSuggestions.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-border/60">
+        {/* Suggested actions, generated only from real deals / CRM rows */}
+        {suggestions.length > 0 && (
+          <div className="mt-4 border-t border-border/60 pt-4">
             <div className="mb-2.5 flex items-center justify-between">
-              <span className="text-xs font-semibold text-foreground uppercase tracking-wider flex items-center gap-1.5">
+              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-foreground">
                 <Zap className="h-3.5 w-3.5 text-amber-400" />
-                Autonomous AI Suggestions
+                Suggested Actions
               </span>
-              <span className="text-[11px] text-muted-foreground">Click to execute or review with specialized agent</span>
+              <span className="text-[11px] text-muted-foreground">Click to review with an agent</span>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {aiSuggestions.map((sug) => (
+              {suggestions.map((sug) => (
                 <div
                   key={sug.id}
                   onClick={() => {
                     window.dispatchEvent(
                       new CustomEvent("open-agent-chat", {
-                        detail: {
-                          agent: sug.agentType || "executive",
-                          prompt: sug.actionPrompt || sug.description,
-                        },
+                        detail: { agent: sug.agentType || "executive", prompt: sug.actionPrompt || sug.description },
                       }),
                     )
                   }}
-                  className="group flex flex-col justify-between rounded-lg border border-border/80 bg-background/60 p-3 hover:border-primary/50 hover:bg-secondary/40 transition-all cursor-pointer shadow-xs"
+                  className="group flex cursor-pointer flex-col justify-between rounded-lg border border-border/80 bg-background/60 p-3 shadow-xs transition-all hover:border-primary/50 hover:bg-secondary/40"
                 >
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-primary uppercase">{sug.category}</span>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded border ${sug.impact === "high" ? "bg-red-500/10 text-red-400 border-red-500/20" : "bg-blue-500/10 text-blue-400 border-blue-500/20"}`}>
+                      <span className="text-[10px] font-semibold uppercase text-primary">{sug.category}</span>
+                      <span
+                        className={`rounded border px-1.5 py-0.5 text-[9px] font-bold ${sug.impact === "high" ? "border-red-500/20 bg-red-500/10 text-red-400" : "border-blue-500/20 bg-blue-500/10 text-blue-400"}`}
+                      >
                         {sug.impact} impact
                       </span>
                     </div>
-                    <h4 className="text-xs font-semibold text-foreground group-hover:text-primary transition-colors line-clamp-1">
+                    <h4 className="line-clamp-2 text-xs font-semibold text-foreground transition-colors group-hover:text-primary">
                       {sug.title}
                     </h4>
-                    <p className="text-[11px] text-muted-foreground line-clamp-2">
-                      {sug.description}
-                    </p>
+                    <p className="line-clamp-2 text-[11px] text-muted-foreground">{sug.description}</p>
                   </div>
-                  <div className="mt-2.5 pt-2 border-t border-border/40 flex items-center justify-between text-[11px] font-medium text-primary">
-                    <span>Act with agent</span>
-                    <ArrowRight className="h-3 w-3 group-hover:translate-x-0.5 transition-transform" />
+                  <div className="mt-2.5 flex items-center justify-between border-t border-border/40 pt-2 text-[11px] font-medium text-primary">
+                    <span>Review with agent</span>
+                    <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
                   </div>
                 </div>
               ))}
@@ -365,14 +371,12 @@ export function DashboardOverview() {
       {/* ── 3. Executive Approval Queue ('Needs You' Review Inbox) ──── */}
       <ExecutiveApprovalQueue />
 
-      {/* ── 4. Hero Sales Graph + Live Activity & Quick Actions (CX Core) ─ */}
+      {/* ── 4. Sales chart + deals, activity & quick actions ─────────── */}
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Left 2 Cols: Main Sales Chart & Deal Highlights */}
         <div className="space-y-6 lg:col-span-2">
-          {/* Main Sales Performance Chart (Live) */}
-          <QuickStats />
+          <QuickStats deals={deals.value} onRetry={retryDeals} />
 
-          {/* High-Value Deals In Flight (Sales Pipeline Spotlight) */}
+          {/* Top deals by value (real sales rows) */}
           <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -380,45 +384,56 @@ export function DashboardOverview() {
                   <Briefcase className="h-4 w-4" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-foreground">High-Value Deals in Pipeline</h3>
-                  <p className="text-xs text-muted-foreground">Top active deal proposals from live sales database</p>
+                  <h3 className="text-base font-semibold text-foreground">Top Deals by Value</h3>
+                  <p className="text-xs text-muted-foreground">Largest deals in the sales database</p>
                 </div>
               </div>
-              <span className="text-xs font-semibold text-emerald-400">
-                Live Deals ({(liveDeals ?? recentHighValueDeals).length})
-              </span>
+              {dealRows && (
+                <span className="text-xs font-semibold text-emerald-400">Deals ({dealRows.length})</span>
+              )}
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              {(liveDeals ?? recentHighValueDeals).map((deal) => (
-                <div
-                  key={deal.client}
-                  className="group relative flex flex-col justify-between rounded-lg border border-border/80 bg-secondary/20 p-3.5 transition-all hover:border-primary/40 hover:bg-secondary/35"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="space-y-0.5">
-                      <span className="text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
-                        {deal.client}
-                      </span>
-                      <p className="text-xs text-muted-foreground line-clamp-1">{deal.type}</p>
+            {deals.value.state !== "ready" ? (
+              <NotConnected loadable={deals.value} service="The sales service" onRetry={retryDeals} />
+            ) : topDealRows.length === 0 ? (
+              <NoDataYet message="No deals yet" />
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {topDealRows.map((deal, i) => (
+                  <div
+                    key={`${deal.client}-${i}`}
+                    className="group relative flex flex-col justify-between rounded-lg border border-border/80 bg-secondary/20 p-3.5 transition-all hover:border-primary/40 hover:bg-secondary/35"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <span className="text-sm font-semibold text-foreground transition-colors group-hover:text-primary">
+                          {deal.client}
+                        </span>
+                        <p className="line-clamp-1 text-xs text-muted-foreground">{deal.type}</p>
+                      </div>
+                      <span className="shrink-0 text-sm font-bold text-foreground">{deal.amount}</span>
                     </div>
-                    <span className="text-sm font-bold text-foreground shrink-0">{deal.amount}</span>
+                    <div className="mt-3 flex items-center justify-between border-t border-border/50 pt-2 text-xs">
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          deal.won
+                            ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+                            : "border-blue-500/20 bg-blue-500/10 text-blue-400"
+                        }`}
+                      >
+                        {deal.stage}
+                      </span>
+                      {deal.rep && <span className="text-muted-foreground">Rep: {deal.rep}</span>}
+                    </div>
                   </div>
-                  <div className="mt-3 flex items-center justify-between pt-2 border-t border-border/50 text-xs">
-                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold ${deal.stageColor}`}>
-                      {deal.stage}
-                    </span>
-                    <span className="text-muted-foreground">Rep: {deal.rep}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Right 1 Col: Live Activity Feed & Executive Quick Actions */}
+        {/* Right 1 Col: Activity Feed & Executive Quick Actions */}
         <div className="space-y-6">
-          {/* Executive Quick Actions */}
           <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
             <div className="mb-3 flex items-center gap-2">
               <Zap className="h-4 w-4 text-primary" />
@@ -445,7 +460,7 @@ export function DashboardOverview() {
                 onClick={() => {
                   window.dispatchEvent(new CustomEvent("open-agent-chat", { detail: { prompt: "Provide a quick summary of this month's revenue and sales forecasts." } }))
                 }}
-                className="flex items-center justify-between rounded-lg border border-border/70 bg-secondary/30 px-3.5 py-2.5 text-xs font-medium text-foreground transition hover:border-primary/50 hover:bg-secondary/60 cursor-pointer text-left"
+                className="flex cursor-pointer items-center justify-between rounded-lg border border-border/70 bg-secondary/30 px-3.5 py-2.5 text-left text-xs font-medium text-foreground transition hover:border-primary/50 hover:bg-secondary/60"
               >
                 <div className="flex items-center gap-2.5">
                   <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-400">
@@ -458,17 +473,16 @@ export function DashboardOverview() {
             </div>
           </div>
 
-          {/* Activity Feed */}
           <ActivityFeed />
         </div>
       </div>
 
-      {/* ── 3. Operational Support Tickets ───────────────────────────── */}
+      {/* ── 5. Recent escalations ────────────────────────────────────── */}
       <div className="rounded-xl">
         <TicketsTable />
       </div>
 
-      {/* ── 4. Platform Modules Directory ────────────────────────────── */}
+      {/* ── 6. Platform Modules Directory ────────────────────────────── */}
       <div>
         <div className="mb-4 flex items-center justify-between">
           <div>
@@ -477,7 +491,7 @@ export function DashboardOverview() {
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {modulesWithIcons.map((module) => (
+          {modules.map((module) => (
             <ModuleCard key={module.title} {...module} />
           ))}
         </div>

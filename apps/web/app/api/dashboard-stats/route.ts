@@ -1,6 +1,7 @@
 import { devFallbackAllowed } from "@/lib/dev-identity"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextResponse } from "next/server"
+import { buildBriefing, buildInsights, customerTotalOf, dealTotals, fmtZar, topDeals } from "@/lib/overview-derive"
 
 /**
  * Real headline stats for the Dashboard Overview, computed from the actual
@@ -9,9 +10,10 @@ import { NextResponse } from "next/server"
  * became unreachable (its Supabase project was paused) -- rather than patch
  * around that specific outage, this replaces the two stats that ARE
  * computable from real data (revenue, subscribers) with genuine numbers, and
- * is honest ("neutral"/"—") about the two that need services not running
- * locally (support tickets, network uptime) rather than showing fabricated
- * placeholder numbers as if they were real.
+ * is honest ("—") where a source is unreachable. The Overview page itself now
+ * reads each tile from its own service client-side (see lib/overview-api.ts)
+ * so it can distinguish loading / not running / error; this route stays as a
+ * real-data-only server aggregate (no invented suggestions or capabilities).
  */
 
 const SALES_SERVICE_URL = process.env.SALES_SERVICE_URL || "http://sales:8002"
@@ -52,143 +54,50 @@ async function fetchJson(url: string, headers: HeadersInit): Promise<unknown | n
 export async function GET(request: Request) {
   const headers = headersFor(request)
 
-  const [deals, customers] = await Promise.all([
+  const [deals, customers, crmInsights] = await Promise.all([
     fetchJson(`${SALES_SERVICE_URL}/deals`, headers),
-    fetchJson(`${CRM_SERVICE_URL}/customers`, headers),
+    fetchJson(`${CRM_SERVICE_URL}/customers?page=1&page_size=1`, headers),
+    fetchJson(`${CRM_SERVICE_URL}/customers/insights`, headers),
   ])
 
-  const dealsArr = Array.isArray(deals) ? deals : []
-  const totalRevenue = dealsArr.reduce((sum: number, d: any) => {
-    const v = Number.parseFloat(d?.value_zar ?? "0")
-    return sum + (Number.isFinite(v) ? v : 0)
-  }, 0)
+  const dealsArr: any[] | null = Array.isArray(deals) ? deals : null
+  const customerCount = customerTotalOf(customers)
+  const t = dealsArr ? dealTotals(dealsArr) : null
 
-  // CRM's /customers returns a paginated envelope ({items, total, page, ...}),
-  // not a raw array -- read .total (falls back to items.length) so a real
-  // empty result (total: 0) is distinguished from the service being down.
-  let customerCount: number | null = null
-  if (customers && typeof customers === "object") {
-    const c = customers as any
-    if (typeof c.total === "number") customerCount = c.total
-    else if (Array.isArray(c.items)) customerCount = c.items.length
-  } else if (Array.isArray(customers)) {
-    customerCount = customers.length
-  }
-
+  // Only tiles computable from the sales + crm services. Tickets, uptime and the
+  // rest are NOT reported here: the Overview page reads them from their own
+  // services with explicit loading / not-running states.
   const stats: Stat[] = [
     {
       id: "revenue",
-      title: "Total Revenue (Open + Closed Deals)",
-      value: dealsArr.length > 0 || deals !== null
-        ? `R${totalRevenue.toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`
-        : "—",
-      change: deals === null ? "" : `${dealsArr.length} deal${dealsArr.length === 1 ? "" : "s"}`,
-      changeType: deals === null ? "neutral" : "positive",
+      title: "Won Revenue",
+      value: t ? fmtZar(t.wonValue) : "—",
+      change: "",
+      changeType: "neutral",
       iconKey: "revenue",
-      description: deals === null ? "sales service unavailable" : "from sales pipeline",
+      description: t ? `${t.won} won of ${t.count} deals` : "sales service unavailable",
     },
     {
       id: "subscribers",
       title: "Active Customers",
       value: customerCount !== null ? customerCount.toLocaleString("en-ZA") : "—",
       change: "",
-      changeType: customerCount !== null ? "positive" : "neutral",
+      changeType: "neutral",
       iconKey: "subscribers",
       description: customerCount !== null ? "from CRM" : "crm service unavailable",
     },
-    {
-      id: "tickets",
-      title: "Open Tickets",
-      value: "—",
-      change: "",
-      changeType: "neutral",
-      iconKey: "tickets",
-      description: "support service not running locally",
-    },
-    {
-      id: "uptime",
-      title: "Network Uptime",
-      value: "—",
-      change: "",
-      changeType: "neutral",
-      iconKey: "uptime",
-      description: "network telemetry not running locally",
-    },
   ]
 
-  const openDeals = dealsArr.filter((d: any) => d.status === "OPEN")
-  const wonDeals = dealsArr.filter((d: any) => d.status === "WON")
-  const openRevenue = openDeals.reduce((sum: number, d: any) => sum + (Number.parseFloat(d?.value_zar ?? "0") || 0), 0)
-
-  // Map real top deals by value
-  const recentDeals = [...dealsArr]
-    .sort((a: any, b: any) => (Number.parseFloat(b?.value_zar ?? "0") || 0) - (Number.parseFloat(a?.value_zar ?? "0") || 0))
-    .slice(0, 4)
-    .map((d: any) => {
-      const isWon = d.status === "WON"
-      const val = Number.parseFloat(d.value_zar ?? "0") || 0
-      return {
-        client: d.name || "Commercial Account",
-        type: d.lead_reference ? `Lead ${d.lead_reference}` : (isWon ? "Closed Won Deal" : "Active Opportunity"),
-        amount: `R ${val.toLocaleString("en-ZA", { maximumFractionDigits: 0 })}`,
-        stage: d.stage_name || (isWon ? "Closed Won" : "In Pipeline"),
-        stageColor: isWon
-          ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
-          : "bg-blue-500/10 text-blue-400 border-blue-500/20",
-        rep: d.owner_name || "Sales Team",
-      }
-    })
-
-  // Executive summary driven by real metrics
-  const executiveSummary = (dealsArr.length > 0 || customerCount !== null)
-    ? `Active sales pipeline currently tracks R${totalRevenue.toLocaleString("en-ZA", { maximumFractionDigits: 0 })} across ${dealsArr.length} deals (${wonDeals.length} won, ${openDeals.length} open proposals). CRM records ${customerCount ?? 0} active customer accounts. InsightDome advises prioritizing the ${openDeals.length} in-flight pipeline opportunities and running automated web lead scans via Firecrawl.`
-    : "AI Agent Orchestrator is operational. Connect sales and CRM data streams to view live portfolio health."
-
-  // Dynamic AI Suggestions driven by orchestrator & live telemetry
-  const aiSuggestions = [
-    {
-      id: "sug-1",
-      title: "Accelerate In-Flight Commercial Deals",
-      description: `${openDeals.length} active proposals totaling R${openRevenue.toLocaleString("en-ZA", { maximumFractionDigits: 0 })} await closure. Deploy InsightDome to draft targeted follow-ups.`,
-      category: "Sales Pipeline",
-      impact: "high" as const,
-      actionPrompt: "Analyze our open sales deals in the pipeline and draft tailored follow-up proposals to accelerate closure.",
-      agentType: "executive",
-    },
-    {
-      id: "sug-2",
-      title: "Autonomous Lead Generation (Firecrawl)",
-      description: "Extract and enrich high-value B2B commercial fiber tender opportunities in key business corridors.",
-      category: "Lead Generation",
-      impact: "high" as const,
-      actionPrompt: "Run an opportunity scan for high-potential commercial fiber tender and corporate leads in Gauteng and Western Cape.",
-      agentType: "assistant",
-    },
-    {
-      id: "sug-3",
-      title: "Workforce & Talent Health (StaffBot)",
-      description: "Monitor NOC shift fatigue and field technician dispatch schedules for upcoming infrastructure work.",
-      category: "HR & Talent",
-      impact: "medium" as const,
-      actionPrompt: "Check StaffBot talent health and employee roster coverage for upcoming maintenance windows.",
-      agentType: "talent",
-    },
-    {
-      id: "sug-4",
-      title: "Customer Retention & Proactive Care",
-      description: "Run churn prediction analysis on active accounts and verify statutory RICA identification compliance.",
-      category: "Retention & Compliance",
-      impact: "medium" as const,
-      actionPrompt: "Run churn prediction analysis on active accounts and review any pending RICA verification flags.",
-      agentType: "retention",
-    },
-  ]
+  const recs =
+    crmInsights && typeof crmInsights === "object" && Array.isArray((crmInsights as any).aiRecommendations)
+      ? (crmInsights as any).aiRecommendations
+      : null
 
   return NextResponse.json({
     stats,
-    recentDeals: recentDeals.length > 0 ? recentDeals : null,
-    executiveSummary,
-    aiSuggestions,
-    sources: { deals: deals !== null, customers: customerCount !== null },
+    recentDeals: dealsArr ? topDeals(dealsArr, 4) : null,
+    executiveSummary: buildBriefing(dealsArr, customerCount),
+    aiSuggestions: buildInsights(dealsArr, recs),
+    sources: { deals: dealsArr !== null, customers: customerCount !== null, insights: recs !== null },
   })
 }

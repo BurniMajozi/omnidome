@@ -37,71 +37,10 @@ export interface ExecutiveApprovalItem {
   status: "pending" | "approved" | "dismissed" | "rejected" | "expired"
 }
 
-const DEFAULT_APPROVAL_ITEMS: ExecutiveApprovalItem[] = [
-  {
-    id: "appr-1",
-    title: "Dispatch 45 Proactive Retention Save Offers (Fiber 100/200 Mbps)",
-    agent: "retention",
-    agentName: "ChurnGuard",
-    agentIcon: "🛡️",
-    impact: "critical",
-    category: "Retention Save",
-    summary: "45 high-value subscribers in Sea Point & Umhlanga flagged with >82% churn probability following recent maintenance. Proposes 15% speed upgrade credit for 3 months.",
-    context: "Estimated MRR at risk is R48,500/mo. Applying credit preserves an estimated R582,000 annualized revenue.",
-    estimatedRoi: "R582,000 Annualized MRR Saved",
-    targetCount: 45,
-    timestamp: "10 mins ago",
-    status: "pending",
-  },
-  {
-    id: "appr-2",
-    title: "Approve MetroFibre Bulk Provisioning Batch for Sandton Office Park",
-    agent: "provisioning",
-    agentName: "ProvisionBot",
-    agentIcon: "⚡",
-    impact: "high",
-    category: "Network Provisioning",
-    summary: "12 corporate broadband circuits ready for automated ONT configuration and IP allocation across MetroFibre backbone.",
-    context: "Installation SLA expires in 18 hours. Approving triggers automated RADIUS profile provisioning.",
-    estimatedRoi: "R96,000/mo New Contracted MRR",
-    targetCount: 12,
-    timestamp: "25 mins ago",
-    status: "pending",
-  },
-  {
-    id: "appr-3",
-    title: "Authorize SLA Credit Adjustments for Outage #INC-8921 (Durban Central)",
-    agent: "support",
-    agentName: "SupportBot",
-    agentIcon: "🔧",
-    impact: "medium",
-    category: "Outage Compensation",
-    summary: "28 business clients experienced 3.5h unplanned downtime due to backhaul power failure. Pre-calculated R12,400 pro-rata billing credit.",
-    context: "Automatic SLA credits prevent escalation to ICASA/adjudication and restore client trust.",
-    estimatedRoi: "SLA Compliance & Goodwill",
-    targetCount: 28,
-    timestamp: "1 hour ago",
-    status: "pending",
-  },
-  {
-    id: "appr-4",
-    title: "Executive Strategic Realignment: Cape Town 1Gbps Fiber Price Drop",
-    agent: "executive",
-    agentName: "InsightDome",
-    agentIcon: "📊",
-    impact: "high",
-    category: "Pricing Strategy",
-    summary: "Competitor Vumatel announced R799 500Mbps tier. Recommends repositioning OmniHome 1Gbps to R999 with bundled VoiceBox VoIP.",
-    context: "Unit economics model shows gross margin remains above 42% while defending 320 at-risk consumer lines.",
-    estimatedRoi: "+18% Target Net Adds in Q4",
-    timestamp: "2 hours ago",
-    status: "pending",
-  },
-]
-
 export function ExecutiveApprovalQueue() {
   const [items, setItems] = useState<ExecutiveApprovalItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
 
   const loadApprovals = async () => {
@@ -126,9 +65,11 @@ export function ExecutiveApprovalQueue() {
           setItems([])
         }
       }
+      setLoadError(false)
     } catch {
-      // Fallback to default demo items if orchestrator unavailable
-      setItems(DEFAULT_APPROVAL_ITEMS)
+      // Orchestrator unavailable: show an honest state, never sample proposals.
+      setItems([])
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
@@ -194,6 +135,24 @@ Please break down:
     setTimeout(() => setActionFeedback(null), 4000)
   }
 
+  if (loading) {
+    return <div className="h-20 animate-pulse rounded-xl border border-border bg-muted/40" aria-label="Loading approvals" />
+  }
+
+  if (loadError && pendingItems.length === 0) {
+    return (
+      <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-card p-5 shadow-xs">
+        <div>
+          <h3 className="text-base font-semibold text-foreground">Executive Approval Queue</h3>
+          <p className="text-xs text-muted-foreground">Service not running. The agent orchestrator is not reachable, so no proposals can be shown.</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => { setLoading(true); loadApprovals() }}>
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
   if (pendingItems.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card p-5 shadow-xs">
@@ -204,7 +163,7 @@ Please break down:
             </div>
             <div>
               <h3 className="text-base font-semibold text-foreground">Executive Action Queue</h3>
-              <p className="text-xs text-muted-foreground">All autonomous agent proposals have been reviewed and approved</p>
+              <p className="text-xs text-muted-foreground">No agent proposals are waiting for review</p>
             </div>
           </div>
           <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-xs">

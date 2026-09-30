@@ -1,121 +1,71 @@
+"use client"
+
 import { Badge } from "@/components/ui/badge"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
+import { loadEscalations, useOps } from "@/lib/ops-api"
+import { relativeTime, type EscalationRow } from "@/lib/ops-derive"
 
-const tickets = [
-  {
-    id: "#12847",
-    subject: "Internet connectivity issue",
-    customer: "John Smith",
-    priority: "High",
-    status: "Open",
-    assignee: "SC",
-  },
-  {
-    id: "#12846",
-    subject: "Router configuration help",
-    customer: "Emily Brown",
-    priority: "Medium",
-    status: "In Progress",
-    assignee: "MJ",
-  },
-  {
-    id: "#12845",
-    subject: "Speed upgrade request",
-    customer: "Tech Corp",
-    priority: "Low",
-    status: "Pending",
-    assignee: "ED",
-  },
-  {
-    id: "#12844",
-    subject: "Billing inquiry",
-    customer: "Lisa Wang",
-    priority: "Medium",
-    status: "Resolved",
-    assignee: "AT",
-  },
-]
-
-const priorityColors = {
-  High: "bg-destructive/20 text-destructive",
-  Medium: "bg-chart-3/20 text-chart-3",
-  Low: "bg-primary/20 text-primary",
+const statusColors: Record<string, string> = {
+  open: "bg-destructive/20 text-destructive",
+  in_progress: "bg-chart-2/20 text-chart-2",
+  resolved: "bg-primary/20 text-primary",
+  closed: "bg-primary/20 text-primary",
 }
 
-const statusColors = {
-  Open: "bg-destructive/20 text-destructive",
-  "In Progress": "bg-chart-2/20 text-chart-2",
-  Pending: "bg-chart-3/20 text-chart-3",
-  Resolved: "bg-primary/20 text-primary",
-}
+const statusLabel = (s: string) => s.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+const shortId = (e: EscalationRow) => e.ticket_id || `ESC-${String(e.id).slice(0, 8)}`
 
+/** Latest escalations from the communication service (real rows only). */
 export function TicketsTable() {
+  const { value, reload } = useOps(loadEscalations)
+  const rows: EscalationRow[] =
+    value.state === "ready"
+      ? [...(value.data.rows as EscalationRow[])]
+          .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+          .slice(0, 5)
+      : []
+
   return (
     <div className="rounded-xl border border-border bg-card">
       <div className="border-b border-border p-5">
-        <h3 className="text-lg font-semibold text-foreground">Recent Tickets</h3>
+        <h3 className="text-lg font-semibold text-foreground">Recent Escalations</h3>
       </div>
-      <div className="md:hidden space-y-3 p-4">
-        {tickets.map((ticket) => (
-          <div key={ticket.id} className="rounded-lg border border-border bg-secondary/20 p-3">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-foreground">{ticket.subject}</p>
-                <p className="text-xs text-muted-foreground">{ticket.id} • {ticket.customer}</p>
-              </div>
-              <Avatar className="h-7 w-7">
-                <AvatarFallback className="text-xs">{ticket.assignee}</AvatarFallback>
-              </Avatar>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Badge variant="secondary" className={priorityColors[ticket.priority as keyof typeof priorityColors]}>
-                {ticket.priority}
-              </Badge>
-              <Badge variant="secondary" className={statusColors[ticket.status as keyof typeof statusColors]}>
-                {ticket.status}
-              </Badge>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="hidden overflow-x-auto md:block">
-        <table className="w-full min-w-[720px]">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">ID</th>
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Subject</th>
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Customer</th>
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Priority</th>
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Status</th>
-              <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Assignee</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tickets.map((ticket) => (
-              <tr key={ticket.id} className="border-b border-border last:border-0 hover:bg-secondary/30">
-                <td className="px-5 py-4 text-sm font-medium text-primary">{ticket.id}</td>
-                <td className="px-5 py-4 text-sm text-foreground">{ticket.subject}</td>
-                <td className="px-5 py-4 text-sm text-muted-foreground">{ticket.customer}</td>
-                <td className="px-5 py-4">
-                  <Badge variant="secondary" className={priorityColors[ticket.priority as keyof typeof priorityColors]}>
-                    {ticket.priority}
-                  </Badge>
-                </td>
-                <td className="px-5 py-4">
-                  <Badge variant="secondary" className={statusColors[ticket.status as keyof typeof statusColors]}>
-                    {ticket.status}
-                  </Badge>
-                </td>
-                <td className="px-5 py-4">
-                  <Avatar className="h-7 w-7">
-                    <AvatarFallback className="text-xs">{ticket.assignee}</AvatarFallback>
-                  </Avatar>
-                </td>
+      {value.state !== "ready" ? (
+        <div className="p-4">
+          <NotConnected loadable={value} service="The communication service" onRetry={reload} />
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="p-4">
+          <NoDataYet message="No escalations yet" />
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px]">
+            <thead>
+              <tr className="border-b border-border text-left">
+                <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Reference</th>
+                <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Reason</th>
+                <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Status</th>
+                <th className="px-5 py-3 text-xs font-medium uppercase text-muted-foreground">Raised</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {rows.map((e) => (
+                <tr key={e.id} className="border-b border-border last:border-0 hover:bg-secondary/30">
+                  <td className="px-5 py-4 text-sm font-medium text-primary">{shortId(e)}</td>
+                  <td className="px-5 py-4 text-sm text-foreground">{e.reason || "—"}</td>
+                  <td className="px-5 py-4">
+                    <Badge variant="secondary" className={statusColors[e.status] ?? "bg-secondary text-foreground"}>
+                      {statusLabel(e.status)}
+                    </Badge>
+                  </td>
+                  <td className="px-5 py-4 text-sm text-muted-foreground">{relativeTime(e.created_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

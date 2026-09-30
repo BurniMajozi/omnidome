@@ -10,6 +10,10 @@ interface StatCardProps {
   icon: LucideIcon
   description?: string
   isCurrency?: boolean
+  /** Show a skeleton instead of the value (data still loading). */
+  loading?: boolean
+  /** Value is an honest state label ('Service not running'), not a figure. */
+  muted?: boolean
 }
 
 export function StatCard({
@@ -20,6 +24,8 @@ export function StatCard({
   icon: Icon,
   description,
   isCurrency = false,
+  loading = false,
+  muted = false,
 }: StatCardProps) {
   const isClient = useIsClient()
 
@@ -34,7 +40,13 @@ export function StatCard({
       <div className="flex items-start justify-between">
         <div className="space-y-1">
           <p className="text-xs font-medium text-muted-foreground sm:text-sm">{title}</p>
-          <p className="text-xl font-bold text-foreground sm:text-2xl">{displayValue}</p>
+          {loading ? (
+            <span className="block h-7 w-24 animate-pulse rounded bg-muted" aria-label="Loading" />
+          ) : muted ? (
+            <p className="text-sm font-medium text-muted-foreground sm:text-base">{value}</p>
+          ) : (
+            <p className="text-xl font-bold text-foreground sm:text-2xl">{displayValue}</p>
+          )}
         </div>
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 sm:h-10 sm:w-10">
           <Icon className="h-[18px] w-[18px] text-primary sm:h-5 sm:w-5" />
