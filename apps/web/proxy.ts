@@ -148,7 +148,17 @@ export async function proxy(request: NextRequest) {
   }
 
   const auth = request.headers.get("authorization")
-  const token = auth && /^bearer /i.test(auth) ? auth.slice(7).trim() : ""
+  let token = auth && /^bearer /i.test(auth) ? auth.slice(7).trim() : ""
+  // Browsers cannot set headers on a WebSocket upgrade: accept the token from the
+  // query string, for the communication WS endpoint only.
+  if (
+    !token &&
+    method === "GET" &&
+    request.headers.get("upgrade")?.toLowerCase() === "websocket" &&
+    pathname === "/svc/communication/api/v1/ws"
+  ) {
+    token = request.nextUrl.searchParams.get("token")?.trim() || ""
+  }
   if (!token) return json(401, "unauthorized")
 
   const identity = await verify(token)

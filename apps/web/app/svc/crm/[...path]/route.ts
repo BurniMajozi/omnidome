@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
 const CRM_SERVICE_URL = process.env.CRM_SERVICE_URL || "http://crm:8001"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -23,8 +24,11 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   if (ALLOW_DEV_HEADERS) {
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
     if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
-    if (!headers.has("x-roles")) headers.set("x-roles", "org_admin,org_user")
-    if (!headers.has("x-permissions")) headers.set("x-permissions", "crm.read,crm.write,crm.admin")
+    // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never org_admin).
+    const rp = verifiedRoleHeaders(request.headers, ["crm.read", "crm.write", "crm.admin"])
+    headers.set("x-roles", rp.roles)
+    if (rp.permissions) headers.set("x-permissions", rp.permissions)
+    else headers.delete("x-permissions")
   }
 
   try {

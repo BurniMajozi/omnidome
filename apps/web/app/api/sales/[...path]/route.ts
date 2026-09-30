@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 import { getSupabaseServer } from "@/lib/supabase/server"
 
 const SALES_SERVICE_URL =
@@ -48,14 +49,16 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
       if (identity) {
         headers.set("x-user-id", identity.userId)
         headers.set("x-tenant-id", identity.tenantId)
-        headers.set("x-roles", "platform_admin,org_admin")
-        headers.set("x-permissions", "sales.read,sales.write,crm.read,crm.write")
       }
     }
 
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
     if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
-    if (!headers.has("x-roles")) headers.set("x-roles", "platform_admin,org_admin")
+    // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
+    const rp = verifiedRoleHeaders(req.headers, ["sales.read", "sales.write", "crm.read", "crm.write"])
+    headers.set("x-roles", rp.roles)
+    if (rp.permissions) headers.set("x-permissions", rp.permissions)
+    else headers.delete("x-permissions")
 
     const body = req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined
 

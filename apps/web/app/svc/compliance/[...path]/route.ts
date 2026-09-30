@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
 const COMPLIANCE_SERVICE_URL =
   process.env.COMPLIANCE_SERVICE_URL || "http://compliance:8019"
@@ -24,7 +25,11 @@ async function proxy(
 
     if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
     if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
-    if (!headers["x-roles"]) headers["x-roles"] = "org_admin,compliance_officer"
+    // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never org_admin).
+    const rp = verifiedRoleHeaders(req.headers, ["compliance.read", "compliance.write", "compliance.admin"])
+    headers["x-roles"] = rp.roles
+    if (rp.permissions) headers["x-permissions"] = rp.permissions
+    else delete headers["x-permissions"]
 
     const init: RequestInit = { method, headers, cache: "no-store" }
     if (method !== "GET" && method !== "HEAD") {

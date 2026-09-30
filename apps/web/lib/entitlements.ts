@@ -43,8 +43,9 @@ export function isModuleEnabled(modules: string[], moduleId: string): boolean {
 }
 
 export async function fetchEntitlements(): Promise<Entitlements> {
-  const base = process.env.NEXT_PUBLIC_GATEWAY_URL?.replace(/\/$/, "") || ""
-  const res = await fetch(`${base}/entitlements`, { cache: "no-store" })
+  // Same-origin gated path (proxy.ts verifies the session and injects identity);
+  // never call the gateway's own port from the browser.
+  const res = await fetch("/gateway/entitlements", { cache: "no-store" })
   if (!res.ok) {
     return DEFAULT_ENTITLEMENTS
   }

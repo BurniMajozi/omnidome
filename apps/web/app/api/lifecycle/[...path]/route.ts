@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
 const LIFECYCLE_SERVICE_URL =
   process.env.LIFECYCLE_SERVICE_URL || "http://lifecycle:8018"
@@ -33,7 +34,8 @@ async function proxy(req: NextRequest, { params }: Context): Promise<NextRespons
 
     if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
     if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
-    if (!headers["x-roles"]) headers["x-roles"] = "platform_admin,org_admin"
+    // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
+    headers["x-roles"] = verifiedRoleHeaders(req.headers, []).roles
 
     const init: RequestInit = { method: req.method, headers }
     if (req.method !== "GET" && req.method !== "HEAD") {

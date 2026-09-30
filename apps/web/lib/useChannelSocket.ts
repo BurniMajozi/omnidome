@@ -23,9 +23,13 @@
 
 import { useEffect, useRef, useCallback, useState } from "react"
 
-const COMM_WS_BASE =
-  process.env.NEXT_PUBLIC_COMM_WS_URL ||
-  "ws://localhost:8020"
+// Same-origin only: /svc/communication is rewritten to the communication service
+// and gated by proxy.ts (which accepts the token query param for the WS upgrade).
+// Never point this at a backend port directly.
+function commWsBase(): string {
+  const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
+  return `${proto}//${window.location.host}/svc/communication`
+}
 
 const MAX_BACKOFF_MS = 30_000
 const BASE_BACKOFF_MS = 1_000
@@ -96,7 +100,7 @@ export function useChannelSocket(
   const connect = useCallback(() => {
     if (!channelId || !token || !mountedRef.current) return
 
-    const url = `${COMM_WS_BASE}/api/v1/ws?channel_id=${encodeURIComponent(channelId)}&token=${encodeURIComponent(token)}`
+    const url = `${commWsBase()}/api/v1/ws?channel_id=${encodeURIComponent(channelId)}&token=${encodeURIComponent(token)}`
     const ws = new WebSocket(url)
     wsRef.current = ws
 

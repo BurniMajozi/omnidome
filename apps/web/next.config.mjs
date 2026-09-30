@@ -17,8 +17,8 @@ const nextConfig = {
   },
   async rewrites() {
     return [
-      // Gateway (primary API proxy)
-      { source: '/gateway/:path*', destination: 'http://localhost:8000/:path*' },
+      // NOTE: /gateway/* is handled by app/gateway/[...path]/route.ts (runtime GATEWAY_SERVICE_URL,
+      // default http://gateway:8000) so no apps/web/.env entry is needed; a rewrite here would win over it.
       // Individual microservice proxies
       // NOTE: /svc/crm, /svc/billing, /svc/inventory, /svc/compliance, /svc/memory,
       // /svc/marketing, and /svc/finance are each handled by their own App Router

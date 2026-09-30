@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 import { getSupabaseServer } from "@/lib/supabase/server"
 
 const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
@@ -49,16 +50,17 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     if (identity) {
       headers.set("x-user-id", identity.userId)
       headers.set("x-tenant-id", identity.tenantId)
-      headers.set("x-roles", "platform_admin,org_admin")
-      headers.set("x-permissions", "platform.admin,org.admin,org.manage,module.manage")
     }
   }
 
   // Ensure mandatory identity headers are always provided so admin service never 401s
   if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
   if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
-  if (!headers.has("x-roles")) headers.set("x-roles", "platform_admin,org_admin")
-  if (!headers.has("x-permissions")) headers.set("x-permissions", "platform.admin,org.admin,org.manage,module.manage")
+  // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
+  const rp = verifiedRoleHeaders(request.headers, ["platform.admin", "org.admin", "org.manage", "module.manage"])
+  headers.set("x-roles", rp.roles)
+  if (rp.permissions) headers.set("x-permissions", rp.permissions)
+  else headers.delete("x-permissions")
 
   try {
     const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
