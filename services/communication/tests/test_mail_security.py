@@ -454,11 +454,34 @@ async def test_admin_creates_a_verified_mailbox(monkeypatch):
     patch_session(monkeypatch, sess)
     checked = []
 
-    async def verified(tid, addr):
+    async def verified(tid, addr, **_k):
         checked.append((tid, addr))
     monkeypatch.setattr(mail, "_require_address_in_tenant_account", verified)
     mb = await mail.create_mailbox(mailbox_payload(), ctx(["org_admin"]))
     assert mb.email_address == "shared@x.agentmail.to" and checked == [(A, "shared@x.agentmail.to")]
+
+
+@async_test
+async def test_tenant_without_own_key_cannot_claim_platform_inboxes(monkeypatch):
+    """No key of the tenant's own -> the platform key is the only account left; only a platform admin may use it."""
+    used = []
+
+    async def load_creds(_s, _tid):
+        return None
+
+    async def get_inbox(inbox, creds=None, **_k):
+        used.append(creds.api_key)
+        return {"inbox_id": inbox}
+
+    patch_session(monkeypatch, None)
+    monkeypatch.setattr(agentmail, "load_creds", load_creds)
+    monkeypatch.setattr(agentmail, "get_inbox", get_inbox)
+    monkeypatch.setattr(agentmail, "env_creds", lambda: agentmail.Creds(api_key="platform-key", inbox="p@x.agentmail.to", source="env"))
+    with pytest.raises(HTTPException) as e:
+        await mail._require_address_in_tenant_account(A, "unclaimed@x.agentmail.to")
+    assert e.value.status_code == 403 and used == []
+    await mail._require_address_in_tenant_account(A, "unclaimed@x.agentmail.to", platform_admin=True)
+    assert used == ["platform-key"]
 
 
 # ── M5: approve-agent-reply claims atomically ──────────────────────────────

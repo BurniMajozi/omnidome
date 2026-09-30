@@ -806,6 +806,9 @@ async def verify_bearer(token: str) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid token")
     if not u.get("id") or not u.get("email"):
         raise HTTPException(status_code=401, detail="Invalid token")
+    if not (u.get("email_confirmed_at") or u.get("confirmed_at")):
+        # an unconfirmed address proves nothing about who owns it
+        raise HTTPException(status_code=401, detail="Email not confirmed")
     return {"id": u["id"], "email": u["email"], "name": (u.get("user_metadata") or {}).get("full_name") or (u.get("user_metadata") or {}).get("name")}
 
 

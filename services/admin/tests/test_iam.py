@@ -583,3 +583,33 @@ def test_invite_409_is_generic_for_tenant_admins(client):
     own = fresh_email()
     assert invite(client, t1, own, headers=h).status_code == 201
     assert "pending" in invite(client, t1, own, headers=h).json()["detail"]
+
+
+# ── verify_bearer: an unconfirmed Supabase address proves nothing ──────────
+_REAL_VERIFY_BEARER = iam.verify_bearer  # captured at import, before the `sb` fixture swaps it out
+
+
+def _fake_supabase_user(monkeypatch, user):
+    class _Client:
+        async def verify_token(self, _token):
+            return user
+
+    monkeypatch.setattr(supabase_sync, "get_client", lambda: _Client())
+
+
+def test_verify_bearer_rejects_unconfirmed_email(monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    _fake_supabase_user(monkeypatch, {"id": str(uuid.uuid4()), "email": "a@b.test", "email_confirmed_at": None, "confirmed_at": None})
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(_REAL_VERIFY_BEARER("tok"))
+    assert e.value.status_code == 401
+
+
+def test_verify_bearer_accepts_confirmed_email(monkeypatch):
+    import asyncio
+
+    _fake_supabase_user(monkeypatch, {"id": str(uuid.uuid4()), "email": "a@b.test", "email_confirmed_at": "2026-01-01T00:00:00Z"})
+    assert asyncio.run(_REAL_VERIFY_BEARER("tok"))["email"] == "a@b.test"

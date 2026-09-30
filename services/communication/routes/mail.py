@@ -136,7 +136,7 @@ async def require_mail_admin(auth: AuthContext) -> None:
     await _require_mail_role(auth, MAIL_ADMIN_ROLES, MAIL_ADMIN_PERMS)
 
 
-async def _require_address_in_tenant_account(tenant_id: uuid.UUID, address: str) -> None:
+async def _require_address_in_tenant_account(tenant_id: uuid.UUID, address: str, *, platform_admin: bool = False) -> None:
     """The address must exist in the AgentMail account behind the tenant's own key (or the
     platform key when the tenant has none). Unreachable provider -> 503 (fail closed)."""
     try:
@@ -145,7 +145,12 @@ async def _require_address_in_tenant_account(tenant_id: uuid.UUID, address: str)
     except Exception as exc:  # noqa: BLE001
         logger.error("tenant AgentMail creds lookup failed: %s", exc)
         raise HTTPException(status_code=503, detail="Cannot verify mailbox: credentials unavailable")
-    creds = creds or agentmail_client.env_creds()
+    if not creds:
+        # No key of the tenant's own: the only account left is the platform's, whose unclaimed
+        # inboxes any tenant could otherwise register. Only a platform admin may use that key.
+        if not platform_admin:
+            raise HTTPException(status_code=403, detail="Connect your own AgentMail API key before registering a mailbox")
+        creds = agentmail_client.env_creds()
     if not creds or not creds.api_key:
         raise HTTPException(status_code=503, detail="Email provider not configured")
     try:
@@ -183,7 +188,7 @@ async def create_mailbox(
         res = await session.execute(stmt)
         existing = res.scalar_one_or_none()
         if existing is None:
-            await _require_address_in_tenant_account(auth.tenant_id, address)
+            await _require_address_in_tenant_account(auth.tenant_id, address, platform_admin=bool(auth.is_platform_admin))
         if existing:
             existing.agent_type = payload.agent_type
             existing.display_name = payload.display_name

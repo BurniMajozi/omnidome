@@ -26,8 +26,36 @@ except ImportError:
 GATEWAY_URL = os.getenv("OMNIDOME_GATEWAY_URL", "http://localhost:8000")
 TENANT_ID = os.getenv("SMOKE_TENANT_ID", "11111111-1111-1111-1111-111111111111")
 
+# Signed identity: backends run AUTH_MODE=signed and reject raw identity headers. Read the shared
+# secret from the environment / .env and let services.common.internal_auth sign every request
+# that carries X-Tenant-Id / X-User-Id (it patches httpx at the transport layer).
+def _load_internal_secret() -> None:
+    if os.getenv("INTERNAL_AUTH_SECRET"):
+        return
+    env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        with open(env_file, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("INTERNAL_AUTH_SECRET="):
+                    os.environ["INTERNAL_AUTH_SECRET"] = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    return
+    except OSError:
+        pass
+
+
+_load_internal_secret()
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from services.common.internal_auth import install_httpx_signing
+
+    install_httpx_signing()
+except Exception as exc:  # noqa: BLE001
+    print(f"warning: request signing unavailable ({exc}); signed backends will answer 401")
+
 HEADERS = {
     "X-Tenant-ID": TENANT_ID,
+    "X-User-Id": os.getenv("SMOKE_USER_ID", "00000000-0000-0000-0000-000000000001"),
+    "X-Roles": os.getenv("SMOKE_ROLES", "org_admin"),
     "X-Dev-Email": "smoke@demo.local",
     "Content-Type": "application/json",
 }

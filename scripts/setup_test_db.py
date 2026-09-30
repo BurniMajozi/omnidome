@@ -50,6 +50,7 @@ def main() -> None:
     os.environ["DATABASE_URL"] = url
     from services.billing.database import init_tables as billing_tables
     from services.common.db import session_scope
+    from services.communication.database import init_tables as communication_tables
     from services.crm.database import init_tables as crm_tables
     from services.tenant_memory.database import init_tables as memory_tables
 
@@ -59,9 +60,10 @@ def main() -> None:
     async def memory() -> None:
         async with session_scope() as session:
             await memory_tables(session)
+        await communication_tables()   # same event loop: the async engine is cached and loop-bound
 
     asyncio.run(memory())
-    print("created crm, billing and tenant_memory tables")
+    print("created crm, billing, tenant_memory and communication tables")
 
 
 if __name__ == "__main__":

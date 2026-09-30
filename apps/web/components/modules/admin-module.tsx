@@ -293,7 +293,7 @@ export function AdminModule() {
   }
 
   const toggleTenantModule = async (moduleItem: ModuleCatalogItem) => {
-    if (!selectedTenant) return
+    if (!selectedTenant || !isPlatformAdmin) return  // module entitlements are platform-admin only (PUT /tenants/{id}/modules)
     const moduleName = moduleItem.module_name || moduleItem.key || moduleItem.name
     await adminApi.updateTenantModules(selectedTenant.id, [
       { name: moduleName, enabled: !moduleItem.enabled, config: moduleItem.config },
@@ -671,7 +671,11 @@ export function AdminModule() {
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                   <CardTitle className="text-base">Tenant Module Entitlements</CardTitle>
-                  <CardDescription>Grant or revoke functional platform modules per organization</CardDescription>
+                  <CardDescription>
+                    {isPlatformAdmin
+                      ? "Grant or revoke functional platform modules per organization"
+                      : "Modules enabled for your organization. Only the platform team can change these."}
+                  </CardDescription>
                 </div>
                 <select
                   className="h-9 rounded-md border border-border bg-background px-3 text-sm font-medium"
@@ -692,12 +696,12 @@ export function AdminModule() {
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {tenantModules.map((item) => {
                   const key = item.module_name || item.key || item.name
+                  const Wrapper: React.ElementType = isPlatformAdmin ? "button" : "div"
                   return (
-                    <button
+                    <Wrapper
                       key={key}
-                      type="button"
-                      onClick={() => void toggleTenantModule(item)}
-                      className="rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary/50 group"
+                      {...(isPlatformAdmin ? { type: "button" as const, onClick: () => void toggleTenantModule(item) } : {})}
+                      className={`rounded-lg border border-border bg-card p-4 text-left transition-colors group ${isPlatformAdmin ? "hover:border-primary/50" : ""}`}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div>
@@ -706,7 +710,7 @@ export function AdminModule() {
                         </div>
                         {item.enabled ? <ToggleRight className="h-6 w-6 text-emerald-400 shrink-0" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground shrink-0" />}
                       </div>
-                    </button>
+                    </Wrapper>
                   )
                 })}
               </div>
