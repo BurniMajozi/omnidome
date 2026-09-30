@@ -18,11 +18,17 @@ from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from services.common.db import get_async_engine, SoftDeleteMixin
+from services.common.db import get_async_engine, register_tenant_scoped_base, SoftDeleteMixin
 
 
 class Base(DeclarativeBase):
     pass
+
+
+# Every model below carries tenant_id; opt this Base into the automatic
+# tenant filter in services.common.db so a missed manual .where() clause
+# can no longer leak rows across tenants.
+register_tenant_scoped_base(Base)
 
 
 # ── Journal Entry (double-entry GL) ─────────────────────────────────────

@@ -18,6 +18,8 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, relationship
 from sqlalchemy.sql import func
 
+from services.common.db import register_tenant_scoped_base
+
 
 class Base(DeclarativeBase):
     def to_dict(self) -> dict:
@@ -31,6 +33,12 @@ class Base(DeclarativeBase):
                 val = float(val)
             result[col.name] = val
         return result
+
+
+# Every model below carries tenant_id; opt this Base into the automatic
+# tenant filter in services.common.db so a missed manual .where() clause
+# can no longer leak rows across tenants.
+register_tenant_scoped_base(Base)
 
 
 # ── Enums ──────────────────────────────────────────────────────────────

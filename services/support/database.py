@@ -16,6 +16,14 @@ class Base(DeclarativeBase):
     pass
 
 
+# NOT registered with services.common.db.register_tenant_scoped_base:
+# TicketReply has no tenant_id column (it scopes through its ticket's FK),
+# and the automatic filter is applied unconditionally to every mapped
+# subclass. Add tenant_id to ticket_replies (needs a schema migration)
+# before opting this Base in. Until then every query must keep its manual
+# .where(tenant_id == ...) clause.
+
+
 class Ticket(Base):
     __tablename__ = "tickets"
 
