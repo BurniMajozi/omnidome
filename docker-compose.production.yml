@@ -10,7 +10,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-omnidome}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-omnidome}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config/master_schema.sql:/docker-entrypoint-initdb.d/init.sql
@@ -39,7 +39,7 @@ services:
       - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -636,7 +636,7 @@ services:
       - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://agent-orchestrator:8021}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       gateway:
         condition: service_healthy

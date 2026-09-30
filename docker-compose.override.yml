@@ -17,7 +17,7 @@
 services:
   db:
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
   # Local web build needs the NEXT_PUBLIC_* baked in at build time. The Dockerfile
   # takes them as build args (Railway passes service vars as --build-arg); locally
@@ -81,7 +81,7 @@ services:
       - SOCIAL_TICKET_CUSTOMER_ID=
       - AUTH_ALLOW_ANONYMOUS=${AUTH_ALLOW_ANONYMOUS:-false}
     ports:
-      - "8014:8014"
+      - "127.0.0.1:8014:8014"
     volumes:
       # Hot reload: no rebuild after each edit.
       - ./services/marketing:/app/services/marketing:ro

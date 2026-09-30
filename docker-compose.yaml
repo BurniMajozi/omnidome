@@ -10,7 +10,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./config/master_schema.sql:/docker-entrypoint-initdb.d/init.sql
@@ -29,12 +29,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     depends_on:
       - db
     volumes:
@@ -47,12 +49,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8002:8002"
+      - "127.0.0.1:8002:8002"
     depends_on:
       - db
     volumes:
@@ -65,13 +69,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - PAYSTACK_SECRET_KEY=${PAYSTACK_SECRET_KEY}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8003:8003"
+      - "127.0.0.1:8003:8003"
     depends_on:
       - db
     volumes:
@@ -84,12 +90,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8015:8015"
+      - "127.0.0.1:8015:8015"
     depends_on:
       - db
     volumes:
@@ -102,6 +110,8 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - SMILE_ID_PARTNER_ID=${SMILE_ID_PARTNER_ID}
       - SMILE_ID_API_KEY=${SMILE_ID_API_KEY}
@@ -109,7 +119,7 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8004:8004"
+      - "127.0.0.1:8004:8004"
     depends_on:
       - db
     volumes:
@@ -122,6 +132,8 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
@@ -131,7 +143,7 @@ services:
       - OPENSERVE_API_URL=${OPENSERVE_API_URL:-http://openserve-mock:9002}
       - OPENSERVE_API_KEY=${OPENSERVE_API_KEY:-}
     ports:
-      - "8005:8005"
+      - "127.0.0.1:8005:8005"
     depends_on:
       - db
     volumes:
@@ -144,12 +156,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8006:8006"
+      - "127.0.0.1:8006:8006"
     depends_on:
       - db
     volumes:
@@ -162,6 +176,8 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
@@ -169,7 +185,7 @@ services:
       - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
     ports:
-      - "8007:8007"
+      - "127.0.0.1:8007:8007"
     depends_on:
       - db
     volumes:
@@ -182,12 +198,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8008:8008"
+      - "127.0.0.1:8008:8008"
     depends_on:
       - db
     volumes:
@@ -200,12 +218,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8009:8009"
+      - "127.0.0.1:8009:8009"
     depends_on:
       - db
     volumes:
@@ -218,12 +238,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8010:8010"
+      - "127.0.0.1:8010:8010"
     depends_on:
       - db
     volumes:
@@ -236,12 +258,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8020:8020"
+      - "127.0.0.1:8020:8020"
     depends_on:
       - db
     volumes:
@@ -258,13 +282,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - VOICEBOX_ENGINE_URL=${VOICEBOX_ENGINE_URL:-http://voicebox-engine:17493}
     ports:
-      - "8027:8027"
+      - "127.0.0.1:8027:8027"
     depends_on:
       - db
     volumes:
@@ -287,7 +313,7 @@ services:
     environment:
       - VOICEBOX_MODELS_DIR=/data/models
     ports:
-      - "17493:17493"
+      - "127.0.0.1:17493:17493"
     volumes:
       - voicebox_models:/data/models
       # Engine's own SQLite db (profiles/generations) + generated audio +
@@ -304,6 +330,8 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
@@ -316,7 +344,7 @@ services:
       - SIM_API_URL=${SIM_API_URL:-}
       - SIM_API_KEY=${SIM_API_KEY:-}
     ports:
-      - "8021:8021"
+      - "127.0.0.1:8021:8021"
     depends_on:
       - db
     volumes:
@@ -329,13 +357,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     ports:
-      - "8019:8019"
+      - "127.0.0.1:8019:8019"
     depends_on:
       - db
     volumes:
@@ -348,13 +378,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     ports:
-      - "8025:8025"
+      - "127.0.0.1:8025:8025"
     depends_on:
       - db
     volumes:
@@ -367,13 +399,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
     ports:
-      - "8026:8026"
+      - "127.0.0.1:8026:8026"
     depends_on:
       - db
     volumes:
@@ -386,13 +420,15 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - ML_MODEL_PATH=${ML_MODEL_PATH}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8012:8012"
+      - "127.0.0.1:8012:8012"
     depends_on:
       - db
     volumes:
@@ -405,12 +441,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8014:8014"
+      - "127.0.0.1:8014:8014"
     depends_on:
       - db
     volumes:
@@ -426,6 +464,8 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
@@ -442,12 +482,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8013:8013"
+      - "127.0.0.1:8013:8013"
     depends_on:
       - db
     volumes:
@@ -460,12 +502,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - ADMIN_SERVICE_URL=${ADMIN_SERVICE_URL:-http://admin:8013}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -478,6 +522,7 @@ services:
     env_file:
       - .env
     environment:
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL}
       - COMPLIANCE_SERVICE_URL=${COMPLIANCE_SERVICE_URL:-http://compliance:8019}
       - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
@@ -505,7 +550,7 @@ services:
       - FNO_INTELLIGENCE_SERVICE_URL=${FNO_INTELLIGENCE_SERVICE_URL:-http://fno_intelligence:8024}
       - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - crm
       - sales
@@ -521,7 +566,7 @@ services:
   portal:
     image: nginx:alpine
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
     volumes:
       - ./apps/portal:/usr/share/nginx/html/portal:ro
       - ./brand_guidelines:/usr/share/nginx/html/brand_guidelines:ro
@@ -572,10 +617,12 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - MODULE_ID=journey_engine
     ports:
-      - "8017:8017"
+      - "127.0.0.1:8017:8017"
     depends_on:
       - db
     volumes:
@@ -593,10 +640,12 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - ANALYTICS_IP_SALT=omnidome-web-analytics-${POSTGRES_DB}
     ports:
-      - "8016:8016"
+      - "127.0.0.1:8016:8016"
     depends_on:
       - db
     volumes:
@@ -609,7 +658,7 @@ services:
       context: .
       dockerfile: services/lifecycle/Dockerfile
     ports:
-      - "8018:8018"
+      - "127.0.0.1:8018:8018"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - LIFECYCLE_SERVICE_URL=http://lifecycle:8018
@@ -625,12 +674,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8022:8022"
+      - "127.0.0.1:8022:8022"
     depends_on:
       db:
         condition: service_healthy
@@ -643,12 +694,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8023:8023"
+      - "127.0.0.1:8023:8023"
     depends_on:
       db:
         condition: service_healthy
@@ -661,12 +714,14 @@ services:
     env_file:
       - .env
     environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
     ports:
-      - "8024:8024"
+      - "127.0.0.1:8024:8024"
     depends_on:
       db:
         condition: service_healthy
@@ -677,7 +732,7 @@ services:
     container_name: omnidome-presenton
     restart: unless-stopped
     ports:
-      - "5000:80"
+      - "127.0.0.1:5000:80"
     environment:
       - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
       - MIGRATE_DATABASE_ON_STARTUP=true
