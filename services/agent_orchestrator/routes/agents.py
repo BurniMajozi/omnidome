@@ -97,9 +97,12 @@ _INTENT_ROUTES: list[tuple[str, list[str]]] = [
 ]
 
 
-# Not agents: routing modes. A request for one of these is answered by the
-# specialist _classify_agent picks, so they are not listed in the Agent Manager.
+# On /invoke these hand the request to the specialist _classify_agent picks.
+# On the AG-UI and A2A paths "auto" runs itself as the Master Orchestrator
+# (all tools), so it is listed in the Agent Manager like any other agent.
 ROUTER_AGENT_TYPES = ("auto", "orchestrator", "router", "")
+# Same agent, second name: listed once, under its canonical type.
+PROMPT_ALIASES = {"orchestrator": "auto"}
 
 
 def _classify_agent(message: str) -> str:
@@ -330,6 +333,7 @@ async def list_agents():
         )
 
     agents = [
+        _info("auto", "Master Orchestrator — chat agent with every tool (AG-UI/A2A); on /invoke it routes to a specialist"),
         _info("customer_facing", "DomeBot — assists customers with balances, invoices, coverage, tickets"),
         _info("retention", "ChurnGuard — autonomous churn prediction and retention campaigns"),
         _info("provisioning", "ProvisionBot — automates new customer provisioning workflow"),

@@ -22,6 +22,12 @@ import type { AgentInfo } from "@/lib/orchestrator-api"
 // ─── Display-name map ────────────────────────────────────────────────────────
 
 const AGENT_METADATA: Record<string, { name: string; role: string; color: string; badge: string }> = {
+  auto: {
+    name: "Master Orchestrator",
+    role: "Chat agent with every tool; routes to specialists",
+    color: "from-slate-500/20 to-zinc-500/10 border-slate-400/30",
+    badge: "Orchestrator",
+  },
   customer_facing: {
     name: "DomeBot",
     role: "Front-Office Omnichannel Assistant",

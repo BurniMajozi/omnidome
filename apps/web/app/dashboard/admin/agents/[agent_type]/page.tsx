@@ -60,6 +60,7 @@ interface ConversationItem {
 // ─── Display-name map (copied from sibling agents/page.tsx) ─────────────────
 
 const DISPLAY_NAMES: Record<string, string> = {
+  auto: "Master Orchestrator",
   customer_facing: "DomeBot",
   retention: "ChurnGuard",
   provisioning: "ProvisionBot",
