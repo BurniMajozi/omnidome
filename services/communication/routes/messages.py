@@ -48,6 +48,7 @@ async def send_message(
                 raise HTTPException(status_code=404, detail="Parent message not found")
 
         message = Message(
+            tenant_id=ctx.tenant_id,
             channel_id=channel_id,
             user_id=ctx.user_id,
             content=body.content,
