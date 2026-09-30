@@ -5,8 +5,13 @@ When an agent encounters a tool with `requires_approval=True`, execution is gate
 2. `agents.approval.requested` is published on the event bus.
 3. A notification is added to the in-app bell feed.
 4. The model receives: "Submitted for approval (#ref); tell the user it will run once approved."
-5. When approved: `agents.approval.decided` is published, the tool is executed
-   idempotently, results are recorded, and memory capture is triggered.
+5. When approved: the decision is committed and `agents.approval.decided` is
+   published. Execution then happens in its own steps (execute_approved):
+   claim the row (committed), run the tool, record the result. A claimed
+   approval is never run again, so the call happens at most once even if the
+   process dies mid-way or both the approve route and the bus consumer try.
+   A claimed-but-unrecorded approval stays visible (execution_started_at set,
+   executed_at empty) for a person to check.
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
     status VARCHAR(20) NOT NULL DEFAULT 'pending',
     rejection_reason TEXT,
     execution_result JSONB,
+    execution_started_at TIMESTAMPTZ,
     executed_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ NOT NULL,
     decided_at TIMESTAMPTZ,
@@ -55,6 +61,7 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
 );
 CREATE INDEX IF NOT EXISTS ix_agent_approvals_tenant_status ON agent_approvals (tenant_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS ix_agent_approvals_agent ON agent_approvals (tenant_id, agent_type, status);
+ALTER TABLE agent_approvals ADD COLUMN IF NOT EXISTS execution_started_at TIMESTAMPTZ;
 """
 
 
@@ -269,6 +276,7 @@ def _approval_to_dict(a: AgentApproval) -> dict:
         "status": a.status,
         "rejection_reason": a.rejection_reason,
         "execution_result": a.execution_result,
+        "execution_started_at": a.execution_started_at.isoformat() if a.execution_started_at else None,
         "executed_at": a.executed_at.isoformat() if a.executed_at else None,
         "expires_at": a.expires_at.isoformat() if a.expires_at else None,
         "decided_at": a.decided_at.isoformat() if a.decided_at else None,
@@ -396,10 +404,7 @@ async def decide_approval(
             severity="info",
             link="/dashboard/admin/agents",
         )
-    elif decision == "approved":
-        # Execute immediately to guarantee prompt feedback, and record idempotency
-        await _execute_approved_call(session, row)
-
+    # Approved: the caller runs execute_approved() once this has committed.
     return _approval_to_dict(row)
 
 
@@ -415,85 +420,99 @@ def acting_user_id(row: AgentApproval) -> Optional[str]:
     return None
 
 
-async def _execute_approved_call(session, row: AgentApproval) -> dict:
-    """Execute the tool call idempotently, save result, record action, and capture in memory."""
-    if row.executed_at is not None:
-        logger.info("Approval %s already executed at %s", row.id, row.executed_at)
-        return row.execution_result or {}
+async def _claim(tenant_id: str | uuid.UUID, approval_id: str | uuid.UUID) -> Optional[AgentApproval]:
+    """Atomically take the right to run an approved call, in its own committed
+    transaction. Only one caller ever gets the row back."""
+    async with session_scope() as session:
+        claimed = (await session.execute(
+            text("""
+                UPDATE agent_approvals
+                   SET execution_started_at = now(), updated_at = now()
+                 WHERE id = :id AND tenant_id = :t AND status = 'approved'
+                   AND execution_started_at IS NULL AND executed_at IS NULL
+             RETURNING id
+            """),
+            {"id": str(approval_id), "t": str(tenant_id)},
+        )).first()
+        if not claimed:
+            return None
+        row = (await session.execute(select(AgentApproval).where(AgentApproval.id == claimed[0]))).scalar_one()
+        session.expunge(row)
+        return row
 
+
+async def _record(row: AgentApproval, result: dict) -> None:
+    """Save the outcome: result on the approval, audit action, memory entry
+    (spec M3) and a bell notification, in one transaction."""
+    ref = approval_ref(row.id)
+    ok = bool(result.get("success", True))
+    async with session_scope() as session:
+        await session.execute(
+            text("""
+                UPDATE agent_approvals
+                   SET execution_result = CAST(:result AS jsonb), executed_at = now(), updated_at = now()
+                 WHERE id = :id
+            """),
+            {"id": str(row.id), "result": json.dumps(result, default=str)},
+        )
+        if row.conversation_id:
+            session.add(AgentAction(
+                conversation_id=row.conversation_id,
+                agent_type=row.agent_type,
+                tool_name=row.tool_name,
+                tool_input=row.arguments or {},
+                tool_output=result,
+                success=ok,
+                error=result.get("error") if not ok else None,
+            ))
+        row.execution_result = result
+        row.executed_at = datetime.now(timezone.utc)
+        mem_entry = memory_capture.approval_entry(
+            _approval_to_dict(row), decision="approved", decided_by=row.decided_by, reason=None, outcome=result
+        )
+        await memory_capture.request_in(session, row.tenant_id, mem_entry)
+        await notify(
+            session,
+            tenant_id=row.tenant_id,
+            title=f"Action #{ref} executed ({'succeeded' if ok else 'failed'})",
+            body=f"Approved tool {row.tool_name} ran with status: {'OK' if ok else result.get('error', 'Error')}",
+            category="approval",
+            severity="info" if ok else "warning",
+            link="/dashboard/admin/agents",
+        )
+
+
+async def execute_approved(tenant_id: str | uuid.UUID, approval_id: str | uuid.UUID) -> Optional[dict]:
+    """Run an approved call at most once: claim (committed) -> run -> record.
+    Returns the result, or None when there is nothing to run (not approved, or
+    already claimed by the approve route / bus consumer / an earlier attempt)."""
+    row = await _claim(tenant_id, approval_id)
+    if row is None:
+        return None
     tool = tool_registry.get(row.tool_name)
     if not tool:
-        err_res = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
-        row.execution_result = err_res
-        row.executed_at = datetime.now(timezone.utc)
-        return err_res
-
-    ref = approval_ref(row.id)
-    logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, ref)
-    try:
-        result = await tool.execute(
-            tool_input=row.arguments or {},
-            tenant_id=str(row.tenant_id),
-            user_id=acting_user_id(row),
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
-        result = {"success": False, "error": str(exc)}
-
-    row.execution_result = result
-    row.executed_at = datetime.now(timezone.utc)
-    await session.flush()
-
-    # Record AgentAction if linked to a conversation
-    if row.conversation_id:
-        action = AgentAction(
-            conversation_id=row.conversation_id,
-            agent_type=row.agent_type,
-            tool_name=row.tool_name,
-            tool_input=row.arguments or {},
-            tool_output=result,
-            success=bool(result.get("success", True)),
-            error=result.get("error") if not result.get("success", True) else None,
-        )
-        session.add(action)
-
-    # Memory capture entry for approval decision + outcome (spec M3)
-    approval_dict = _approval_to_dict(row)
-    mem_entry = memory_capture.approval_entry(
-        approval_dict, decision="approved", decided_by=row.decided_by, reason=None, outcome=result
-    )
-    await memory_capture.request_in(session, row.tenant_id, mem_entry)
-
-    # Bell notification
-    ok = bool(result.get("success", True))
-    await notify(
-        session,
-        tenant_id=row.tenant_id,
-        title=f"Action #{ref} executed ({'succeeded' if ok else 'failed'})",
-        body=f"Approved tool {row.tool_name} ran with status: {'OK' if ok else result.get('error', 'Error')}",
-        category="approval",
-        severity="info" if ok else "warning",
-        link="/dashboard/admin/agents",
-    )
-
+        result = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
+    else:
+        logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, approval_ref(row.id))
+        try:
+            result = await tool.execute(
+                tool_input=row.arguments or {},
+                tenant_id=str(row.tenant_id),
+                user_id=acting_user_id(row),
+            )
+        except Exception as exc:  # noqa: BLE001 - the failure is the outcome to record
+            logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
+            result = {"success": False, "error": str(exc)}
+    await _record(row, result)
     return result
 
 
 async def handle_approval_decided(event: dict) -> None:
-    """Bus consumer handler for agents.approval.decided events."""
+    """Bus consumer for agents.approval.decided: runs the call if the approve
+    route did not get to it (e.g. the process died after the decision)."""
     payload = event.get("payload") or {}
-    approval_id = payload.get("approval_id")
-    decision = payload.get("decision")
-    if not approval_id:
-        return
-
-    if decision == "approved":
-        async with session_scope() as session:
-            row = (await session.execute(
-                select(AgentApproval).where(AgentApproval.id == uuid.UUID(str(approval_id))).with_for_update()
-            )).scalar_one_or_none()
-            if row and row.executed_at is None:
-                await _execute_approved_call(session, row)
+    if payload.get("approval_id") and payload.get("decision") == "approved":
+        await execute_approved(event["tenant_id"], payload["approval_id"])
 
 
 consumer = EventConsumer("approval_gate", {EVENT_APPROVAL_DECIDED: handle_approval_decided})

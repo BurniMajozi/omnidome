@@ -187,48 +187,36 @@ def test_request_approval_stores_row_and_emits_event(monkeypatch):
     asyncio.run(_run())
 
 
-def test_decide_approval_approved_executes_tool_idempotently(monkeypatch):
+def test_decide_approval_approved_records_the_decision_without_running_the_tool(monkeypatch):
+    # The decision commits on its own; the tool runs afterwards in
+    # execute_approved (a failed commit can no longer follow a real side effect).
     async def _run():
         appr_id = uuid.uuid4()
         appr_row = AgentApproval(
-            id=appr_id,
-            tenant_id=uuid.UUID(TENANT),
-            agent_type="support",
-            tool_name="test_execute_tool",
-            arguments={"param": "value"},
-            status="pending",
+            id=appr_id, tenant_id=uuid.UUID(TENANT), agent_type="support", tool_name="test_execute_tool",
+            arguments={"param": "value"}, status="pending",
             expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
         )
-
         calls = []
 
         class MockTool:
             name = "test_execute_tool"
             async def execute(self, tool_input, tenant_id=None, user_id=None):
-                calls.append({"input": tool_input, "tenant": tenant_id})
-                return {"success": True, "data": {"result_id": "RES-1"}}
+                calls.append(tool_input)
+                return {"success": True}
 
         tool_registry._tools["test_execute_tool"] = MockTool()
 
         class QueryMock:
-            def where(self, *args, **kwargs):
-                return self
-            def with_for_update(self):
-                return self
             def scalar_one_or_none(self):
                 return appr_row
 
         class MockSession:
-            def __init__(self):
-                self.events = []
-                self.actions = []
-
+            events = []
             async def execute(self, stmt, *args, **kwargs):
                 return QueryMock()
-
             def add(self, obj):
-                self.actions.append(obj)
-
+                pass
             async def flush(self):
                 pass
 
@@ -241,43 +229,105 @@ def test_decide_approval_approved_executes_tool_idempotently(monkeypatch):
         async def fake_notify(*args, **kwargs):
             return uuid.uuid4()
 
-        async def fake_request_in(*args, **kwargs):
-            pass
-
         monkeypatch.setattr("services.agent_orchestrator.approvals.publish", fake_publish)
         monkeypatch.setattr("services.agent_orchestrator.approvals.notify", fake_notify)
-        monkeypatch.setattr("services.agent_orchestrator.memory_capture.request_in", fake_request_in)
-
         try:
-            result = await decide_approval(
-                session=session,
-                tenant_id=TENANT,
-                approval_id=appr_id,
-                decision="approved",
-                decided_by="admin-user",
-            )
-
-            assert result["status"] == "approved"
-            assert result["decided_by"] == "admin-user"
-            assert len(calls) == 1
-            assert calls[0]["input"] == {"param": "value"}
-            assert appr_row.executed_at is not None
-            assert appr_row.execution_result == {"success": True, "data": {"result_id": "RES-1"}}
-
-            # Event published
-            decided_events = [e for e in session.events if e["type"] == "agents.approval.decided"]
-            assert len(decided_events) == 1
-            assert decided_events[0]["payload"]["decision"] == "approved"
-
-            # Re-running execution on same row is idempotent
-            from services.agent_orchestrator.approvals import _execute_approved_call
-            second_res = await _execute_approved_call(session, appr_row)
-            assert len(calls) == 1  # Tool NOT called a second time
-            assert second_res == {"success": True, "data": {"result_id": "RES-1"}}
+            result = await decide_approval(session=session, tenant_id=TENANT, approval_id=appr_id,
+                                           decision="approved", decided_by="admin-user")
+            assert result["status"] == "approved" and result["decided_by"] == "admin-user"
+            assert calls == [] and appr_row.executed_at is None
+            decided = [e for e in session.events if e["type"] == "agents.approval.decided"]
+            assert len(decided) == 1 and decided[0]["payload"]["decision"] == "approved"
         finally:
             tool_registry._tools.pop("test_execute_tool", None)
 
     asyncio.run(_run())
+
+
+class ClaimStore:
+    """Stands in for the agent_approvals row: claim() succeeds once, like the
+    UPDATE ... WHERE execution_started_at IS NULL RETURNING in approvals._claim."""
+
+    def __init__(self, row, fail_record=False):
+        self.row, self.claimed, self.fail_record, self.recorded = row, False, fail_record, []
+
+    async def claim(self, tenant_id, approval_id):
+        if self.claimed or self.row.status != "approved":
+            return None
+        self.claimed = True
+        return self.row
+
+    async def record(self, row, result):
+        if self.fail_record:
+            raise RuntimeError("database went away")
+        self.recorded.append(result)
+
+
+def _approved_row(tool_name):
+    return AgentApproval(id=uuid.uuid4(), tenant_id=uuid.UUID(TENANT), agent_type="crm", tool_name=tool_name,
+                         arguments={"first_name": "TEST"}, status="approved", requested_by="crm",
+                         decided_by="11111111-1111-1111-1111-111111111111",
+                         expires_at=datetime.now(timezone.utc) + timedelta(hours=24))
+
+
+def _tool(name, calls, raises=False):
+    class T:
+        async def execute(self, tool_input, tenant_id=None, user_id=None):
+            calls.append((tool_input, user_id))
+            if raises:
+                raise ConnectionError("crm down")
+            return {"success": True, "data": {"id": "c1"}}
+    tool_registry._tools[name] = T()
+
+
+@pytest.mark.parametrize("fail_record", [False, True])
+def test_approved_call_runs_at_most_once(monkeypatch, fail_record):
+    from services.agent_orchestrator import approvals
+    calls, name = [], "test_once_tool"
+    _tool(name, calls)
+    store = ClaimStore(_approved_row(name), fail_record=fail_record)
+    monkeypatch.setattr(approvals, "_claim", store.claim)
+    monkeypatch.setattr(approvals, "_record", store.record)
+    try:
+        for _ in range(3):   # the approve route, the bus consumer, a retry
+            try:
+                asyncio.run(approvals.execute_approved(TENANT, store.row.id))
+            except RuntimeError:
+                pass         # recording failed: the claim still stands, so nothing re-runs
+        assert len(calls) == 1
+        assert calls[0][1] == "11111111-1111-1111-1111-111111111111"   # runs as the approver
+    finally:
+        tool_registry._tools.pop(name, None)
+
+
+def test_a_failing_tool_is_recorded_as_failed(monkeypatch):
+    from services.agent_orchestrator import approvals
+    calls, name = [], "test_failing_tool"
+    _tool(name, calls, raises=True)
+    store = ClaimStore(_approved_row(name))
+    monkeypatch.setattr(approvals, "_claim", store.claim)
+    monkeypatch.setattr(approvals, "_record", store.record)
+    try:
+        out = asyncio.run(approvals.execute_approved(TENANT, store.row.id))
+        assert out["success"] is False and "crm down" in out["error"]
+        assert store.recorded == [out]
+    finally:
+        tool_registry._tools.pop(name, None)
+
+
+def test_nothing_runs_unless_the_approval_is_approved(monkeypatch):
+    from services.agent_orchestrator import approvals
+    calls, name = [], "test_pending_tool"
+    _tool(name, calls)
+    row = _approved_row(name)
+    row.status = "rejected"
+    store = ClaimStore(row)
+    monkeypatch.setattr(approvals, "_claim", store.claim)
+    monkeypatch.setattr(approvals, "_record", store.record)
+    try:
+        assert asyncio.run(approvals.execute_approved(TENANT, row.id)) is None and calls == []
+    finally:
+        tool_registry._tools.pop(name, None)
 
 
 def test_decide_approval_rejected_does_not_execute(monkeypatch):

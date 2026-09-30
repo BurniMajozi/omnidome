@@ -12,6 +12,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
 from services.agent_orchestrator.approvals import (
     decide_approval,
+    execute_approved,
     get_approval,
     list_approvals,
 )
@@ -66,10 +67,10 @@ async def approve(
     body: Optional[ApproveRequest] = None,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Approve a pending agent action proposal."""
+    """Approve a pending agent action proposal, then run it (at most once)."""
     async with session_scope() as session:
         try:
-            return await decide_approval(
+            await decide_approval(
                 session=session,
                 tenant_id=ctx.tenant_id,
                 approval_id=approval_id,
@@ -79,6 +80,10 @@ async def approve(
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
+    # The decision is committed; execution claims the row in its own transaction.
+    await execute_approved(ctx.tenant_id, approval_id)
+    async with session_scope() as session:
+        return await get_approval(session, ctx.tenant_id, approval_id)
 
 
 @router.post("/{approval_id}/reject")

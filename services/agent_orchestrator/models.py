@@ -146,6 +146,7 @@ class AgentApproval(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending | approved | rejected | expired
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     execution_result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    execution_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
