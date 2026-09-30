@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, type ReactNode } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -66,6 +66,12 @@ interface ModuleLayoutProps {
   showTable?: boolean
   /** Whether to hide the header Export CSV button (defaults to false) */
   hideHeaderExport?: boolean
+  /**
+   * Per-panel replacement content (loading skeleton, Not connected, Error + Retry).
+   * When a key is set it is rendered instead of that panel's list, so a module with
+   * no real data for a panel never shows placeholder rows.
+   */
+  panelStates?: Partial<Record<"kpis" | "activity" | "issues" | "summary" | "tasks" | "recommendations", ReactNode>>
 }
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -97,6 +103,14 @@ function ImpactBadge({ impact }: { impact: string }) {
   return <Badge variant="outline" className={cn("capitalize", cls)}>{impact} impact</Badge>
 }
 
+function EmptyPanel({ text }: { text: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-sm text-muted-foreground">
+      {text}
+    </div>
+  )
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export function ModuleLayout({
@@ -115,12 +129,17 @@ export function ModuleLayout({
   headerActions,
   showTable = true,
   hideHeaderExport = false,
+  panelStates,
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
   const [localTableData, setLocalTableData] = useState<TableRow[]>(tableData)
   const [localRecommendations, setLocalRecommendations] = useState<AIRecommendation[]>(aiRecommendations)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
   const isClient = useIsClient()
+  // Recommendations can arrive after mount (async data); follow the prop.
+  useEffect(() => {
+    setLocalRecommendations(aiRecommendations)
+  }, [aiRecommendations])
   const openIssues = issues.filter((i) => i.status === "open").length
   const openTasks = tasks.filter((t) => t.status !== "done").length
 
@@ -260,6 +279,7 @@ Format each proposal as a separate markdown code block with a clear title header
       {/* KPI Flashcards */}
       <section aria-label="Key metrics">
         <h2 className="section-title mb-3">Key Metrics</h2>
+        {panelStates?.kpis ?? (
         <KPIGrid>
           {flashcardKPIs.map((kpi) => (
             <KPICard
@@ -274,6 +294,7 @@ Format each proposal as a separate markdown code block with a clear title header
             />
           ))}
         </KPIGrid>
+        )}
       </section>
 
       {/* Main content slot (charts, sub-tabs, etc.) */}
@@ -308,6 +329,7 @@ Format each proposal as a separate markdown code block with a clear title header
                 </TabsList>
 
                 <TabsContent value="activity" className="mt-4 pb-4">
+                  {panelStates?.activity ?? (activities.length === 0 ? <EmptyPanel text="No activity yet" /> : (
                   <ul className="scrollbar-thin max-h-72 space-y-2 overflow-y-auto pr-1">
                     {activities.map((a) => (
                       <li key={a.id} className="flex items-start gap-3 rounded-lg border border-border bg-secondary/20 p-3 group">
@@ -341,9 +363,11 @@ Format each proposal as a separate markdown code block with a clear title header
                       </li>
                     ))}
                   </ul>
+                  ))}
                 </TabsContent>
 
                 <TabsContent value="issues" className="mt-4 pb-4">
+                  {panelStates?.issues ?? (issues.length === 0 ? <EmptyPanel text="No issues" /> : (
                   <ul className="scrollbar-thin max-h-72 space-y-2 overflow-y-auto pr-1">
                     {issues.map((issue) => (
                       <li key={issue.id} className="rounded-lg border border-border bg-secondary/20 p-3 group">
@@ -380,15 +404,19 @@ Format each proposal as a separate markdown code block with a clear title header
                       </li>
                     ))}
                   </ul>
+                  ))}
                 </TabsContent>
 
                 <TabsContent value="summary" className="mt-4 pb-4">
+                  {panelStates?.summary ?? (
                   <div className="surface-sunken rounded-lg p-4">
                     <p className="text-sm leading-relaxed text-muted-foreground">{summary}</p>
                   </div>
+                  )}
                 </TabsContent>
 
                 <TabsContent value="tasks" className="mt-4 pb-4">
+                  {panelStates?.tasks ?? (tasks.length === 0 ? <EmptyPanel text="No tasks" /> : (
                   <ul className="scrollbar-thin max-h-72 space-y-2 overflow-y-auto pr-1">
                     {tasks.map((task) => (
                       <li key={task.id} className="rounded-lg border border-border bg-secondary/20 p-3">
@@ -411,6 +439,7 @@ Format each proposal as a separate markdown code block with a clear title header
                       </li>
                     ))}
                   </ul>
+                  ))}
                 </TabsContent>
               </Tabs>
             </CardHeader>
@@ -431,7 +460,8 @@ Format each proposal as a separate markdown code block with a clear title header
                   {actionFeedback}
                 </div>
               )}
-              {localRecommendations.map((rec) => (
+              {panelStates?.recommendations ?? (localRecommendations.length === 0 ? <EmptyPanel text="No recommendations" /> : null)}
+              {!panelStates?.recommendations && localRecommendations.map((rec) => (
                 <div key={rec.id} className="rounded-lg border border-border bg-secondary/20 p-3 group">
                   <div className="flex items-start justify-between gap-2">
                     <p className="text-sm font-medium text-foreground">{rec.title}</p>

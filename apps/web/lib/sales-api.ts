@@ -5,9 +5,11 @@
  * Proxies through the Next.js API routes to the sales service (port 8002).
  */
 
+import { parseTotalCount } from "@/lib/sales-derive"
+
 const SALES_API = "/api/sales"
 
-async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
+async function fetchSalesRaw(path: string, init?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   }
@@ -40,7 +42,23 @@ async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "")
     throw new SalesApiError(res.status, body)
   }
-  return res.json()
+  return res
+}
+
+async function fetchSales<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await fetchSalesRaw(path, init)).json()
+}
+
+/** A list plus the total matching rows (X-Total-Count) when the service sends it. */
+export interface Page<T> {
+  data: T[]
+  total: number | null
+}
+
+async function fetchSalesPage<T>(path: string): Promise<Page<T>> {
+  const res = await fetchSalesRaw(path)
+  const data = await res.json()
+  return { data: Array.isArray(data) ? (data as T[]) : [], total: parseTotalCount(res.headers.get("x-total-count")) }
 }
 
 /** Error carrying the service's own message (FastAPI `detail`), for the UI. */
@@ -51,12 +69,19 @@ export class SalesApiError extends Error {
     try {
       const parsed = JSON.parse(body)
       if (typeof parsed?.detail === "string") detail = parsed.detail
+      else if (typeof parsed?.error === "string") detail = parsed.error
     } catch {
       /* not JSON */
     }
     super(detail || `Sales API error ${status}`)
     this.status = status
   }
+}
+
+/** True when the service could not be reached (network, timeout, 502/503/504), as opposed to answering with an error. */
+export function isSalesUnreachable(err: unknown): boolean {
+  if (err instanceof SalesApiError) return err.status === 502 || err.status === 503 || err.status === 504
+  return true
 }
 
 export function salesErrorMessage(err: unknown, fallback = "Something went wrong"): string {
@@ -359,6 +384,21 @@ export const salesApi = {
     return fetchSales<Deal[]>(`/deals?${q}`)
   },
 
+  /** Every deal for the tenant, paged (the service caps one page at 1000). `total` is the service's count. */
+  listAllDeals: async (): Promise<Page<Deal>> => {
+    const PAGE = 1000
+    const all: Deal[] = []
+    let total: number | null = null
+    for (let page = 0; page < 10; page++) {
+      const r = await fetchSalesPage<Deal>(`/deals?limit=${PAGE}&offset=${page * PAGE}`)
+      all.push(...r.data)
+      total = r.total ?? total
+      // An older service ignores limit/offset and returns everything in one response.
+      if (total === null || r.data.length < PAGE || all.length >= total) break
+    }
+    return { data: all, total: total ?? all.length }
+  },
+
   createDeal: (data: DealCreate) =>
     fetchSales<Deal>("/deals", {
       method: "POST",
@@ -386,6 +426,15 @@ export const salesApi = {
     }),
 
   // Leads
+  listLeadsPage: (params?: { status?: string; source?: string; channel?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set("status", params.status)
+    if (params?.source) q.set("source", params.source)
+    if (params?.channel) q.set("channel", params.channel)
+    if (params?.limit) q.set("limit", String(params.limit))
+    return fetchSalesPage<SalesLead>(`/leads?${q}`)
+  },
+
   listLeads: (params?: { status?: string; source?: string; channel?: string; limit?: number }) => {
     const q = new URLSearchParams()
     if (params?.status) q.set("status", params.status)

@@ -22,9 +22,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { announceSalesChange } from "./sales-leads-tab"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { NotConnected } from "@/components/ui/not-connected"
+import type { Loadable } from "@/lib/service-state"
+import { boardTotals, closingTarget, truncationNote } from "@/lib/sales-derive"
 import {
   salesApi,
   salesErrorMessage,
+  isSalesUnreachable,
+  SalesApiError,
   PRODUCT_CATALOG,
   SALES_CHANNELS,
   type Deal,
@@ -94,10 +99,10 @@ function formatCurrency(value: number) {
 }
 
 // Derives per-stage deal_count/total_value_zar from the already-loaded
-// `deals` array instead of a separate /pipeline overview fetch. Safe and
-// exact: services/sales/main.py's GET /deals has no pagination, so `deals`
-// is always the complete set for the tenant -- this matches the backend's
-// own aggregate byte-for-byte, without an extra network round trip. This is
+// `deals` array instead of a separate /pipeline overview fetch. `deals` is
+// the full set for the tenant (salesApi.listAllDeals pages through /deals and
+// the header shows "Showing N of total" if it was ever cut short), so this
+// matches the backend's own aggregate without an extra round trip. This is
 // what lets stage moves/won/lost update the board instantly (see
 // SalesPipelineBoard's action handlers) instead of re-fetching everything.
 function deriveStageStats(stageDefs: PipelineStage[], deals: Deal[]): PipelineOverviewStage[] {
@@ -124,7 +129,9 @@ function DealCard({
   onLost,
   isFirst,
   isLast,
+  busy,
 }: {
+  busy: boolean
   deal: Deal
   stageName: string
   allStages: PipelineOverviewStage[]
@@ -142,7 +149,7 @@ function DealCard({
   return (
     <div
       className={`group relative rounded-lg border ${colors.border} ${colors.bg} p-3 transition-all hover:shadow-lg hover:shadow-black/20 cursor-grab active:cursor-grabbing`}
-      draggable
+      draggable={!busy}
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", deal.id)
         e.dataTransfer.effectAllowed = "move"
@@ -230,6 +237,7 @@ function DealCard({
       <div className="mt-2.5 flex items-center justify-between gap-1.5">
         <select
           value={deal.stage_id}
+          disabled={busy}
           onChange={(e) => {
             e.stopPropagation()
             onStageChange(deal.id, e.target.value)
@@ -260,6 +268,7 @@ function DealCard({
               variant="ghost"
               size="icon"
               className="h-6 w-6"
+              disabled={busy}
               onClick={(e) => { e.stopPropagation(); onMovePrev(deal.id) }}
               title="Move to previous stage"
             >
@@ -271,6 +280,7 @@ function DealCard({
               variant="ghost"
               size="icon"
               className="h-6 w-6"
+              disabled={busy}
               onClick={(e) => { e.stopPropagation(); onMoveNext(deal.id) }}
               title="Move to next stage"
             >
@@ -285,6 +295,7 @@ function DealCard({
               variant="ghost"
               size="icon"
               className="h-6 w-6 text-emerald-400 hover:text-emerald-300 hover:bg-emerald-500/10"
+              disabled={busy}
               onClick={(e) => { e.stopPropagation(); onWon(deal.id) }}
               title="Close Won"
             >
@@ -294,6 +305,7 @@ function DealCard({
               variant="ghost"
               size="icon"
               className="h-6 w-6 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+              disabled={busy}
               onClick={(e) => { e.stopPropagation(); onLost(deal.id) }}
               title="Close Lost"
             >
@@ -320,7 +332,9 @@ function PipelineColumn({
   onMovePrev,
   onWon,
   onLost,
+  busy,
 }: {
+  busy: boolean
   stage: PipelineOverviewStage
   deals: Deal[]
   stageIndex: number
@@ -351,7 +365,7 @@ function PipelineColumn({
         e.preventDefault()
         setDragOver(false)
         const dealId = e.dataTransfer.getData("text/plain")
-        if (dealId) onDrop(dealId, stage.id)
+        if (dealId && !busy) onDrop(dealId, stage.id)
       }}
     >
       {/* Column header */}
@@ -396,6 +410,7 @@ function PipelineColumn({
             onLost={onLost}
             isFirst={stageIndex === 0}
             isLast={stageIndex === totalStages - 1}
+            busy={busy}
           />
         ))}
       </div>
@@ -421,7 +436,15 @@ export function SalesPipelineBoard({
   const [stageDefs, setStageDefs] = useState<PipelineStage[]>([])
   const [deals, setDeals] = useState<Deal[]>([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // No fallback stages or deals: a failed load is an error state, never invented columns.
+  const [loadFail, setLoadFail] = useState<Loadable<never> | null>(null)
+  const [dealsTotal, setDealsTotal] = useState<number | null>(null)
+  // Mutations: one at a time, failures shown inline with the server's own text.
+  const [pending, setPending] = useState(false)
+  const pendingRef = useRef(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [confirmClose, setConfirmClose] = useState<{ dealId: string; kind: "won" | "lost" } | null>(null)
+  const [lostReason, setLostReason] = useState("")
 
   // Manual Deal Creation Modal state with full contact & product fields
   const [newDealOpen, setNewDealOpen] = useState(false)
@@ -443,37 +466,38 @@ export function SalesPipelineBoard({
 
   const loadData = useCallback(async () => {
     setLoading(true)
-    setError(null)
+    setLoadFail(null)
     try {
-      const [dealsData, stagesData] = await Promise.all([
-        salesApi.listDeals().catch(() => []),
-        salesApi.getPipelineStages().catch(() => []),
-      ])
-
-      // Fallback stages if backend is initializing or empty
-      const effectiveStages = stagesData.length > 0 ? stagesData : [
-        { id: "stage-1", name: "Prospecting", probability: 10, sort_order: 1 },
-        { id: "stage-2", name: "Qualified", probability: 30, sort_order: 2 },
-        { id: "stage-3", name: "Proposal", probability: 60, sort_order: 3 },
-        { id: "stage-4", name: "Negotiation", probability: 80, sort_order: 4 },
-        { id: "stage-5", name: "Closed Won", probability: 100, sort_order: 5 },
-        { id: "stage-6", name: "Closed Lost", probability: 0, sort_order: 6 },
-      ]
+      const [dealsPage, stagesData] = await Promise.all([salesApi.listAllDeals(), salesApi.getPipelineStages()])
+      const dealsData = dealsPage.data
+      if (stagesData.length === 0) {
+        setStageDefs([])
+        setDeals([])
+        setLoadFail({ state: "error", status: null, message: "No pipeline stages are configured for this tenant" })
+        return
+      }
 
       // Sort stages by sort_order
-      const sortedStages = [...effectiveStages].sort((a, b) => a.sort_order - b.sort_order)
+      const sortedStages = [...stagesData].sort((a, b) => a.sort_order - b.sort_order)
 
       setStageDefs(sortedStages)
       setDeals(dealsData)
+      setDealsTotal(dealsPage.total)
       // Functional update: depending on dealStageId here made the first load
       // change loadData's identity, re-firing the effect for a second full
       // reload (and spinner flash) on every mount.
-      if (sortedStages.length > 0) {
-        setDealStageId((prev) => prev || sortedStages[0].id)
-      }
+      setDealStageId((prev) => prev || sortedStages[0].id)
       onDataLoadedRef.current?.(dealsData, deriveStageStats(sortedStages, dealsData))
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load pipeline")
+      setStageDefs([])
+      setDeals([])
+      setLoadFail(
+        isSalesUnreachable(err)
+          ? { state: "unreachable", status: err instanceof SalesApiError ? err.status : null }
+          : err instanceof SalesApiError && (err.status === 401 || err.status === 403)
+            ? { state: "denied", status: err.status }
+            : { state: "error", status: err instanceof SalesApiError ? err.status : null, message: salesErrorMessage(err, "Failed to load pipeline") },
+      )
     } finally {
       setLoading(false)
     }
@@ -488,6 +512,8 @@ export function SalesPipelineBoard({
   // a local optimistic update without any extra fetch.
   const stages = useMemo(() => deriveStageStats(stageDefs, deals), [stageDefs, deals])
 
+  const totals = useMemo(() => boardTotals(deals), [deals])
+
   // Group deals by stage
   const dealsByStage = useMemo(() => {
     return stages.reduce<Record<string, Deal[]>>((acc, stage) => {
@@ -498,43 +524,63 @@ export function SalesPipelineBoard({
 
   // ── Actions ───────────────────────────────────────────────────────
 
-  const handleWonRef = useRef<(dealId: string) => Promise<void>>(async () => undefined)
-  const handleLostRef = useRef<(dealId: string) => Promise<void>>(async () => undefined)
+  // One mutation at a time; each caller rolls back in its own catch and surfaces the server's text.
+  const runMutation = useCallback(async (fn: () => Promise<void>) => {
+    if (pendingRef.current) return
+    pendingRef.current = true
+    setPending(true)
+    setActionError(null)
+    try {
+      await fn()
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
+  }, [])
+
+  const performMove = useCallback(async (dealId: string, targetStageId: string) => {
+    const deal = deals.find((d) => d.id === dealId)
+    if (!deal || deal.stage_id === targetStageId) return
+    if (deal.status === "WON" || deal.status === "LOST") {
+      setActionError(`This deal is already closed (${deal.status.toLowerCase()}).`)
+      return
+    }
+    const previousStageId = deal.stage_id
+    await runMutation(async () => {
+      // Optimistic update. Stage totals re-derive automatically from `deals`
+      // (see the `stages` useMemo above), so this alone keeps the whole board
+      // correct -- no follow-up loadData() on success.
+      setDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage_id: targetStageId } : d)))
+      try {
+        const updated = await salesApi.moveDealStage(dealId, { stage_id: targetStageId })
+        setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
+        announceSalesChange()
+      } catch (err) {
+        // Roll back the optimistic move and say why (409 closed deal, 403 not a writer, ...).
+        setDeals((prev) => prev.map((d) => (d.id === dealId ? { ...d, stage_id: previousStageId } : d)))
+        setActionError(salesErrorMessage(err, "Could not move the deal"))
+      }
+    })
+  }, [deals, runMutation])
+
+  // Any path into a closing stage (drag, stage select, Move next, Won/Lost buttons) asks first.
+  const requestClose = useCallback((dealId: string, kind: "won" | "lost") => {
+    if (pendingRef.current) return
+    setLostReason("")
+    setConfirmClose({ dealId, kind })
+  }, [])
 
   const handleStageChange = useCallback(async (dealId: string, targetStageId: string) => {
     const deal = deals.find((d) => d.id === dealId)
     if (!deal || deal.stage_id === targetStageId) return
     if (deal.status === "WON" || deal.status === "LOST") {
-      alert(`This deal is already closed (${deal.status.toLowerCase()}).`)
+      setActionError(`This deal is already closed (${deal.status.toLowerCase()}).`)
       return
     }
-    // Closing columns run the real close paths (commission / reason), not a plain move.
-    const targetName = stages.find((s) => s.id === targetStageId)?.name?.toLowerCase()
-    if (targetName === "closed won") return void handleWonRef.current(dealId)
-    if (targetName === "closed lost") return void handleLostRef.current(dealId)
-    const previousStageId = deal.stage_id
-
-    // Optimistic update. Stage totals re-derive automatically from `deals`
-    // (see the `stages` useMemo above), so this alone is enough to keep the
-    // whole board correct -- no follow-up loadData() needed on success,
-    // which previously re-fetched everything (3 API calls) and flashed the
-    // full-page "Loading pipeline..." spinner after every single move.
-    setDeals((prev) =>
-      prev.map((d) => (d.id === dealId ? { ...d, stage_id: targetStageId } : d))
-    )
-
-    try {
-      const updated = await salesApi.moveDealStage(dealId, { stage_id: targetStageId })
-      setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      announceSalesChange()
-    } catch (err) {
-      console.error("Failed to move deal:", err)
-      // Revert locally instead of a full reload.
-      setDeals((prev) =>
-        prev.map((d) => (d.id === dealId ? { ...d, stage_id: previousStageId } : d))
-      )
-    }
-  }, [deals, stages])
+    const closing = closingTarget(stages, targetStageId)
+    if (closing) return requestClose(dealId, closing)
+    await performMove(dealId, targetStageId)
+  }, [deals, stages, performMove, requestClose])
 
   const handleDrop = useCallback(async (dealId: string, targetStageId: string) => {
     handleStageChange(dealId, targetStageId)
@@ -545,8 +591,8 @@ export function SalesPipelineBoard({
     if (!deal) return
     const currentIdx = stages.findIndex((s) => s.id === deal.stage_id)
     if (currentIdx < 0 || currentIdx >= stages.length - 1) return
-    const nextStage = stages[currentIdx + 1]
-    handleStageChange(dealId, nextStage.id)
+    // Goes through handleStageChange: a next stage that is Closed Won/Lost opens the confirmation dialog.
+    handleStageChange(dealId, stages[currentIdx + 1].id)
   }, [deals, stages, handleStageChange])
 
   const handleMovePrev = useCallback(async (dealId: string) => {
@@ -554,38 +600,30 @@ export function SalesPipelineBoard({
     if (!deal) return
     const currentIdx = stages.findIndex((s) => s.id === deal.stage_id)
     if (currentIdx <= 0) return
-    const prevStage = stages[currentIdx - 1]
-    handleStageChange(dealId, prevStage.id)
+    handleStageChange(dealId, stages[currentIdx - 1].id)
   }, [deals, stages, handleStageChange])
 
-  const handleWon = useCallback(async (dealId: string) => {
-    try {
-      const updated = await salesApi.closeDealWon(dealId)
-      // `updated` already carries the new stage_id/status from the server;
-      // stage totals re-derive automatically, no reload needed.
-      setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      announceSalesChange()
-    } catch (err) {
-      alert(salesErrorMessage(err, "Could not close the deal as won"))
-    }
-  }, [])
+  const handleWon = useCallback((dealId: string) => requestClose(dealId, "won"), [requestClose])
+  const handleLost = useCallback((dealId: string) => requestClose(dealId, "lost"), [requestClose])
 
-  const handleLost = useCallback(async (dealId: string) => {
-    const reason = prompt("Reason for losing this deal?")
-    if (!reason || reason.length < 3) return
-    try {
-      const updated = await salesApi.closeDealLost(dealId, reason)
-      setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
-      announceSalesChange()
-    } catch (err) {
-      alert(salesErrorMessage(err, "Could not close the deal as lost"))
-    }
-  }, [])
-
-  useEffect(() => {
-    handleWonRef.current = handleWon
-    handleLostRef.current = handleLost
-  }, [handleWon, handleLost])
+  const executeClose = useCallback(async () => {
+    if (!confirmClose) return
+    const { dealId, kind } = confirmClose
+    if (kind === "lost" && lostReason.trim().length < 3) return
+    setConfirmClose(null)
+    await runMutation(async () => {
+      try {
+        const updated = kind === "won"
+          ? await salesApi.closeDealWon(dealId)
+          : await salesApi.closeDealLost(dealId, lostReason.trim())
+        // `updated` carries the new stage_id/status from the server; totals re-derive.
+        setDeals((prev) => prev.map((d) => (d.id === dealId ? updated : d)))
+        announceSalesChange()
+      } catch (err) {
+        setActionError(salesErrorMessage(err, kind === "won" ? "Could not close the deal as won" : "Could not close the deal as lost"))
+      }
+    })
+  }, [confirmClose, lostReason, runMutation])
 
   const handleCreateManualDeal = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -598,9 +636,11 @@ export function SalesPipelineBoard({
       }${dealContactPhone.trim() ? ` | Phone: ${dealContactPhone.trim()}` : ""} | Product: ${dealProduct} | Channel: ${dealChannel}`
       const combinedNotes = dealNotes.trim() ? `${metaPrefix}\n${dealNotes.trim()}` : metaPrefix
 
-      const contactUuid = typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : "00000000-0000-0000-0000-000000000001"
+      // No constant fallback id (it would attach unrelated deals to one customer): fail loudly.
+      const makeContactId = () => {
+        if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID()
+        throw new Error("This browser cannot generate a customer id; add a contact name instead")
+      }
 
       if (dealContactName.trim()) {
         // A person is known: one lead with its deal, linked (SPEC-lead-lifecycle.md).
@@ -618,7 +658,7 @@ export function SalesPipelineBoard({
       } else {
         await salesApi.createDeal({
           name: dealName.trim(),
-          customer_id: contactUuid,
+          customer_id: makeContactId(),
           stage_id: stage?.id,
           stage_name: stage?.name,
           value_zar: Number(dealValue) || 0,
@@ -635,7 +675,7 @@ export function SalesPipelineBoard({
       setDealNotes("")
       loadData()
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to create deal")
+      setActionError(err instanceof Error ? err.message : "Failed to create deal")
     } finally {
       setSavingDeal(false)
     }
@@ -654,15 +694,8 @@ export function SalesPipelineBoard({
     )
   }
 
-  if (error && stages.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <p className="text-sm text-red-400">{error}</p>
-        <Button variant="outline" size="sm" onClick={loadData}>
-          Retry
-        </Button>
-      </div>
-    )
+  if (loadFail) {
+    return <NotConnected loadable={loadFail} service="The sales service" onRetry={loadData} className="h-64" />
   }
 
   return (
@@ -672,20 +705,21 @@ export function SalesPipelineBoard({
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <DollarSign className="h-4 w-4 text-emerald-400" />
-            <span>
-              Total Pipeline:{" "}
-              <span className="font-semibold text-foreground">
-                {formatCurrency(
-                  stages.reduce((sum, s) => sum + s.total_value_zar, 0)
-                )}
-              </span>
+            <span title="Deals with status OPEN; won and lost are excluded">
+              Open pipeline:{" "}
+              <span className="font-semibold text-foreground">{formatCurrency(totals.openValue)}</span>
             </span>
           </div>
           <div className="text-sm text-muted-foreground">
+            Won:{" "}
+            <span className="font-semibold text-emerald-400">{formatCurrency(totals.wonValue)}</span>
+          </div>
+          <div className="text-sm text-muted-foreground">
             Deals:{" "}
-            <span className="font-semibold text-foreground">
-              {stages.reduce((sum, s) => sum + s.deal_count, 0)}
-            </span>
+            <span className="font-semibold text-foreground">{totals.count}</span>
+            {truncationNote(deals.length, dealsTotal) && (
+              <span className="ml-2 text-xs text-amber-400">{truncationNote(deals.length, dealsTotal)}</span>
+            )}
           </div>
         </div>
 
@@ -878,6 +912,51 @@ export function SalesPipelineBoard({
         </div>
       )}
 
+      {actionError && (
+        <div role="alert" className="flex items-start justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
+          <span>{actionError}</span>
+          <button type="button" className="shrink-0 underline" onClick={() => setActionError(null)}>Dismiss</button>
+        </div>
+      )}
+
+      {confirmClose && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div role="dialog" aria-modal="true" className="w-full max-w-sm rounded-xl border border-border bg-card p-5 shadow-2xl space-y-3">
+            <h3 className="text-base font-bold text-foreground">
+              {confirmClose.kind === "won" ? "Close this deal as won?" : "Close this deal as lost?"}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              This closes the deal and posts commission and finance entries.
+              {" "}{deals.find((d) => d.id === confirmClose.dealId)?.name}
+            </p>
+            {confirmClose.kind === "lost" && (
+              <input
+                type="text"
+                autoFocus
+                placeholder="Reason for losing this deal (required)"
+                value={lostReason}
+                onChange={(e) => setLostReason(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" size="sm" onClick={() => setConfirmClose(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={pending || (confirmClose.kind === "lost" && lostReason.trim().length < 3)}
+                onClick={() => void executeClose()}
+                className={confirmClose.kind === "won" ? "bg-emerald-600 text-white" : "bg-red-600 text-white"}
+              >
+                {confirmClose.kind === "won" ? "Close as won" : "Close as lost"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Kanban columns — horizontal scroll */}
       <div className="flex gap-4 overflow-x-auto pb-4 px-1">
         {stages.map((stage, idx) => (
@@ -894,6 +973,7 @@ export function SalesPipelineBoard({
             onMovePrev={handleMovePrev}
             onWon={handleWon}
             onLost={handleLost}
+            busy={pending}
           />
         ))}
       </div>

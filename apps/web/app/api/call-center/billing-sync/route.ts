@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { simulatedTelephonyGuard } from "@/lib/call-center-guard"
 
 export interface VoipInvoiceItem {
   id: string
@@ -92,7 +93,9 @@ let generatedInvoices: VoipInvoiceItem[] = [
   },
 ]
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const totalBilled = generatedInvoices.reduce((acc, inv) => acc + inv.total_amount_zar, 0)
   const totalMargin = generatedInvoices.reduce((acc, inv) => acc + inv.net_margin_zar, 0)
   const totalMinutes = generatedInvoices.reduce((acc, inv) => acc + inv.total_billable_minutes, 0)
@@ -111,6 +114,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const { action } = body

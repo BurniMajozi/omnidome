@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { simulatedTelephonyGuard } from "@/lib/call-center-guard"
 
 export interface TelecomProvider {
   id: string
@@ -94,7 +95,9 @@ let telecomProviders: TelecomProvider[] = [
   },
 ]
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const totalChannels = telecomProviders.reduce((acc, p) => acc + p.max_channels, 0)
   const activeChannels = telecomProviders.reduce((acc, p) => acc + p.active_channels, 0)
   return NextResponse.json({
@@ -111,6 +114,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const { action } = body
@@ -167,6 +172,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const url = new URL(req.url)
   const id = url.searchParams.get("id")
   if (!id) return NextResponse.json({ error: "Missing provider id" }, { status: 400 })

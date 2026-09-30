@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { simulatedTelephonyGuard } from "@/lib/call-center-guard"
 
 export interface SmartIvrNode {
   id: string
@@ -95,7 +96,9 @@ let ivrNodes: SmartIvrNode[] = [
   },
 ]
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   return NextResponse.json({
     ivr_nodes: ivrNodes,
     stats: {
@@ -115,6 +118,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const { action } = body

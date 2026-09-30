@@ -81,9 +81,15 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
     // 204/205/304 must not carry a body: passing "" makes NextResponse throw,
     // which the catch below turned into a 502 for every successful DELETE.
     const noBody = res.status === 204 || res.status === 205 || res.status === 304
+    const outHeaders: Record<string, string> = { "Content-Type": contentType }
+    // Pagination metadata from list endpoints (GET /deals): "showing N of total".
+    for (const h of ["x-total-count", "x-limit", "x-offset"]) {
+      const v = res.headers.get(h)
+      if (v !== null) outHeaders[h] = v
+    }
     return new NextResponse(noBody ? null : data, {
       status: res.status,
-      headers: { "Content-Type": contentType },
+      headers: outHeaders,
     })
   } catch (err) {
     console.error("Sales service proxy error:", err)

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { simulatedTelephonyGuard } from "@/lib/call-center-guard"
 
 export interface AstppRateCard {
   id: string
@@ -145,6 +146,8 @@ let rateCards: AstppRateCard[] = [
 ]
 
 export async function GET(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const url = new URL(req.url)
   const search = url.searchParams.get("search")?.toLowerCase()
 
@@ -176,6 +179,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const { destination, prefix, destination_type, buy_rate_zar, sell_rate_zar, pulse, connection_fee_zar, carrier, active } = body
@@ -209,6 +214,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const url = new URL(req.url)
   const id = url.searchParams.get("id")
   if (!id) return NextResponse.json({ error: "Missing rate card id" }, { status: 400 })

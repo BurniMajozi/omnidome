@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { simulatedTelephonyGuard } from "@/lib/call-center-guard"
 
 export interface VoipHardwareDevice {
   id: string
@@ -79,7 +80,9 @@ let hardwareDevices: VoipHardwareDevice[] = [
   },
 ]
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const onlineCount = hardwareDevices.filter((d) => d.status === "REGISTERED" || d.status === "IN_CALL").length
   return NextResponse.json({
     devices: hardwareDevices,
@@ -94,6 +97,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   try {
     const body = await req.json()
     const { brand, model, mac_address, assigned_extension, agent_name, ip_address, sip_transport } = body
@@ -129,6 +134,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const blocked = simulatedTelephonyGuard(req)
+  if (blocked) return blocked
   const url = new URL(req.url)
   const id = url.searchParams.get("id")
   if (!id) return NextResponse.json({ error: "Missing device id" }, { status: 400 })

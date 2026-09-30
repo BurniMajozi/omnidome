@@ -6,7 +6,7 @@
  * active, its runs in the last 7 days and the last run; can install, pause and
  * send a clearly-labelled test event.
  */
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { FileText, Globe, Loader2, Play, ShoppingCart, Zap } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -102,6 +102,12 @@ export function LeadWarmingRules() {
   const [busy, setBusy] = useState<string | null>(null)
   const [message, setMessage] = useState<Record<string, string>>({})
   const [showIntegration, setShowIntegration] = useState(false)
+  // The test-run watcher below polls for minutes; it must stop when this panel unmounts.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -149,6 +155,10 @@ export function LeadWarmingRules() {
   }
 
   const sendTest = async (rule: RuleStatus) => {
+    // Each click creates a REAL lead (labelled Test) and starts a real workflow run.
+    if (!window.confirm(`Send a test "${CARD[rule.key].title}" event?
+
+This creates a real lead labelled "Test" in Lead Stage Management and runs the workflow (an AI draft is generated).`)) return
     setBusy(rule.key)
     setMessage((m) => ({ ...m, [rule.key]: "Event sent — waiting for the run…" }))
     const tag = Math.random().toString(36).slice(2, 8)
@@ -171,7 +181,9 @@ export function LeadWarmingRules() {
       const started = Date.now()
       while (Date.now() - started < 180_000) {
         await new Promise((r) => setTimeout(r, Date.now() - started < 30_000 ? 3000 : 6000))
+        if (!mountedRef.current) return
         const data = await load()
+        if (!mountedRef.current) return
         const now = data?.find((r) => r.key === rule.key)?.last_run
         if (now && now.id !== previous && now.status === "running") {
           setMessage((m) => ({ ...m, [rule.key]: "Running — the AI draft can take a minute on free models…" }))
@@ -190,7 +202,7 @@ export function LeadWarmingRules() {
     } catch (err) {
       setMessage((m) => ({ ...m, [rule.key]: err instanceof Error ? err.message : "Could not send the event" }))
     } finally {
-      setBusy(null)
+      if (mountedRef.current) setBusy(null)
     }
   }
 
