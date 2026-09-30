@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { supabase } from "@/lib/supabase/client"
+import { sanitizeNextUrl } from "@/lib/supabase/redirect"
 import { Button } from "@/components/ui/button"
 
 export default function AuthCallbackPage() {
@@ -14,6 +15,26 @@ export default function AuthCallbackPage() {
     let cancelled = false
 
     const finalize = async () => {
+      // 1. Check for URL error parameters from OAuth provider
+      const searchParams = new URLSearchParams(window.location.search)
+      const errorParam = searchParams.get("error_description") || searchParams.get("error")
+      if (errorParam) {
+        if (!cancelled) setError(decodeURIComponent(errorParam))
+        return
+      }
+
+      // 2. Exchange code for session if PKCE code parameter is present
+      const code = searchParams.get("code")
+      if (code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+        if (cancelled) return
+        if (exchangeError) {
+          setError(exchangeError.message)
+          return
+        }
+      }
+
+      // 3. Check session
       const { data, error: sessionError } = await supabase.auth.getSession()
       if (cancelled) return
 
@@ -23,7 +44,8 @@ export default function AuthCallbackPage() {
       }
 
       if (data.session) {
-        router.replace("/dashboard")
+        const nextUrl = sanitizeNextUrl(searchParams.get("next"))
+        router.replace(nextUrl)
         return
       }
 
@@ -32,7 +54,9 @@ export default function AuthCallbackPage() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session) {
-        router.replace("/dashboard")
+        const searchParams = new URLSearchParams(window.location.search)
+        const nextUrl = sanitizeNextUrl(searchParams.get("next"))
+        router.replace(nextUrl)
       }
     })
 

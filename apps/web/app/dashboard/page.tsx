@@ -28,6 +28,7 @@ import { AdminModule } from "@/components/modules/admin-module"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { DEFAULT_ENTITLEMENTS, fetchEntitlements, isModuleEnabled, moduleBySection } from "@/lib/entitlements"
 import { AUTH_DISABLED } from "@/lib/flags"
+import { sanitizeNextUrl } from "@/lib/supabase/redirect"
 
 const sectionTitles: Record<string, string> = {
   overview: "Dashboard Overview",
@@ -98,17 +99,26 @@ export default function Dashboard() {
       }
     }
 
+    const redirectToAuth = () => {
+      const currentPath =
+        typeof window !== "undefined"
+          ? `${window.location.pathname}${window.location.search}${window.location.hash}`
+          : "/dashboard"
+      const safeNext = sanitizeNextUrl(currentPath)
+      router.replace(`/auth?next=${encodeURIComponent(safeNext)}`)
+    }
+
     supabase.auth.getSession().then(({ data }) => {
       if (!mounted) return
       if (!data.session) {
-        router.replace("/auth")
+        redirectToAuth()
         return
       }
       setAuthChecked(true)
     })
 
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!session) router.replace("/auth")
+      if (!session) redirectToAuth()
     })
 
     return () => {
