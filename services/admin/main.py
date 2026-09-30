@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import bcrypt
+import json
 import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime
@@ -15,17 +18,55 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context
-from services.common.entitlements import EntitlementGuard
+from services.common.entitlements import EntitlementGuard, EntitlementState
 from services.common.middleware import configure_production
 from services.common.rbac import has_permission, has_role
 from services.common.db import get_async_session
 from services.common.rate_limiter import RateLimiter
+from services.common.db import get_async_engine, run_with_db_retry
+from services.admin import iam, migrations, supabase_sync
+from services.admin.iam import (
+    actor_info,
+    apply_roles,
+    check_can_grant,
+    check_can_manage_target,
+    deactivate_member,
+    ensure_tenant_scope as _ensure_tenant_scope,
+    guard_last,
+    lock_tenant,
+    member_roles,
+    reactivate_member,
+    record_seat_event,
+    require_platform_admin as _require_platform_admin,
+    require_seat,
+    require_tenant_admin as _require_tenant_admin,
+    resolve_roles,
+)
 
 logger = logging.getLogger("admin")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="OmniDome Admin Service", version="1.0.0")
-guard = EntitlementGuard(module_name="admin", public_paths={"/internal/users/by-email"})
+app.include_router(iam.router)
+_SEAT_READ_RE = re.compile(r"^/(tenants/[0-9a-fA-F-]{36}/seats|platform/seat-usage)$")
+
+
+class AdminGuard(EntitlementGuard):
+    """Lets another service (billing) read seat data with only the shared x-internal-key."""
+
+    async def _check_tenant_module(self, tenant_id):
+        # The admin service IS the tenant-IAM platform surface; there is no `admin` row in the
+        # module catalog, so gating on tenant_modules would 403 every non-platform admin.
+        # Authorisation is done per endpoint (tenant admin / platform admin / rank guardrails).
+        return EntitlementState(enabled=True)
+
+    async def middleware(self, request, call_next):
+        if request.method == "GET" and _SEAT_READ_RE.match(request.url.path) and iam.internal_key_ok(request):
+            return await call_next(request)
+        return await super().middleware(request, call_next)
+
+
+guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept"})
 
 configure_production(app)
 
@@ -45,6 +86,11 @@ async def global_rate_limit_middleware(request: Request, call_next):
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
+    if os.getenv("ADMIN_RUN_MIGRATIONS", "true").lower() == "true":
+        # advisory-locked + idempotent: safe with several workers, safe to restart
+        await run_with_db_retry(lambda: migrations.run_migrations(get_async_engine()), logger=logger)
+    if os.getenv("ADMIN_SYNC_RETRY", "true").lower() == "true":
+        app.state.sync_task = asyncio.create_task(supabase_sync.retry_loop())
 
 
 @app.middleware("http")
@@ -68,6 +114,10 @@ class TenantCreate(BaseModel):
     vat_number: Optional[str] = None
     status: Optional[str] = None
     admin_user_id: Optional[uuid.UUID] = None
+    seat_limit: Optional[int] = Field(None, ge=1, le=100000)
+    seat_price: Optional[Decimal] = Field(None, ge=0)
+    owner_email: Optional[str] = Field(None, max_length=254)
+    send_owner_invite_email: bool = True
 
 
 class TenantUpdate(BaseModel):
@@ -158,55 +208,9 @@ async def _log_audit(
     tenant_id: Optional[uuid.UUID] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> None:
-    try:
-        await session.execute(
-            text(
-                """
-                insert into audit_logs (tenant_id, user_id, action, resource_type, resource_id, metadata)
-                values (:tenant_id, :user_id, :action, :resource_type, :resource_id, :metadata)
-                """
-            ),
-            {
-                "tenant_id": str(tenant_id or ctx.tenant_id) if (tenant_id or ctx.tenant_id) else None,
-                "user_id": str(ctx.user_id),
-                "action": action,
-                "resource_type": resource_type,
-                "resource_id": str(resource_id) if resource_id else None,
-                "metadata": metadata,
-            },
-        )
-    except Exception as exc:
-        logger.warning("Failed to write audit log: %s", exc)
-
-
-async def _require_platform_admin(ctx: AuthContext, session: AsyncSession) -> None:
-    if ctx.is_platform_admin:
-        return
-    if await has_permission(ctx, "platform.admin", session):
-        return
-    if await has_role(ctx, "platform_admin", session):
-        return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform admin required")
-
-
-async def _require_tenant_admin(ctx: AuthContext, session: AsyncSession) -> None:
-    if ctx.is_platform_admin:
-        return
-    if await has_permission(ctx, "org.admin", session):
-        return
-    if await has_permission(ctx, "org.manage", session):
-        return
-    if await has_role(ctx, "org_admin", session):
-        return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tenant admin required")
-
-
-async def _ensure_tenant_scope(ctx: AuthContext, tenant_id: uuid.UUID, session: AsyncSession) -> None:
-    if ctx.is_platform_admin:
-        return
-    if tenant_id != ctx.tenant_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-tenant access denied")
-    await _require_tenant_admin(ctx, session)
+    """Mandatory audit: runs in the caller's transaction and RAISES on failure, so a change
+    that cannot be audited is rolled back and the request fails."""
+    await iam.audit(session, ctx, action, resource_type, resource_id, tenant_id, metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +254,7 @@ async def create_tenant(
                 id, name, subdomain, domain, org_code, tier, vat_number, status, active, settings, branding
             )
             values (
-                :id, :name, :subdomain, :domain, :org_code, :tier, :vat_number, :status, :active, :settings, :branding
+                :id, :name, :subdomain, :domain, :org_code, :tier, :vat_number, :status, :active, CAST(:settings AS jsonb), CAST(:branding AS jsonb)
             )
             returning id, name, subdomain, domain, settings, branding, active,
                       org_code, tier, vat_number, status, created_at, updated_at
@@ -266,23 +270,35 @@ async def create_tenant(
             "vat_number": payload.vat_number,
             "status": status_value,
             "active": active_flag,
-            "settings": payload.settings,
-            "branding": payload.branding,
+            "settings": json.dumps(payload.settings) if payload.settings is not None else None,
+            "branding": json.dumps(payload.branding) if payload.branding is not None else None,
         },
     )
     row = result.mappings().one()
 
     if os.getenv("ADMIN_AUTO_PROVISION", "true").lower() == "true":
-        try:
-            await session.execute(
-                text("select provision_tenant(:tenant_id, :admin_user_id)"),
-                {
-                    "tenant_id": str(tenant_id),
-                    "admin_user_id": str(payload.admin_user_id) if payload.admin_user_id else None,
-                },
-            )
-        except Exception as exc:
-            logger.warning("Provision tenant failed: %s", exc)
+        # provision_tenant is part of the tenant: if it fails the whole request rolls back
+        # (a tenant without roles cannot be invited into).
+        await session.execute(
+            text("select provision_tenant(:tenant_id, :admin_user_id)"),
+            {
+                "tenant_id": str(tenant_id),
+                "admin_user_id": str(payload.admin_user_id) if payload.admin_user_id else None,
+            },
+        )
+    conn = await session.connection()
+    await migrations.ensure_tenant_roles(conn, tenant_id)
+    seat_limit = payload.seat_limit if payload.seat_limit is not None else migrations.DEFAULT_SEAT_LIMIT
+    await session.execute(
+        text("update tenants set seat_limit = :l, seat_price = :p where id = :t"),
+        {"l": seat_limit, "p": payload.seat_price, "t": str(tenant_id)},
+    )
+
+    owner_invite = None
+    if payload.owner_email:
+        actor = await actor_info(ctx, session)
+        inv = await iam.create_invite_row(session, ctx, actor, tenant_id, payload.owner_email, ["owner"])
+        owner_invite = inv
 
     await _log_audit(
         session,
@@ -291,10 +307,19 @@ async def create_tenant(
         resource_type="tenant",
         resource_id=tenant_id,
         tenant_id=tenant_id,
-        metadata={"domain": domain, "settings": payload.settings, "branding": payload.branding},
+        metadata={"domain": domain, "seat_limit": seat_limit, "owner_email": payload.owner_email},
     )
+    await session.commit()
 
-    return _tenant_response(row)
+    response = _tenant_response(row)
+    response["seat_limit"] = seat_limit
+    response["seat_price"] = str(payload.seat_price) if payload.seat_price is not None else None
+    if owner_invite:
+        delivery = await iam.deliver_invite(
+            owner_invite["invite_id"], owner_invite["email"], owner_invite["token"], payload.send_owner_invite_email
+        )
+        response["owner_invite"] = {"invite_id": str(owner_invite["invite_id"]), "email": owner_invite["email"], **delivery}
+    return response
 
 
 @app.get("/tenants")
@@ -357,9 +382,9 @@ async def update_tenant(
     if payload.name is not None:
         updates["name"] = payload.name
     if payload.settings is not None:
-        updates["settings"] = payload.settings
+        updates["settings"] = json.dumps(payload.settings)
     if payload.branding is not None:
-        updates["branding"] = payload.branding
+        updates["branding"] = json.dumps(payload.branding)
     if payload.org_code is not None:
         updates["org_code"] = payload.org_code
     if payload.tier is not None:
@@ -375,8 +400,14 @@ async def update_tenant(
 
     if not updates:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
+    # commercial / lifecycle fields belong to the platform, not the tenant admin
+    if not ctx.is_platform_admin and {"tier", "status", "active", "org_code"} & set(updates):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a platform admin may change tier, status or org_code")
 
-    set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+    json_cols = {"settings", "branding"}
+    set_clause = ", ".join(
+        [f"{key} = CAST(:{key} AS jsonb)" if key in json_cols else f"{key} = :{key}" for key in updates.keys()]
+    )
     updates["tenant_id"] = str(tenant_id)
 
     result = await session.execute(
@@ -402,7 +433,7 @@ async def update_tenant(
         resource_type="tenant",
         resource_id=tenant_id,
         tenant_id=tenant_id,
-        metadata={"updates": updates, "settings": payload.settings, "branding": payload.branding},
+        metadata={"updates": sorted(k for k in updates if k != "tenant_id")},
     )
     return _tenant_response(row)
 
@@ -446,6 +477,12 @@ async def delete_tenant(
 # ---------------------------------------------------------------------------
 
 
+async def _guard_permissions(ctx: AuthContext, permissions: List[str]) -> None:
+    """Tenant admins may not hand out platform-level permissions through a tenant role."""
+    if not ctx.is_platform_admin and any(p.startswith("platform.") for p in permissions):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform.* permissions require a platform admin")
+
+
 @app.post("/roles", status_code=status.HTTP_201_CREATED)
 async def create_role(
     payload: RoleCreate,
@@ -455,6 +492,9 @@ async def create_role(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
+    if payload.name.strip().lower() in iam.RESERVED_ROLE_NAMES | set(migrations.ROLE_RANKS):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reserved role name")
+    await _guard_permissions(ctx, payload.permissions)
     role_id = uuid.uuid4()
 
     result = await session.execute(
@@ -560,13 +600,18 @@ async def update_role_permissions(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
+    await _guard_permissions(ctx, payload.permissions)
 
     role_row = await session.execute(
-        text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
+        text("select id, role_rank from roles where id = :role_id and tenant_id = :tenant_id"),
         {"role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
     )
-    if not role_row.first():
+    role_found = role_row.first()
+    if not role_found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    actor = await actor_info(ctx, session)
+    if not actor.platform and int(role_found[1]) > actor.rank:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit a role above your own rank")
 
     await session.execute(
         text("delete from role_permissions where role_id = :role_id"),
@@ -596,6 +641,10 @@ async def update_role_permissions(
     return {"role_id": role_id, "permissions": payload.permissions}
 
 
+async def _current_role_names(session, tenant_id, user_id) -> List[str]:
+    return sorted(r["name"] for r in await member_roles(session, tenant_id, user_id) if r["scope"] == "TENANT")
+
+
 @app.post("/users/{user_id}/roles")
 async def assign_role(
     user_id: uuid.UUID,
@@ -606,36 +655,20 @@ async def assign_role(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
+    actor = await actor_info(ctx, session)
 
     role_row = await session.execute(
-        text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
+        text("select name from roles where id = :role_id and tenant_id = :tenant_id"),
         {"role_id": str(payload.role_id), "tenant_id": str(ctx.tenant_id)},
     )
-    if not role_row.first():
+    found = role_row.first()
+    if not found:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
 
-    user_row = await session.execute(
-        text("select id from users where id = :user_id and tenant_id = :tenant_id"),
-        {"user_id": str(user_id), "tenant_id": str(ctx.tenant_id)},
-    )
-    if not user_row.first():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    await session.execute(
-        text(
-            """
-            insert into user_roles (user_id, role_id, tenant_id, assigned_by)
-            values (:user_id, :role_id, :tenant_id, :assigned_by)
-            on conflict (user_id, role_id, tenant_id) do nothing
-            """
-        ),
-        {
-            "user_id": str(user_id),
-            "role_id": str(payload.role_id),
-            "tenant_id": str(ctx.tenant_id),
-            "assigned_by": str(ctx.user_id),
-        },
-    )
+    await lock_tenant(session, ctx.tenant_id)
+    current = await _current_role_names(session, ctx.tenant_id, user_id)
+    if found[0] not in current:
+        await apply_roles(session, ctx, actor, ctx.tenant_id, user_id, current + [found[0]])
 
     await _log_audit(
         session,
@@ -643,10 +676,11 @@ async def assign_role(
         action="role.assign",
         resource_type="user",
         resource_id=user_id,
-        metadata={"role_id": str(payload.role_id)},
+        metadata={"role_id": str(payload.role_id), "role": found[0]},
     )
-
-    return {"user_id": user_id, "role_id": payload.role_id, "tenant_id": ctx.tenant_id}
+    await session.commit()
+    sync = await supabase_sync.sync_user(user_id, revoke=True)
+    return {"user_id": user_id, "role_id": payload.role_id, "tenant_id": ctx.tenant_id, "supabase_sync": sync}
 
 
 @app.delete("/users/{user_id}/roles/{role_id}")
@@ -657,24 +691,28 @@ async def remove_role(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _require_tenant_admin(ctx, session)
-    await session.execute(
-        text(
-            """
-            delete from user_roles
-            where user_id = :user_id and role_id = :role_id and tenant_id = :tenant_id
-            """
-        ),
-        {"user_id": str(user_id), "role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
+    actor = await actor_info(ctx, session)
+    role_row = await session.execute(
+        text("select name from roles where id = :r and tenant_id = :t"), {"r": str(role_id), "t": str(ctx.tenant_id)}
     )
+    found = role_row.first()
+    if not found:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    await lock_tenant(session, ctx.tenant_id)
+    current = await _current_role_names(session, ctx.tenant_id, user_id)
+    if found[0] in current:
+        await apply_roles(session, ctx, actor, ctx.tenant_id, user_id, [n for n in current if n != found[0]])
     await _log_audit(
         session,
         ctx,
         action="role.remove",
         resource_type="user",
         resource_id=user_id,
-        metadata={"role_id": str(role_id)},
+        metadata={"role_id": str(role_id), "role": found[0]},
     )
-    return {"user_id": user_id, "role_id": role_id, "tenant_id": ctx.tenant_id, "status": "removed"}
+    await session.commit()
+    sync = await supabase_sync.sync_user(user_id, revoke=True)
+    return {"user_id": user_id, "role_id": role_id, "tenant_id": ctx.tenant_id, "status": "removed", "supabase_sync": sync}
 
 
 # ---------------------------------------------------------------------------
@@ -780,7 +818,7 @@ async def update_tenant_modules(
                 "tenant_id": str(tenant_id),
                 "module_id": str(module_id_row[0]),
                 "status": status_value,
-                "enabled_by": str(ctx.user_id),
+                "enabled_by": str(ctx.user_id) if (await session.execute(text("select 1 from users where id = :u"), {"u": str(ctx.user_id)})).first() else None,
                 "disabled_at": None if module.enabled else datetime.utcnow(),
                 "config": module.config,
             },
@@ -870,13 +908,32 @@ async def internal_get_user_by_email(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal key")
 
     result = await session.execute(
-        text("select id, tenant_id from users where email = :email and is_active = true"),
+        text("select id, tenant_id, is_active, is_owner, supabase_synced from users where lower(email) = lower(:email)"),
         {"email": email},
     )
     row = result.mappings().first()
     if not row or not row["tenant_id"]:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    return {"user_id": str(row["id"]), "tenant_id": str(row["tenant_id"])}
+    roles = await member_roles(session, row["tenant_id"], row["id"])
+    return {
+        "user_id": str(row["id"]),
+        "tenant_id": str(row["tenant_id"]),
+        "roles": sorted({r["name"] for r in roles}),
+        "is_active": bool(row["is_active"]),
+        "seat_status": "active" if row["is_active"] else "suspended",
+        "is_owner": bool(row["is_owner"]),
+        "synced": bool(row["supabase_synced"]),
+    }
+
+
+def _user_out(row) -> Dict[str, Any]:
+    return {
+        "id": row.get("id"),
+        "email": row.get("email"),
+        "name": row.get("full_name"),
+        "is_active": row.get("is_active"),
+        "created_at": row.get("created_at"),
+    }
 
 
 @app.post("/users", status_code=status.HTTP_201_CREATED)
@@ -886,57 +943,71 @@ async def create_user(
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
+    """Direct user creation (break-glass / provisioning). Normal onboarding is invite-based
+    (POST /tenants/{id}/invites). Consumes a seat, so the tenant seat limit applies."""
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
+    actor = await actor_info(ctx, session)
+    tenant_id = ctx.tenant_id
+    email = payload.email.strip().lower()
     user_id = uuid.uuid4()
     if payload.password:
         hashed_password = bcrypt.hashpw(payload.password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
     else:
         hashed_password = os.getenv("DEFAULT_USER_PASSWORD_HASH") or secrets.token_hex(16)
 
+    await lock_tenant(session, tenant_id)
+    if (await session.execute(text("select 1 from users where lower(email) = :e"), {"e": email})).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already belongs to a tenant")
+    if payload.is_active:
+        await require_seat(session, tenant_id)
+
+    role = None
+    if payload.role_id:
+        # Only a role of the caller's tenant, and only one the caller is allowed to grant.
+        role_row = await session.execute(
+            text("select name from roles where id = :role_id and tenant_id = :tenant_id"),
+            {"role_id": str(payload.role_id), "tenant_id": str(tenant_id)},
+        )
+        found = role_row.first()
+        if not found:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+        role = (await resolve_roles(session, tenant_id, [found[0]]))[0]
+        check_can_grant(actor, [role])
+
     result = await session.execute(
         text(
             """
-            insert into users (id, tenant_id, email, full_name, hashed_password, is_active)
-            values (:id, :tenant_id, :email, :full_name, :hashed_password, :is_active)
+            insert into users (id, tenant_id, email, full_name, hashed_password, is_active, is_owner)
+            values (:id, :tenant_id, :email, :full_name, :hashed_password, :is_active, :is_owner)
             returning id, email, full_name, is_active, created_at
             """
         ),
         {
             "id": str(user_id),
-            "tenant_id": str(ctx.tenant_id),
-            "email": payload.email,
+            "tenant_id": str(tenant_id),
+            "email": email,
             "full_name": payload.name,
             "hashed_password": hashed_password,
             "is_active": payload.is_active,
+            "is_owner": bool(role and role["name"] == "owner"),
         },
     )
     row = result.mappings().one()
 
-    if payload.role_id:
-        # Only assign a role that belongs to the caller's tenant (mirrors
-        # assign_role) — prevents attaching a cross-tenant / unknown role.
-        role_row = await session.execute(
-            text("select id from roles where id = :role_id and tenant_id = :tenant_id"),
-            {"role_id": str(payload.role_id), "tenant_id": str(ctx.tenant_id)},
-        )
-        if not role_row.first():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    if role:
         await session.execute(
             text(
                 """
                 insert into user_roles (user_id, role_id, tenant_id, assigned_by)
-                values (:user_id, :role_id, :tenant_id, :assigned_by)
+                values (:user_id, :role_id, :tenant_id, (select id from users where id = :by))
                 on conflict (user_id, role_id, tenant_id) do nothing
                 """
             ),
-            {
-                "user_id": str(user_id),
-                "role_id": str(payload.role_id),
-                "tenant_id": str(ctx.tenant_id),
-                "assigned_by": str(ctx.user_id),
-            },
+            {"user_id": str(user_id), "role_id": str(role["id"]), "tenant_id": str(tenant_id), "by": str(ctx.user_id)},
         )
+    if payload.is_active:
+        await record_seat_event(session, tenant_id, user_id, 1, "user_created", ctx.user_id)
 
     await _log_audit(
         session,
@@ -944,16 +1015,11 @@ async def create_user(
         action="user.create",
         resource_type="user",
         resource_id=user_id,
-        metadata={"role_id": str(payload.role_id) if payload.role_id else None},
+        metadata={"role_id": str(payload.role_id) if payload.role_id else None, "email": email},
     )
-
-    return {
-        "id": row.get("id"),
-        "email": row.get("email"),
-        "name": row.get("full_name"),
-        "is_active": row.get("is_active"),
-        "created_at": row.get("created_at"),
-    }
+    await session.commit()
+    await supabase_sync.sync_user(user_id, revoke=False)
+    return _user_out(row)
 
 
 @app.put("/users/{user_id}")
@@ -964,31 +1030,40 @@ async def update_user(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _require_tenant_admin(ctx, session)
+    actor = await actor_info(ctx, session)
+    if payload.email is None and payload.name is None and payload.is_active is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
+    tenant_id = ctx.tenant_id
+
+    # activation state changes go through the seat-aware paths
+    changed_state = False
+    if payload.is_active is False:
+        out = await deactivate_member(session, ctx, actor, tenant_id, user_id)
+        changed_state = out["changed"]
+    elif payload.is_active is True:
+        out = await reactivate_member(session, ctx, actor, tenant_id, user_id)
+        changed_state = out["changed"]
+
     updates: Dict[str, Any] = {}
     if payload.email is not None:
-        updates["email"] = payload.email
+        new_email = payload.email.strip().lower()
+        if (await session.execute(text("select 1 from users where lower(email) = :e and id <> :u"), {"e": new_email, "u": str(user_id)})).first():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already belongs to a tenant")
+        check_can_manage_target(actor, await member_roles(session, tenant_id, user_id))
+        updates["email"] = new_email
     if payload.name is not None:
         updates["full_name"] = payload.name
-    if payload.is_active is not None:
-        updates["is_active"] = payload.is_active
-
-    if not updates:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
-
-    set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
-    updates["user_id"] = str(user_id)
-    updates["tenant_id"] = str(ctx.tenant_id)
-
+    if updates:
+        set_clause = ", ".join([f"{key} = :{key}" for key in updates.keys()])
+        if "email" in updates:
+            set_clause += ", supabase_synced = false"
+        await session.execute(
+            text(f"update users set {set_clause} where id = :user_id and tenant_id = :tenant_id"),
+            {**updates, "user_id": str(user_id), "tenant_id": str(tenant_id)},
+        )
     result = await session.execute(
-        text(
-            f"""
-            update users
-            set {set_clause}
-            where id = :user_id and tenant_id = :tenant_id
-            returning id, email, full_name, is_active, created_at
-            """
-        ),
-        updates,
+        text("select id, email, full_name, is_active, created_at from users where id = :u and tenant_id = :t"),
+        {"u": str(user_id), "t": str(tenant_id)},
     )
     row = result.mappings().one_or_none()
     if not row:
@@ -1000,16 +1075,12 @@ async def update_user(
         action="user.update",
         resource_type="user",
         resource_id=user_id,
-        metadata={"updates": updates},
+        metadata={"updates": sorted(updates), "is_active": payload.is_active},
     )
-
-    return {
-        "id": row.get("id"),
-        "email": row.get("email"),
-        "name": row.get("full_name"),
-        "is_active": row.get("is_active"),
-        "created_at": row.get("created_at"),
-    }
+    await session.commit()
+    if changed_state or "email" in updates:
+        await supabase_sync.sync_user(user_id, revoke=payload.is_active is False)
+    return _user_out(row)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -1033,6 +1104,8 @@ async def reset_user_password(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
+    actor = await actor_info(ctx, session)
+    check_can_manage_target(actor, await member_roles(session, ctx.tenant_id, user_id))
     new_hash = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
     result = await session.execute(
         text("update users set hashed_password = :hp where id = :uid and tenant_id = :tid"),
@@ -1059,36 +1132,18 @@ async def deactivate_user(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
-    result = await session.execute(
-        text(
-            """
-            update users
-            set is_active = false
-            where id = :user_id and tenant_id = :tenant_id
-            returning id, email, full_name, is_active, created_at
-            """
-        ),
-        {"user_id": str(user_id), "tenant_id": str(ctx.tenant_id)},
-    )
-    row = result.mappings().one_or_none()
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    await _log_audit(
-        session,
-        ctx,
-        action="user.deactivate",
-        resource_type="user",
-        resource_id=user_id,
-    )
-
-    return {
-        "id": row.get("id"),
-        "email": row.get("email"),
-        "name": row.get("full_name"),
-        "is_active": row.get("is_active"),
-        "created_at": row.get("created_at"),
-    }
+    actor = await actor_info(ctx, session)
+    out = await deactivate_member(session, ctx, actor, ctx.tenant_id, user_id)
+    row = (
+        await session.execute(
+            text("select id, email, full_name, is_active, created_at from users where id = :u and tenant_id = :t"),
+            {"u": str(user_id), "t": str(ctx.tenant_id)},
+        )
+    ).mappings().one()
+    await session.commit()
+    if out["changed"]:
+        await supabase_sync.sync_user(user_id, revoke=True)
+    return _user_out(row)
 
 
 # ---------------------------------------------------------------------------

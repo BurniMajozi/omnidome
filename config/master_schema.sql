@@ -19,6 +19,12 @@ CREATE TABLE tenants (
     active BOOLEAN DEFAULT TRUE,
     settings JSONB DEFAULT '{}'::jsonb,
     branding JSONB DEFAULT '{}'::jsonb,
+    -- Seats (services/admin/migrations.py mirrors these for existing DBs).
+    -- seat_limit NULL = unlimited (dev tenant / explicit platform-admin choice); new tenants default to 5.
+    seat_limit INTEGER DEFAULT 5,
+    seat_price NUMERIC(12,2),
+    billing_status TEXT NOT NULL DEFAULT 'active', -- active, past_due, suspended, cancelled
+    owner_user_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
@@ -31,6 +37,14 @@ CREATE TABLE users (
     role TEXT DEFAULT 'USER', -- Legacy role field (prefer RBAC tables below)
     hashed_password TEXT NOT NULL,
     is_active BOOLEAN DEFAULT TRUE,
+    -- Membership state (one tenant per email): is_active = seat held, is_owner = tenant owner.
+    is_owner BOOLEAN NOT NULL DEFAULT FALSE,
+    deactivated_at TIMESTAMP WITH TIME ZONE,
+    -- Supabase app_metadata is a derived cache written only by the admin service.
+    supabase_user_id UUID,
+    supabase_synced BOOLEAN NOT NULL DEFAULT FALSE,
+    supabase_synced_at TIMESTAMP WITH TIME ZONE,
+    supabase_sync_error TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -66,6 +80,9 @@ CREATE TABLE roles (
     scope TEXT NOT NULL, -- PLATFORM, TENANT
     description TEXT,
     is_system BOOLEAN DEFAULT FALSE,
+    -- Grant guardrail: an actor may grant only roles with role_rank <= their own highest rank.
+    -- platform_admin 100 > owner 90 > org_admin 80 > manager/hr_manager 50 > org_user 10 (custom default 10).
+    role_rank INTEGER NOT NULL DEFAULT 10,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     CHECK (scope IN ('PLATFORM', 'TENANT')),
     CHECK (
@@ -108,6 +125,57 @@ CREATE TABLE role_modules (
     can_access BOOLEAN DEFAULT TRUE,
     PRIMARY KEY (role_id, module_id)
 );
+
+-- 1d. SEATS, INVITES, ADMIN MIGRATION LOG (services/admin)
+CREATE TABLE IF NOT EXISTS admin_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+
+-- Append-only ledger of seat changes. delta is the change in ACTIVE users (invite events are 0);
+-- billing bills the end-of-cycle PEAK of active_after (pending_after shown for reservation reporting).
+CREATE TABLE IF NOT EXISTS seat_events (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id UUID,
+    delta INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    actor_id UUID,
+    active_after INTEGER,
+    pending_after INTEGER,
+    at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_seat_events_tenant_at ON seat_events(tenant_id, at);
+
+CREATE OR REPLACE FUNCTION seat_events_no_update() RETURNS trigger AS $$
+BEGIN RAISE EXCEPTION 'seat_events is append-only'; END; $$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_seat_events_no_update ON seat_events;
+CREATE TRIGGER trg_seat_events_no_update BEFORE UPDATE ON seat_events
+    FOR EACH ROW EXECUTE FUNCTION seat_events_no_update();
+
+-- Invites hold a seat while pending and unexpired (7 days). Only a hash of the token is stored.
+CREATE TABLE IF NOT EXISTS invites (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    role_names TEXT[] NOT NULL DEFAULT '{}',
+    token_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+    invited_by UUID,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    accepted_at TIMESTAMP WITH TIME ZONE,
+    accepted_user_id UUID,
+    revoked_at TIMESTAMP WITH TIME ZONE,
+    supabase_user_id UUID,
+    supabase_created BOOLEAN NOT NULL DEFAULT FALSE,
+    CHECK (status IN ('pending','accepted','revoked','expired'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_token_hash ON invites(token_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_pending_email ON invites(tenant_id, lower(email)) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(lower(email));
+CREATE INDEX IF NOT EXISTS idx_invites_tenant ON invites(tenant_id, status);
+CREATE INDEX IF NOT EXISTS idx_users_supabase_unsynced ON users(supabase_synced) WHERE supabase_synced = false;
 
 -- 2. SMART CRM (CORE)
 CREATE TABLE contacts (
