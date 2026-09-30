@@ -1,3 +1,5 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextResponse } from "next/server"
 
 /**
@@ -28,8 +30,8 @@ type Stat = {
 
 function headersFor(request: Request): HeadersInit {
   const auth = request.headers.get("authorization")
-  const tenantId = request.headers.get("x-tenant-id") || DEV_TENANT_ID
-  const h: Record<string, string> = { "x-tenant-id": tenantId }
+  const tenantId = request.headers.get("x-tenant-id") || (devFallbackAllowed() ? DEV_TENANT_ID : "")
+  const h: Record<string, string> = tenantId ? { "x-tenant-id": tenantId } : {}
   // proxy.ts injects the verified x-user-id; backends reject a tenant without a user.
   const userId = request.headers.get("x-user-id")
   if (userId) h["x-user-id"] = userId
@@ -39,7 +41,7 @@ function headersFor(request: Request): HeadersInit {
 
 async function fetchJson(url: string, headers: HeadersInit): Promise<unknown | null> {
   try {
-    const res = await fetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(1500) })
+    const res = await signedFetch(url, { headers, cache: "no-store", signal: AbortSignal.timeout(1500) })
     if (!res.ok) return null
     return await res.json()
   } catch {

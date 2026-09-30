@@ -1,3 +1,5 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 
 /**
@@ -12,7 +14,9 @@ const FORWARD = ["authorization", "x-tenant-id", "x-user-id", "x-roles", "conten
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
-  const url = new URL(`${GATEWAY_SERVICE_URL}/${path.join("/")}`)
+  const gatewayPath = joinSafePath(path)
+  if (gatewayPath === null) return badPathResponse()
+  const url = new URL(`${GATEWAY_SERVICE_URL}/${gatewayPath}`)
   request.nextUrl.searchParams.forEach((value, key) => url.searchParams.append(key, value))
 
   const headers = new Headers()
@@ -23,7 +27,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
 
   try {
     const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
-    const res = await fetch(url.toString(), { method: request.method, headers, body, cache: "no-store" })
+    const res = await signedFetch(url.toString(), { method: request.method, headers, body, cache: "no-store" })
     const noBody = res.status === 204 || res.status === 205 || res.status === 304
     return new NextResponse(noBody ? null : await res.text(), {
       status: res.status,

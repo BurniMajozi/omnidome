@@ -1,3 +1,6 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 import { getSupabaseServer } from "@/lib/supabase/server"
@@ -17,7 +20,7 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
   if (error || !data.user?.email) return null
 
   try {
-    const res = await fetch(
+    const res = await signedFetch(
       `${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(data.user.email)}`,
       { headers: { "x-internal-key": INTERNAL_SERVICE_KEY } },
     )
@@ -32,7 +35,8 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const searchParams = req.nextUrl.searchParams.toString()
     const url = `${SALES_SERVICE_URL}/${apiPath}${searchParams ? `?${searchParams}` : ""}`
 
@@ -52,8 +56,11 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
       }
     }
 
-    if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
-    if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
+    if (!headers.has("x-tenant-id") || !headers.has("x-user-id")) {
+      if (!devFallbackAllowed()) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+      if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
+      if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
+    }
     // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
     const rp = verifiedRoleHeaders(req.headers, ["sales.read", "sales.write", "crm.read", "crm.write"])
     headers.set("x-roles", rp.roles)
@@ -62,7 +69,7 @@ async function proxy(req: NextRequest, { params }: { params: Promise<{ path: str
 
     const body = req.method !== "GET" && req.method !== "HEAD" ? await req.text() : undefined
 
-    const res = await fetch(url, {
+    const res = await signedFetch(url, {
       method: req.method,
       headers,
       body,

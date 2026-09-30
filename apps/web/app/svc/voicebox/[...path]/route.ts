@@ -1,3 +1,5 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 
 // Uses a route handler (not a rewrite) so long-running TTS generation
@@ -5,15 +7,16 @@ import { NextRequest, NextResponse } from "next/server"
 const VOICEBOX_SERVICE_URL = process.env.VOICEBOX_SERVICE_URL || "http://voicebox:8027"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 const DEV_USER_ID = "00000000-0000-0000-0000-000000000002"
-const ALLOW_DEV_HEADERS =
-  process.env.NODE_ENV !== "production" || process.env.VOICEBOX_PROXY_ALLOW_DEV_HEADERS === "true"
+const ALLOW_DEV_HEADERS = process.env.NODE_ENV !== "production" && process.env.VOICEBOX_PROXY_ALLOW_DEV_HEADERS === "true"
 
 // 10 minutes — covers cold model load + generation on CPU-only hardware.
 const TIMEOUT_MS = 600_000
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
-  const url = new URL(`${VOICEBOX_SERVICE_URL}/${path.join("/")}`)
+  const safePath = joinSafePath(path)
+  if (safePath === null) return badPathResponse()
+  const url = new URL(`${VOICEBOX_SERVICE_URL}/${safePath}`)
   request.nextUrl.searchParams.forEach((value, key) => url.searchParams.set(key, value))
 
   const headers = new Headers()
@@ -21,7 +24,9 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     const v = request.headers.get(h)
     if (v) headers.set(h, v)
   }
-  if (ALLOW_DEV_HEADERS) {
+  // Fail closed: proxy.ts always injects verified identity; a request without it is unauthenticated.
+  if (!headers.has("x-tenant-id") || !headers.has("x-user-id")) {
+    if (!ALLOW_DEV_HEADERS) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
     if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
   }
@@ -33,7 +38,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     const body = request.method !== "GET" && request.method !== "HEAD"
       ? await request.arrayBuffer()
       : undefined
-    const res = await fetch(url.toString(), {
+    const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
       body,

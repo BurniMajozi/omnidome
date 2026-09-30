@@ -1,3 +1,5 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 
 const TENANT_MEMORY_SERVICE_URL =
@@ -10,7 +12,8 @@ async function proxy(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const searchParams = req.nextUrl.searchParams.toString()
     const url = `${TENANT_MEMORY_SERVICE_URL}/${apiPath}${searchParams ? `?${searchParams}` : ""}`
 
@@ -26,7 +29,7 @@ async function proxy(
       headers["Content-Type"] = req.headers.get("content-type") || "application/json"
     }
 
-    const res = await fetch(url, init)
+    const res = await signedFetch(url, init)
     const contentType = res.headers.get("content-type") || ""
     const body = contentType.includes("application/json") ? await res.json() : await res.text()
 

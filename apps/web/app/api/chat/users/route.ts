@@ -1,3 +1,4 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
@@ -9,7 +10,7 @@ export async function GET(request: NextRequest) {
     const { headers, identity } = await identityHeaders(request)
     if (!identity) return NextResponse.json({ data: [] }, { status: 401 })
 
-    const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/directory/users`, {
+    const response = await signedFetch(`${COMMUNICATION_SERVICE_URL}/api/v1/directory/users`, {
       method: "GET",
       headers,
       cache: "no-store",

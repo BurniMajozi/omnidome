@@ -1,3 +1,4 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { NextRequest, NextResponse } from "next/server"
 
 const ANALYTICS_SERVICE_URL =
@@ -15,7 +16,8 @@ export async function POST(
 ) {
   try {
     const { path } = await params
-    const trackPath = path.join("/")
+    const trackPath = joinSafePath(path)
+    if (trackPath === null) return badPathResponse()
     const body = await req.text()
 
     const headers: Record<string, string> = { "Content-Type": "application/json" }

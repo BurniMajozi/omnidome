@@ -1,13 +1,14 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
 const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http://communication:8020"
 
 async function forward(request: NextRequest, channelId: string) {
-  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/preferences`)
+  const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${encodeURIComponent(channelId)}/preferences`)
   const { headers, identity } = await identityHeaders(request)
   if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
-  const response = await fetch(url.toString(), {
+  const response = await signedFetch(url.toString(), {
     method: request.method,
     headers,
     body: request.method === "PATCH" ? await request.text() : undefined,

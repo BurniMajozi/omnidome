@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from dataclasses import dataclass, field
@@ -7,7 +8,15 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from starlette.requests import Request
 
+from services.common import internal_auth
 from services.common.db import set_tenant_context
+
+logger = logging.getLogger("omnidome.auth")
+
+# Startup banner (loud WARNING in header mode, CRITICAL when signed mode has no secret) and
+# transport-level signing of identity headers on this service's outgoing httpx calls.
+internal_auth.log_mode_banner(os.getenv("AUTH_MODE", "header").strip().lower())
+internal_auth.install_httpx_signing()
 
 
 def _bool_env(key: str, default: bool = False) -> bool:
@@ -123,6 +132,32 @@ async def get_auth_context(request: Request) -> AuthContext:
         roles = _roles_from_payload(payload)
         permissions = _permissions_from_payload(payload)
         modules = _modules_from_payload(payload)
+    elif mode == "signed":
+        # Identity headers are only trusted when the web tier signed them (HMAC over the
+        # identity + method + path + timestamp). Never falls back to header mode; the
+        # AUTH_ALLOW_ANONYMOUS/DEFAULT_* shortcuts do not apply here.
+        try:
+            secret = internal_auth.get_secret()
+        except internal_auth.IdentityConfigError:
+            logger.error("AUTH_MODE=signed but INTERNAL_AUTH_SECRET is missing/short: refusing %s", request.url.path)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Internal auth not configured",
+            )
+        try:
+            internal_auth.verify_request(request.headers, request.method, request.url.path, secret)
+        except internal_auth.IdentityError as exc:
+            logger.warning("signed identity rejected (%s) for %s %s", exc.reason, request.method, request.url.path)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing signed identity")
+        user_raw = request.headers.get("X-User-Id")
+        tenant_raw = request.headers.get("X-Tenant-Id")
+        if not user_raw or not tenant_raw:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing X-User-Id or X-Tenant-Id")
+        user_id = _parse_uuid(user_raw, "user_id")
+        tenant_id = _parse_uuid(tenant_raw, "tenant_id")
+        roles = _split_csv(request.headers.get("X-Roles"))
+        permissions = _split_csv(request.headers.get("X-Permissions"))
+        modules = _split_csv(request.headers.get("X-Modules"))
     elif mode in {"header", "dev"}:
         user_raw = request.headers.get("X-User-Id") or (os.getenv("DEFAULT_USER_ID") if allow_anonymous else None)
         tenant_raw = request.headers.get("X-Tenant-Id") or (os.getenv("DEFAULT_TENANT_ID") if allow_anonymous else None)

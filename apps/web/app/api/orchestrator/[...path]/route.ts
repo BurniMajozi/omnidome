@@ -1,7 +1,10 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 /**
  * Proxy route: Next.js → Agent Orchestrator (port 8021)
  * Forwards all /api/orchestrator/* requests to the orchestrator service.
  */
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { getSupabaseServer } from "@/lib/supabase/server"
 
@@ -22,7 +25,7 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
   if (error || !data.user?.email) return null
 
   try {
-    const res = await fetch(
+    const res = await signedFetch(
       `${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(data.user.email)}`,
       { headers: { "x-internal-key": INTERNAL_SERVICE_KEY }, signal: AbortSignal.timeout(1500) },
     )
@@ -36,7 +39,8 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
-  const pathStr = path.join("/")
+  const pathStr = joinSafePath(path)
+  if (pathStr === null) return badPathResponse()
   const url = new URL(`${ORCHESTRATOR_URL}/api/${pathStr}`)
 
   // Forward query params
@@ -63,19 +67,18 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     }
   }
 
-  // Fallback to client header or dev default if Supabase identity wasn't resolved
-  if (!headers.has("x-tenant-id")) {
-    const fallbackTenant = request.headers.get("x-tenant-id") || DEV_TENANT_ID
-    headers.set("x-tenant-id", fallbackTenant)
-  }
-  if (!headers.has("x-user-id")) {
-    const fallbackUser = request.headers.get("x-user-id") || DEV_USER_ID
-    headers.set("x-user-id", fallbackUser)
+  // Fail closed: use the proxy.ts-verified headers; the dev default only with the local auth-disabled flag.
+  if (!headers.has("x-tenant-id") || !headers.has("x-user-id")) {
+    const t = request.headers.get("x-tenant-id") || (devFallbackAllowed() ? DEV_TENANT_ID : "")
+    const u = request.headers.get("x-user-id") || (devFallbackAllowed() ? DEV_USER_ID : "")
+    if (!t || !u) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    headers.set("x-tenant-id", t)
+    headers.set("x-user-id", u)
   }
 
   try {
     const body = request.method !== "GET" ? await request.text() : undefined
-    const res = await fetch(url.toString(), {
+    const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
       body,

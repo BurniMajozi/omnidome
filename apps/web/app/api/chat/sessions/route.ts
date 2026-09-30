@@ -1,3 +1,4 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
@@ -10,7 +11,7 @@ async function proxyGet(request: NextRequest) {
   const { headers, identity } = await identityHeaders(request)
   if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
 
-  const response = await fetch(url.toString(), {
+  const response = await signedFetch(url.toString(), {
     method: "GET",
     headers,
     cache: "no-store",
@@ -34,7 +35,7 @@ async function proxyPost(request: NextRequest) {
   const { headers, identity } = await identityHeaders(request)
   if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
 
-  const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/sessions`, {
+  const response = await signedFetch(`${COMMUNICATION_SERVICE_URL}/api/v1/sessions`, {
     method: "POST",
     headers,
     body: JSON.stringify({

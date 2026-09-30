@@ -1,3 +1,4 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { NextRequest, NextResponse } from "next/server"
 
 const JOURNEY_ENGINE_URL =
@@ -9,7 +10,8 @@ export async function GET(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const searchParams = req.nextUrl.searchParams.toString()
     const url = `${JOURNEY_ENGINE_URL}/${apiPath}${searchParams ? `?${searchParams}` : ""}`
 
@@ -28,7 +30,8 @@ export async function POST(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const body = await req.text()
 
     const res = await fetch(`${JOURNEY_ENGINE_URL}/${apiPath}`, {
@@ -50,7 +53,8 @@ export async function PUT(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const body = await req.text()
 
     const res = await fetch(`${JOURNEY_ENGINE_URL}/${apiPath}`, {
@@ -72,7 +76,8 @@ export async function DELETE(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
 
     const res = await fetch(`${JOURNEY_ENGINE_URL}/${apiPath}`, {
       method: "DELETE",

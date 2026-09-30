@@ -1,3 +1,4 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
@@ -16,7 +17,7 @@ async function forward(request: NextRequest, method: "GET" | "POST" | "PUT" | "D
   }
 
   try {
-    const response = await fetch(url.toString(), init)
+    const response = await signedFetch(url.toString(), init)
     const payload = await response.json().catch(() => null)
     const data = payload?.items ?? payload
     return NextResponse.json({ data }, { status: response.status })
@@ -51,7 +52,7 @@ export async function PATCH(request: NextRequest) {
   const { id, ...fields } = body ?? {}
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 })
 
-  const response = await fetch(`${COMMUNICATION_SERVICE_URL}/api/v1/schedule/${id}`, {
+  const response = await signedFetch(`${COMMUNICATION_SERVICE_URL}/api/v1/schedule/${id}`, {
     method: "PUT",
     headers,
     body: JSON.stringify(fields),

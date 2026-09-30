@@ -23,6 +23,9 @@ function keyMatches(provided: string): boolean {
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id)) {
+    return NextResponse.json({ error: "invalid_path" }, { status: 400 })
+  }
   if (!WEBHOOK_KEY) {
     return NextResponse.json(
       { error: "webhook_disabled", message: "WORKFLOW_WEBHOOK_KEY is not configured on this server; workflow webhooks are disabled." },

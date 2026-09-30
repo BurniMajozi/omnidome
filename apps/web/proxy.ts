@@ -1,7 +1,7 @@
 /**
  * Edge auth gate for every /svc/*, /api/* and /gateway/* request.
  *
- * Why: the backends run AUTH_MODE=header and trust whatever X-User-Id /
+ * Why: the backends used to run AUTH_MODE=header (now AUTH_MODE=signed, see lib/internal-identity.ts) and trust whatever X-User-Id /
  * X-Tenant-Id they receive. The /svc rewrites and several route handlers pass
  * client headers straight through, so without this gate anyone who can reach the
  * web port could read any tenant's data by sending those headers.
@@ -29,6 +29,8 @@
  */
 import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
+import { backendPathForSvc, signHeaders } from "@/lib/internal-identity"
+import { hasUnsafePath } from "@/lib/safe-path"
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
@@ -47,19 +49,21 @@ const IDENTITY_HEADERS = [
   "x-modules",
   "x-user-email",
   "x-internal-key",
+  "x-identity-ts",
+  "x-identity-sig",
 ]
 
 // Public by design. Each of these is protected by its own secret/signature (or
 // carries no tenant data). Method-scoped where possible.
 const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   // Workflow webhook trigger (optional X-Webhook-Key checked in the handler)
-  { methods: ["POST"], pattern: /^\/api\/workflows\/hook\/[^/]+$/ },
+  { methods: ["POST"], pattern: /^\/api\/workflows\/hook\/[A-Za-z0-9_-]+$/ },
   // Anonymous site analytics beacon (analytics-provider.tsx)
-  { methods: ["POST"], pattern: /^\/api\/analytics\/track\/.+$/ },
+  { methods: ["POST"], pattern: /^\/api\/analytics\/track\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/ },
   // Supabase reachability probe (returns only {ok})
   { methods: ["GET"], pattern: /^\/api\/supabase\/health$/ },
   // Zernio / social / email provider webhooks: HMAC-verified by the marketing service
-  { methods: ["POST"], pattern: /^\/svc\/marketing\/social\/webhooks\/.+$/ },
+  { methods: ["POST"], pattern: /^\/svc\/marketing\/social\/webhooks\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/ },
   { methods: ["POST"], pattern: /^\/svc\/marketing\/email\/webhook$/ },
 ]
 
@@ -131,6 +135,8 @@ async function verify(token: string): Promise<Identity | "no-tenant" | "inactive
   const { data, error } = await supabase.auth.getUser(token)
   if (error || !data.user) return null
   const user = data.user
+  // Identity is keyed on the email: an unconfirmed sign-up must not inherit a provisioned user's tenant.
+  if (!user.email_confirmed_at && !user.confirmed_at) return null
 
   let result: Identity | "no-tenant" | "inactive"
   const admin = user.email ? await lookupAdmin(user.email) : null
@@ -169,6 +175,12 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
   const method = request.method.toUpperCase()
 
+  // Reject traversal / encoded-separator paths before any allow-list check: handlers decode the
+  // path and fetch() normalizes "..", so a public-looking path must not be able to escape its prefix.
+  if (hasUnsafePath(request.nextUrl.pathname) || hasUnsafePath(new URL(request.url).pathname)) {
+    return json(400, "invalid_path")
+  }
+
   const headers = new Headers(request.headers)
   for (const h of IDENTITY_HEADERS) headers.delete(h)
 
@@ -206,6 +218,11 @@ export async function proxy(request: NextRequest) {
   headers.set("x-user-id", identity.userId)
   headers.set("x-tenant-id", identity.tenantId)
   if (identity.roles) headers.set("x-roles", identity.roles)
+  // Sign the verified identity for the backend (AUTH_MODE=signed). Bound to method + the path the
+  // backend will see: for /svc/<service>/* rewrites that is the path with the prefix stripped.
+  // /api/*, /gateway/* and the /svc/<crm|billing|...> route handlers rebuild their own identity
+  // headers and re-sign the final values with signedFetch() (lib/internal-identity.ts).
+  await signHeaders(headers, method, backendPathForSvc(pathname))
   return NextResponse.next({ request: { headers } })
 }
 

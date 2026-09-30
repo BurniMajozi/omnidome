@@ -1,3 +1,6 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 import { getSupabaseServer } from "@/lib/supabase/server"
@@ -15,7 +18,7 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
   if (error || !data.user?.email) return null
 
   try {
-    const res = await fetch(
+    const res = await signedFetch(
       `${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(data.user.email)}`,
       { headers: { "x-internal-key": INTERNAL_SERVICE_KEY } },
     )
@@ -29,7 +32,8 @@ async function resolveIdentity(bearerToken: string): Promise<{ userId: string; t
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
-  const pathStr = path.join("/")
+  const pathStr = joinSafePath(path)
+  if (pathStr === null) return badPathResponse()
   const url = new URL(`${ADMIN_SERVICE_URL}/${pathStr}`)
 
   request.nextUrl.searchParams.forEach((value, key) => {
@@ -53,9 +57,12 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     }
   }
 
-  // Ensure mandatory identity headers are always provided so admin service never 401s
-  if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
-  if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
+  // Fail closed: proxy.ts always injects verified identity; without it the request is unauthenticated.
+  if (!headers.has("x-tenant-id") || !headers.has("x-user-id")) {
+    if (!devFallbackAllowed()) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
+    if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
+  }
   // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
   const rp = verifiedRoleHeaders(request.headers, ["platform.admin", "org.admin", "org.manage", "module.manage"])
   headers.set("x-roles", rp.roles)
@@ -64,7 +71,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
 
   try {
     const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
-    const res = await fetch(url.toString(), {
+    const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
       body,

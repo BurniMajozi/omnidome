@@ -1,3 +1,6 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
@@ -12,7 +15,8 @@ type Context = { params: Promise<{ path: string[] }> }
 async function proxy(req: NextRequest, { params }: Context): Promise<NextResponse> {
   try {
     const { path } = await params
-    const pathStr = path.join("/")
+    const pathStr = joinSafePath(path)
+    if (pathStr === null) return NextResponse.json({ error: "invalid_path" }, { status: 400 })
     const targetUrl = new URL(`${LIFECYCLE_SERVICE_URL}/${pathStr}`)
 
     // Forward query parameters
@@ -32,8 +36,11 @@ async function proxy(req: NextRequest, { params }: Context): Promise<NextRespons
     const rolesHeader = req.headers.get("x-roles")
     if (rolesHeader) headers["x-roles"] = rolesHeader
 
-    if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
-    if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
+    if (!headers["x-tenant-id"] || !headers["x-user-id"]) {
+      if (!devFallbackAllowed()) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+      if (!headers["x-tenant-id"]) headers["x-tenant-id"] = DEV_TENANT_ID
+      if (!headers["x-user-id"]) headers["x-user-id"] = DEV_USER_ID
+    }
     // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never platform_admin/org_admin).
     headers["x-roles"] = verifiedRoleHeaders(req.headers, []).roles
 
@@ -42,7 +49,7 @@ async function proxy(req: NextRequest, { params }: Context): Promise<NextRespons
       init.body = await req.text()
     }
 
-    const res = await fetch(targetUrl.toString(), init)
+    const res = await signedFetch(targetUrl.toString(), init)
     const contentType = res.headers.get("content-type") || ""
 
     if (contentType.includes("application/json")) {

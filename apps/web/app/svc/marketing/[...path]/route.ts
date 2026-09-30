@@ -1,15 +1,17 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
 const MARKETING_SERVICE_URL = process.env.MARKETING_SERVICE_URL || "http://marketing:8014"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 const DEV_USER_ID = "00000000-0000-0000-0000-000000000001"
-const ALLOW_DEV_HEADERS =
-  process.env.NODE_ENV !== "production" || process.env.MARKETING_PROXY_ALLOW_DEV_HEADERS === "true"
+const ALLOW_DEV_HEADERS = process.env.NODE_ENV !== "production" && process.env.MARKETING_PROXY_ALLOW_DEV_HEADERS === "true"
 
 async function proxy(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
-  const pathStr = path.join("/")
+  const pathStr = joinSafePath(path)
+  if (pathStr === null) return badPathResponse()
   const url = new URL(`${MARKETING_SERVICE_URL}/${pathStr}`)
 
   request.nextUrl.searchParams.forEach((value, key) => {
@@ -25,10 +27,18 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     if (value) headers.set(header, value)
   }
 
-  if (ALLOW_DEV_HEADERS) {
+  // Provider webhooks are public at the edge (HMAC-verified by the marketing service) and carry no
+  // identity; everything else must arrive with the identity proxy.ts verified.
+  const isPublicWebhook =
+    request.method === "POST" &&
+    (/^social\/webhooks\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)?$/.test(pathStr) || pathStr === "email/webhook")
+  if (!isPublicWebhook && (!headers.has("x-tenant-id") || !headers.has("x-user-id"))) {
+    if (!ALLOW_DEV_HEADERS) return NextResponse.json({ error: "unauthorized" }, { status: 401 })
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
     if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
-    // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never org_admin).
+  }
+  // Least privilege: only the proxy.ts-verified roles; minimal role otherwise (never org_admin).
+  if (!isPublicWebhook) {
     const rp = verifiedRoleHeaders(request.headers, ["marketing.read", "marketing.write", "marketing.admin"])
     headers.set("x-roles", rp.roles)
     if (rp.permissions) headers.set("x-permissions", rp.permissions)
@@ -37,7 +47,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
 
   try {
     const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
-    const res = await fetch(url.toString(), {
+    const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
       body,

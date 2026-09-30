@@ -120,8 +120,20 @@ def _resolve_route(path: str) -> Optional[tuple[str, str, str]]:
     return None
 
 
-def _filtered_headers(request: Request) -> dict:
+_IDENTITY_HEADERS = ("x-user-id", "x-tenant-id", "x-roles", "x-permissions", "x-modules", "x-org-id")
+
+
+def _filtered_headers(request: Request, verified: bool = False) -> dict:
     headers = dict(request.headers)
+    # The inbound signature covers the gateway's own path, not the upstream path. Drop it: for a
+    # verified caller the upstream signature is recomputed at the httpx boundary
+    # (services.common.internal_auth.install_httpx_signing). An unverified caller must never get its
+    # identity headers signed on its behalf, so strip them too.
+    headers.pop("x-identity-ts", None)
+    headers.pop("x-identity-sig", None)
+    if not verified:
+        for name in _IDENTITY_HEADERS:
+            headers.pop(name, None)
     headers.pop("host", None)
     headers.pop("content-length", None)
     forwarded_for = headers.get("x-forwarded-for")
@@ -190,7 +202,7 @@ async def proxy(full_path: str, request: Request):
             raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     url = f"{base_url}{suffix}"
-    headers = _filtered_headers(request)
+    headers = _filtered_headers(request, verified=ctx is not None)
     body = await request.body()
 
     try:

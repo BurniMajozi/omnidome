@@ -1,3 +1,4 @@
+import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { NextRequest, NextResponse } from "next/server"
 
 const ANALYTICS_SERVICE_URL =
@@ -9,7 +10,8 @@ export async function GET(
 ) {
   try {
     const { path } = await params
-    const apiPath = path.join("/")
+    const apiPath = joinSafePath(path)
+    if (apiPath === null) return badPathResponse()
     const searchParams = req.nextUrl.searchParams.toString()
     const url = `${ANALYTICS_SERVICE_URL}/analytics/${apiPath}${searchParams ? `?${searchParams}` : ""}`
 

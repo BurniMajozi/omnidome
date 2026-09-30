@@ -1,3 +1,4 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
@@ -11,8 +12,8 @@ async function forward(request: NextRequest, channelId: string, method: "GET" | 
   const init: RequestInit = { method, headers, cache: "no-store" }
   if (method !== "GET") init.body = await request.text()
 
-  const response = await fetch(
-    `${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/members`,
+  const response = await signedFetch(
+    `${COMMUNICATION_SERVICE_URL}/api/v1/channels/${encodeURIComponent(channelId)}/members`,
     init,
   )
   const payload = await response.json().catch(() => null)

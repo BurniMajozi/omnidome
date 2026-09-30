@@ -1,3 +1,4 @@
+import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { identityHeaders } from "@/lib/api-auth"
 
@@ -15,7 +16,7 @@ async function forward(request: NextRequest, method: "GET" | "POST" | "PATCH") {
     init.body = await request.text()
   }
 
-  const response = await fetch(url.toString(), init)
+  const response = await signedFetch(url.toString(), init)
   const payload = await response.json().catch(() => null)
   const data = payload?.items ?? (payload ? [payload] : [])
   return NextResponse.json({ data }, { status: response.status })

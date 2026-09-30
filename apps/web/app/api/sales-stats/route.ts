@@ -1,3 +1,5 @@
+import { devFallbackAllowed } from "@/lib/dev-identity"
+import { signedFetch } from "@/lib/internal-identity"
 import { NextResponse } from "next/server"
 
 /**
@@ -32,8 +34,8 @@ const FALLBACK_COLORS = ["#4ade80", "#60a5fa", "#fbbf24", "#a855f7", "#f87171", 
 
 function headersFor(request: Request): HeadersInit {
   const auth = request.headers.get("authorization")
-  const tenantId = request.headers.get("x-tenant-id") || DEV_TENANT_ID
-  const h: Record<string, string> = { "x-tenant-id": tenantId }
+  const tenantId = request.headers.get("x-tenant-id") || (devFallbackAllowed() ? DEV_TENANT_ID : "")
+  const h: Record<string, string> = tenantId ? { "x-tenant-id": tenantId } : {}
   // proxy.ts injects the verified x-user-id; backends reject a tenant without a user.
   const userId = request.headers.get("x-user-id")
   if (userId) h["x-user-id"] = userId
@@ -50,7 +52,7 @@ export async function GET(request: Request) {
 
   let deals: any[] | null = null
   try {
-    const res = await fetch(`${SALES_SERVICE_URL}/deals`, {
+    const res = await signedFetch(`${SALES_SERVICE_URL}/deals`, {
       headers,
       cache: "no-store",
       signal: AbortSignal.timeout(5000),
