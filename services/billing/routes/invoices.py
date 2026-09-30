@@ -321,17 +321,23 @@ async def create_credit_note(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     with get_session() as session:
+        # Row lock: two credit notes at once must see each other's amounts.
         result = session.execute(
             select(Invoice).where(
                 Invoice.id == invoice_id,
                 Invoice.tenant_id == ctx.tenant_id,
-            )
+            ).with_for_update()
         )
         original = result.scalar_one_or_none()
         if not original:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if original.status == "voided":
             raise HTTPException(status_code=400, detail="Cannot credit a voided invoice")
+        already_credited = -(session.execute(
+            select(func.coalesce(func.sum(Invoice.total_zar), 0)).where(
+                Invoice.credit_note_of == original.id, Invoice.tenant_id == ctx.tenant_id,
+            )
+        ).scalar_one())
 
         if body.line_items:
             li_dicts = [li.model_dump(mode="json") for li in body.line_items]
@@ -344,6 +350,14 @@ async def create_credit_note(
 
         vat = compute_vat(subtotal)
         total = subtotal + vat
+        # Credit notes together may not exceed the invoice (each one alone
+        # passing is not enough: two 60% notes would credit 120%).
+        if already_credited + total > original.total_zar:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Credit of R{total} would exceed invoice total R{original.total_zar} "
+                       f"(R{already_credited} already credited)",
+            )
 
         number = next_invoice_number(session, ctx.tenant_id)
 
@@ -363,7 +377,7 @@ async def create_credit_note(
         )
         session.add(cn)
 
-        if abs(total) >= original.total_zar:
+        if already_credited + total >= original.total_zar:
             original.status = "voided"
 
         session.flush()

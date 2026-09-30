@@ -397,7 +397,8 @@ class SubscriptionRead(BaseModel):
     trial_ends_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
     cancel_at_period_end: bool
-    metadata_: Optional[Dict[str, Any]] = Field(None, alias="metadata")
+    # read from the model attribute metadata_ ("metadata" on a mapped class is SQLAlchemy's MetaData)
+    metadata_: Optional[Dict[str, Any]] = Field(None, validation_alias="metadata_", serialization_alias="metadata")
     created_at: datetime
     updated_at: datetime
 

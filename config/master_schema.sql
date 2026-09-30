@@ -311,48 +311,95 @@ CREATE TABLE billing_plans (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- subscriptions / invoices / payments are owned by services/billing: these
+-- definitions match services/billing/models.py (the older shape here --
+-- invoice_number, amount, start_date, gateway -- left billing unable to write
+-- them, because create_all() never alters an existing table). billing's
+-- start-up (init_tables) upgrades databases built from the old shape.
+-- billing_account_id has no FK here: billing_accounts is created by billing.
+DO $$ BEGIN CREATE TYPE subscription_status AS ENUM ('active', 'cancelled', 'paused', 'trial', 'expired');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE subscription_billing_interval AS ENUM ('monthly', 'quarterly', 'semi_annual', 'annual');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE invoice_status AS ENUM ('draft', 'sent', 'paid', 'partially_paid', 'overdue', 'voided');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE payment_method AS ENUM ('manual', 'eft', 'card', 'debit_order');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE TYPE payment_status AS ENUM ('pending', 'completed', 'failed', 'refunded');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 CREATE TABLE subscriptions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    contact_id UUID REFERENCES contacts(id),
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL,
+    billing_account_id UUID,
+    property_id UUID,
     plan_id UUID REFERENCES billing_plans(id),
-    status TEXT DEFAULT 'ACTIVE', -- ACTIVE, SUSPENDED, CANCELLED
-    start_date DATE NOT NULL,
-    next_billing_date DATE,
-    cancel_date DATE,
-    paystack_customer_token TEXT,
+    plan VARCHAR(100) NOT NULL DEFAULT '',
+    segment VARCHAR(50),
+    status subscription_status NOT NULL DEFAULT 'active',
+    billing_interval subscription_billing_interval NOT NULL DEFAULT 'monthly',
+    base_price_zar NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    segment_pricing JSONB,
+    billing_anchor DATE NOT NULL DEFAULT CURRENT_DATE,
+    current_period_start DATE,
+    current_period_end DATE,
+    trial_ends_at TIMESTAMP WITH TIME ZONE,
+    cancelled_at TIMESTAMP WITH TIME ZONE,
+    cancel_at_period_end BOOLEAN NOT NULL DEFAULT FALSE,
+    metadata JSONB,
     paystack_subscription_code VARCHAR(100), -- SUB_xxx (Paystack recurring subscription)
     paystack_customer_code VARCHAR(100),     -- CUS_xxx
     paystack_email_token VARCHAR(100),       -- token required to disable a subscription
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
+CREATE INDEX ix_subscriptions_tenant_customer ON subscriptions (tenant_id, customer_id);
+CREATE INDEX ix_subscriptions_tenant_status ON subscriptions (tenant_id, status);
+CREATE INDEX ix_subscriptions_plan_id ON subscriptions (plan_id);
 
 CREATE TABLE invoices (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    contact_id UUID REFERENCES contacts(id),
-    subscription_id UUID REFERENCES subscriptions(id),
-    invoice_number TEXT UNIQUE NOT NULL,
-    amount DECIMAL(12, 2) NOT NULL,
-    tax_amount DECIMAL(12, 2) NOT NULL, -- 15% VAT
-    total_amount DECIMAL(12, 2) NOT NULL,
-    status TEXT DEFAULT 'DRAFT', -- DRAFT, SENT, PAID, OVERDUE, REFUNDED
-    due_date DATE,
-    paid_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL,
+    subscription_id UUID REFERENCES subscriptions(id) ON DELETE SET NULL,
+    billing_account_id UUID,
+    property_id UUID,
+    number VARCHAR(50) NOT NULL,
+    status invoice_status NOT NULL DEFAULT 'draft',
+    subtotal_zar NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    vat_zar NUMERIC(12, 2) NOT NULL DEFAULT 0,      -- 15% VAT
+    total_zar NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    amount_paid_zar NUMERIC(12, 2) NOT NULL DEFAULT 0,
+    due_date DATE NOT NULL,
+    billing_period_start DATE,
+    billing_period_end DATE,
+    line_items JSONB,
+    notes TEXT,
+    credit_note_of UUID REFERENCES invoices(id),
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
+CREATE UNIQUE INDEX ix_invoices_tenant_number ON invoices (tenant_id, number);
+CREATE INDEX ix_invoices_tenant_customer ON invoices (tenant_id, customer_id);
+CREATE INDEX ix_invoices_tenant_status ON invoices (tenant_id, status);
+CREATE INDEX ix_invoices_subscription ON invoices (subscription_id);
 
 CREATE TABLE payments (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE,
-    invoice_id UUID REFERENCES invoices(id),
-    amount DECIMAL(12, 2) NOT NULL,
-    gateway TEXT DEFAULT 'PAYSTACK',
-    reference TEXT UNIQUE, -- Paystack Ref
-    status TEXT, -- SUCCESS, FAILED
-    meta JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    invoice_id UUID NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+    customer_id UUID NOT NULL,
+    amount_zar NUMERIC(12, 2) NOT NULL,
+    method payment_method NOT NULL,
+    reference VARCHAR(200),
+    paystack_ref VARCHAR(200),                       -- Paystack reference (webhook idempotency)
+    status payment_status NOT NULL DEFAULT 'pending',
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
 );
+CREATE INDEX ix_payments_tenant_customer ON payments (tenant_id, customer_id);
+CREATE INDEX ix_payments_invoice ON payments (invoice_id);
 
 CREATE TABLE refunds (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

@@ -140,10 +140,12 @@ async def verify_paystack(
 # POST /payments/paystack/webhook — Paystack webhook handler
 # ---------------------------------------------------------------------------
 
-def _verify_webhook_signature(body: bytes, signature: str) -> bool:
-    """Verify HMAC SHA-512 signature from Paystack."""
-    if not PAYSTACK_WEBHOOK_SECRET:
-        return True  # skip in dev
+def _verify_webhook_signature(body: bytes, signature: Optional[str]) -> bool:
+    """Verify HMAC SHA-512 signature from Paystack. No secret or no signature
+    means not verified: the webhook is public, and an unverified
+    charge.success would mark any invoice paid."""
+    if not PAYSTACK_WEBHOOK_SECRET or not signature:
+        return False
     expected = hmac.new(
         PAYSTACK_WEBHOOK_SECRET.encode(), body, hashlib.sha512
     ).hexdigest()
@@ -161,8 +163,11 @@ async def paystack_webhook(
     """
     raw_body = await request.body()
 
-    if x_paystack_signature and not _verify_webhook_signature(raw_body, x_paystack_signature):
-        raise HTTPException(status_code=400, detail="Invalid signature")
+    if not PAYSTACK_WEBHOOK_SECRET:
+        logger.error("Paystack webhook secret not configured - rejecting webhook")
+        raise HTTPException(status_code=503, detail="Webhook secret not configured")
+    if not _verify_webhook_signature(raw_body, x_paystack_signature):
+        raise HTTPException(status_code=401, detail="Invalid or missing signature")
 
     import json
     payload = json.loads(raw_body)
@@ -222,13 +227,21 @@ async def _handle_charge_success(data: dict) -> None:
     reference = data.get("reference", "")
 
     with get_session() as session:
+        # Row lock: concurrent deliveries (and manual payments) must see each other.
         inv = (
             session.query(Invoice)
             .filter(Invoice.id == invoice_id, Invoice.tenant_id == tenant_id)
+            .with_for_update()
             .first()
         )
         if not inv:
             logger.warning("Webhook: invoice %s not found", invoice_id)
+            return
+        # Paystack redelivers events; a reference is applied once.
+        if reference and session.query(Payment).filter(
+            Payment.invoice_id == inv.id, Payment.paystack_ref == reference
+        ).first():
+            logger.info("Webhook: charge %s already recorded on %s", reference, inv.number)
             return
 
         payment = Payment(

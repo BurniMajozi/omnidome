@@ -117,7 +117,10 @@ class Invoice(Base):
     payments: Mapped[list["Payment"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     dunning_actions: Mapped[list["DunningAction"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
     subscription: Mapped[Optional["Subscription"]] = relationship(back_populates="invoices")
-    line_items: Mapped[list["InvoiceLine"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    # Structured lines (inventory links). Named `lines`: a second `line_items`
+    # silently replaced the JSONB line_items column above, so invoices had no
+    # line_items column and every invoice build failed.
+    lines: Mapped[list["InvoiceLine"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_invoices_tenant_status", "tenant_id", "status"),
@@ -171,7 +174,7 @@ class InvoiceLine(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     # Relationships
-    invoice: Mapped["Invoice"] = relationship(back_populates="line_items")
+    invoice: Mapped["Invoice"] = relationship(back_populates="lines")
 
     __table_args__ = (
         Index("ix_invoice_lines_tenant", "tenant_id"),
@@ -430,6 +433,9 @@ class Subscription(Base):
     plan_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("billing_plans.id"), nullable=True,
     )
+    # Plan name as sold (e.g. "Fibre 100"). plan_id links the catalog plan when
+    # there is one; the name is what invoices, lists and the API show.
+    plan: Mapped[str] = mapped_column(String(100), nullable=False, default="")
     segment: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(SUBSCRIPTION_STATUS, nullable=False, default="active")
     billing_interval: Mapped[str] = mapped_column(

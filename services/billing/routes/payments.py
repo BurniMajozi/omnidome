@@ -24,9 +24,13 @@ def record_payment(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     with get_session() as session:
+        # Row lock until commit: concurrent payments on one invoice must each
+        # see the others' amounts, or all of them pass the balance check (and
+        # the last write wins amount_paid_zar) — overpaying the invoice.
         inv = (
             session.query(Invoice)
             .filter(Invoice.id == body.invoice_id, Invoice.tenant_id == ctx.tenant_id)
+            .with_for_update()
             .first()
         )
         if not inv:
