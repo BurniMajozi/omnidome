@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react"
 import { Badge } from "@/components/ui/badge"
+import { NotConnected } from "@/components/ui/not-connected"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -42,6 +43,9 @@ import {
   type UifDeclarationItem,
 } from "@/lib/compliance-api"
 
+const money = (v: number | null | undefined): string =>
+  v === null || v === undefined ? "N/A" : `R ${v.toLocaleString()}`
+
 export function StatutoryPayrollAdminView() {
   const [activeTab, setActiveTab] = useState<"emp201" | "uif" | "labor" | "emp501">("emp201")
   const [loading, setLoading] = useState(true)
@@ -60,9 +64,9 @@ export function StatutoryPayrollAdminView() {
   const [filingEmp201, setFilingEmp201] = useState(false)
   const [emp201Form, setEmp201Form] = useState({
     period: new Date().toISOString().slice(0, 7),
-    amount_paye: 65202.31,
-    amount_uif: 7300.80,
-    amount_sdl: 5774.00,
+    amount_paye: 0,
+    amount_uif: 0,
+    amount_sdl: 0,
     payment_method: "sars_efiling",
     notes: "",
   })
@@ -177,6 +181,17 @@ export function StatutoryPayrollAdminView() {
     )
   })
 
+  // No fabricated payroll figures: without the real summary show an honest state.
+  if (loading || !summary) {
+    return (
+      <NotConnected
+        loadable={loading ? { state: "loading" } : { state: "error", status: null, message: "statutory payroll summary could not be loaded" }}
+        service="Statutory payroll"
+        onRetry={loadData}
+      />
+    )
+  }
+
   return (
     <div className="space-y-6">
       {/* Success Banners */}
@@ -220,21 +235,21 @@ export function StatutoryPayrollAdminView() {
             </Badge>
           </p>
           <p className="text-2xl font-bold text-foreground mt-1.5">
-            R {(summary?.total_emp201_liability_zar ?? 79269).toLocaleString()}
+            {money(summary?.total_emp201_liability_zar)}
           </p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            PAYE R{(summary?.paye_withheld_zar ?? 65202).toLocaleString()} + UIF + SDL
+            PAYE {money(summary?.paye_withheld_zar)} + UIF + SDL
           </p>
         </Card>
 
         <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
           <p className="text-xs text-muted-foreground flex items-center justify-between">
             <span>SARS Tax Clearance (TCC)</span>
-            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+            <span className="h-2 w-2 rounded-full bg-muted-foreground" />
           </p>
-          <p className="text-2xl font-bold text-emerald-400 mt-1.5">Good Standing</p>
+          <p className="text-2xl font-bold text-foreground mt-1.5">{summary?.sars_tcc_pin ? "TCC on file" : "N/A"}</p>
           <p className="text-[11px] text-muted-foreground mt-1 font-mono">
-            PIN: {summary?.sars_tcc_pin ?? "9482-1092-8821"}
+            PIN: {summary?.sars_tcc_pin ?? "N/A"}
           </p>
         </Card>
 
@@ -243,22 +258,22 @@ export function StatutoryPayrollAdminView() {
             <span>UIF uFiling Status</span>
             <span className="text-[10px] text-blue-400 font-medium">UI-19 Electronic</span>
           </p>
-          <p className="text-2xl font-bold text-blue-400 mt-1.5">Compliant</p>
+          <p className="text-2xl font-bold text-foreground mt-1.5">{uifData ? `${uifData.total_contributors} on register` : "N/A"}</p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            {uifData?.total_contributors ?? 21} Contributors Registered
+            {uifData?.total_contributors ?? "N/A"} Contributors Registered
           </p>
         </Card>
 
         <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
           <p className="text-xs text-muted-foreground flex items-center justify-between">
             <span>Labor & PSIRA Standards</span>
-            <span className="text-[10px] text-emerald-400 font-semibold">{laborAudit?.bcea_readiness_status ?? "FULLY COMPLIANT"}</span>
+            <span className="text-[10px] text-emerald-400 font-semibold">{laborAudit?.bcea_readiness_status ?? "N/A"}</span>
           </p>
           <p className="text-2xl font-bold text-foreground mt-1.5">
-            {laborAudit?.overall_labor_score ?? 98.5} / 100
+            {laborAudit?.overall_labor_score ?? "N/A"} / 100
           </p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            0 BCEA Violations · {laborAudit?.psira_registered_officers ?? 6} PSIRA Verified
+            {laborAudit?.psira_registered_officers ?? "N/A"} PSIRA Verified
           </p>
         </Card>
       </div>
@@ -327,7 +342,7 @@ export function StatutoryPayrollAdminView() {
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
                     <Landmark className="h-4 w-4 text-emerald-400" />
-                    Current Month SARS EMP201 Breakdown ({summary?.period ?? "2026-09"})
+                    Current Month SARS EMP201 Breakdown ({summary?.period ?? "N/A"})
                   </CardTitle>
                   <CardDescription className="text-xs">
                     Statutory remittance due to South African Revenue Service by the 7th of next month.
@@ -336,7 +351,7 @@ export function StatutoryPayrollAdminView() {
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-muted-foreground">Payment Reference (PRN):</span>
                   <Badge variant="outline" className="font-mono text-xs border-primary/40 text-primary">
-                    {summary?.sars_prn ?? "PRN-202609-9827361524"}
+                    {summary?.sars_prn ?? "N/A"}
                   </Badge>
                 </div>
               </div>
@@ -347,7 +362,7 @@ export function StatutoryPayrollAdminView() {
                   <p className="text-xs text-muted-foreground font-mono">SARS Line 4101</p>
                   <p className="text-xs font-semibold text-foreground">PAYE Tax Withheld</p>
                   <p className="text-lg font-bold text-foreground">
-                    R {(summary?.paye_withheld_zar ?? 65202.31).toLocaleString()}
+                    {money(summary?.paye_withheld_zar)}
                   </p>
                   <p className="text-[11px] text-muted-foreground">Progressive SARS 2026 Brackets</p>
                 </div>
@@ -356,7 +371,7 @@ export function StatutoryPayrollAdminView() {
                   <p className="text-xs text-muted-foreground font-mono">SARS Line 4102</p>
                   <p className="text-xs font-semibold text-foreground">Skills Development (SDL)</p>
                   <p className="text-lg font-bold text-foreground">
-                    R {(summary?.sdl_zar ?? 5774.00).toLocaleString()}
+                    {money(summary?.sdl_zar)}
                   </p>
                   <p className="text-[11px] text-muted-foreground">1% of Taxable Remuneration</p>
                 </div>
@@ -365,7 +380,7 @@ export function StatutoryPayrollAdminView() {
                   <p className="text-xs text-muted-foreground font-mono">SARS Line 4103</p>
                   <p className="text-xs font-semibold text-foreground">UIF Total (Employee + Employer)</p>
                   <p className="text-lg font-bold text-foreground">
-                    R {((summary?.uif_employee_zar ?? 4642.56) + (summary?.uif_employer_zar ?? 3650.40)).toLocaleString()}
+                    {summary ? money(summary.uif_employee_zar + summary.uif_employer_zar) : "N/A"}
                   </p>
                   <p className="text-[11px] text-muted-foreground">1% Employee + 1% Employer match</p>
                 </div>
@@ -374,16 +389,16 @@ export function StatutoryPayrollAdminView() {
                   <p className="text-xs text-emerald-400 font-mono">SARS Total Remittance</p>
                   <p className="text-xs font-semibold text-emerald-400">Total EMP201 Due</p>
                   <p className="text-xl font-bold text-emerald-400">
-                    R {(summary?.total_emp201_liability_zar ?? 79269.27).toLocaleString()}
+                    {money(summary?.total_emp201_liability_zar)}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">Due: {summary?.period ?? "2026-09"}-07</p>
+                  <p className="text-[11px] text-muted-foreground">Due: {summary?.period ?? "N/A"}-07</p>
                 </div>
               </div>
 
               <div className="mt-4 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-muted-foreground">
                 <div className="flex items-center gap-4">
-                  <span>Gross Workforce Remuneration: <strong className="text-foreground">R {(summary?.gross_remuneration_zar ?? 577400).toLocaleString()}</strong></span>
-                  <span>Net Disbursed to Bank: <strong className="text-foreground">R {(summary?.net_salaries_disbursed_zar ?? 507555).toLocaleString()}</strong></span>
+                  <span>Gross Workforce Remuneration: <strong className="text-foreground">{money(summary?.gross_remuneration_zar)}</strong></span>
+                  <span>Net Disbursed to Bank: <strong className="text-foreground">{money(summary?.net_salaries_disbursed_zar)}</strong></span>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
@@ -475,10 +490,10 @@ export function StatutoryPayrollAdminView() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline" className="border-blue-500/40 text-blue-400 font-mono text-xs">
-                    Employer Ref: {uifData?.uif_employer_reference ?? "UIF-U7819230/7"}
+                    Employer Ref: {uifData?.uif_employer_reference ?? "N/A"}
                   </Badge>
                   <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-xs">
-                    Batch: {uifData?.ufiling_batch_reference ?? "UF-202609-B9482"}
+                    Batch: {uifData?.ufiling_batch_reference ?? "N/A"}
                   </Badge>
                 </div>
               </div>
@@ -495,7 +510,7 @@ export function StatutoryPayrollAdminView() {
                   />
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>Total Monthly UIF Remittance: <strong className="text-foreground">R {(uifData?.total_monthly_remittance_zar ?? 6236.64).toLocaleString()}</strong></span>
+                  <span>Total Monthly UIF Remittance: <strong className="text-foreground">{money(uifData?.total_monthly_remittance_zar)}</strong></span>
                 </div>
               </div>
 
@@ -586,7 +601,7 @@ export function StatutoryPayrollAdminView() {
                   </CardDescription>
                 </div>
                 <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 font-semibold text-xs">
-                  Overall Score: {laborAudit?.overall_labor_score ?? 98.5} / 100
+                  Overall Score: {laborAudit?.overall_labor_score ?? "N/A"} / 100
                 </Badge>
               </div>
             </CardHeader>
@@ -634,7 +649,7 @@ export function StatutoryPayrollAdminView() {
                   </CardDescription>
                 </div>
                 <Badge variant="outline" className="border-purple-500/40 text-purple-400 font-mono text-xs">
-                  Tax Year: 2026/2027
+                  Tax Year: {new Date().getMonth() >= 2 ? `${new Date().getFullYear()}/${new Date().getFullYear() + 1}` : `${new Date().getFullYear() - 1}/${new Date().getFullYear()}`}
                 </Badge>
               </div>
             </CardHeader>
@@ -643,23 +658,23 @@ export function StatutoryPayrollAdminView() {
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
                   <p className="text-xs text-muted-foreground">Total Declared (EMP201)</p>
                   <p className="text-xl font-bold text-foreground">
-                    R {((summary?.total_emp201_liability_zar ?? 79269) * 6).toLocaleString()}
+                    N/A
                   </p>
-                  <p className="text-[11px] text-muted-foreground">6 Months Accumulated</p>
+                  <p className="text-[11px] text-muted-foreground">Not connected: no EMP501 data source</p>
                 </div>
 
                 <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
                   <p className="text-xs text-muted-foreground">Total Tax Certificates (IRP5)</p>
                   <p className="text-xl font-bold text-foreground">
-                    R {((summary?.total_emp201_liability_zar ?? 79269) * 6).toLocaleString()}
+                    N/A
                   </p>
-                  <p className="text-[11px] text-muted-foreground">21 Employee Certificates Generated</p>
+                  <p className="text-[11px] text-muted-foreground">Not connected: no IRP5 data source</p>
                 </div>
 
                 <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3.5 space-y-1">
                   <p className="text-xs text-emerald-400 font-semibold">Reconciliation Variance</p>
-                  <p className="text-xl font-bold text-emerald-400">R 0.00</p>
-                  <p className="text-[11px] text-muted-foreground">Balanced to Nil · No Penalties</p>
+                  <p className="text-xl font-bold text-muted-foreground">N/A</p>
+                  <p className="text-[11px] text-muted-foreground">Cannot be computed without EMP501 data</p>
                 </div>
               </div>
 
@@ -843,11 +858,11 @@ export function StatutoryPayrollAdminView() {
                   <p className="font-medium text-blue-400">Declaration Summary</p>
                   <div className="flex justify-between text-muted-foreground">
                     <span>Active Contributors:</span>
-                    <strong className="text-foreground">{uifData?.total_contributors ?? 21} Staff</strong>
+                    <strong className="text-foreground">{uifData?.total_contributors ?? "N/A"} Staff</strong>
                   </div>
                   <div className="flex justify-between text-muted-foreground">
                     <span>Total Monthly UIF:</span>
-                    <strong className="text-foreground">R {(uifData?.total_monthly_remittance_zar ?? 6236.64).toLocaleString()}</strong>
+                    <strong className="text-foreground">{money(uifData?.total_monthly_remittance_zar)}</strong>
                   </div>
                 </div>
                 <div>

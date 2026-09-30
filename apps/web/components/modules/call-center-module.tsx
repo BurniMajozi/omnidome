@@ -79,32 +79,15 @@ import {
   getWhisperWsUrl,
 } from "@/lib/call-center-api"
 import { toWav } from "@/lib/audio-utils"
-
-// ─── Default / fallback chart data ──────────────────────────────────────────
-
-const defaultCallData = [
-  { hour: "08:00", inbound: 45, outbound: 32 },
-  { hour: "10:00", inbound: 52, outbound: 38 },
-  { hour: "12:00", inbound: 68, outbound: 42 },
-  { hour: "14:00", inbound: 75, outbound: 45 },
-  { hour: "16:00", inbound: 58, outbound: 40 },
-  { hour: "18:00", inbound: 42, outbound: 28 },
-]
-
-const defaultAgentPerformance = [
-  { name: "Agent A", calls: 124, satisfaction: 4.8 },
-  { name: "Agent B", calls: 118, satisfaction: 4.6 },
-  { name: "Agent C", calls: 135, satisfaction: 4.7 },
-  { name: "Agent D", calls: 112, satisfaction: 4.5 },
-  { name: "Agent E", calls: 128, satisfaction: 4.9 },
-]
-
-const defaultCallType = [
-  { name: "Support", value: 52, fill: "#4ade80" },
-  { name: "Sales", value: 28, fill: "#60a5fa" },
-  { name: "Billing", value: 15, fill: "#f59e0b" },
-  { name: "Complaint", value: 5, fill: "#ef4444" },
-]
+import { useLoadable } from "@/lib/service-fetch"
+import { tileLabel, type Loadable } from "@/lib/service-state"
+import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
+import { CALL_CENTER_SIMULATED_TELEPHONY_ENABLED } from "@/lib/flags"
+import {
+  unwrapList, callsToday, avgHandleSeconds, avgWaitSeconds, activeAgentCount, formatDuration,
+  hourlyVolume, directionSplit, agentPerformance,
+  type CcAgent, type CcSession, type CcQueue,
+} from "@/lib/call-center-metrics"
 
 // ─── Helper ──────────────────────────────────────────────────────────────────
 
@@ -116,149 +99,73 @@ function cn(...classes: (string | false | undefined | null)[]) {
 // KPI CARDS
 // ═════════════════════════════════════════════════════════════════════════════
 
-interface KpiData {
-  callsToday: string
-  avgWait: string
-  activeAgents: string
-  avgHandle: string
-}
+const CC = "/svc/call-center"
+type CcDashboard = { inbound?: { queues?: CcQueue[] }; outbound?: { queues?: CcQueue[] } }
 
-function KpiSection({ agents, sessions, dashboard }: { agents: any; sessions: any; dashboard: any }) {
-  const [kpis, setKpis] = useState<KpiData>({
-    callsToday: "—",
-    avgWait: "—",
-    activeAgents: "—",
-    avgHandle: "—",
-  })
+function KpiSection({
+  agentsL,
+  sessionsL,
+  dashL,
+}: {
+  agentsL: Loadable<unknown>
+  sessionsL: Loadable<unknown>
+  dashL: Loadable<unknown>
+}) {
+  // All figures are derived from real rows. Missing data => "No data yet".
+  const callsTodayL: Loadable<string> =
+    sessionsL.state === "ready" ? { state: "ready", data: String(callsToday(unwrapList<CcSession>(sessionsL.data, "sessions"), new Date())) } : (sessionsL as Loadable<string>)
+  const waitL: Loadable<string> =
+    dashL.state === "ready"
+      ? {
+          state: "ready",
+          data: (() => {
+            const d = dashL.data as CcDashboard
+            const w = avgWaitSeconds([...(d.inbound?.queues ?? []), ...(d.outbound?.queues ?? [])])
+            return w === null ? "No data yet" : `${Math.round(w)}s`
+          })(),
+        }
+      : (dashL as Loadable<string>)
+  const activeL: Loadable<string> =
+    agentsL.state === "ready" ? { state: "ready", data: String(activeAgentCount(unwrapList<CcAgent>(agentsL.data, "agents"))) } : (agentsL as Loadable<string>)
+  const handleL: Loadable<string> =
+    sessionsL.state === "ready"
+      ? {
+          state: "ready",
+          data: (() => {
+            const h = avgHandleSeconds(unwrapList<CcSession>(sessionsL.data, "sessions"))
+            return h === null ? "No data yet" : formatDuration(h)
+          })(),
+        }
+      : (sessionsL as Loadable<string>)
 
-  useEffect(() => {
-    const agentList = agents?.agents ?? agents ?? []
-    const sessionList = sessions?.sessions ?? sessions ?? []
-    const dash = dashboard?.data ?? dashboard ?? {}
-
-    const activeAgents = Array.isArray(agentList)
-      ? agentList.filter((a: any) => a.status === "active" || a.status === "on_call").length
-      : 0
-
-    const totalCalls = Array.isArray(sessionList) ? sessionList.length : 0
-
-    // avg_wait: average across all inbound queues (dashboard returns per-queue data)
-    const inboundQueues: any[] = dash.inbound?.queues ?? []
-    const waitValues = inboundQueues.map((q: any) => q.avg_wait_seconds).filter((v: any) => v != null)
-    const avgWaitSec = waitValues.length > 0 ? waitValues.reduce((a: number, b: number) => a + b, 0) / waitValues.length : null
-    // avg_handle: derived from completed session durations
-    const completedSessions = Array.isArray(sessionList) ? sessionList.filter((s: any) => s.duration_seconds != null) : []
-    const avgHandleSec = completedSessions.length > 0
-      ? completedSessions.reduce((a: number, s: any) => a + s.duration_seconds, 0) / completedSessions.length
-      : null
-
-    setKpis({
-      callsToday: totalCalls > 0 ? totalCalls.toLocaleString() : "1,847",
-      avgWait: avgWaitSec != null ? `${Math.round(avgWaitSec)}s` : "42s",
-      activeAgents: activeAgents > 0 ? String(activeAgents) : "48",
-      avgHandle: avgHandleSec != null
-        ? `${Math.floor(avgHandleSec / 60)}m ${Math.round(avgHandleSec % 60)}s`
-        : "5m 32s",
-    })
-  }, [agents, sessions, dashboard])
+  const show = (l: Loadable<string>): string => (l.state === "ready" ? l.data : (tileLabel(l) ?? ""))
 
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      <StatCard
-        title="Calls Today"
-        value={kpis.callsToday}
-        change="+8.5%"
-        changeType="positive"
-        icon={Phone}
-        description="vs last week"
-      />
-      <StatCard
-        title="Avg Wait Time"
-        value={kpis.avgWait}
-        change="-8.2%"
-        changeType="positive"
-        icon={Clock}
-        description="vs last week"
-      />
-      <StatCard
-        title="Active Agents"
-        value={kpis.activeAgents}
-        change="+2"
-        changeType="positive"
-        icon={Users}
-        description="on shift"
-      />
-      <StatCard
-        title="Avg Handle Time"
-        value={kpis.avgHandle}
-        change="+12s"
-        changeType="negative"
-        icon={TrendingUp}
-        description="vs last week"
-      />
+      <StatCard title="Calls Today" value={show(callsTodayL)} change="" changeType="neutral" icon={Phone} description="sessions started today" />
+      <StatCard title="Avg Wait Time" value={show(waitL)} change="" changeType="neutral" icon={Clock} description="across queues" />
+      <StatCard title="Active Agents" value={show(activeL)} change="" changeType="neutral" icon={Users} description="active or on a call" />
+      <StatCard title="Avg Handle Time" value={show(handleL)} change="" changeType="neutral" icon={TrendingUp} description="completed calls" />
     </div>
   )
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// OVERVIEW TAB — Charts
+// OVERVIEW TAB — Charts (real sessions/agents only)
 // ═════════════════════════════════════════════════════════════════════════════
 
-function OverviewTab() {
-  const [callData, setCallData] = useState(defaultCallData)
-  const [agentPerf, setAgentPerf] = useState(defaultAgentPerformance)
-  const [callType] = useState(defaultCallType)
-  const [loading, setLoading] = useState(true)
+const DIRECTION_FILL: Record<string, string> = { Inbound: "#4ade80", Outbound: "#60a5fa" }
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const [agents, sessions, dashboard] = await Promise.allSettled([
-          listAgents(),
-          listSessions(),
-          getQueuesDashboard(),
-        ])
-        if (cancelled) return
-
-        // Derive call volume from sessions if available
-        const sessResult = sessions.status === "fulfilled" ? sessions.value : null
-        const sessList = sessResult?.sessions ?? sessResult ?? []
-        if (Array.isArray(sessList) && sessList.length > 0) {
-          // Build a simple hourly histogram (mock bucketing since we may not have timestamps)
-          const hours = ["08:00", "10:00", "12:00", "14:00", "16:00", "18:00"]
-          const bucketCount = Math.ceil(sessList.length / 6)
-          const derived = hours.map((hour, i) => ({
-            hour,
-            inbound: Math.max(10, Math.round(bucketCount * (1 + Math.sin(i * 0.8) * 0.3))),
-            outbound: Math.max(5, Math.round(bucketCount * 0.6 * (1 + Math.cos(i * 0.7) * 0.3))),
-          }))
-          setCallData(derived)
-        }
-
-        // Derive agent perf
-        const agentsResult = agents.status === "fulfilled" ? agents.value : null
-        const agentList = agentsResult?.agents ?? agentsResult ?? []
-        if (Array.isArray(agentList) && agentList.length > 0) {
-          setAgentPerf(
-            agentList.slice(0, 8).map((a: any) => ({
-              name: a.name ?? a.extension ?? "Agent",
-              calls: a.calls_handled ?? a.daily_sales ?? Math.floor(Math.random() * 50) + 100,
-              satisfaction: a.csat_score ?? a.satisfaction ?? 4.5,
-            }))
-          )
-        }
-      } catch {
-        // keep defaults
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [])
-
-  if (loading) {
+function OverviewTab({
+  agentsL,
+  sessionsL,
+  onRetry,
+}: {
+  agentsL: Loadable<unknown>
+  sessionsL: Loadable<unknown>
+  onRetry: () => void
+}) {
+  if (sessionsL.state === "loading" || agentsL.state === "loading") {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -266,6 +173,14 @@ function OverviewTab() {
       </div>
     )
   }
+  if (sessionsL.state !== "ready") return <NotConnected loadable={sessionsL} service="Call center service" onRetry={onRetry} className="py-16" />
+  if (agentsL.state !== "ready") return <NotConnected loadable={agentsL} service="Call center service" onRetry={onRetry} className="py-16" />
+
+  const sessions = unwrapList<CcSession>(sessionsL.data, "sessions")
+  const agents = unwrapList<CcAgent>(agentsL.data, "agents")
+  const callData = hourlyVolume(sessions)
+  const callType = directionSplit(sessions).map((d) => ({ ...d, fill: DIRECTION_FILL[d.name] ?? "#a855f7" }))
+  const agentPerf = agentPerformance(agents, sessions)
 
   return (
     <div className="space-y-6">
@@ -274,6 +189,7 @@ function OverviewTab() {
         {/* Call Volume */}
         <div className="surface-card p-5">
           <h3 className="section-title mb-4">Call Volume Trend</h3>
+          {callData.length === 0 ? <NoDataYet message="No calls recorded yet" className="flex h-64 items-center justify-center" /> : (
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={callData}>
@@ -294,11 +210,13 @@ function OverviewTab() {
               </BarChart>
             </ResponsiveContainer>
           </div>
+          )}
         </div>
 
         {/* Call Type Distribution */}
         <div className="surface-card p-5">
-          <h3 className="section-title mb-4">Call Type Distribution</h3>
+          <h3 className="section-title mb-4">Call Direction Distribution</h3>
+          {callType.length === 0 ? <NoDataYet message="No calls recorded yet" className="flex h-64 items-center justify-center" /> : (
           <div className="h-64">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -307,7 +225,7 @@ function OverviewTab() {
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, value }: { name: string; value: number }) => `${name}: ${value}%`}
+                  label={({ name, value }: { name: string; value: number }) => `${name}: ${value}`}
                   outerRadius={80}
                   fill="#4ade80"
                   dataKey="value"
@@ -327,12 +245,14 @@ function OverviewTab() {
               </PieChart>
             </ResponsiveContainer>
           </div>
+          )}
         </div>
       </div>
 
       {/* Agent Performance */}
       <div className="surface-card p-5">
         <h3 className="section-title mb-4">Top Agent Performance</h3>
+        {agentPerf.length === 0 ? <NoDataYet message="No agents registered yet" className="flex h-64 items-center justify-center" /> : (
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={agentPerf}>
@@ -354,6 +274,7 @@ function OverviewTab() {
             </BarChart>
           </ResponsiveContainer>
         </div>
+        )}
       </div>
     </div>
   )
@@ -477,7 +398,7 @@ function QueuesTab() {
             </div>
           </div>
           <Badge variant="outline" className={cn("text-[10px] capitalize", statusColor(q.status))}>
-            {q.status ?? "active"}
+            {q.status ?? "unknown"}
           </Badge>
         </div>
 
@@ -492,7 +413,7 @@ function QueuesTab() {
           </div>
           <div>
             <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Avg Wait</p>
-            <p className="text-lg font-bold text-foreground">{Math.round(q.avg_wait_seconds ?? 0)}s</p>
+            <p className="text-lg font-bold text-foreground">{q.avg_wait_seconds == null ? "—" : `${Math.round(q.avg_wait_seconds)}s`}</p>
           </div>
         </div>
 
@@ -519,7 +440,7 @@ function QueuesTab() {
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Service Level</p>
               <p className="card-title">
-                {((selectedQueueStats.data.service_level ?? 0.85) * 100).toFixed(1)}%
+                {selectedQueueStats.data.service_level == null ? "No data yet" : `${(selectedQueueStats.data.service_level * 100).toFixed(1)}%`}
               </p>
             </div>
             <div>
@@ -531,7 +452,7 @@ function QueuesTab() {
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Avg Handle</p>
               <p className="card-title">
-                {Math.round((selectedQueueStats.data.avg_handle_time ?? 330) / 60)}m
+                {selectedQueueStats.data.avg_handle_time == null ? "No data yet" : `${Math.round(selectedQueueStats.data.avg_handle_time / 60)}m`}
               </p>
             </div>
           </div>
@@ -1348,37 +1269,27 @@ function Customer360Tab() {
 // MAIN EXPORT
 // ═════════════════════════════════════════════════════════════════════════════
 
-export function CallCenterModule() {
-  const [agents, setAgents] = useState<any>(null)
-  const [sessions, setSessions] = useState<any>(null)
-  const [dashboard, setDashboard] = useState<any>(null)
-  const [kpiLoading, setKpiLoading] = useState(true)
-  const [kpiError, setKpiError] = useState<string | null>(null)
+function SimulatedTelephonyOff({ label }: { label: string }) {
+  return (
+    <NotConnected
+      loadable={{ state: "error", status: null, message: `${label} has no telephony backend connected` }}
+      service="Telephony"
+      className="py-16"
+    />
+  )
+}
 
-  useEffect(() => {
-    let cancelled = false
-    async function loadKpiData() {
-      try {
-        const results = await Promise.allSettled([
-          listAgents(),
-          listSessions(),
-          getQueuesDashboard(),
-        ])
-        if (cancelled) return
-        setAgents(results[0].status === "fulfilled" ? results[0].value : null)
-        setSessions(results[1].status === "fulfilled" ? results[1].value : null)
-        setDashboard(results[2].status === "fulfilled" ? results[2].value : null)
-      } catch (err) {
-        if (!cancelled) {
-          setKpiError(err instanceof Error ? err.message : "Failed to load KPI data")
-        }
-      } finally {
-        if (!cancelled) setKpiLoading(false)
-      }
-    }
-    loadKpiData()
-    return () => { cancelled = true }
-  }, [])
+export function CallCenterModule() {
+  // Real call-center service only; an honest state when it is not running.
+  const { value: agentsL, reload: reloadAgents } = useLoadable<unknown>(`${CC}/agents`)
+  const { value: sessionsL, reload: reloadSessions } = useLoadable<unknown>(`${CC}/sessions`)
+  const { value: dashL, reload: reloadDash } = useLoadable<unknown>(`${CC}/queues/dashboard/summary`)
+  const reloadAll = () => {
+    reloadAgents()
+    reloadSessions()
+    reloadDash()
+  }
+  const serviceDown = [agentsL, sessionsL, dashL].every((l) => l.state === "unreachable")
 
   return (
     <div className="space-y-6">
@@ -1395,13 +1306,10 @@ export function CallCenterModule() {
       />
 
       {/* KPI Cards — live data */}
-      <KpiSection agents={agents} sessions={sessions} dashboard={dashboard} />
+      <KpiSection agentsL={agentsL} sessionsL={sessionsL} dashL={dashL} />
 
-      {kpiError && (
-        <div className="flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4" />
-          {kpiError}
-        </div>
+      {serviceDown && (
+        <NotConnected loadable={agentsL} service="Call center service" onRetry={reloadAll} />
       )}
 
       {/* Tabs */}
@@ -1454,11 +1362,11 @@ export function CallCenterModule() {
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab />
+          <OverviewTab agentsL={agentsL} sessionsL={sessionsL} onRetry={reloadAll} />
         </TabsContent>
 
         <TabsContent value="queues">
-          <QueuesTab />
+          {serviceDown ? <NotConnected loadable={agentsL} service="Call center service" onRetry={reloadAll} className="py-16" /> : <QueuesTab />}
         </TabsContent>
 
         <TabsContent value="whisper">
@@ -1470,27 +1378,27 @@ export function CallCenterModule() {
         </TabsContent>
 
         <TabsContent value="asterisk">
-          <AsteriskTelephonyView />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <AsteriskTelephonyView /> : <SimulatedTelephonyOff label="Asterisk core and CDRs" />}
         </TabsContent>
 
         <TabsContent value="astpp">
-          <AstppBillingView />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <AstppBillingView /> : <SimulatedTelephonyOff label="ASTPP voice billing" />}
         </TabsContent>
 
         <TabsContent value="seeker">
-          <CallSeekerView />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <CallSeekerView /> : <SimulatedTelephonyOff label="Call Seeker" />}
         </TabsContent>
 
         <TabsContent value="smart_ivr">
-          <SmartIvrStudio />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <SmartIvrStudio /> : <SimulatedTelephonyOff label="Smart IVR Studio" />}
         </TabsContent>
 
         <TabsContent value="hardware">
-          <VoipHardwareView />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <VoipHardwareView /> : <SimulatedTelephonyOff label="VoIP hardware" />}
         </TabsContent>
 
         <TabsContent value="providers">
-          <TelecomProvidersView />
+          {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <TelecomProvidersView /> : <SimulatedTelephonyOff label="SIP trunks and carriers" />}
         </TabsContent>
 
         <TabsContent value="customer360">

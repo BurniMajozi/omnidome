@@ -51,6 +51,9 @@ import {
   type SafetyIncidentItem, type DsarItem,
 } from "@/lib/compliance-api"
 import DocumentUploadZone from "@/components/modules/document-upload-zone"
+import { NotConnected } from "@/components/ui/not-connected"
+import { loadableFromStatus, type Loadable } from "@/lib/service-state"
+import { ComplianceApiError } from "@/lib/compliance-api"
 import { StatutoryPayrollAdminView } from "./compliance/statutory-payroll-admin-view"
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -189,10 +192,17 @@ function EmptyState({ icon, message }: { icon: React.ReactNode; message: string 
 // MAIN MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
 
+/** Real value or an honest "N/A" - never a made-up default. */
+const na = (v: number | string | null | undefined, suffix = ""): string =>
+  v === null || v === undefined ? "N/A" : `${v}${suffix}`
+
 export default function ComplianceModule() {
   const [activeTab, setActiveTab] = useState("overview")
   const [loading, setLoading] = useState(true)
   const [overview, setOverview] = useState<ComplianceOverview | null>(null)
+  // Whether the compliance service answered at all. Drives the honest
+  // "Service not running" state instead of fabricated KPIs.
+  const [serviceState, setServiceState] = useState<Loadable<null>>({ state: "loading" })
 
   // Data states per section
   const [contracts, setContracts] = useState<Contract[]>([])
@@ -259,15 +269,32 @@ export default function ComplianceModule() {
   const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
 
   const loadOverview = useCallback(async () => {
-    const [data, exec, sla] = await Promise.all([
-      safe(getComplianceOverview()),
+    const [data, exec, sla, stat] = await Promise.all([
+      getComplianceOverview().then(
+        (d) => ({ ok: true as const, d }),
+        (e: unknown) => ({ ok: false as const, e }),
+      ),
       safe(getExecutiveComplianceSummary()),
       safe(getComplianceSalesSla()),
+      safe(getFinanceStatutoryStatus()),
     ])
-    if (data) setOverview(data)
+    if (stat) setStatutoryStatus(stat)
+    if (data.ok) {
+      setOverview(data.d)
+      setServiceState({ state: "ready", data: null })
+    } else {
+      const status = data.e instanceof ComplianceApiError ? data.e.status : null
+      setServiceState(loadableFromStatus<null>(status, undefined))
+    }
     if (exec) setExecutiveSummary(exec)
     if (sla) setSalesSla(sla)
   }, [])
+
+  const reloadOverview = () => {
+    setLoading(true)
+    setServiceState({ state: "loading" })
+    loadOverview().finally(() => setLoading(false))
+  }
 
   const handleVetFica = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -473,6 +500,19 @@ export default function ComplianceModule() {
     )
   }
 
+  if (serviceState.state !== "ready") {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          icon={<Scale className="h-5 w-5" />}
+          title="Compliance Center"
+          subtitle="Contracts, regulatory filings, POPIA/RICA and audit readiness"
+        />
+        <NotConnected loadable={serviceState} service="Compliance service" onRetry={reloadOverview} className="py-16" />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -593,9 +633,13 @@ export default function ComplianceModule() {
                   <Activity className="h-4 w-4 text-primary animate-pulse" />
                   Unified Cross-Service Compliance Pulse
                 </CardTitle>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                  {executiveSummary?.audit_readiness_level ?? "AUDIT_READY"} · Score {executiveSummary?.overall_compliance_score ?? 96}%
-                </Badge>
+                {executiveSummary ? (
+                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
+                    {executiveSummary.audit_readiness_level} · Score {executiveSummary.overall_compliance_score}%
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">Audit readiness: not connected</Badge>
+                )}
               </div>
               <CardDescription className="text-xs">
                 Real-time regulatory telemetry across Commercial Sales SLAs, Field Fleet OHS, Statutory Finance Treasury, Call Center POPIA, and RICA Subscriber Identity.
@@ -612,9 +656,9 @@ export default function ComplianceModule() {
                     <FileText className="h-3.5 w-3.5 text-blue-400" />
                   </div>
                   <p className="mt-1 text-lg font-bold text-foreground">
-                    R {((salesSla?.total_portfolio_value_zar ?? 25350000) / 1000000).toFixed(2)}M
+                    {salesSla ? `R ${(salesSla.total_portfolio_value_zar / 1000000).toFixed(2)}M` : "N/A"}
                   </p>
-                  <p className="text-[11px] text-emerald-400">{salesSla?.average_sla_uptime_pct ?? 99.5}% Uptime Target</p>
+                  <p className="text-[11px] text-emerald-400">{na(salesSla?.average_sla_uptime_pct, "% Uptime Target")}</p>
                 </div>
 
                 <div
@@ -626,9 +670,9 @@ export default function ComplianceModule() {
                     <Truck className="h-3.5 w-3.5 text-amber-400" />
                   </div>
                   <p className="mt-1 text-lg font-bold text-foreground">
-                    {fleetSafety?.zero_incident_streak_days ?? 148} Days
+                    {na(fleetSafety?.zero_incident_streak_days, " Days")}
                   </p>
-                  <p className="text-[11px] text-emerald-400">0 COIDA Reportable</p>
+                  <p className="text-[11px] text-emerald-400">{na(fleetSafety?.coida_reportable_accidents_ytd, " COIDA Reportable")}</p>
                 </div>
 
                 <div
@@ -639,8 +683,12 @@ export default function ComplianceModule() {
                     <span className="text-xs text-muted-foreground">Statutory Treasury</span>
                     <Landmark className="h-3.5 w-3.5 text-emerald-400" />
                   </div>
-                  <p className="mt-1 text-lg font-bold text-foreground">SARS Good</p>
-                  <p className="text-[11px] text-cyan-400">Level 1 BBBEE · 135%</p>
+                  <p className="mt-1 text-lg font-bold text-foreground">
+                    {statutoryStatus ? `SARS ${statutoryStatus.sars_tax_clearance_status}` : "N/A"}
+                  </p>
+                  <p className="text-[11px] text-cyan-400">
+                    {statutoryStatus ? `BBBEE ${statutoryStatus.bbbee_contributor_level} · ${statutoryStatus.bbbee_procurement_recognition_pct}%` : "Open tab to load"}
+                  </p>
                 </div>
 
                 <div
@@ -652,9 +700,9 @@ export default function ComplianceModule() {
                     <ShieldCheck className="h-3.5 w-3.5 text-cyan-400" />
                   </div>
                   <p className="mt-1 text-lg font-bold text-foreground">
-                    {popiaAudit?.voice_recording_consent_rate_pct ?? 99.8}%
+                    {na(popiaAudit?.voice_recording_consent_rate_pct, "%")}
                   </p>
-                  <p className="text-[11px] text-emerald-400">{ricaAudit?.verified_pct ?? 97.6}% RICA Verified</p>
+                  <p className="text-[11px] text-emerald-400">{na(ricaAudit?.verified_pct, "% RICA Verified")}</p>
                 </div>
 
                 <div
@@ -666,9 +714,9 @@ export default function ComplianceModule() {
                     <Zap className="h-3.5 w-3.5 text-purple-400" />
                   </div>
                   <p className="mt-1 text-lg font-bold text-foreground">
-                    {executiveSummary?.alerts?.length ?? 4} Alerts
+                    {executiveSummary ? `${executiveSummary.alerts?.length ?? 0} Alerts` : "N/A"}
                   </p>
-                  <p className="text-[11px] text-purple-400">Copilot Synced</p>
+                  <p className="text-[11px] text-purple-400">{executiveSummary ? "Copilot synced" : "Not connected"}</p>
                 </div>
               </div>
             </CardContent>
@@ -805,30 +853,30 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">B2B Portfolio Value</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                R {(salesSla?.total_portfolio_value_zar ?? 25350000).toLocaleString()}
+                {salesSla ? `R ${salesSla.total_portfolio_value_zar.toLocaleString()}` : "N/A"}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">5 Carrier & Enterprise accounts</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(salesSla?.total_contracts, " contracts")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Active Carrier SLAs</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {salesSla?.active_contracts_count ?? 5} Active
+                {na(salesSla?.active_contracts_count, " Active")}
               </p>
-              <p className="text-[11px] text-emerald-400 mt-0.5">100% active operational rate</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(salesSla?.expiring_soon_count, " expiring soon")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Fiber Uptime SLA Target</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {salesSla?.average_sla_uptime_pct ?? 99.5}%
+                {na(salesSla?.average_sla_uptime_pct, "%")}
               </p>
-              <p className="text-[11px] text-emerald-400 mt-0.5">4.0h MTTR response window</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Average across contracts</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">B2B FICA Status</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {salesSla?.fica_verified_pct ?? 100}% Cleared
+                {na(salesSla?.fica_verified_pct, "% Cleared")}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">AML & CIPC validated</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Contracts with verified FICA</p>
             </Card>
           </div>
 
@@ -841,19 +889,13 @@ export default function ComplianceModule() {
                   <CardDescription className="text-xs">Wholesale interconnect, dark fiber backhaul, and enterprise fiber SLAs.</CardDescription>
                 </div>
                 <Badge variant="outline" className="border-blue-500/40 text-blue-400">
-                  {salesSla?.contracts?.length ?? 5} Carrier Agreements
+                  {salesSla?.contracts?.length ?? 0} Carrier Agreements
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {(salesSla?.contracts ?? [
-                  { contract_id: 1, contract_number: "CTR-2026-002", title: "Openserve Dark Fibre Backhaul Interconnect", counterparty: "Openserve (Telkom SA)", contract_type: "infrastructure", status: "active", annual_value_zar: 9200000, effective_date: "2025-08-21", expiry_date: "2027-08-21", days_to_expiry: 330, uptime_sla_pct: 99.5, mttr_target_hours: 4.0, fica_status: "VERIFIED" },
-                  { contract_id: 2, contract_number: "CTR-2026-003", title: "Vumatel NNI Master Services Agreement", counterparty: "Vumatel (Pty) Ltd", contract_type: "fno", status: "active", annual_value_zar: 6500000, effective_date: "2026-03-09", expiry_date: "2027-03-09", days_to_expiry: 165, uptime_sla_pct: 99.5, mttr_target_hours: 4.0, fica_status: "VERIFIED" },
-                  { contract_id: 3, contract_number: "CTR-2026-001", title: "MetroFibre FNO Master SLA", counterparty: "MetroFibre Networx", contract_type: "fno", status: "active", annual_value_zar: 4800000, effective_date: "2025-11-29", expiry_date: "2026-11-29", days_to_expiry: 65, uptime_sla_pct: 99.5, mttr_target_hours: 4.0, fica_status: "VERIFIED" },
-                  { contract_id: 4, contract_number: "CTR-2026-004", title: "MTN Business Transit & Peering SLA", counterparty: "MTN South Africa", contract_type: "interconnect", status: "active", annual_value_zar: 3600000, effective_date: "2026-04-28", expiry_date: "2027-04-28", days_to_expiry: 215, uptime_sla_pct: 99.5, mttr_target_hours: 4.0, fica_status: "VERIFIED" },
-                  { contract_id: 5, contract_number: "CTR-2026-005", title: "Commercial Guarding Enterprise Fiber SLA", counterparty: "ADT Fidelity Security", contract_type: "customer", status: "active", annual_value_zar: 1250000, effective_date: "2026-06-27", expiry_date: "2027-06-27", days_to_expiry: 275, uptime_sla_pct: 99.5, mttr_target_hours: 4.0, fica_status: "VERIFIED" },
-                ]).map((c) => (
+                {(salesSla?.contracts ?? []).map((c) => (
                   <div key={c.contract_id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-border/50 hover:bg-muted/20 gap-3 transition-colors">
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="rounded bg-blue-500/10 p-2">
@@ -882,7 +924,7 @@ export default function ComplianceModule() {
                         </Badge>
                       </div>
                       <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 flex items-center gap-1">
-                        <ShieldCheck className="h-3 w-3" /> FICA OK
+                        <ShieldCheck className="h-3 w-3" /> FICA {String(c.fica_status ?? "unknown").toLowerCase()}
                       </Badge>
                     </div>
                   </div>
@@ -978,30 +1020,30 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Active Technician Fleet</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {fleetSafety?.total_fleet_vehicles ?? 4} Vehicles
+                {na(fleetSafety?.total_fleet_vehicles, " Vehicles")}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">Splicing & drop units</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Roadworthy Compliance</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {fleetSafety?.roadworthy_compliant_count ?? 4} / {fleetSafety?.total_fleet_vehicles ?? 4} (100%)
+                {fleetSafety ? `${fleetSafety.roadworthy_compliant_count} / ${fleetSafety.total_fleet_vehicles}` : "N/A"}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">1 renewal in 30 days</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(fleetSafety?.expiring_license_discs_30d, " renewals in 30 days")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Zero-Incident Streak</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {fleetSafety?.zero_incident_streak_days ?? 148} Days
+                {na(fleetSafety?.zero_incident_streak_days, " Days")}
               </p>
-              <p className="text-[11px] text-emerald-400 mt-0.5">0 COIDA reportable YTD</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(fleetSafety?.coida_reportable_accidents_ytd, " COIDA reportable YTD")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Safety Certifications</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {fleetSafety?.working_at_heights_certified_count ?? 12} Heights · {fleetSafety?.optical_laser_safety_certified_count ?? 15} Laser
+                {fleetSafety ? `${fleetSafety.working_at_heights_certified_count} Heights · ${fleetSafety.optical_laser_safety_certified_count} Laser` : "N/A"}
               </p>
-              <p className="text-[11px] text-cyan-400 mt-0.5">100% field staff certified</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">Certified field staff</p>
             </Card>
           </div>
 
@@ -1013,19 +1055,14 @@ export default function ComplianceModule() {
                   <CardTitle className="text-sm">Technician Light Delivery Vehicle (LDV) Fleet</CardTitle>
                   <CardDescription className="text-xs">Natis e-Services licensing, roadworthy certificates, and assigned field staff.</CardDescription>
                 </div>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                  All Units Active
+                <Badge variant="outline" className="text-muted-foreground">
+                  {fleetSafety ? `${fleetSafety.vehicles?.length ?? 0} units` : "Not connected"}
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {(fleetSafety?.vehicles ?? [
-                  { id: 1, registration_number: "CA 124-892", vehicle_type: "Light Delivery Vehicle", assigned_technician_name: "Musa Sithole", make_model: "Toyota Hilux 2.4 GD-6 Splicing Van", license_disc_expiry: "2026-10-23", days_to_license_expiry: 28, roadworthy_status: "COMPLIANT", tracking_unit_active: true, last_safety_inspection: "2026-09-01" },
-                  { id: 2, registration_number: "GP 882-901", vehicle_type: "Installation Van", assigned_technician_name: "David Botha", make_model: "Nissan NP200 ONT Drop Cable Unit", license_disc_expiry: "2027-01-13", days_to_license_expiry: 110, roadworthy_status: "COMPLIANT", tracking_unit_active: true, last_safety_inspection: "2026-08-20" },
-                  { id: 3, registration_number: "ND 441-209", vehicle_type: "Trench Ops Bakkie", assigned_technician_name: "Sipho Khumalo", make_model: "Ford Ranger 2.2 TDCi Civil Works", license_disc_expiry: "2027-04-28", days_to_license_expiry: 215, roadworthy_status: "COMPLIANT", tracking_unit_active: true, last_safety_inspection: "2026-07-15" },
-                  { id: 4, registration_number: "CA 908-112", vehicle_type: "NOC Field Response", assigned_technician_name: "Tanya Jacobs", make_model: "Volkswagen Caddy Maxi 2.0 TDI", license_disc_expiry: "2027-08-11", days_to_license_expiry: 320, roadworthy_status: "COMPLIANT", tracking_unit_active: true, last_safety_inspection: "2026-09-10" },
-                ]).map((v) => (
+                {(fleetSafety?.vehicles ?? []).map((v) => (
                   <div key={v.id} className="p-3 rounded-lg border border-border/60 bg-background/50 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -1109,7 +1146,7 @@ export default function ComplianceModule() {
             <SectionHeader
               icon={<Landmark className="h-5 w-5 text-emerald-400" />}
               title="CIPC Corporate Standing & B-BBEE Governance"
-              subtitle="CIPC annual returns, corporate registration artifacts, and B-BBEE Level 1 Contributor scorecard"
+              subtitle="CIPC annual returns, corporate registration artifacts, and B-BBEE contributor scorecard"
             />
 
           {/* Corporate Verification Artifacts */}
@@ -1122,21 +1159,16 @@ export default function ComplianceModule() {
               </CardHeader>
               <CardContent className="space-y-2 text-xs">
                 <div className="flex justify-between py-1 border-b border-border/40">
-                  <span className="text-muted-foreground">Entity Name</span>
-                  <span className="font-medium text-foreground">OmniDome Telecoms (Pty) Ltd</span>
-                </div>
-                <div className="flex justify-between py-1 border-b border-border/40">
-                  <span className="text-muted-foreground">Registration Number</span>
-                  <span className="font-mono text-foreground">2020/781923/07</span>
-                </div>
-                <div className="flex justify-between py-1 border-b border-border/40">
                   <span className="text-muted-foreground">Annual Returns Status</span>
-                  <span className="text-emerald-400 font-medium">COMPLIANT (Filing Year 2026 Cleared)</span>
+                  <span className="font-medium text-foreground">{statutoryStatus?.cipc_annual_returns_status ?? "N/A"}</span>
                 </div>
                 <div className="flex justify-between py-1">
-                  <span className="text-muted-foreground">CIPC Disclosure Certificate</span>
-                  <span className="text-primary cursor-pointer hover:underline">Download CoR 14.3</span>
+                  <span className="text-muted-foreground">Next Filing Deadline</span>
+                  <span className="font-medium text-foreground">{statutoryStatus?.cipc_next_filing_deadline ?? "N/A"}</span>
                 </div>
+                {!statutoryStatus && (
+                  <p className="pt-2 text-muted-foreground">Not connected: statutory status has not loaded.</p>
+                )}
               </CardContent>
             </Card>
 
@@ -1148,20 +1180,14 @@ export default function ComplianceModule() {
               </CardHeader>
               <CardContent className="space-y-2 text-xs">
                 <div className="flex justify-between py-1 border-b border-border/40">
-                  <span className="text-muted-foreground">Verification Sector</span>
-                  <span className="font-medium text-foreground">ICT Sector Code (Gazette 40407)</span>
-                </div>
-                <div className="flex justify-between py-1 border-b border-border/40">
                   <span className="text-muted-foreground">Contributor Status</span>
-                  <span className="text-emerald-400 font-medium">Level 1 Contributor (135% recognition)</span>
-                </div>
-                <div className="flex justify-between py-1 border-b border-border/40">
-                  <span className="text-muted-foreground">Black Ownership</span>
-                  <span className="font-medium text-foreground">51.2% Black Owned · 30.8% Black Female Owned</span>
+                  <span className="font-medium text-foreground">
+                    {statutoryStatus ? `${statutoryStatus.bbbee_contributor_level} (${statutoryStatus.bbbee_procurement_recognition_pct}% recognition)` : "N/A"}
+                  </span>
                 </div>
                 <div className="flex justify-between py-1">
-                  <span className="text-muted-foreground">SANAS Accredited Agency</span>
-                  <span className="text-muted-foreground">Empowerdex (Cert: EPD-2026/0491)</span>
+                  <span className="text-muted-foreground">Valid Until</span>
+                  <span className="font-medium text-foreground">{statutoryStatus?.bbbee_valid_until ?? "N/A"}</span>
                 </div>
               </CardContent>
             </Card>
@@ -1189,30 +1215,30 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Call Recording Consent</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {popiaAudit?.voice_recording_consent_rate_pct ?? 99.8}%
+                {na(popiaAudit?.voice_recording_consent_rate_pct, "%")}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">{popiaAudit?.total_calls_monitored_month ?? 1420} calls audited</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(popiaAudit?.total_calls_monitored_month, " calls audited")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Active DSAR Clock</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {popiaAudit?.active_dsar_requests_count ?? 3} Active
+                {na(popiaAudit?.active_dsar_requests_count, " Active")}
               </p>
-              <p className="text-[11px] text-emerald-400 mt-0.5">0 Overdue (&gt;30d)</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(popiaAudit?.overdue_dsar_count, " Overdue (>30d)")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">RICA Verified Subscribers</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {ricaAudit?.verified_pct ?? 97.6}% Verified
+                {na(ricaAudit?.verified_pct, "% Verified")}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">{ricaAudit?.total_active_subscribers ?? 340} total subs</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(ricaAudit?.total_active_subscribers, " total subs")}</p>
             </Card>
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">SmileID Biometric Match</p>
               <p className="text-xl font-bold text-cyan-400 mt-1">
-                {ricaAudit?.biometric_smileid_verified_pct ?? 98.4}%
+                {na(ricaAudit?.biometric_smileid_verified_pct, "%")}
               </p>
-              <p className="text-[11px] text-muted-foreground mt-0.5">{ricaAudit?.average_audit_latency_ms ?? 180}ms verification SLA</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">{na(ricaAudit?.average_audit_latency_ms, "ms verification latency")}</p>
             </Card>
           </div>
 
@@ -1357,10 +1383,10 @@ export default function ComplianceModule() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Zap className="h-5 w-5 text-purple-400" />
-                  Autonomous Compliance Readiness Rating: AUDIT READY
+                  Autonomous Compliance Readiness Rating: {executiveSummary ? executiveSummary.audit_readiness_level.replace(/_/g, " ") : "not connected"}
                 </CardTitle>
                 <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-sm font-bold">
-                  Score {executiveSummary?.overall_compliance_score ?? 96}%
+                  {executiveSummary ? `Score ${executiveSummary.overall_compliance_score}%` : "Score N/A"}
                 </Badge>
               </div>
               <CardDescription className="text-xs">
@@ -1371,19 +1397,19 @@ export default function ComplianceModule() {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">Operational Pillars Assessed</p>
-                  <p className="text-lg font-bold text-foreground">{executiveSummary?.pillars_assessed_count ?? 5} Pillars</p>
+                  <p className="text-lg font-bold text-foreground">{na(executiveSummary?.pillars_assessed_count, " Pillars")}</p>
                 </div>
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">Deadlines in 30 Days</p>
-                  <p className="text-lg font-bold text-amber-400">{executiveSummary?.critical_statutory_deadlines_30d ?? 2} Critical</p>
+                  <p className="text-lg font-bold text-amber-400">{na(executiveSummary?.critical_statutory_deadlines_30d, " Critical")}</p>
                 </div>
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">ICASA Regulatory Breaches</p>
-                  <p className="text-lg font-bold text-emerald-400">{executiveSummary?.icasa_regulatory_alerts_count ?? 0} Breaches</p>
+                  <p className="text-lg font-bold text-emerald-400">{na(executiveSummary?.icasa_regulatory_alerts_count, " Breaches")}</p>
                 </div>
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">Statutory Standing</p>
-                  <p className="text-lg font-bold text-emerald-400">100% Good Standing</p>
+                  <p className="text-lg font-bold text-foreground">{statutoryStatus ? statutoryStatus.sars_tax_clearance_status : "N/A"}</p>
                 </div>
               </div>
             </CardContent>
@@ -1397,12 +1423,7 @@ export default function ComplianceModule() {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {(executiveSummary?.alerts ?? [
-                  { id: "ALERT-01", category: "COMMERCIAL_CONTRACTS", severity: "medium", title: "MetroFibre FNO Master SLA Renewal", description: "The national Dark Fibre Interconnect SLA expires in 65 days. Tariff renegotiation threshold approaching.", deadline: "2026-11-29", recommended_action: "Initiate commercial contract extension review with Sales & Wholesale teams." },
-                  { id: "ALERT-02", category: "FLEET_SAFETY", severity: "low", title: "Splicing Van Fleet Roadworthy Discs", description: "Two technician light delivery vehicles (Toyota Hilux) license discs due for municipal renewal next month.", deadline: "2026-10-23", recommended_action: "Dispatch Natis e-Services automated payment via Finance Treasury." },
-                  { id: "ALERT-03", category: "POPIA_PRIVACY", severity: "info", title: "Quarterly Information Regulator Audit", description: "All call center audio recording disclosures and customer opt-out logs verified at 99.8% compliance.", deadline: undefined, recommended_action: "Export audit evidence packet for board governance filing." },
-                  { id: "ALERT-04", category: "STATUTORY_TAX", severity: "info", title: "SARS EMP201 & VAT201 Reconciliations", description: "All PAYE, UIF, and VAT returns up to date. Tax Clearance Certificate PIN remains active in good standing.", deadline: "2026-10-25", recommended_action: "Approve automated ledger reconciliation entry." },
-                ]).map((alert) => (
+                {(executiveSummary?.alerts ?? []).map((alert) => (
                   <div key={alert.id} className="p-3 rounded-lg border border-border/60 bg-background/50 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">

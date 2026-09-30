@@ -23,16 +23,33 @@ async function getTenantId(): Promise<string> {
 
 async function fetchCompliance<T>(path: string, init?: RequestInit): Promise<T> {
   const tenantId = await getTenantId()
-  const res = await fetch(`${API_BASE}${path}`, {
-    cache: "no-store",
-    headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
-    ...init,
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+      headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
+      ...init,
+    })
+  } catch (err) {
+    // Network failure / timeout: status null => "Service not running".
+    throw new ComplianceApiError(null, err instanceof Error ? err.message : "unreachable")
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    throw new Error(`Compliance API error ${res.status}: ${body}`)
+    throw new ComplianceApiError(res.status, body)
   }
   return res.json()
+}
+
+/** Carries the HTTP status so the UI can tell "service not running" from "error". */
+export class ComplianceApiError extends Error {
+  status: number | null
+  constructor(status: number | null, body: string) {
+    super(status === null ? `Compliance API unreachable: ${body}` : `Compliance API error ${status}: ${body}`)
+    this.name = "ComplianceApiError"
+    this.status = status
+  }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────

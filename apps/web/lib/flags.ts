@@ -44,3 +44,13 @@ export const FINANCE_MOCK_JOURNALS_ENABLED = flagEnabled(
 export const AB_TESTING_ENABLED = flagEnabled(
   process.env.NEXT_PUBLIC_ENABLE_AB_TESTING,
 )
+
+/**
+ * Call Center "simulated telephony" tabs (Asterisk CDRs, ASTPP rates/billing,
+ * Call Seeker, Smart IVR, VoIP hardware, SIP trunks). They are backed by
+ * in-memory demo stores in app/api/call-center/*, not a real telephony
+ * backend, so they are hidden behind a "Not connected" state by default.
+ */
+export const CALL_CENTER_SIMULATED_TELEPHONY_ENABLED = flagEnabled(
+  process.env.NEXT_PUBLIC_ENABLE_CALL_CENTER_SIMULATED_TELEPHONY,
+)
