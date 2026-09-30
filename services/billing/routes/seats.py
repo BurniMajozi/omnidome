@@ -11,10 +11,11 @@ import os
 import secrets
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -36,6 +37,24 @@ def _is_operator(request: Request, ctx: AuthContext) -> bool:
     expected = os.getenv("INTERNAL_SERVICE_KEY", "")
     provided = request.headers.get("x-internal-key") or ""
     return bool(expected) and secrets.compare_digest(provided, expected)
+
+
+# Roles allowed to read a tenant's seat billing (runs, proration quotes) besides operators.
+_BILLING_READ_ROLES = {"owner", "org_admin", "admin", "tenant_admin", "billing", "billing_admin", "platform_admin"}
+
+
+def _can_read_billing(request: Request, ctx: AuthContext) -> bool:
+    return _is_operator(request, ctx) or bool({str(r).lower() for r in ctx.roles} & _BILLING_READ_ROLES)
+
+
+def _require_billing_reader(request: Request, ctx: AuthContext) -> None:
+    if not _can_read_billing(request, ctx):
+        raise HTTPException(status_code=403, detail="Tenant admin, billing role or platform_admin required")
+
+
+# Per-seat price: never negative, sane ceiling (ZAR per seat per cycle), cents precision.
+def UnitPrice():
+    return Field(default=None, ge=0, le=Decimal("100000"), max_digits=12, decimal_places=2)
 
 
 def _require_operator(request: Request, ctx: AuthContext) -> None:
@@ -64,7 +83,7 @@ class ReconcileRequest(BaseModel):
     tenant_id: Optional[uuid.UUID] = None   # omitted: every tenant the admin service reports
     period: Optional[str] = Field(default=None, description="YYYY-MM; default = previous calendar month")
     seat_snapshot: Optional[dict[str, Any]] = Field(default=None, description="Override admin data (tests)")
-    unit_price: Optional[float] = None
+    unit_price: Optional[Decimal] = UnitPrice()
 
 
 @router.post("/reconcile")
@@ -102,6 +121,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=200),
     ctx: AuthContext = Depends(get_auth_context),
 ):
+    _require_billing_reader(request, ctx)
     target = ctx.tenant_id
     if tenant_id and tenant_id != ctx.tenant_id:
         _require_operator(request, ctx)
@@ -118,7 +138,8 @@ class ProrationRequest(BaseModel):
     tenant_id: Optional[uuid.UUID] = None
     added_seats: int = Field(gt=0)
     on: Optional[date] = None               # default today
-    unit_price: Optional[float] = None
+    unit_price: Optional[Decimal] = UnitPrice()
+    idempotency_key: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 def _proration_target(body: ProrationRequest, request: Request, ctx: AuthContext) -> uuid.UUID:
@@ -131,6 +152,7 @@ def _proration_target(body: ProrationRequest, request: Request, ctx: AuthContext
 @router.post("/proration-preview")
 async def proration_preview(body: ProrationRequest, request: Request, ctx: AuthContext = Depends(get_auth_context)):
     """What adding seats today would cost pro rata (ex VAT). Writes nothing."""
+    _require_billing_reader(request, ctx)
     tenant_id = _proration_target(body, request, ctx)
     on = body.on or date.today()
     period_start, period_end = sb.month_period(on.year, on.month)
@@ -147,10 +169,16 @@ async def proration_preview(body: ProrationRequest, request: Request, ctx: AuthC
 
 
 @router.post("/prorate")
-async def prorate_charge(body: ProrationRequest, request: Request, ctx: AuthContext = Depends(get_auth_context)):
+async def prorate_charge(
+    body: ProrationRequest,
+    request: Request,
+    ctx: AuthContext = Depends(get_auth_context),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=128),
+):
     """Invoice (issued, unpaid) and record the pro rata charge for seats added
     now; the cycle invoice later credits it. Operator only (called by admin
-    when it adds seats)."""
+    when it adds seats). Send an Idempotency-Key header (or body idempotency_key) so a retry
+    returns the original charge instead of billing twice."""
     _require_operator(request, ctx)
     tenant_id = _proration_target(body, request, ctx)
     on = body.on or date.today()
@@ -158,7 +186,8 @@ async def prorate_charge(body: ProrationRequest, request: Request, ctx: AuthCont
     with get_session() as session:
         unit = sb.money(body.unit_price) if body.unit_price is not None else seat_runs.resolve_unit_price(session, tenant_id)
         charge, invoice = seat_runs.record_proration_charge(
-            session, tenant_id, body.added_seats, unit, period_start, period_end, on)
+            session, tenant_id, body.added_seats, unit, period_start, period_end, on,
+            idempotency_key=idempotency_key or body.idempotency_key)
         return {
             "charge_id": str(charge.id), "amount_ex_vat": str(charge.amount),
             "invoice_id": str(invoice.id) if invoice else None,

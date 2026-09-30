@@ -109,8 +109,31 @@ DDL: List[str] = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_pending_email ON invites(tenant_id, lower(email)) WHERE status = 'pending'",
     "CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(lower(email))",
     "CREATE INDEX IF NOT EXISTS idx_invites_tenant ON invites(tenant_id, status)",
+    # --- audit_logs: append-only (no escape hatch; a superuser must drop the trigger to purge) ---
+    """CREATE OR REPLACE FUNCTION audit_logs_immutable() RETURNS trigger AS $$
+       BEGIN RAISE EXCEPTION 'audit_logs is append-only (% not allowed)', TG_OP USING ERRCODE = 'insufficient_privilege'; END;
+       $$ LANGUAGE plpgsql""",
+    "DROP TRIGGER IF EXISTS trg_audit_logs_immutable ON audit_logs",
+    """CREATE TRIGGER trg_audit_logs_immutable BEFORE UPDATE OR DELETE ON audit_logs
+       FOR EACH ROW EXECUTE FUNCTION audit_logs_immutable()""",
     "CREATE INDEX IF NOT EXISTS idx_users_supabase_unsynced ON users(supabase_synced) WHERE supabase_synced = false",
 ]
+
+
+async def ensure_unique_lower_email(conn) -> bool:
+    """Case-insensitive unique email. Skips (with a warning) while case-variant duplicates exist,
+    so a bad row never blocks startup; nothing is deleted or merged automatically."""
+    dupes = (
+        await conn.execute(text("SELECT lower(email) AS e, count(*) FROM users GROUP BY lower(email) HAVING count(*) > 1 LIMIT 20"))
+    ).fetchall()
+    if dupes:
+        logger.warning(
+            "users_email_lower_key NOT created: %d duplicate lower(email) group(s) exist (e.g. %s); resolve them and restart",
+            len(dupes), ", ".join(str(r[0]) for r in dupes[:3]),
+        )
+        return False
+    await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email))"))
+    return True
 
 
 async def _once(conn, name: str, statements: List[str]) -> None:
@@ -173,6 +196,8 @@ async def run_migrations(engine: AsyncEngine) -> None:
         await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": MIGRATION_LOCK_KEY})
         for stmt in DDL:
             await conn.execute(text(stmt))
+
+        await ensure_unique_lower_email(conn)
 
         # One-shot backfills, each recorded so later edits are never overwritten.
         await _once(

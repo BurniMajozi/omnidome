@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -926,8 +927,11 @@ class SeatProrationCharge(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)  # ex VAT
     charged_on: Mapped[date] = mapped_column(Date, nullable=False)
     invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
         Index("ix_seat_proration_tenant_period", "tenant_id", "period_start"),
+        Index("uq_seat_proration_tenant_idem", "tenant_id", "idempotency_key", unique=True,
+              postgresql_where=text("idempotency_key IS NOT NULL")),
     )

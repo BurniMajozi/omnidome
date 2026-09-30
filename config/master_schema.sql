@@ -986,6 +986,13 @@ CREATE TABLE audit_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Append-only: no UPDATE/DELETE, no escape hatch (a superuser must drop the trigger to purge).
+CREATE OR REPLACE FUNCTION audit_logs_immutable() RETURNS trigger AS $$
+BEGIN RAISE EXCEPTION 'audit_logs is append-only (% not allowed)', TG_OP USING ERRCODE = 'insufficient_privilege'; END;
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_audit_logs_immutable BEFORE UPDATE OR DELETE ON audit_logs
+    FOR EACH ROW EXECUTE FUNCTION audit_logs_immutable();
+
 -- 13b. TENANT MEMORY
 CREATE TABLE tenant_memory_entries (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1056,6 +1063,7 @@ CREATE INDEX IF NOT EXISTS idx_tenants_subdomain_trgm ON tenants USING gin (lowe
 CREATE INDEX IF NOT EXISTS idx_tenants_org_code_trgm ON tenants USING gin (lower(org_code) gin_trgm_ops);
 
 CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email));
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email));
 CREATE INDEX IF NOT EXISTS idx_users_email_trgm ON users USING gin (lower(email) gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_users_full_name_trgm ON users USING gin (lower(full_name) gin_trgm_ops);
 

@@ -21,6 +21,7 @@ Usage as dependency on specific endpoints:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from collections import defaultdict
@@ -29,6 +30,21 @@ from typing import Optional
 from fastapi import HTTPException, Request, status
 
 logger = logging.getLogger(__name__)
+
+
+def identity_key(request: Request) -> str:
+    """Stable per-caller limiter key: x-user-id, else hash of the bearer token, else client host.
+
+    Behind a proxy every request shares the proxy's client.host, so keying on the host alone
+    makes one caller's flood exhaust the bucket for everybody.
+    """
+    user = (request.headers.get("x-user-id") or "").strip()
+    if user:
+        return "u:" + user[:128]
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer ") and auth[7:].strip():
+        return "t:" + hashlib.sha256(auth[7:].strip().encode()).hexdigest()[:32]
+    return "ip:" + (request.client.host if request.client else "unknown")
 
 
 class RateLimiter:
@@ -46,9 +62,11 @@ class RateLimiter:
         max_requests: int = 60,
         window_seconds: float = 60.0,
         key_func: Optional[object] = None,
+        max_keys: int = 10000,
     ):
         self.max_requests = max_requests
         self.window_seconds = window_seconds
+        self.max_keys = max_keys
         self._key_func = key_func or (lambda r: r.client.host if r.client else "unknown")
         self._requests: dict[str, list[float]] = defaultdict(list)
 
@@ -57,10 +75,27 @@ class RateLimiter:
         cutoff = now - self.window_seconds
         self._requests[key] = [t for t in self._requests[key] if t > cutoff]
 
+    def _evict(self, now: float) -> None:
+        """Bound memory: drop idle keys, then the least recently used ones."""
+        cutoff = now - self.window_seconds
+        for k in [k for k, v in self._requests.items() if not v or v[-1] <= cutoff]:
+            del self._requests[k]
+        if len(self._requests) >= self.max_keys:
+            # still full of live keys: drop the least recently used 10% so this is not O(n log n) per request
+            target = max(1, self.max_keys - max(1, self.max_keys // 10))
+            oldest = sorted(self._requests, key=lambda k: self._requests[k][-1])
+            for k in oldest[: len(self._requests) - target]:
+                del self._requests[k]
+
     async def check(self, request: Request) -> None:
         """FastAPI dependency that raises HTTP 429 if rate limit exceeded."""
-        key = self._key_func(request)  # type: ignore[operator]
+        self.check_key(self._key_func(request))  # type: ignore[operator]
+
+    def check_key(self, key: str) -> None:
+        """Same as check() but with an explicit key (for keys derived from the request body)."""
         now = time.monotonic()
+        if key not in self._requests and len(self._requests) >= self.max_keys:
+            self._evict(now)
         self._cleanup(key, now)
 
         if len(self._requests[key]) >= self.max_requests:

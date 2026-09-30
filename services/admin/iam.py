@@ -27,7 +27,7 @@ from services.admin import supabase_sync
 from services.admin.migrations import ADMIN_CAPABLE_ROLES, DEFAULT_SEAT_LIMIT, ROLE_RANKS, ensure_tenant_roles
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
-from services.common.rate_limiter import RateLimiter
+from services.common.rate_limiter import RateLimiter, identity_key
 from services.common.rbac import has_permission, has_role
 
 logger = logging.getLogger("admin.iam")
@@ -36,8 +36,8 @@ router = APIRouter()
 INVITE_TTL = timedelta(days=7)
 RESERVED_ROLE_NAMES = {"platform_admin", "owner", "org_admin", "org_user"}
 BILLING_STATUSES = {"active", "past_due", "suspended", "cancelled"}
-invite_limiter = RateLimiter(max_requests=30, window_seconds=60)
-accept_limiter = RateLimiter(max_requests=20, window_seconds=60)
+invite_limiter = RateLimiter(max_requests=30, window_seconds=60, key_func=identity_key)
+accept_limiter = RateLimiter(max_requests=20, window_seconds=60, key_func=identity_key)
 
 
 def app_public_url() -> str:
@@ -473,16 +473,21 @@ async def create_invite_row(session, ctx, actor: Actor, tenant_id, email: str, r
     roles = await resolve_roles(session, tenant_id, role_names or ["org_user"])
     check_can_grant(actor, roles)
 
-    existing = (await session.execute(text("SELECT tenant_id FROM users WHERE lower(email) = :e"), {"e": email})).first()
+    # Non-platform callers get one generic refusal: distinct messages would reveal whether an
+    # email already has an account (or a pending invite) in ANOTHER tenant.
+    generic = "This email cannot be invited to this organisation"
+    existing = (await session.execute(text("SELECT tenant_id FROM users WHERE lower(email) = :e ORDER BY created_at, id LIMIT 1"), {"e": email})).first()
     if existing:
-        raise HTTPException(status_code=409, detail="Email already belongs to a tenant")
+        raise HTTPException(status_code=409, detail="Email already belongs to a tenant" if actor.platform else generic)
     other = (
         await session.execute(
-            text("SELECT 1 FROM invites WHERE lower(email) = :e AND status = 'pending' AND expires_at > now()"), {"e": email}
+            text("SELECT tenant_id FROM invites WHERE lower(email) = :e AND status = 'pending' AND expires_at > now() LIMIT 1"), {"e": email}
         )
     ).first()
     if other:
-        raise HTTPException(status_code=409, detail="A pending invite already exists for this email")
+        if actor.platform or str(other[0]) == str(tenant_id):
+            raise HTTPException(status_code=409, detail="A pending invite already exists for this email")
+        raise HTTPException(status_code=409, detail=generic)
     await require_seat(session, tenant_id)
 
     token = secrets.token_urlsafe(32)
@@ -813,7 +818,8 @@ async def accept_invite(
 ):
     """The caller proves who they are with their Supabase access token (Authorization: Bearer);
     the invite must be addressed to that verified email."""
-    await accept_limiter.check(request)
+    # per caller identity + invite token (not global): one flooder cannot lock out other acceptors
+    accept_limiter.check_key(f"{identity_key(request)}|{hash_token(payload.token)[:16]}")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Bearer token required")
     who = await verify_bearer(authorization[7:].strip())

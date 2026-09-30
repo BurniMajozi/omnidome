@@ -490,3 +490,96 @@ def test_role_change_syncs_supabase_and_deactivation_clears_metadata(client, sb,
     assert client.post(f"/tenants/{t}/members/{m}/reactivate", headers=as_user(t, admin)).status_code == 200
     row = q("SELECT supabase_synced, supabase_sync_error FROM users WHERE id=:u", u=m)[0]
     assert row[0] is False and "down" in row[1]
+
+
+# --------------------------------------------------------------------------- security hardening
+
+
+def test_tenant_admin_cannot_enable_modules_platform_admin_can(client):
+    t = make_tenant(client)
+    admin, _ = add_user(t, ["org_admin"])
+    owner, _ = add_user(t, ["owner"])
+    key = q("SELECT key FROM modules ORDER BY key LIMIT 1")[0][0]
+    body = {"modules": [{"name": key, "enabled": True}]}
+    for uid in (admin, owner):
+        assert client.put(f"/tenants/{t}/modules", json=body, headers=as_user(t, uid)).status_code == 403
+    assert client.get(f"/tenants/{t}/modules", headers=as_user(t, admin)).status_code == 200  # read stays open
+    r = client.put(f"/tenants/{t}/modules", json=body, headers=platform(t))
+    assert r.status_code == 200, r.text
+    assert q("SELECT tm.status FROM tenant_modules tm JOIN modules m ON m.id = tm.module_id WHERE tm.tenant_id=:t AND m.key=:k", t=t, k=key)[0][0] == "ENABLED"
+
+
+def test_audit_logs_are_append_only(client):
+    t = make_tenant(client)
+    q("INSERT INTO audit_logs (tenant_id, action, resource_type) VALUES (:t, 'test.append', 'test')", t=t)  # INSERT still works
+    with pytest.raises(Exception, match="append-only"):
+        q("UPDATE audit_logs SET action = 'tampered' WHERE tenant_id = :t", t=t)
+    with pytest.raises(Exception, match="append-only"):
+        q("DELETE FROM audit_logs WHERE tenant_id = :t", t=t)
+    assert q("SELECT count(*) FROM audit_logs WHERE tenant_id=:t AND action='test.append'", t=t)[0][0] == 1
+
+
+def test_email_unique_case_insensitively(client):
+    t = make_tenant(client)
+    email = f"Case-{uuid.uuid4().hex[:8]}@Example.test"
+    add_user(t, ["org_user"], email=email.lower())
+    with pytest.raises(Exception, match="users_email_lower_key|duplicate key"):
+        q("INSERT INTO users (id, tenant_id, email, hashed_password) VALUES (:i,:t,:e,'x')", i=uuid.uuid4(), t=t, e=email.upper())
+    look = client.get("/internal/users/by-email", params={"email": email.upper()}, headers={"x-internal-key": "test-internal-key"})
+    assert look.status_code == 200
+
+
+def test_migration_skips_unique_email_index_when_duplicates_exist(client):
+    import asyncio
+
+    from services.admin import migrations
+
+    # the index exists (applied at startup); dropping it, adding a case-variant duplicate, and
+    # re-running must warn and skip, never fail or delete rows
+    t = make_tenant(client)
+    e = f"dup-{uuid.uuid4().hex[:8]}@example.test"
+    q("DROP INDEX IF EXISTS users_email_lower_key")
+    try:
+        add_user(t, ["org_user"], email=e)
+        q("INSERT INTO users (id, tenant_id, email, hashed_password) VALUES (:i,:t,:e,'x')", i=uuid.uuid4(), t=t, e=e.upper())
+
+        async def go():
+            from sqlalchemy.ext.asyncio import create_async_engine
+
+            from services.common.db import _async_database_url
+
+            eng = create_async_engine(_async_database_url())
+            try:
+                async with eng.begin() as conn:
+                    return await migrations.ensure_unique_lower_email(conn)
+            finally:
+                await eng.dispose()
+
+        assert asyncio.run(go()) is False
+        assert q("SELECT count(*) FROM users WHERE lower(email)=:e", e=e)[0][0] == 2
+    finally:
+        q("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE lower(email)=:e)", e=e)
+        q("DELETE FROM seat_events WHERE user_id IN (SELECT id FROM users WHERE lower(email)=:e)", e=e)
+        q("DELETE FROM users WHERE lower(email)=:e", e=e)
+        q("CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email))")
+
+
+def test_invite_409_is_generic_for_tenant_admins(client):
+    t1, t2 = make_tenant(client), make_tenant(client)
+    admin, _ = add_user(t1, ["org_admin"])
+    _, taken_email = add_user(t2, ["org_user"])
+    pending_email = fresh_email()
+    assert invite(client, t2, pending_email).status_code == 201
+    h = as_user(t1, admin)
+    a = invite(client, t1, taken_email, headers=h)
+    b = invite(client, t1, pending_email, headers=h)
+    fresh = invite(client, t1, fresh_email(), headers=h)
+    assert fresh.status_code == 201
+    assert a.status_code == b.status_code == 409
+    assert a.json()["detail"] == b.json()["detail"]
+    assert "belongs" not in a.json()["detail"] and "pending" not in b.json()["detail"]
+    # platform admins keep the detail; a tenant may still learn about its OWN pending invite
+    assert "belongs" in invite(client, t1, taken_email).json()["detail"]
+    own = fresh_email()
+    assert invite(client, t1, own, headers=h).status_code == 201
+    assert "pending" in invite(client, t1, own, headers=h).json()["detail"]

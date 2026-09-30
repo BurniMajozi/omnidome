@@ -151,10 +151,25 @@ def reconcile_tenant(
     ).scalars().all()
     lines = sb.build_cycle_invoice_lines(peak, unit, period_start, period_end, charges)
 
+    # Claim the (tenant, period) slot FIRST. The unique index makes a concurrent run wait for us
+    # and then fail, so only the winner ever creates an invoice; a loser never flushes one.
     run = SeatBillingRun(
         tenant_id=tenant_id, period_start=period_start, period_end=period_end,
-        peak_seats=peak, unit_price=unit, amount=sb.lines_total(lines), status="skipped",
+        peak_seats=peak, unit_price=unit, amount=sb.lines_total(lines), status="pending",
     )
+    try:
+        with session.begin_nested():
+            session.add(run)
+            session.flush()
+    except IntegrityError:  # concurrent worker won the race; its run stands
+        won = session.execute(
+            select(SeatBillingRun).where(
+                SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start
+            )
+        ).scalar_one()
+        return won, False
+
+    run.status = "skipped"
     if lines:
         subtotal = sb.lines_total(lines)
         invoice = Invoice(
@@ -176,26 +191,48 @@ def reconcile_tenant(
         run.invoice_id = invoice.id
         run.status = "invoiced"
         _maybe_autocharge(invoice)
-    try:
-        with session.begin_nested():
-            session.add(run)
-            session.flush()
-    except IntegrityError:  # concurrent worker won the race; its run stands
-        won = session.execute(
-            select(SeatBillingRun).where(
-                SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start
-            )
-        ).scalar_one()
-        return won, False
+    session.flush()
     return run, True
 
 
 def record_proration_charge(
     session, tenant_id: uuid.UUID, added_seats: int, unit: Decimal,
-    period_start: date, period_end: date, on: date,
+    period_start: date, period_end: date, on: date, idempotency_key: Optional[str] = None,
 ) -> tuple[SeatProrationCharge, Optional[Invoice]]:
-    """Invoice (issued, unpaid) and record the pro rata charge for added seats."""
+    """Invoice (issued, unpaid) and record the pro rata charge for added seats.
+
+    With an idempotency_key, a replay for the same tenant returns the original charge (and its
+    invoice) instead of charging again; the charge row is claimed before the invoice exists so a
+    concurrent duplicate cannot leave an orphan invoice behind."""
     amount = sb.prorate_addition(unit, added_seats, period_start, period_end, on)
+    charge = SeatProrationCharge(
+        tenant_id=tenant_id, period_start=period_start, period_end=period_end,
+        added_seats=added_seats, unit_price=unit, amount=amount, charged_on=on,
+        idempotency_key=idempotency_key,
+    )
+    if idempotency_key:
+        def _existing():
+            return session.execute(
+                select(SeatProrationCharge).where(
+                    SeatProrationCharge.tenant_id == tenant_id, SeatProrationCharge.idempotency_key == idempotency_key
+                )
+            ).scalar_one_or_none()
+
+        prior = _existing()
+        if prior is None:
+            try:
+                with session.begin_nested():
+                    session.add(charge)
+                    session.flush()
+            except IntegrityError:
+                prior = _existing()
+        if prior is not None:
+            inv = session.get(Invoice, prior.invoice_id) if prior.invoice_id else None
+            return prior, inv
+    else:
+        session.add(charge)
+        session.flush()
+
     invoice = None
     if amount > 0:
         vat = compute_vat(amount)
@@ -216,14 +253,9 @@ def record_proration_charge(
         )
         session.add(invoice)
         session.flush()
+        charge.invoice_id = invoice.id
+        session.flush()
         _maybe_autocharge(invoice)
-    charge = SeatProrationCharge(
-        tenant_id=tenant_id, period_start=period_start, period_end=period_end,
-        added_seats=added_seats, unit_price=unit, amount=amount, charged_on=on,
-        invoice_id=invoice.id if invoice else None,
-    )
-    session.add(charge)
-    session.flush()
     return charge, invoice
 
 

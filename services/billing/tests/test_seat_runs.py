@@ -73,8 +73,60 @@ def test_reconcile_requires_operator_and_preview(client):
     tenant = testdb.new_tenant()
     r = client.post("/billing/seats/reconcile", headers=testdb.headers(tenant), json={"tenant_id": str(tenant)})
     assert r.status_code == 403
-    p = client.post("/billing/seats/proration-preview", headers=testdb.headers(tenant),
+    admin = {**testdb.headers(tenant), "X-Roles": "org_admin"}
+    p = client.post("/billing/seats/proration-preview", headers=admin,
                     json={"added_seats": 1, "on": "2026-06-30", "unit_price": 300})
     assert p.status_code == 200 and p.json()["amount_ex_vat"] == "10.00"
-    runs = client.get("/billing/seats/runs", headers=testdb.headers(tenant))
+    runs = client.get("/billing/seats/runs", headers=admin)
     assert runs.status_code == 200 and runs.json() == []
+
+
+def test_runs_and_preview_refuse_plain_members(client):
+    tenant = testdb.new_tenant()
+    member = {**testdb.headers(tenant), "X-Roles": "org_user"}
+    assert client.get("/billing/seats/runs", headers=member).status_code == 403
+    assert client.get("/billing/seats/runs", headers=testdb.headers(tenant)).status_code == 403
+    r = client.post("/billing/seats/proration-preview", headers=member, json={"added_seats": 1, "unit_price": 300})
+    assert r.status_code == 403
+
+
+@pytest.mark.parametrize("price", [-1, -0.01, 100001, 10.123, "abc"])
+def test_bad_unit_price_is_rejected(client, price):
+    tenant = testdb.new_tenant()
+    r = client.post("/billing/seats/reconcile", headers=_admin_headers(tenant),
+                    json={"tenant_id": str(tenant), "period": "2026-06", "unit_price": price, "seat_snapshot": _snap(2, [])})
+    assert r.status_code == 422
+    r = client.post("/billing/seats/prorate", headers=_admin_headers(tenant),
+                    json={"tenant_id": str(tenant), "added_seats": 1, "on": "2026-06-15", "unit_price": price})
+    assert r.status_code == 422
+    with testdb.sync_engine().begin() as conn:
+        assert conn.execute(text("select count(*) from invoices where tenant_id=:t"), {"t": tenant}).scalar() == 0
+
+
+def test_prorate_idempotency_key_replays_same_charge(client):
+    tenant = testdb.new_tenant()
+    body = {"tenant_id": str(tenant), "added_seats": 2, "on": "2026-06-15", "unit_price": 300}
+    h = {**_admin_headers(tenant), "Idempotency-Key": "abc-123"}
+    first = client.post("/billing/seats/prorate", headers=h, json=body)
+    second = client.post("/billing/seats/prorate", headers=h, json=body)
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json() == first.json()
+    other = client.post("/billing/seats/prorate", headers={**_admin_headers(tenant), "Idempotency-Key": "other"}, json=body)
+    assert other.json()["charge_id"] != first.json()["charge_id"]
+    with testdb.sync_engine().begin() as conn:
+        assert conn.execute(text("select count(*) from seat_proration_charges where tenant_id=:t"), {"t": tenant}).scalar() == 2
+        assert conn.execute(text("select count(*) from invoices where tenant_id=:t"), {"t": tenant}).scalar() == 2
+
+
+def test_concurrent_reconcile_creates_exactly_one_invoice(client):
+    from concurrent.futures import ThreadPoolExecutor
+
+    tenant = testdb.new_tenant()
+    snap = _snap(3, [])
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(lambda _: _reconcile(client, tenant, snap, period="2026-05"), range(6)))
+    assert sum(1 for r in results if r["created"]) == 1
+    assert len({r["id"] for r in results}) == 1
+    with testdb.sync_engine().begin() as conn:
+        assert conn.execute(text("select count(*) from invoices where tenant_id=:t"), {"t": tenant}).scalar() == 1
+        assert conn.execute(text("select count(*) from seat_billing_runs where tenant_id=:t"), {"t": tenant}).scalar() == 1

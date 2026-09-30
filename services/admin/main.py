@@ -22,7 +22,7 @@ from services.common.entitlements import EntitlementGuard, EntitlementState
 from services.common.middleware import configure_production
 from services.common.rbac import has_permission, has_role
 from services.common.db import get_async_session
-from services.common.rate_limiter import RateLimiter
+from services.common.rate_limiter import RateLimiter, identity_key
 from services.common.db import get_async_engine, run_with_db_retry
 from services.admin import iam, migrations, supabase_sync
 from services.admin.iam import (
@@ -71,10 +71,10 @@ guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email"
 configure_production(app)
 
 # Rate limiter for auth-sensitive endpoints (10 req/min per IP)
-_auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60)
+_auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60, key_func=identity_key)
 
 # Global rate limiter middleware (100 req/min per IP)
-_global_rate_limiter = RateLimiter(max_requests=100, window_seconds=60)
+_global_rate_limiter = RateLimiter(max_requests=100, window_seconds=60, key_func=identity_key)
 
 
 @app.middleware("http")
@@ -787,7 +787,8 @@ async def update_tenant_modules(
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _ensure_tenant_scope(ctx, tenant_id, session)
+    # Enabling modules is an entitlement (paid) decision: platform admins only, never the tenant itself.
+    await _require_platform_admin(ctx, session)
 
     for module in payload.modules:
         module_key = module.module_name
@@ -908,7 +909,7 @@ async def internal_get_user_by_email(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid internal key")
 
     result = await session.execute(
-        text("select id, tenant_id, is_active, is_owner, supabase_synced from users where lower(email) = lower(:email)"),
+        text("select id, tenant_id, is_active, is_owner, supabase_synced from users where lower(email) = lower(:email) order by is_active desc, created_at asc, id asc limit 1"),
         {"email": email},
     )
     row = result.mappings().first()

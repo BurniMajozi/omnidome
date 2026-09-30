@@ -79,6 +79,8 @@ _SEAT_BILLING_COLUMNS = [
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_start DATE",
     "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_end DATE",
+    "ALTER TABLE seat_proration_charges ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_seat_proration_tenant_idem ON seat_proration_charges (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
 ]
 
 
