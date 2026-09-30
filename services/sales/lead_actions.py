@@ -68,6 +68,18 @@ def campaign_audience(campaign_id: str, campaign_name: str, members: list[dict])
     }
 
 
+async def email_is_suppressed(db: Any, tenant_id: uuid.UUID, email: str) -> bool:
+    """True when the address has opted out (services/common/suppression.py, owned
+    by Marketing). Imported lazily so this service works before that module
+    exists: without it every address is allowed and a warning is logged."""
+    try:
+        from services.common.suppression import is_suppressed
+    except ImportError:
+        logger.warning("services.common.suppression is not available: sending without an opt-out check")
+        return False
+    return bool(await is_suppressed(db, tenant_id, email))
+
+
 # ── Event handlers (at-least-once; idempotent) ──────────────────────────────
 
 async def handle_email_requested(event: dict) -> None:
@@ -83,6 +95,15 @@ async def handle_email_requested(event: dict) -> None:
         )).first()
     if already:
         return
+    async with get_session() as db:
+        suppressed = await email_is_suppressed(db, tenant_id, p["to"])
+        if suppressed:
+            # Opted out: never send, and say so on the timeline (once per event).
+            await record_activity(db, tenant_id, lead_id, "email_suppressed", "email suppressed (opt-out)",
+                                  {"event_id": event["id"], "to": p["to"], "subject": p.get("subject")},
+                                  AUTOMATION, idempotency_key=f"suppressed:{event['id']}")
+    if suppressed:
+        return
     try:
         message_id = await agentmail.send_email(p["to"], p["subject"], email_html(p.get("body", "")))
     except Exception as exc:
@@ -95,7 +116,7 @@ async def handle_email_requested(event: dict) -> None:
     async with get_session() as db:
         await record_activity(db, tenant_id, lead_id, "email_sent", f"Email sent: {p['subject']}",
                               {"event_id": event["id"], "to": p["to"], "message_id": message_id,
-                               "subject": p["subject"]}, AUTOMATION)
+                               "subject": p["subject"]}, AUTOMATION, idempotency_key=f"sent:{event['id']}")
 
 
 async def handle_campaign_requested(event: dict) -> None:

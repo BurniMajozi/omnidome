@@ -9,6 +9,7 @@ SPEC-lead-lifecycle.md. Pure logic (no DB) so the rules are unit-tested.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -155,7 +156,7 @@ def is_forward_move(
     return target is not None and target > current
 
 
-# ── Channel normalization for funnel analytics ────────────────────────────
+# ── Channel normalization (ONE mapping: schema.py's SQL backfill mirrors it) ──
 
 SALES_CHANNELS = (
     "MARKETING",
@@ -171,36 +172,161 @@ SALES_CHANNELS = (
     "OTHER",
 )
 
+# Whole-word keyword groups, checked in this order. Matching is on WORDS (split
+# on anything that is not a letter or digit), never on substrings: "BROADBAND"
+# is not "AD", "DIALING" is not "IN", "CALLING" is not inbound.
+_FIELD_WORDS = {"FIELD", "DOOR", "VISIT", "CANVASS", "CANVASSING"}
+_CALL_WORDS = {"CALL", "CALLS", "CALLING", "PHONE"}
+_INBOUND_WORDS = {"INBOUND", "IN", "INCOMING"}
+_OUTBOUND_WORDS = {"OUTBOUND", "OUT", "OUTGOING", "TELE", "TELESALES", "TELEMARKETING", "COLD"}
+_MARKETING_WORDS = {"MARKET", "MARKETING", "CAMPAIGN", "SOCIAL", "AD", "ADS", "ADVERT", "ADVERTS",
+                    "ADVERTISING", "ADVERTISEMENT"}
+_PORTAL_WORDS = {"PORTAL", "WEB", "WEBSITE", "WEBFORM", "ONLINE", "SITE"}
+_TENDER_WORDS = {"TENDER", "TENDERS", "RFQ", "RFP", "PROCUREMENT"}
+_EMAIL_WORDS = {"EMAIL", "MAIL", "EMAILS"}
+_WALK_WORDS = {"WALK", "WALKIN", "WALKINS", "BRANCH", "STORE"}
+_REFERRAL_WORDS = {"REFERRAL", "REFERRALS", "REFER", "REFERRED", "PARTNER", "AFFILIATE"}
+
+
+def _tokens(value: str) -> list[str]:
+    return [w for w in re.split(r"[^A-Z0-9]+", (value or "").upper()) if w]
+
+
+def _match_channel(raw: str) -> Optional[str]:
+    """Allow-listed channel for one raw string, or None when nothing matches."""
+    tokens = _tokens(raw)
+    if not tokens:
+        return None
+    words = set(tokens)
+    if "_".join(tokens) in SALES_CHANNELS:
+        return "_".join(tokens)
+    if "COMPANY" in words:
+        return "COMPANY_SEARCH"
+    if words & _FIELD_WORDS:
+        return "FIELD_SALES"
+    if words & _CALL_WORDS:
+        return "CALL_CENTER_INBOUND" if words & _INBOUND_WORDS else "CALL_CENTER_OUTBOUND"
+    if words & _OUTBOUND_WORDS:
+        return "CALL_CENTER_OUTBOUND"
+    if words & _MARKETING_WORDS:
+        return "MARKETING"
+    if words & _PORTAL_WORDS:
+        return "PORTAL_WEBSITE"
+    if words & _TENDER_WORDS:
+        return "TENDER"
+    if words & _EMAIL_WORDS:
+        return "INBOUND_EMAIL"
+    if words & _WALK_WORDS:
+        return "WALK_IN"
+    if words & _REFERRAL_WORDS:
+        return "REFERRAL"
+    return None
+
 
 def normalize_channel(
     channel: Optional[str] = None,
     source: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> str:
-    """Normalize raw channel or legacy source string into a canonical sales channel."""
-    raw = (channel or source or "").strip()
-    norm = raw.upper().replace("-", "_").replace(" ", "_")
-    if norm in SALES_CHANNELS:
-        return norm
-    if "COMPANY" in norm or (notes and "company search" in notes.lower()):
-        return "COMPANY_SEARCH"
-    if any(k in norm for k in ("FIELD", "DOOR", "VISIT")):
-        return "FIELD_SALES"
-    if "CALL" in norm and "IN" in norm:
-        return "CALL_CENTER_INBOUND"
-    if any(k in norm for k in ("CALL", "OUTBOUND", "TELE")):
-        return "CALL_CENTER_OUTBOUND"
-    if any(k in norm for k in ("MARKET", "CAMPAIGN", "SOCIAL", "ADS", "ADVERT")):
-        return "MARKETING"
-    if any(k in norm for k in ("PORTAL", "WEB", "ONLINE", "SITE")):
-        return "PORTAL_WEBSITE"
-    if any(k in norm for k in ("TENDER", "RFQ", "PROCURE")):
-        return "TENDER"
-    if "EMAIL" in norm or "MAIL" in norm:
-        return "INBOUND_EMAIL"
-    if any(k in norm for k in ("WALK", "BRANCH", "STORE")):
-        return "WALK_IN"
-    if any(k in norm for k in ("REFER", "PARTNER", "AFFILIATE")):
-        return "REFERRAL"
-    return "OTHER" if not norm else norm[:50]
+    """Canonical sales channel for a raw channel / legacy source string.
 
+    The result is ALWAYS one of SALES_CHANNELS: an unknown value becomes OTHER
+    (it is never passed through raw)."""
+    for raw in (channel, source):
+        found = _match_channel((raw or "").strip())
+        if found:
+            return found
+    if notes and "company search" in notes.lower():
+        return "COMPANY_SEARCH"
+    return "OTHER"
+
+
+# ── Funnel stage buckets (ONE mapping for the funnel and the board) ───────────
+
+# Order of the fixed funnel. Keys are the labels the web already renders.
+STANDARD_FUNNEL_STAGES: tuple[str, ...] = (
+    "NEW", "CONTACTED", "QUALIFIED", "Prospecting", "Proposal", "Negotiation", "Closed Won", "Closed Lost",
+)
+_CANONICAL_BY_KEY = {s.upper(): s for s in STANDARD_FUNNEL_STAGES}
+# Synonyms, keyed by trimmed upper-case text with runs of "_"/whitespace collapsed to one space.
+_STAGE_SYNONYMS = {
+    "WON": "Closed Won",
+    "LOST": "Closed Lost",
+    "DISQUALIFIED": "Closed Lost",
+    "CLOSED WON": "Closed Won",
+    "CLOSED LOST": "Closed Lost",
+}
+OPEN_FUNNEL_ORDER: tuple[str, ...] = ("NEW", "CONTACTED", "QUALIFIED", "Prospecting", "Proposal", "Negotiation")
+
+
+def stage_key(name: Optional[str]) -> str:
+    """Case-insensitive, trimmed identity of a stage name."""
+    return re.sub(r"[\s_]+", " ", (name or "").strip()).upper()
+
+
+def canonical_stage(name: Optional[str]) -> Optional[str]:
+    """The standard funnel label for a stage or lead status ('Qualified' and
+    'QUALIFIED' are the same stage), or None for a tenant-defined custom stage."""
+    key = stage_key(name)
+    return _STAGE_SYNONYMS.get(key) or _CANONICAL_BY_KEY.get(key)
+
+
+def funnel_bucket(
+    lead_status: Optional[str],
+    deal_status: Optional[str] = None,
+    deal_stage: Optional[str] = None,
+    has_deal: Optional[bool] = None,
+) -> tuple[str, bool, bool]:
+    """(bucket label, is_won, is_lost) for one lead. Every lead lands in exactly
+    one bucket, so bucket counts always add up to the number of leads.
+
+    With a deal, the deal is the truth (status first, then its board stage);
+    without one the lead status is. A custom board stage keeps its own label."""
+    if has_deal is None:
+        has_deal = deal_status is not None or deal_stage is not None
+    if has_deal:
+        status_key = stage_key(deal_status)
+        stage_std = canonical_stage(deal_stage)
+        if status_key == "WON" or stage_std == "Closed Won":
+            return "Closed Won", True, False
+        if status_key == "LOST" or stage_std == "Closed Lost":
+            return "Closed Lost", False, True
+        if stage_std:
+            return stage_std, False, False
+        custom = re.sub(r"\s+", " ", (deal_stage or "").strip())
+        return (custom or "Prospecting"), False, False
+    std = canonical_stage(lead_status)
+    if std == "Closed Won":
+        return std, True, False
+    if std == "Closed Lost":
+        return std, False, True
+    if std:
+        return std, False, False
+    if stage_key(lead_status) == "CONVERTED":
+        return "CONVERTED", False, False  # in the pipeline but its deal row is missing
+    custom = re.sub(r"\s+", " ", (lead_status or "").strip())
+    return (custom or "NEW"), False, False
+
+
+def cohort_conversion(counts: dict[str, int]) -> dict[str, dict[str, float]]:
+    """Stage-to-stage conversion on COHORT counts.
+
+    cohort[stage] = leads that reached that stage or went further (open leads at
+    or past it, plus every won lead). Lost leads are excluded: we do not know
+    where they dropped out. conversion_from_previous = cohort / previous cohort,
+    clamped to 0..100 (0 when the previous cohort is empty)."""
+    by_key = {stage_key(k): v for k, v in counts.items()}
+    won = by_key.get("CLOSED WON", 0)
+    open_counts = [by_key.get(stage_key(s), 0) for s in OPEN_FUNNEL_ORDER]
+    out: dict[str, dict[str, float]] = {}
+    previous: Optional[int] = None
+    labels = list(OPEN_FUNNEL_ORDER) + ["Closed Won"]
+    for i, label in enumerate(labels):
+        cohort = won + (sum(open_counts[i:]) if i < len(open_counts) else 0)
+        if previous is None:
+            pct = 100.0 if cohort > 0 else 0.0
+        else:
+            pct = (cohort / previous * 100.0) if previous > 0 else 0.0
+        out[label] = {"cohort": cohort, "conversion_from_previous_pct": round(max(0.0, min(100.0, pct)), 1)}
+        previous = cohort
+    return out

@@ -8,7 +8,9 @@ config/migrations/20260925_lead_lifecycle.sql. Every statement is safe to re-run
 
 from __future__ import annotations
 
+import logging
 import re
+
 from sqlalchemy import text
 
 LEAD_LIFECYCLE_SQL = """
@@ -37,18 +39,32 @@ CREATE INDEX IF NOT EXISTS ix_leads_tenant_status ON leads (tenant_id, status);
 CREATE INDEX IF NOT EXISTS ix_leads_tenant_source_channel ON leads (tenant_id, source_channel);
 CREATE INDEX IF NOT EXISTS ix_deals_lead_id ON deals (lead_id);
 
+-- Mirrors lead_stages.normalize_channel: allow-listed values, WHOLE-WORD matches
+-- (so BROADBAND is not "ad"), anything else is OTHER. A previous backfill that
+-- stored raw/odd values is redone: rows outside the allow-list are reset first.
+UPDATE leads SET source_channel = NULL
+ WHERE source_channel IS NOT NULL
+   AND source_channel NOT IN ('MARKETING', 'INBOUND_EMAIL', 'CALL_CENTER_INBOUND', 'CALL_CENTER_OUTBOUND',
+                              'PORTAL_WEBSITE', 'FIELD_SALES', 'WALK_IN', 'REFERRAL', 'COMPANY_SEARCH', 'TENDER', 'OTHER');
+
 UPDATE leads SET source_channel = CASE
-    WHEN source ILIKE '%field%' OR source ILIKE '%door%' OR source ILIKE '%visit%' THEN 'FIELD_SALES'
-    WHEN source ILIKE '%call%in%' OR source ILIKE '%inbound%call%' THEN 'CALL_CENTER_INBOUND'
-    WHEN source ILIKE '%call%out%' OR source ILIKE '%outbound%call%' OR source ILIKE '%tele%' THEN 'CALL_CENTER_OUTBOUND'
-    WHEN source ILIKE '%market%' OR source ILIKE '%campaign%' OR source ILIKE '%social%' OR source ILIKE '%ad%' THEN 'MARKETING'
-    WHEN source ILIKE '%portal%' OR source ILIKE '%web%' OR source ILIKE '%site%' THEN 'PORTAL_WEBSITE'
-    WHEN source ILIKE '%tender%' OR source ILIKE '%rfq%' THEN 'TENDER'
-    WHEN source ILIKE '%company%' OR notes ILIKE '%company search%' THEN 'COMPANY_SEARCH'
-    WHEN source ILIKE '%email%' OR source ILIKE '%mail%' THEN 'INBOUND_EMAIL'
-    WHEN source ILIKE '%walk%' OR source ILIKE '%branch%' THEN 'WALK_IN'
-    WHEN source ILIKE '%refer%' OR source ILIKE '%partner%' THEN 'REFERRAL'
-    ELSE COALESCE(NULLIF(source, ''), 'OTHER')
+    WHEN upper(regexp_replace(trim(source), '[^A-Za-z0-9]+', '_', 'g'))
+         IN ('MARKETING', 'INBOUND_EMAIL', 'CALL_CENTER_INBOUND', 'CALL_CENTER_OUTBOUND', 'PORTAL_WEBSITE',
+             'FIELD_SALES', 'WALK_IN', 'REFERRAL', 'COMPANY_SEARCH', 'TENDER', 'OTHER')
+         THEN upper(regexp_replace(trim(source), '[^A-Za-z0-9]+', '_', 'g'))
+    WHEN source ~* '(^|[^a-z0-9])(company)([^a-z0-9]|$)' THEN 'COMPANY_SEARCH'
+    WHEN source ~* '(^|[^a-z0-9])(field|door|visit|canvass|canvassing)([^a-z0-9]|$)' THEN 'FIELD_SALES'
+    WHEN source ~* '(^|[^a-z0-9])(call|calls|calling|phone)([^a-z0-9]|$)' AND source ~* '(^|[^a-z0-9])(inbound|in|incoming)([^a-z0-9]|$)' THEN 'CALL_CENTER_INBOUND'
+    WHEN source ~* '(^|[^a-z0-9])(call|calls|calling|phone)([^a-z0-9]|$)' THEN 'CALL_CENTER_OUTBOUND'
+    WHEN source ~* '(^|[^a-z0-9])(outbound|out|outgoing|tele|telesales|telemarketing|cold)([^a-z0-9]|$)' THEN 'CALL_CENTER_OUTBOUND'
+    WHEN source ~* '(^|[^a-z0-9])(market|marketing|campaign|social|ad|ads|advert|adverts|advertising|advertisement)([^a-z0-9]|$)' THEN 'MARKETING'
+    WHEN source ~* '(^|[^a-z0-9])(portal|web|website|webform|online|site)([^a-z0-9]|$)' THEN 'PORTAL_WEBSITE'
+    WHEN source ~* '(^|[^a-z0-9])(tender|tenders|rfq|rfp|procurement)([^a-z0-9]|$)' THEN 'TENDER'
+    WHEN source ~* '(^|[^a-z0-9])(email|mail|emails)([^a-z0-9]|$)' THEN 'INBOUND_EMAIL'
+    WHEN source ~* '(^|[^a-z0-9])(walk|walkin|walkins|branch|store)([^a-z0-9]|$)' THEN 'WALK_IN'
+    WHEN source ~* '(^|[^a-z0-9])(referral|referrals|refer|referred|partner|affiliate)([^a-z0-9]|$)' THEN 'REFERRAL'
+    WHEN notes ILIKE '%company search%' THEN 'COMPANY_SEARCH'
+    ELSE 'OTHER'
 END
 WHERE source_channel IS NULL;
 
@@ -64,6 +80,9 @@ CREATE TABLE IF NOT EXISTS lead_activities (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS ix_lead_activities_lead ON lead_activities (lead_id, created_at DESC);
+-- record_activity(idempotency_key=...) stores the key in details, one row per (lead, kind, key).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_lead_activities_idem ON lead_activities (lead_id, kind, (details->>'idem_key'))
+    WHERE details->>'idem_key' IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS lead_tasks (
     id UUID PRIMARY KEY,
@@ -109,3 +128,63 @@ async def ensure_lead_schema(session) -> None:
         # Skip fragments that are only comments: asyncpg cannot execute them.
         if re.sub(r"--[^\n]*", "", statement).strip():
             await session.execute(text(statement))
+
+
+# ── Pipeline / commission integrity (sales hardening) ─────────────────────────
+# One default pipeline per tenant, unique stage names per pipeline, one live
+# commission per deal. create_all() never adds an index to an existing table, so
+# these run at startup under an advisory lock and are safe to re-run. Indexes
+# that would fail on data that is already duplicated are skipped with a warning
+# instead of keeping the service from starting.
+
+logger = logging.getLogger("sales.schema")
+
+_PIPELINE_LOCK = 0x5A1E6
+
+DEDUPE_DEFAULT_PIPELINES_SQL = """
+WITH ranked AS (
+    SELECT p.id,
+           row_number() OVER (
+               PARTITION BY p.tenant_id
+               ORDER BY (SELECT count(*) FROM deals d JOIN deal_stages s ON s.id = d.stage_id
+                          WHERE s.pipeline_id = p.id) DESC, p.id
+           ) AS rn
+      FROM pipelines p
+     WHERE p.is_default
+)
+UPDATE pipelines SET is_default = false FROM ranked WHERE ranked.id = pipelines.id AND ranked.rn > 1
+"""
+
+# (name, check for existing duplicates, create statement)
+_GUARDED_UNIQUE_INDEXES = (
+    (
+        "uq_pipelines_one_default",
+        "SELECT count(*) FROM (SELECT 1 FROM pipelines WHERE is_default GROUP BY tenant_id HAVING count(*) > 1) d",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_pipelines_one_default ON pipelines (tenant_id) WHERE is_default",
+    ),
+    (
+        "uq_deal_stages_pipeline_name",
+        "SELECT count(*) FROM (SELECT 1 FROM deal_stages GROUP BY pipeline_id, lower(name) HAVING count(*) > 1) d",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_deal_stages_pipeline_name ON deal_stages (pipeline_id, lower(name))",
+    ),
+    (
+        "uq_commissions_deal_live",
+        "SELECT count(*) FROM (SELECT 1 FROM commissions WHERE status <> 'CLAWBACK' GROUP BY deal_id HAVING count(*) > 1) d",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_commissions_deal_live ON commissions (deal_id) WHERE status <> 'CLAWBACK'",
+    ),
+)
+
+
+async def ensure_pipeline_integrity(session) -> None:
+    await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _PIPELINE_LOCK})
+    demoted = await session.execute(text(DEDUPE_DEFAULT_PIPELINES_SQL))
+    if demoted.rowcount:
+        logger.warning("Demoted %d duplicate default pipeline(s); kept the one holding the most deals",
+                       demoted.rowcount)
+    for name, check_sql, create_sql in _GUARDED_UNIQUE_INDEXES:
+        duplicates = (await session.execute(text(check_sql))).scalar() or 0
+        if duplicates:
+            logger.warning("Not creating %s: %d group(s) already hold duplicates; clean them up first", name,
+                           duplicates)
+            continue
+        await session.execute(text(create_sql))

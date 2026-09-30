@@ -23,16 +23,19 @@ Merged 2026-09-12 from main.py (raw-SQL, production) + main_async.py (ORM):
 
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, InvalidOperation
+from dataclasses import dataclass
+from datetime import date, datetime, time as dt_time, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
-from sqlalchemy import Integer, func, select, text
+from sqlalchemy import and_, func, select, text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
@@ -41,14 +44,19 @@ from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.event_bus import ensure_schema as ensure_bus_schema, notify
 from services.common.middleware import configure_production
-from services.sales.database import get_db, get_session, init_tables
-from services.sales import lead_actions, lead_service
+from services.common.rate_limiter import RateLimiter
+from services.sales import access, lead_actions, lead_service
+from services.sales.database import after_commit, get_db, get_session, init_tables
 from services.sales.lead_service import Actor
 from services.sales.lead_stages import (
     SALES_CHANNELS,
+    STANDARD_FUNNEL_STAGES,
     StageChangeError,
+    cohort_conversion,
+    funnel_bucket,
     is_forward_move,
     normalize_channel,
+    stage_key,
 )
 from services.sales.models import (
     Commission,
@@ -63,7 +71,7 @@ from services.sales.models import (
     Quote,
     Target,
 )
-from services.sales.schema import ensure_lead_schema
+from services.sales.schema import ensure_lead_schema, ensure_pipeline_integrity
 
 logger = logging.getLogger("sales")
 
@@ -92,6 +100,7 @@ async def lifespan(app: FastAPI):
         async with get_session() as session:
             await ensure_bus_schema(session)  # sales publishes lead/deal events
             await ensure_lead_schema(session)
+            await ensure_pipeline_integrity(session)
 
     await run_with_db_retry(_lead_schema, logger=logger)
     # Event consumer: lead emails (AgentMail) and campaign audiences (Marketing).
@@ -164,6 +173,12 @@ class PipelineOverviewStage(BaseModel):
 
 
 class DealCreate(BaseModel):
+    # value_zar is the deal's TOTAL CONTRACT VALUE (what close-won books as revenue and
+    # what commission is paid on): a deal made from a quote is monthly x term + once-off
+    # (deal_value_from_quote). A caller that sends a single monthly price (for example
+    # R 799) therefore records a much smaller number than one that sends price x 12; the
+    # value is stored as sent, not reinterpreted. Note the lifecycle bridge divides
+    # value_zar by 12 to get monthly recurring revenue, which assumes an annual figure.
     name: str
     customer_id: uuid.UUID
     lead_id: Optional[uuid.UUID] = None
@@ -276,11 +291,16 @@ class QuoteResponse(BaseModel):
     created_at: datetime
     sent_at: Optional[datetime]
     accepted_at: Optional[datetime]
+    # Set by POST /quotes/{id}/send only: "email" (queued for delivery) or "marked_sent_only".
+    delivery: Optional[str] = None
 
 
 class QuoteSend(BaseModel):
-    channel: str = Field(default="email", description="email or sms")
+    channel: str = Field(default="email", description="email (whatsapp/sms are not wired yet)")
     recipient: Optional[str] = None
+    # Say so explicitly when you only want the quote flagged as sent (for example it was
+    # handed over in person). Nothing is delivered and the response says so.
+    mark_sent_only: bool = False
 
 
 class QuoteAccept(BaseModel):
@@ -297,6 +317,18 @@ class CommissionResponse(BaseModel):
     status: str
     created_at: datetime
     updated_at: Optional[datetime]
+
+
+class DealSummary(BaseModel):
+    """Totals computed in SQL (NUMERIC) over the same filters as GET /deals."""
+    count: int
+    total_value_zar: float
+    won_count: int
+    won_value_zar: float
+    open_count: int
+    open_value_zar: float
+    lost_count: int
+    lost_value_zar: float
 
 
 class CommissionReportEntry(BaseModel):
@@ -408,6 +440,11 @@ class FunnelStageItem(BaseModel):
     count: int
     pct_of_total: float = 0.0
     value_zar: Decimal = Decimal("0")
+    # Cohort view (lead_stages.cohort_conversion): leads that reached this stage
+    # or went further, and that cohort as a % of the previous stage's, clamped 0..100.
+    # Only set for the open stages and Closed Won.
+    cohort_count: Optional[int] = None
+    conversion_from_previous_pct: Optional[float] = None
 
 
 class ChannelFunnelItem(BaseModel):
@@ -419,8 +456,12 @@ class ChannelFunnelItem(BaseModel):
     won_count: int
     lost_count: int
     conversion_rate: float
+    # OPEN pipeline only (won and lost excluded). Kept under its old name for the
+    # web; open_value_zar is the same number under an unambiguous one.
     total_pipeline_value_zar: Decimal
+    open_value_zar: Decimal = Decimal("0")
     won_value_zar: Decimal
+    lost_value_zar: Decimal = Decimal("0")
 
 
 class LeadFunnelResponse(BaseModel):
@@ -481,7 +522,9 @@ class LeadAssign(BaseModel):
 
 class LeadNote(BaseModel):
     body: str = Field(..., min_length=1, max_length=8000)
-    # ai_draft: a message drafted by an automation for a person to review and send
+    # ai_draft: a message drafted by an automation for a person to review and send.
+    # Only an automation caller keeps it (see add_lead_note); from anyone else it is
+    # downgraded, so a person cannot post text that looks like it came from DomeBot.
     kind: str = Field("note", pattern="^(note|call|ai_draft)$")
 
 
@@ -686,24 +729,41 @@ def deserialize_items(items: Optional[List[Dict[str, Any]]]) -> Optional[List[Qu
 # DB helpers
 # ---------------------------------------------------------------------------
 
+def _day_start(d: date) -> datetime:
+    return datetime.combine(d, dt_time.min)
+
+
+def _next_day_start(d: date) -> datetime:
+    """Exclusive upper bound for an inclusive end DATE: compare `< next_day_start(end)`,
+    so rows stamped during the end day (after midnight) are included."""
+    return datetime.combine(d + timedelta(days=1), dt_time.min)
+
+
 async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
-    result = await db.execute(
-        select(Pipeline).where(
-            Pipeline.tenant_id == tenant_id,
-            Pipeline.is_default == True,  # noqa: E712
-        )
-    )
-    pipeline = result.scalar_one_or_none()
-    if pipeline:
-        return pipeline.id
+    """The tenant's default pipeline, created on first use.
+
+    Creation is serialised per tenant with a transaction-scoped advisory lock (the
+    board fires /deals and /pipeline/stages at the same moment on a fresh tenant)
+    and backed by the uq_pipelines_one_default partial unique index. Lookups use
+    .first() with a fixed order so a tenant that already holds two defaults gets a
+    deterministic one instead of a 500."""
+    async def _find() -> Optional[uuid.UUID]:
+        return (await db.execute(
+            select(Pipeline.id).where(Pipeline.tenant_id == tenant_id, Pipeline.is_default == True)  # noqa: E712
+            .order_by(Pipeline.id).limit(1)
+        )).scalars().first()
+
+    found = await _find()
+    if found:
+        return found
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"sales_pipeline:{tenant_id}"})
+    found = await _find()  # another request may have created it while we waited for the lock
+    if found:
+        return found
 
     pipeline_id = uuid.uuid4()
-    pipeline = Pipeline(
-        id=pipeline_id, tenant_id=tenant_id, name="Default Pipeline", is_default=True,
-    )
-    db.add(pipeline)
+    db.add(Pipeline(id=pipeline_id, tenant_id=tenant_id, name="Default Pipeline", is_default=True))
     await db.flush()
-
     for stage_def in DEFAULT_STAGES:
         db.add(DealStage(
             id=uuid.uuid4(),
@@ -720,9 +780,21 @@ async def _get_stages(db: AsyncSession, pipeline_id: uuid.UUID) -> List[DealStag
     result = await db.execute(
         select(DealStage)
         .where(DealStage.pipeline_id == pipeline_id)
-        .order_by(DealStage.sort_order)
+        .order_by(DealStage.sort_order, DealStage.id)
     )
     return list(result.scalars().all())
+
+
+async def _tenant_stage(db: AsyncSession, tenant_id: uuid.UUID, stage_id: uuid.UUID) -> DealStage:
+    """A stage of one of THIS tenant's pipelines, else 404 (a foreign stage id must
+    neither leak its name nor be writable onto a deal)."""
+    stage = (await db.execute(
+        select(DealStage).join(Pipeline, Pipeline.id == DealStage.pipeline_id)
+        .where(DealStage.id == stage_id, Pipeline.tenant_id == tenant_id)
+    )).scalars().first()
+    if stage is None:
+        raise HTTPException(status_code=404, detail="Stage not found")
+    return stage
 
 
 async def _resolve_stage_id(
@@ -733,15 +805,14 @@ async def _resolve_stage_id(
 ) -> uuid.UUID:
     pipeline_id = await _ensure_default_pipeline(db, tenant_id)
     if stage_id:
-        return stage_id
+        return (await _tenant_stage(db, tenant_id, stage_id)).id
     if stage_name:
-        result = await db.execute(
+        row = (await db.execute(
             select(DealStage.id).where(
                 DealStage.pipeline_id == pipeline_id,
-                func.lower(DealStage.name) == stage_name.lower(),
-            )
-        )
-        row = result.scalar_one_or_none()
+                func.lower(DealStage.name) == stage_name.strip().lower(),
+            ).order_by(DealStage.sort_order, DealStage.id).limit(1)
+        )).scalars().first()
         if row:
             return row
     stages = await _get_stages(db, pipeline_id)
@@ -754,17 +825,81 @@ async def _get_closed_stage_id(
     db: AsyncSession, tenant_id: uuid.UUID, name: str,
 ) -> Optional[uuid.UUID]:
     pipeline_id = await _ensure_default_pipeline(db, tenant_id)
-    result = await db.execute(
+    return (await db.execute(
         select(DealStage.id).where(
             DealStage.pipeline_id == pipeline_id,
             func.lower(DealStage.name) == name.lower(),
-        )
-    )
-    return result.scalar_one_or_none()
+        ).order_by(DealStage.sort_order, DealStage.id).limit(1)
+    )).scalars().first()
+
+
+# -- client-supplied foreign ids must belong to the caller's tenant ------------
+
+async def _require_lead(db: AsyncSession, tenant_id: uuid.UUID, lead_id: Optional[uuid.UUID]) -> None:
+    if lead_id is None:
+        return
+    found = (await db.execute(
+        select(Lead.id).where(Lead.id == lead_id, Lead.tenant_id == tenant_id)
+    )).first()
+    if not found:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+
+async def _tenant_row_exists(db: AsyncSession, sql: str, tenant_id: uuid.UUID, row_id: uuid.UUID) -> Optional[bool]:
+    """True/False when the lookup ran, None when its table does not exist here."""
+    try:
+        async with db.begin_nested():
+            return (await db.execute(text(sql), {"i": row_id, "t": tenant_id})).first() is not None
+    except Exception:  # noqa: BLE001 - table not installed in this deployment
+        return None
+
+
+async def _require_agent(
+    db: AsyncSession, tenant_id: uuid.UUID, agent_id: Optional[uuid.UUID], caller: Optional[uuid.UUID] = None,
+) -> None:
+    """An agent is a login user (users) or an HR employee (employees) of this tenant."""
+    if agent_id is None or agent_id == caller:
+        return
+    for sql in ("SELECT 1 FROM users WHERE id = :i AND tenant_id = :t",
+                "SELECT 1 FROM employees WHERE id = :i AND tenant_id = :t"):
+        if await _tenant_row_exists(db, sql, tenant_id, agent_id):
+            return
+    raise HTTPException(status_code=404, detail="Agent not found")
+
+
+async def _require_package(db: AsyncSession, tenant_id: uuid.UUID, package_id: Optional[uuid.UUID]) -> None:
+    if package_id is None:
+        return
+    found = await _tenant_row_exists(db, "SELECT 1 FROM products WHERE id = :i AND tenant_id = :t",
+                                     tenant_id, package_id)
+    if found is False:  # no products table at all (None) is not evidence of a foreign id
+        raise HTTPException(status_code=404, detail="Package not found")
+
+
+async def _require_contact(db: AsyncSession, tenant_id: uuid.UUID, contact_id: uuid.UUID) -> None:
+    found = (await db.execute(
+        select(Contact.id).where(Contact.id == contact_id, Contact.tenant_id == tenant_id)
+    )).first()
+    if not found:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+
+async def _require_deal(db: AsyncSession, tenant_id: uuid.UUID, deal_id: Optional[uuid.UUID]) -> None:
+    if deal_id is None:
+        return
+    found = (await db.execute(
+        select(Deal.id).where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
+    )).first()
+    if not found:
+        raise HTTPException(status_code=404, detail="Deal not found")
 
 
 async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uuid.UUID) -> Decimal:
-    """Tenant-configured tier wins; default 5/7/10% thresholds otherwise."""
+    """Tenant-configured tier wins; default 5/7/10% thresholds otherwise.
+
+    The tier is chosen by the agent's WON deals this month INCLUDING the deal being
+    closed: the caller flushes the WON status first, so the count does not depend
+    on session autoflush (closing the 10th deal of the month earns the 10-deal tier)."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     period_start = date(now.year, now.month, 1)
     next_m = period_start + timedelta(days=32)
@@ -775,8 +910,8 @@ async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uui
             Deal.tenant_id == tenant_id,
             Deal.agent_id == agent_id,
             Deal.status == "WON",
-            Deal.closed_at >= period_start,
-            Deal.closed_at < period_end,
+            Deal.closed_at >= _day_start(period_start),
+            Deal.closed_at < _day_start(period_end),
         )
     )
     count = result.scalar() or 0
@@ -791,7 +926,7 @@ async def _commission_rate(db: AsyncSession, tenant_id: uuid.UUID, agent_id: uui
         .order_by(CommissionTier.rate_percent.desc())
         .limit(1)
     )
-    tier_rate = tier_result.scalar_one_or_none()
+    tier_rate = tier_result.scalars().first()
     if tier_rate is not None:
         return Decimal(str(tier_rate))
     return fallback_commission_rate(count)
@@ -828,20 +963,23 @@ async def _ensure_contact(
     db: AsyncSession, tenant_id: uuid.UUID, contact_id: uuid.UUID,
     notes: Optional[str], now: datetime,
 ) -> uuid.UUID:
-    """Return an existing contact id, else insert one (satisfies FK)."""
-    existing = await db.get(Contact, contact_id)
-    if existing and existing.tenant_id == tenant_id:
-        return contact_id
+    """Return an existing contact id of this tenant, else insert one (satisfies FK).
+
+    An id that belongs to ANOTHER tenant is a clean 404 (it used to be a primary-key
+    error, a 500). The insert is ON CONFLICT DO NOTHING so two requests creating the
+    same new id cannot 500 each other; ownership is re-checked afterwards."""
     hints = _parse_notes_contact(notes)
-    db.add(Contact(
-        id=contact_id, tenant_id=tenant_id,
-        first_name=hints["first_name"] or "Walk-in",
-        last_name=hints["last_name"] or "Customer",
-        email=hints["email"], phone=hints["phone"],
-        status="ACTIVE", lifecycle_stage="PROSPECT",
-        created_at=now, updated_at=now,
-    ))
-    await db.flush()
+    await db.execute(
+        pg_insert(Contact).values(
+            id=contact_id, tenant_id=tenant_id,
+            first_name=hints["first_name"] or "Walk-in",
+            last_name=hints["last_name"] or "Customer",
+            email=hints["email"], phone=hints["phone"],
+            status="ACTIVE", lifecycle_stage="PROSPECT", rica_verified=False,
+            created_at=now, updated_at=now,
+        ).on_conflict_do_nothing(index_elements=[Contact.id])
+    )
+    await _require_contact(db, tenant_id, contact_id)
     return contact_id
 
 
@@ -972,9 +1110,52 @@ def _actor(ctx: Optional[AuthContext]) -> Actor:
     return Actor(id=ctx.user_id if ctx else None)
 
 
+def _closed_deal_decision(deal_status: Optional[str], target: str) -> str:
+    """Closed deals are terminal. `target` is "WON" or "LOST".
+
+    Returns "proceed" for an open deal and "noop" when the deal is ALREADY closed
+    the same way (repeating a close is idempotent: 200, no side effects). Closing it
+    the other way is a 409; reversing a closed deal is not supported."""
+    current = (deal_status or "OPEN").upper()
+    if current not in ("WON", "LOST"):
+        return "proceed"
+    if current == target:
+        return "noop"
+    if current == "WON":
+        raise HTTPException(status_code=409, detail="Deal is already won; a won deal cannot be closed as lost "
+                            "(its commission and journal entry are already booked)")
+    raise HTTPException(status_code=409, detail="Deal is already lost; a lost deal cannot be closed as won "
+                        "(create a new deal instead)")
+
+
+async def _lock_deal(db: AsyncSession, tenant_id: uuid.UUID, deal_id: uuid.UUID) -> Deal:
+    """Load the tenant's deal under SELECT ... FOR UPDATE, fresh from the database.
+
+    The status check that follows happens while holding the row lock, so two
+    concurrent closes are serialised: the second sees WON/LOST and books nothing."""
+    deal = (await db.execute(
+        select(Deal).where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalars().first()
+    if deal is None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    return deal
+
+
 async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None:
-    """Close a deal as won: Closed Won stage, commission, finance + lifecycle
-    bridges, provisioning webhooks. Shared by the board and the lead table."""
+    """Close a deal as won: Closed Won stage, commission, then (after the commit)
+    finance + lifecycle bridges and provisioning webhooks. Shared by the board and
+    the lead table. Idempotent: an already-won deal does nothing; a lost one is a 409.
+
+    Everything here is DB work in the caller's transaction; the calls to other
+    services are queued with after_commit(), so a rolled-back close posts nothing
+    and a committed one posts exactly once."""
+    if _closed_deal_decision(deal.status, "WON") == "noop":
+        return
+    await db.flush()  # keep pending edits, then re-read the row under its lock
+    await db.refresh(deal, with_for_update=True)
+    if _closed_deal_decision(deal.status, "WON") == "noop":
+        return
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Won")
     deal.status = "WON"
@@ -982,32 +1163,47 @@ async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None
     deal.updated_at = now
     if closed_stage_id:
         deal.stage_id = closed_stage_id
+    await db.flush()  # the commission tier counts this deal as won
 
-    # Commission per agent tier.
+    # Commission per agent tier, one per deal.
     if deal.agent_id:
-        rate = await _commission_rate(db, tenant_id, deal.agent_id)
-        amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
-        db.add(Commission(
-            id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal.id,
-            agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
-            status="PENDING", created_at=now, updated_at=now,
-        ))
-
+        already = (await db.execute(
+            select(Commission.id).where(Commission.deal_id == deal.id, Commission.status != "CLAWBACK").limit(1)
+        )).first()
+        if not already:
+            rate = await _commission_rate(db, tenant_id, deal.agent_id)
+            amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
+            db.add(Commission(
+                id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal.id,
+                agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
+                status="PENDING", created_at=now, updated_at=now,
+            ))
     await db.flush()
 
-    # Bridges — non-blocking, never fail the sale.
-    await _notify_lifecycle_won(deal, tenant_id)
-    await _notify_finance_won(deal, tenant_id, now)
-    schedule_background(_dispatch_provisioning_bg({
+    # Bridges: queued for after the commit, non-blocking, never fail the sale.
+    payload = {
         "event": "deal.closed_won", "deal_id": str(deal.id),
         "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
         "agent_id": str(deal.agent_id) if deal.agent_id else None,
         "package_id": str(deal.package_id) if deal.package_id else None,
         "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
-    }))
+    }
+
+    async def _bridges() -> None:
+        await _notify_lifecycle_won(deal, tenant_id)
+        await _notify_finance_won(deal, tenant_id, now)
+        schedule_background(_dispatch_provisioning_bg(payload))
+
+    after_commit(db, _bridges)
 
 
 async def _close_lost(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, reason: str) -> None:
+    if _closed_deal_decision(deal.status, "LOST") == "noop":
+        return
+    await db.flush()
+    await db.refresh(deal, with_for_update=True)
+    if _closed_deal_decision(deal.status, "LOST") == "noop":
+        return
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     closed_stage_id = await _get_closed_stage_id(db, tenant_id, "Closed Lost")
     deal.status = "LOST"
@@ -1018,17 +1214,19 @@ async def _close_lost(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, reason
         deal.stage_id = closed_stage_id
     await db.flush()
 
-    # Lifecycle bridge — non-blocking.
-    await _notify_lifecycle_lost(deal, tenant_id, reason)
+    async def _bridges() -> None:
+        await _notify_lifecycle_lost(deal, tenant_id, reason)
+
+    after_commit(db, _bridges)
+
 
 async def _set_deal_stage(
     db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, stage_id: uuid.UUID, ctx: Optional[AuthContext],
 ) -> Optional[DealStage]:
     """Board move. Closed Won runs the full close-won path; Closed Lost needs the
-    close-lost route (reason); closed deals don't move. Mirrors onto the lead."""
-    stage = await db.get(DealStage, stage_id)
-    if stage is None:
-        raise HTTPException(status_code=400, detail="Unknown stage")
+    close-lost route (reason); closed deals don't move. Mirrors onto the lead.
+    The stage must belong to this tenant (404 otherwise)."""
+    stage = await _tenant_stage(db, tenant_id, stage_id)
     if deal.status in ("WON", "LOST"):
         raise HTTPException(status_code=409, detail=f"Deal is already closed ({deal.status.lower()})")
     if stage.name.lower() == "closed lost":
@@ -1042,8 +1240,6 @@ async def _set_deal_stage(
     await lead_service.sync_lead_from_deal(db, deal, stage.name, _actor(ctx))
     await lead_service.publish_deal_event(db, deal, stage.name)
     return stage
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -1104,8 +1300,20 @@ async def create_pipeline_stage(
     payload: PipelineStageCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    _auth: AuthContext = Depends(access.require_tier("admin")),
 ):
+    name = re.sub(r"\s+", " ", (payload.name or "").strip())
+    if not name:
+        raise HTTPException(status_code=422, detail="A stage needs a name")
     pipeline_id = await _ensure_default_pipeline(db, tenant_id)
+    # Stage names are unique per pipeline, case-insensitively; in particular there
+    # is exactly one Closed Won and one Closed Lost (the close paths look them up by name).
+    clash = (await db.execute(
+        select(DealStage.id).where(DealStage.pipeline_id == pipeline_id,
+                                   func.lower(DealStage.name) == name.lower()).limit(1)
+    )).first()
+    if clash:
+        raise HTTPException(status_code=409, detail=f"A stage named '{name}' already exists in this pipeline")
     sort_order = payload.sort_order
     if sort_order is None:
         result = await db.execute(
@@ -1115,7 +1323,7 @@ async def create_pipeline_stage(
         sort_order = (result.scalar() or 0) + 1
 
     stage = DealStage(
-        id=uuid.uuid4(), pipeline_id=pipeline_id, name=payload.name,
+        id=uuid.uuid4(), pipeline_id=pipeline_id, name=name,
         probability=payload.probability, sort_order=sort_order,
     )
     db.add(stage)
@@ -1131,8 +1339,12 @@ async def create_deal(
     payload: DealCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
     stage_id = await _resolve_stage_id(db, tenant_id, payload.stage_id, payload.stage_name)
+    await _require_lead(db, tenant_id, payload.lead_id)
+    await _require_agent(db, tenant_id, payload.agent_id, ctx.user_id)
+    await _require_package(db, tenant_id, payload.package_id)
     deal_id = uuid.uuid4()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -1153,48 +1365,138 @@ async def create_deal(
     return _deal_to_response(deal, stage.name if stage else None)
 
 
+def _deal_conditions(
+    tenant_id: uuid.UUID, *, stage_id=None, stage=None, agent_id=None, status_filter=None,
+    start_date=None, end_date=None, closed_from=None, closed_to=None, min_value=None, max_value=None,
+) -> list:
+    """WHERE conditions shared by GET /deals and GET /deals/summary. Date filters are
+    inclusive DATES: an end date means the whole end day (< end + 1 day)."""
+    conds: list = [Deal.tenant_id == tenant_id]
+    if stage_id:
+        conds.append(Deal.stage_id == stage_id)
+    if stage:
+        conds.append(func.lower(DealStage.name) == stage.lower())
+    if agent_id:
+        conds.append(Deal.agent_id == agent_id)
+    if status_filter:
+        conds.append(Deal.status == status_filter.upper())
+    if start_date:
+        conds.append(Deal.created_at >= _day_start(start_date))
+    if end_date:
+        conds.append(Deal.created_at < _next_day_start(end_date))
+    if closed_from:
+        conds.append(Deal.closed_at >= _day_start(closed_from))
+    if closed_to:
+        conds.append(Deal.closed_at < _next_day_start(closed_to))
+    if min_value is not None:
+        conds.append(Deal.value_zar >= min_value)
+    if max_value is not None:
+        conds.append(Deal.value_zar <= max_value)
+    return conds
+
+
 @app.get("/deals", response_model=List[DealResponse])
 async def list_deals(
+    response: Response,
     stage_id: Optional[uuid.UUID] = None,
     stage: Optional[str] = None,
     agent_id: Optional[uuid.UUID] = None,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    closed_from: Optional[date] = None,
+    closed_to: Optional[date] = None,
     min_value: Optional[Decimal] = None,
     max_value: Optional[Decimal] = None,
+    limit: int = Query(500, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
+    """Deals, newest first. The body is still a bare list; the total matching the
+    filters (before limit/offset) is in the X-Total-Count header. closed_from /
+    closed_to filter on the close date (inclusive days), start_date / end_date
+    on the creation date. For revenue totals use GET /deals/summary instead of summing rows."""
+    conds = _deal_conditions(
+        tenant_id, stage_id=stage_id, stage=stage, agent_id=agent_id, status_filter=status_filter,
+        start_date=start_date, end_date=end_date, closed_from=closed_from, closed_to=closed_to,
+        min_value=min_value, max_value=max_value)
     q = (
         select(Deal, DealStage.name.label("stage_name"), Lead)
         .outerjoin(DealStage, DealStage.id == Deal.stage_id)
-        .outerjoin(Lead, Lead.id == Deal.lead_id)
-        .where(Deal.tenant_id == tenant_id)
+        # tenant-scoped join: a foreign lead id on a deal must not surface that lead's reference/owner
+        .outerjoin(Lead, and_(Lead.id == Deal.lead_id, Lead.tenant_id == Deal.tenant_id))
+        .where(*conds)
+        .order_by(Deal.created_at.desc(), Deal.id)
+        .limit(limit).offset(offset)
     )
-    if stage_id:
-        q = q.where(Deal.stage_id == stage_id)
-    if stage:
-        q = q.where(func.lower(DealStage.name) == stage.lower())
-    if agent_id:
-        q = q.where(Deal.agent_id == agent_id)
-    if status_filter:
-        q = q.where(Deal.status == status_filter.upper())
-    if start_date:
-        q = q.where(Deal.created_at >= start_date)
-    if end_date:
-        q = q.where(Deal.created_at <= end_date)
-    if min_value is not None:
-        q = q.where(Deal.value_zar >= min_value)
-    if max_value is not None:
-        q = q.where(Deal.value_zar <= max_value)
-    q = q.order_by(Deal.created_at.desc())
-
+    total = (await db.execute(
+        select(func.count(Deal.id)).select_from(Deal)
+        .outerjoin(DealStage, DealStage.id == Deal.stage_id).where(*conds)
+    )).scalar() or 0
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(limit)
+    response.headers["X-Offset"] = str(offset)
     result = await db.execute(q)
     return [
         _deal_to_response(row.Deal, row.stage_name, row.Lead)
         for row in result.all()
     ]
+
+
+def _deal_summary_query(conds: list):
+    """Every figure in one SQL statement over NUMERIC, never summed in Python floats."""
+    def _sum(*extra):
+        expr = func.sum(Deal.value_zar)
+        if extra:
+            expr = expr.filter(*extra)
+        return func.coalesce(expr, 0)
+
+    def _count(*extra):
+        expr = func.count(Deal.id)
+        return expr.filter(*extra) if extra else expr
+
+    return (
+        select(
+            _count().label("count"), _sum().label("total_value"),
+            _count(Deal.status == "WON").label("won_count"), _sum(Deal.status == "WON").label("won_value"),
+            _count(Deal.status == "OPEN").label("open_count"), _sum(Deal.status == "OPEN").label("open_value"),
+            _count(Deal.status == "LOST").label("lost_count"), _sum(Deal.status == "LOST").label("lost_value"),
+        )
+        .select_from(Deal).outerjoin(DealStage, DealStage.id == Deal.stage_id).where(*conds)
+    )
+
+
+def _money(value: Any) -> float:
+    return float(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+@app.get("/deals/summary", response_model=DealSummary)
+async def deals_summary(
+    stage_id: Optional[uuid.UUID] = None,
+    stage: Optional[str] = None,
+    agent_id: Optional[uuid.UUID] = None,
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    closed_from: Optional[date] = None,
+    closed_to: Optional[date] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Count and value (ZAR) of the deals matching the same filters as GET /deals,
+    split by status, without pulling every row. Won revenue for a period:
+    ?status=WON&closed_from=2026-09-01&closed_to=2026-09-30."""
+    conds = _deal_conditions(
+        tenant_id, stage_id=stage_id, stage=stage, agent_id=agent_id, status_filter=status_filter,
+        start_date=start_date, end_date=end_date, closed_from=closed_from, closed_to=closed_to)
+    row = (await db.execute(_deal_summary_query(conds))).one()
+    return DealSummary(
+        count=row.count, total_value_zar=_money(row.total_value),
+        won_count=row.won_count, won_value_zar=_money(row.won_value),
+        open_count=row.open_count, open_value_zar=_money(row.open_value),
+        lost_count=row.lost_count, lost_value_zar=_money(row.lost_value),
+    )
 
 
 @app.get("/deals/{deal_id}", response_model=DealResponse)
@@ -1206,7 +1508,7 @@ async def get_deal(
     result = await db.execute(
         select(Deal, DealStage.name.label("stage_name"), Lead)
         .outerjoin(DealStage, Deal.stage_id == DealStage.id)
-        .outerjoin(Lead, Lead.id == Deal.lead_id)
+        .outerjoin(Lead, and_(Lead.id == Deal.lead_id, Lead.tenant_id == Deal.tenant_id))
         .where(Deal.id == deal_id, Deal.tenant_id == tenant_id)
     )
     row = result.first()
@@ -1220,10 +1522,9 @@ async def delete_deal(
     deal_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    _auth: AuthContext = Depends(access.require_tier("admin")),
 ):
-    deal = await db.get(Deal, deal_id)
-    if not deal or deal.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Deal not found")
+    deal = await _lock_deal(db, tenant_id, deal_id)
     lead = await db.get(Lead, deal.lead_id) if deal.lead_id else None
     await db.delete(deal)
     await db.flush()
@@ -1246,9 +1547,9 @@ async def update_deal(
     db: AsyncSession = Depends(get_db),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    deal = await db.get(Deal, deal_id)
-    if not deal or deal.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Deal not found")
+    deal = await _lock_deal(db, tenant_id, deal_id)
+    await _require_agent(db, tenant_id, payload.agent_id, ctx.user_id)
+    await _require_package(db, tenant_id, payload.package_id)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     if payload.name is not None:
@@ -1283,9 +1584,7 @@ async def move_deal_stage(
     db: AsyncSession = Depends(get_db),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    deal = await db.get(Deal, deal_id)
-    if not deal or deal.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Deal not found")
+    deal = await _lock_deal(db, tenant_id, deal_id)
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     stage_id = payload.stage_id
@@ -1318,13 +1617,11 @@ async def close_deal_won(
     db: AsyncSession = Depends(get_db),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    deal = await db.get(Deal, deal_id)
-    if not deal or deal.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    await _close_won(db, tenant_id, deal)
-    await lead_service.sync_lead_from_deal(db, deal, "Closed Won", _actor(ctx))
-    await lead_service.publish_deal_event(db, deal, "Closed Won")
+    deal = await _lock_deal(db, tenant_id, deal_id)  # row lock: concurrent closes are serialised
+    if _closed_deal_decision(deal.status, "WON") == "proceed":  # 409 if lost; repeat of the same close is a no-op
+        await _close_won(db, tenant_id, deal)
+        await lead_service.sync_lead_from_deal(db, deal, "Closed Won", _actor(ctx))
+        await lead_service.publish_deal_event(db, deal, "Closed Won")
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
     return _deal_to_response(deal, stage.name if stage else "Closed Won")
@@ -1338,13 +1635,11 @@ async def close_deal_lost(
     db: AsyncSession = Depends(get_db),
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    deal = await db.get(Deal, deal_id)
-    if not deal or deal.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    await _close_lost(db, tenant_id, deal, reason)
-    await lead_service.sync_lead_from_deal(db, deal, "Closed Lost", _actor(ctx))
-    await lead_service.publish_deal_event(db, deal, "Closed Lost")
+    deal = await _lock_deal(db, tenant_id, deal_id)
+    if _closed_deal_decision(deal.status, "LOST") == "proceed":  # 409 if won; repeat is a no-op
+        await _close_lost(db, tenant_id, deal, reason)
+        await lead_service.sync_lead_from_deal(db, deal, "Closed Lost", _actor(ctx))
+        await lead_service.publish_deal_event(db, deal, "Closed Lost")
 
     stage = await db.get(DealStage, deal.stage_id) if deal.stage_id else None
     return _deal_to_response(deal, stage.name if stage else "Closed Lost")
@@ -1358,6 +1653,11 @@ async def create_quote(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
+    await _require_contact(db, tenant_id, payload.customer_id)
+    await _require_deal(db, tenant_id, payload.deal_id)
+    await _require_lead(db, tenant_id, payload.lead_id)
+    await _require_agent(db, tenant_id, payload.agent_id)
+    await _require_package(db, tenant_id, payload.package_id)
     quote_id = uuid.uuid4()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
 
@@ -1449,19 +1749,7 @@ async def get_quote(
     )
 
 
-@app.post("/quotes/{quote_id}/send", response_model=QuoteResponse)
-async def send_quote(
-    quote_id: uuid.UUID,
-    payload: QuoteSend,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    db: AsyncSession = Depends(get_db),
-):
-    quote = await db.get(Quote, quote_id)
-    if not quote or quote.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quote not found")
-    quote.status = "SENT"
-    quote.sent_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    await db.flush()
+def _quote_response(quote: Quote, delivery: Optional[str] = None) -> QuoteResponse:
     return QuoteResponse(
         id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
         customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
@@ -1469,8 +1757,86 @@ async def send_quote(
         total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
         term_months=quote.term_months, valid_until=quote.valid_until,
         status=quote.status, terms=quote.terms, created_at=quote.created_at,
-        sent_at=quote.sent_at, accepted_at=quote.accepted_at,
+        sent_at=quote.sent_at, accepted_at=quote.accepted_at, delivery=delivery,
     )
+
+
+def _quote_expired(quote: Quote, today: Optional[date] = None) -> bool:
+    return bool(quote.valid_until and quote.valid_until < (today or date.today()))
+
+
+def _quote_email_html(quote: Quote) -> str:
+    lines = [
+        "Thank you for your interest. Your quote:",
+        f"Monthly: R {quote.total_monthly:,.2f}",
+        f"Once-off: R {quote.total_once_off:,.2f}",
+        f"Term: {quote.term_months} months",
+        f"Valid until: {quote.valid_until:%d %b %Y}" if quote.valid_until else "",
+        quote.terms or "",
+    ]
+    return lead_actions.email_html("\n".join(line for line in lines if line))
+
+
+async def _lock_quote(db: AsyncSession, tenant_id: uuid.UUID, quote_id: uuid.UUID) -> Quote:
+    quote = (await db.execute(
+        select(Quote).where(Quote.id == quote_id, Quote.tenant_id == tenant_id)
+        .with_for_update().execution_options(populate_existing=True)
+    )).scalars().first()
+    if quote is None:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return quote
+
+
+@app.post("/quotes/{quote_id}/send", response_model=QuoteResponse)
+async def send_quote(
+    quote_id: uuid.UUID,
+    payload: QuoteSend,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+    _auth: AuthContext = Depends(access.require_tier("agent")),
+):
+    """Deliver a quote by email, or (mark_sent_only=true) only flag it as sent.
+
+    The quote is marked SENT only when something was actually sent, or when the
+    caller asked for the flag alone. `delivery` in the response says which:
+    "email" (handed to the mail provider) or "marked_sent_only" (nothing delivered).
+    An opted-out address is never emailed. SMS / WhatsApp are not wired: 501."""
+    quote = await _lock_quote(db, tenant_id, quote_id)
+    if quote.status not in ("DRAFT", "SENT"):
+        raise HTTPException(status_code=409, detail=f"A {quote.status.lower()} quote cannot be sent")
+    if _quote_expired(quote):
+        raise HTTPException(status_code=409, detail="This quote has expired; create a new one")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    if payload.mark_sent_only:
+        quote.status = "SENT"
+        quote.sent_at = now
+        await db.flush()
+        return _quote_response(quote, delivery="marked_sent_only")
+
+    if (payload.channel or "email").lower() != "email":
+        raise HTTPException(status_code=501, detail=f"Sending by {payload.channel} is not available yet; "
+                            "use channel=email, or mark_sent_only=true to record that it was handed over")
+    recipient = (payload.recipient or "").strip()
+    if not recipient:
+        contact = await db.get(Contact, quote.customer_id)
+        recipient = (contact.email or "").strip() if contact and contact.tenant_id == tenant_id else ""
+    if not recipient:
+        raise HTTPException(status_code=400, detail="No recipient: pass `recipient` or give the customer an email address")
+    if await lead_actions.email_is_suppressed(db, tenant_id, recipient):
+        raise HTTPException(status_code=409, detail="This address has opted out of email; the quote was not sent")
+    try:
+        await lead_actions.agentmail.send_email(recipient, "Your quote", _quote_email_html(quote))
+    except lead_actions.agentmail.EmailNotConfigured as exc:
+        raise HTTPException(status_code=501, detail="Email sending is not configured for this tenant; "
+                            "use mark_sent_only=true to record a quote handed over another way") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Quote %s email failed: %s", quote_id, exc)
+        raise HTTPException(status_code=502, detail="The mail provider did not accept the email; the quote was not sent") from exc
+    quote.status = "SENT"
+    quote.sent_at = now
+    await db.flush()
+    return _quote_response(quote, delivery="email")
 
 
 @app.post("/quotes/{quote_id}/accept", response_model=QuoteResponse)
@@ -1480,11 +1846,21 @@ async def accept_quote(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
-    quote = await db.get(Quote, quote_id)
-    if not quote or quote.tenant_id != tenant_id:
-        raise HTTPException(status_code=404, detail="Quote not found")
+    """Accept a SENT, unexpired quote. A deal that is already closed is never reopened
+    or rewritten (409), and an accepted quote cannot be accepted twice."""
+    quote = await _lock_quote(db, tenant_id, quote_id)
+    if quote.status != "SENT":
+        raise HTTPException(status_code=409, detail=f"Only a sent quote can be accepted (this one is {quote.status.lower()})")
+    if _quote_expired(quote):
+        raise HTTPException(status_code=409, detail="This quote has expired and cannot be accepted")
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
+    deal: Optional[Deal] = None
+    if payload.create_deal and quote.deal_id:
+        deal = await _lock_deal(db, tenant_id, quote.deal_id)
+        if deal.status in ("WON", "LOST"):
+            raise HTTPException(status_code=409, detail=f"The deal for this quote is already closed ({deal.status.lower()})")
+
     quote.status = "ACCEPTED"
     quote.accepted_at = now
 
@@ -1494,18 +1870,13 @@ async def accept_quote(
             quote.total_once_off or Decimal("0"),
             quote.term_months or 12,
         )
-        stage_id = await _resolve_stage_id(db, tenant_id, None, payload.stage_name or "Proposal")
-        if quote.deal_id:
-            deal = await db.get(Deal, quote.deal_id)
-            if deal and deal.tenant_id == tenant_id:
-                deal.value_zar = contract_value
-                deal.amount = contract_value
-                deal.status = "OPEN"
-                deal.closed_at = None
-                deal.close_reason = None
-                deal.stage_id = stage_id
-                deal.updated_at = now
+        if deal is not None:
+            # Open deal: record the agreed contract value; its stage stays where the team put it.
+            deal.value_zar = contract_value
+            deal.amount = contract_value
+            deal.updated_at = now
         else:
+            stage_id = await _resolve_stage_id(db, tenant_id, None, payload.stage_name or "Proposal")
             # Quote customer is an existing contact (quotes.customer_id FKs contacts).
             deal = Deal(
                 id=uuid.uuid4(), tenant_id=tenant_id, contact_id=quote.customer_id,
@@ -1519,15 +1890,7 @@ async def accept_quote(
             quote.deal_id = deal.id
 
     await db.flush()
-    return QuoteResponse(
-        id=quote.id, tenant_id=quote.tenant_id, deal_id=quote.deal_id,
-        customer_id=quote.customer_id, lead_id=quote.lead_id, agent_id=quote.agent_id,
-        package_id=quote.package_id, items=deserialize_items(quote.items),
-        total_monthly=quote.total_monthly, total_once_off=quote.total_once_off,
-        term_months=quote.term_months, valid_until=quote.valid_until,
-        status=quote.status, terms=quote.terms, created_at=quote.created_at,
-        sent_at=quote.sent_at, accepted_at=quote.accepted_at,
-    )
+    return _quote_response(quote)
 
 
 # ── Commissions ──────────────────────────────────────────────────────────
@@ -1543,9 +1906,12 @@ async def list_commissions(
     db: AsyncSession = Depends(get_db),
 ):
     # Production behaviour: default the agent filter to the caller so agents
-    # see their own commissions (web quick-stats relies on this).
+    # see their own commissions (web quick-stats relies on this). Reading another
+    # agent's commissions needs a manager role.
     if agent_id is None:
         agent_id = ctx.user_id
+    if agent_id != ctx.user_id:
+        await access.require(ctx, db, "manager")
 
     q = select(Commission).where(
         Commission.tenant_id == ctx.tenant_id,
@@ -1556,9 +1922,9 @@ async def list_commissions(
     if status_filter:
         q = q.where(Commission.status == status_filter.upper())
     if start_date:
-        q = q.where(Commission.created_at >= start_date)
+        q = q.where(Commission.created_at >= _day_start(start_date))
     if end_date:
-        q = q.where(Commission.created_at <= end_date)
+        q = q.where(Commission.created_at < _next_day_start(end_date))
     q = q.order_by(Commission.created_at.desc())
     result = await db.execute(q)
     return [
@@ -1571,12 +1937,36 @@ async def list_commissions(
     ]
 
 
+def _commission_report_query(tenant_id: uuid.UUID, start: datetime, end_exclusive: datetime):
+    """One row per agent. The per-status counts are COUNT(*) FILTER (WHERE status = ...),
+    not a cast of a boolean expression (that form is not valid SQLAlchemy and 500ed)."""
+    return (
+        select(
+            Commission.agent_id,
+            func.coalesce(func.sum(Commission.amount_zar), 0).label("total_amount"),
+            func.count(Commission.id).label("deals_count"),
+            func.count(Commission.id).filter(Commission.status == "PENDING").label("pending"),
+            func.count(Commission.id).filter(Commission.status == "APPROVED").label("approved"),
+            func.count(Commission.id).filter(Commission.status == "PAID").label("paid"),
+            func.count(Commission.id).filter(Commission.status == "CLAWBACK").label("clawback"),
+        )
+        .where(
+            Commission.tenant_id == tenant_id,
+            Commission.created_at >= start,
+            Commission.created_at < end_exclusive,
+        )
+        .group_by(Commission.agent_id)
+        .order_by(Commission.agent_id)
+    )
+
+
 @app.get("/commissions/report", response_model=List[CommissionReportEntry])
 async def commission_report(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    _auth: AuthContext = Depends(access.require_tier("manager")),
 ):
     today = date.today()
     if not start_date:
@@ -1584,25 +1974,8 @@ async def commission_report(
     if not end_date:
         next_month = start_date + timedelta(days=32)
         end_date = date(next_month.year, next_month.month, 1) - timedelta(days=1)
-    end_exclusive = end_date + timedelta(days=1)
 
-    result = await db.execute(
-        select(
-            Commission.agent_id,
-            func.sum(Commission.amount_zar).label("total_amount"),
-            func.count(Commission.id).label("deals_count"),
-            func.sum(func.cast((Commission.status == "PENDING").int, Integer)).label("pending"),
-            func.sum(func.cast((Commission.status == "APPROVED").int, Integer)).label("approved"),
-            func.sum(func.cast((Commission.status == "PAID").int, Integer)).label("paid"),
-            func.sum(func.cast((Commission.status == "CLAWBACK").int, Integer)).label("clawback"),
-        )
-        .where(
-            Commission.tenant_id == tenant_id,
-            Commission.created_at >= start_date,
-            Commission.created_at < end_exclusive,
-        )
-        .group_by(Commission.agent_id)
-    )
+    result = await db.execute(_commission_report_query(tenant_id, _day_start(start_date), _next_day_start(end_date)))
     return [
         CommissionReportEntry(
             agent_id=row.agent_id, total_amount_zar=Decimal(str(row.total_amount or 0)),
@@ -1620,6 +1993,7 @@ async def create_target(
     payload: TargetCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
+    _auth: AuthContext = Depends(access.require_tier("admin")),
 ):
     if payload.period_end < payload.period_start:
         raise HTTPException(status_code=400, detail="period_end must be after period_start")
@@ -1671,8 +2045,8 @@ async def target_performance(
             select(func.coalesce(func.sum(Deal.value_zar), 0)).where(
                 Deal.tenant_id == tenant_id,
                 Deal.status == "WON",
-                Deal.closed_at >= target.period_start,
-                Deal.closed_at < target.period_end + timedelta(days=1),
+                Deal.closed_at >= _day_start(target.period_start),
+                Deal.closed_at < _next_day_start(target.period_end),
                 *([Deal.agent_id == target.agent_id] if target.agent_id else []),
             )
         )
@@ -1729,17 +2103,6 @@ CHANNEL_LABELS: Dict[str, str] = {
     "OTHER": "Direct / Other",
 }
 
-STANDARD_FUNNEL_STAGES: List[str] = [
-    "NEW",
-    "CONTACTED",
-    "QUALIFIED",
-    "Prospecting",
-    "Proposal",
-    "Negotiation",
-    "Closed Won",
-    "Closed Lost",
-]
-
 
 @app.get("/leads", response_model=List[LeadResponse])
 async def list_leads(
@@ -1775,6 +2138,67 @@ async def list_leads(
     ]
 
 
+@dataclass
+class FunnelLead:
+    """What the funnel needs to know about one lead (no ORM objects, so it is testable)."""
+    lead_status: Optional[str]
+    source_channel: Optional[str] = None
+    source: Optional[str] = None
+    notes: Optional[str] = None
+    has_deal: bool = False
+    deal_status: Optional[str] = None
+    deal_stage: Optional[str] = None
+    deal_value: Decimal = Decimal("0")
+
+
+ZERO = Decimal("0.00")
+
+
+def _new_channel_bucket(ch: str) -> Dict[str, Any]:
+    return {
+        "channel": ch,
+        "channel_label": CHANNEL_LABELS.get(ch, ch.replace("_", " ").title()),
+        "total_leads": 0,
+        "stage_counts": {s: 0 for s in STANDARD_FUNNEL_STAGES},
+        "stage_values_zar": {s: ZERO for s in STANDARD_FUNNEL_STAGES},
+        "won_count": 0, "lost_count": 0,
+        "open_value_zar": ZERO, "won_value_zar": ZERO, "lost_value_zar": ZERO,
+    }
+
+
+def compute_funnel(leads: List[FunnelLead]) -> Dict[str, Any]:
+    """Bucket every lead exactly once (lead_stages.funnel_bucket), per channel and overall.
+
+    Invariant, asserted in the tests: the overall counts and each channel's stage
+    counts add up to the number of leads; a stage that is not in the standard list
+    (a tenant-defined board stage) gets its own bucket instead of being dropped."""
+    channels = {ch: _new_channel_bucket(ch) for ch in SALES_CHANNELS}
+    labels = {stage_key(s): s for s in STANDARD_FUNNEL_STAGES}  # one label per case-insensitive stage
+    overall_counts: Dict[str, int] = {s: 0 for s in STANDARD_FUNNEL_STAGES}
+    overall_values: Dict[str, Decimal] = {s: ZERO for s in STANDARD_FUNNEL_STAGES}
+
+    for lead in leads:
+        ch = normalize_channel(lead.source_channel, lead.source, lead.notes)
+        cd = channels[ch]
+        bucket, is_won, is_lost = funnel_bucket(lead.lead_status, lead.deal_status, lead.deal_stage, lead.has_deal)
+        bucket = labels.setdefault(stage_key(bucket), bucket)
+        value = Decimal(str(lead.deal_value or 0)) if lead.has_deal else ZERO
+
+        for counts, values in ((cd["stage_counts"], cd["stage_values_zar"]), (overall_counts, overall_values)):
+            counts[bucket] = counts.get(bucket, 0) + 1
+            values[bucket] = values.get(bucket, ZERO) + value
+        cd["total_leads"] += 1
+        if is_won:
+            cd["won_count"] += 1
+            cd["won_value_zar"] += value
+        elif is_lost:
+            cd["lost_count"] += 1
+            cd["lost_value_zar"] += value
+        else:
+            cd["open_value_zar"] += value
+    return {"channels": channels, "overall_counts": overall_counts, "overall_values": overall_values}
+
+
 @app.get("/leads/funnel", response_model=LeadFunnelResponse)
 async def get_lead_funnel(
     days: Optional[int] = Query(None, ge=1, le=730),
@@ -1782,8 +2206,13 @@ async def get_lead_funnel(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Funnel view of leads by channel across lead status and deal pipeline stages."""
-    q = select(Lead).where(Lead.tenant_id == tenant_id)
+    """Funnel view of leads by channel across lead status and deal pipeline stages.
+
+    Every lead is counted once, so the stage counts always add up to total_leads.
+    total_pipeline_value_zar is the OPEN pipeline only (won and lost excluded);
+    open_value_zar / won_value_zar / lost_value_zar split the value by outcome.
+    All channels are returned (the web slices the list for display)."""
+    q = select(Lead.id, Lead.status, Lead.source, Lead.source_channel, Lead.notes).where(Lead.tenant_id == tenant_id)
     if days:
         since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
         q = q.where(Lead.created_at >= since)
@@ -1791,116 +2220,74 @@ async def get_lead_funnel(
         norm_filter = normalize_channel(channel)
         q = q.where((Lead.source_channel == norm_filter) | (Lead.source == channel))
 
-    leads = list((await db.execute(q)).scalars().all())
-    deals = await lead_service.deals_by_lead(db, [lead.id for lead in leads])
+    rows = (await db.execute(q)).all()
+    deals = await lead_service.deals_by_lead(db, [r.id for r in rows])  # chunked: no 32k-parameter IN
+    funnel_leads = []
+    for r in rows:
+        deal, deal_stage = deals.get(r.id, (None, None))
+        funnel_leads.append(FunnelLead(
+            lead_status=r.status, source_channel=r.source_channel, source=r.source, notes=r.notes,
+            has_deal=deal is not None, deal_status=deal.status if deal else None, deal_stage=deal_stage,
+            deal_value=Decimal(str(deal.value_zar or 0)) if deal else ZERO,
+        ))
+    data = compute_funnel(funnel_leads)
+    channel_data, overall_counts, overall_values = data["channels"], data["overall_counts"], data["overall_values"]
 
-    # Per-channel data containers
-    channel_data: Dict[str, Dict[str, Any]] = {}
-    for ch in SALES_CHANNELS:
-        channel_data[ch] = {
-            "channel": ch,
-            "channel_label": CHANNEL_LABELS.get(ch, ch.replace("_", " ").title()),
-            "total_leads": 0,
-            "stage_counts": {s: 0 for s in STANDARD_FUNNEL_STAGES},
-            "stage_values_zar": {s: Decimal("0.00") for s in STANDARD_FUNNEL_STAGES},
-            "won_count": 0,
-            "lost_count": 0,
-            "total_pipeline_value_zar": Decimal("0.00"),
-            "won_value_zar": Decimal("0.00"),
-        }
+    total_leads_all = len(funnel_leads)
+    total_won_all = sum(cd["won_count"] for cd in channel_data.values())
+    total_lost_all = sum(cd["lost_count"] for cd in channel_data.values())
+    total_open_val = sum((cd["open_value_zar"] for cd in channel_data.values()), ZERO)
+    total_won_val = sum((cd["won_value_zar"] for cd in channel_data.values()), ZERO)
+    total_lost_val = sum((cd["lost_value_zar"] for cd in channel_data.values()), ZERO)
 
-    overall_counts: Dict[str, int] = {s: 0 for s in STANDARD_FUNNEL_STAGES}
-    overall_values: Dict[str, Decimal] = {s: Decimal("0.00") for s in STANDARD_FUNNEL_STAGES}
-
-    for lead in leads:
-        lead_ch = lead.source_channel or normalize_channel(None, lead.source, lead.notes)
-        if lead_ch not in channel_data:
-            lead_ch = "OTHER"
-
-        deal, deal_stage = deals.get(lead.id, (None, None))
-
-        if deal:
-            stage_name = deal_stage or "Prospecting"
-            val = Decimal(str(deal.value_zar or 0))
-            is_won = deal.status == "WON" or stage_name == "Closed Won"
-            is_lost = deal.status == "LOST" or stage_name == "Closed Lost"
-        else:
-            stage_name = lead.status or "NEW"
-            val = Decimal("0.00")
-            is_won = stage_name == "WON"
-            is_lost = stage_name in ("DISQUALIFIED", "LOST")
-
-        mapped_stage = stage_name
-        if mapped_stage not in channel_data[lead_ch]["stage_counts"]:
-            channel_data[lead_ch]["stage_counts"][mapped_stage] = 0
-            channel_data[lead_ch]["stage_values_zar"][mapped_stage] = Decimal("0.00")
-        if mapped_stage not in overall_counts:
-            overall_counts[mapped_stage] = 0
-            overall_values[mapped_stage] = Decimal("0.00")
-
-        channel_data[lead_ch]["total_leads"] += 1
-        channel_data[lead_ch]["stage_counts"][mapped_stage] += 1
-        channel_data[lead_ch]["stage_values_zar"][mapped_stage] += val
-        channel_data[lead_ch]["total_pipeline_value_zar"] += val
-        overall_counts[mapped_stage] += 1
-        overall_values[mapped_stage] += val
-
-        if is_won:
-            channel_data[lead_ch]["won_count"] += 1
-            channel_data[lead_ch]["won_value_zar"] += val
-        elif is_lost:
-            channel_data[lead_ch]["lost_count"] += 1
+    def pct(part: int, whole: int) -> float:
+        return round(max(0.0, min(100.0, part / whole * 100.0)), 1) if whole > 0 else 0.0
 
     channels_res: List[ChannelFunnelItem] = []
-    total_leads_all = len(leads)
-    total_won_all = sum(cd["won_count"] for cd in channel_data.values())
-    total_pipeline_val_all = sum(cd["total_pipeline_value_zar"] for cd in channel_data.values())
-    total_won_val_all = sum(cd["won_value_zar"] for cd in channel_data.values())
-
     for ch in SALES_CHANNELS:
         cd = channel_data[ch]
-        tot = cd["total_leads"]
-        won = cd["won_count"]
-        conv_rate = round((won / tot * 100.0), 1) if tot > 0 else 0.0
-        channels_res.append(
-            ChannelFunnelItem(
-                channel=cd["channel"],
-                channel_label=cd["channel_label"],
-                total_leads=tot,
-                stage_counts=cd["stage_counts"],
-                stage_values_zar=cd["stage_values_zar"],
-                won_count=won,
-                lost_count=cd["lost_count"],
-                conversion_rate=conv_rate,
-                total_pipeline_value_zar=cd["total_pipeline_value_zar"].quantize(Decimal("0.01")),
-                won_value_zar=cd["won_value_zar"].quantize(Decimal("0.01")),
-            )
-        )
-
+        channels_res.append(ChannelFunnelItem(
+            channel=cd["channel"], channel_label=cd["channel_label"], total_leads=cd["total_leads"],
+            stage_counts=cd["stage_counts"], stage_values_zar=cd["stage_values_zar"],
+            won_count=cd["won_count"], lost_count=cd["lost_count"],
+            conversion_rate=pct(cd["won_count"], cd["total_leads"]),
+            total_pipeline_value_zar=cd["open_value_zar"].quantize(Decimal("0.01")),
+            open_value_zar=cd["open_value_zar"].quantize(Decimal("0.01")),
+            won_value_zar=cd["won_value_zar"].quantize(Decimal("0.01")),
+            lost_value_zar=cd["lost_value_zar"].quantize(Decimal("0.01")),
+        ))
     # Sort so channels with active leads come first
     channels_res.sort(key=lambda c: (c.total_leads, c.total_pipeline_value_zar), reverse=True)
 
-    overall_funnel = [
-        FunnelStageItem(
-            stage=s,
-            count=overall_counts.get(s, 0),
-            pct_of_total=round((overall_counts.get(s, 0) / total_leads_all * 100.0), 1) if total_leads_all > 0 else 0.0,
-            value_zar=overall_values.get(s, Decimal("0.00")).quantize(Decimal("0.01")),
-        )
-        for s in STANDARD_FUNNEL_STAGES
-    ]
+    cohorts = cohort_conversion(overall_counts)
+    extra_stages = sorted((k for k in overall_counts if k not in STANDARD_FUNNEL_STAGES),
+                          key=lambda k: (-overall_counts[k], k))
+    overall_funnel = []
+    for stage in [*STANDARD_FUNNEL_STAGES, *extra_stages]:
+        cohort = cohorts.get(stage)
+        overall_funnel.append(FunnelStageItem(
+            stage=stage, count=overall_counts.get(stage, 0),
+            pct_of_total=pct(overall_counts.get(stage, 0), total_leads_all),
+            value_zar=overall_values.get(stage, ZERO).quantize(Decimal("0.01")),
+            cohort_count=int(cohort["cohort"]) if cohort else None,
+            conversion_from_previous_pct=cohort["conversion_from_previous_pct"] if cohort else None,
+        ))
 
     top_channel = channels_res[0].channel_label if channels_res and channels_res[0].total_leads > 0 else "None"
-
     return LeadFunnelResponse(
         channels=channels_res,
         overall_funnel=overall_funnel,
         totals={
             "total_leads": total_leads_all,
+            "stage_total": sum(overall_counts.values()),
             "won_leads": total_won_all,
-            "conversion_rate": round((total_won_all / total_leads_all * 100.0), 1) if total_leads_all > 0 else 0.0,
-            "total_pipeline_value_zar": float(total_pipeline_val_all),
-            "won_value_zar": float(total_won_val_all),
+            "lost_leads": total_lost_all,
+            "open_leads": total_leads_all - total_won_all - total_lost_all,
+            "conversion_rate": pct(total_won_all, total_leads_all),
+            "total_pipeline_value_zar": float(total_open_val),  # open only
+            "open_value_zar": float(total_open_val),
+            "won_value_zar": float(total_won_val),
+            "lost_value_zar": float(total_lost_val),
             "top_performing_channel": top_channel,
         },
         period_days=days,
@@ -2095,19 +2482,49 @@ async def assign_lead(lead_id: uuid.UUID, payload: LeadAssign,
     return LeadResponse(**await lead_service.lead_with_deal(db, lead))
 
 
+AI_DRAFT_ACTOR = "DomeBot (AI)"
+AI_DRAFT_UNVERIFIED_ACTOR = "AI draft (unverified source)"
+
+
+@dataclass(frozen=True)
+class NoteKind:
+    kind: str                       # stored lead_activities.kind
+    actor_name: Optional[str] = None  # None = the signed-in user
+    unverified: bool = False
+
+
+def resolve_note_kind(requested: str, automation: bool) -> NoteKind:
+    """A note's kind and attribution. "DomeBot (AI)" and the AI-draft notification belong
+    to automations only (role automation/system/service/orchestrator, or an X-Automation-Run
+    header). Anyone else asking for ai_draft gets a note that says its source is unverified
+    (SALES_AI_DRAFT_STRICT=true downgrades it to a plain note instead)."""
+    if requested == "call":
+        return NoteKind("call_logged")
+    if requested != "ai_draft":
+        return NoteKind("note")
+    if automation:
+        return NoteKind("ai_draft", AI_DRAFT_ACTOR)
+    if os.getenv("SALES_AI_DRAFT_STRICT", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        return NoteKind("note")
+    return NoteKind("ai_draft", AI_DRAFT_UNVERIFIED_ACTOR, unverified=True)
+
+
 @app.post("/leads/{lead_id}/notes", response_model=LeadActivityResponse, status_code=201)
-async def add_lead_note(lead_id: uuid.UUID, payload: LeadNote,
+async def add_lead_note(lead_id: uuid.UUID, payload: LeadNote, request: Request,
                         tenant_id: uuid.UUID = Depends(get_current_tenant_id),
                         db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
     lead = await _get_lead(db, tenant_id, lead_id)
     await _touch(db, lead)
-    kind = {"call": "call_logged", "ai_draft": "ai_draft"}.get(payload.kind, "note")
+    kind = resolve_note_kind(payload.kind, access.is_automation_caller(ctx, request.headers))
     first_line = payload.body.strip().splitlines()[0][:240]
     summary = {"call_logged": f"Call: {first_line}",
-               "ai_draft": "AI draft ready — review and send"}.get(kind, first_line)
-    actor = Actor(id=ctx.user_id, name="DomeBot (AI)") if kind == "ai_draft" else _actor(ctx)
-    a = await lead_service.record_activity(db, tenant_id, lead.id, kind, summary, {"body": payload.body}, actor)
-    if kind == "ai_draft":
+               "ai_draft": "AI draft ready — review and send"}.get(kind.kind, first_line)
+    actor = Actor(id=ctx.user_id, name=kind.actor_name) if kind.actor_name else _actor(ctx)
+    a = await lead_service.record_activity(db, tenant_id, lead.id, kind.kind, summary,
+                                           {"body": payload.body, **({"unverified_source": True} if kind.unverified else {})},
+                                           actor)
+    kind = kind.kind
+    if kind == "ai_draft" and a.actor_name == AI_DRAFT_ACTOR:
         await notify(db, tenant_id, f"AI draft ready for {_ref(lead)} {lead_service.full_name(lead)}",
                      body=first_line, category="automation", source="sales", subject=("lead", lead.id))
     await db.flush()
@@ -2115,21 +2532,38 @@ async def add_lead_note(lead_id: uuid.UUID, payload: LeadNote,
                                 actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)
 
 
+LEAD_EMAIL_RATE_PER_MIN = int(os.getenv("LEAD_EMAIL_RATE_PER_MIN", "20"))
+_lead_email_limiter = RateLimiter(max_requests=LEAD_EMAIL_RATE_PER_MIN, window_seconds=60.0)
+
+
+def check_lead_email_rate(tenant_id: uuid.UUID) -> None:
+    """Per-tenant cap on queued lead emails (LEAD_EMAIL_RATE_PER_MIN, default 20): 429 beyond it."""
+    _lead_email_limiter.check_key(f"lead_email:{tenant_id}")
+
+
 @app.post("/leads/{lead_id}/email", response_model=LeadActivityResponse, status_code=202)
 async def email_lead(lead_id: uuid.UUID, payload: LeadEmail,
                      tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-                     db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context)):
-    """Queue an email to the lead. Sent by the sales consumer via AgentMail; the
-    timeline shows queued → sent (or failed after retries)."""
+                     db: AsyncSession = Depends(get_db), ctx: AuthContext = Depends(get_auth_context),
+                     _role: AuthContext = Depends(access.require_tier("agent")),
+                     idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key", max_length=100)):
+    """Queue an email to the lead. Sent by the sales consumer via AgentMail (never to an
+    opted-out address: the consumer records "email suppressed (opt-out)" instead); the
+    timeline shows queued -> sent (or failed after retries). Needs a sales role and is
+    rate limited per tenant. Repeat a request with the same Idempotency-Key header
+    (for example after a timeout) and it is queued once."""
     lead = await _get_lead(db, tenant_id, lead_id)
     if not lead.email:
         raise HTTPException(status_code=400, detail="This lead has no email address")
+    check_lead_email_rate(tenant_id)
     await _touch(db, lead)
     a = await lead_service.record_activity(db, tenant_id, lead.id, "email_queued", f"Email queued: {payload.subject}",
                                            {"to": lead.email, "subject": payload.subject, "body": payload.body},
-                                           _actor(ctx))
-    await lead_service.publish_lead_event(db, lead, "sales.lead.email_requested",
-                                          to=lead.email, subject=payload.subject, body=payload.body)
+                                           _actor(ctx),
+                                           idempotency_key=f"queue:{idempotency_key}" if idempotency_key else None)
+    if a in db.new:  # an existing row means this is a retry of a request that already queued the email
+        await lead_service.publish_lead_event(db, lead, "sales.lead.email_requested",
+                                              to=lead.email, subject=payload.subject, body=payload.body)
     await db.flush()
     return LeadActivityResponse(id=a.id, kind=a.kind, summary=a.summary, details=a.details,
                                 actor_id=a.actor_id, actor_name=a.actor_name, created_at=a.created_at)

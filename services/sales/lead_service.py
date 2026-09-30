@@ -62,31 +62,40 @@ async def stage_names(db: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
     return [r for (r,) in rows.all()]
 
 
+# asyncpg caps one statement at 32767 bind parameters, so an IN (...) over "every
+# lead of a big tenant" fails outright. Ids are sent in chunks well below that.
+ID_CHUNK = 5000
+
+
+def chunked(ids: list, size: int = ID_CHUNK) -> list[list]:
+    return [ids[i:i + size] for i in range(0, len(ids), size)]
+
+
 async def deals_by_lead(db: AsyncSession, lead_ids: list[uuid.UUID]) -> dict[uuid.UUID, tuple[Deal, Optional[str]]]:
     """Latest deal (and its stage name) for each lead."""
-    if not lead_ids:
-        return {}
-    rows = await db.execute(
-        select(Deal, DealStage.name)
-        .outerjoin(DealStage, DealStage.id == Deal.stage_id)
-        .where(Deal.lead_id.in_(lead_ids))
-        .order_by(Deal.lead_id, Deal.created_at.desc())
-    )
     out: dict[uuid.UUID, tuple[Deal, Optional[str]]] = {}
-    for deal, stage in rows.all():
-        out.setdefault(deal.lead_id, (deal, stage))
+    for chunk in chunked(list(lead_ids)):
+        rows = await db.execute(
+            select(Deal, DealStage.name)
+            .outerjoin(DealStage, DealStage.id == Deal.stage_id)
+            .where(Deal.lead_id.in_(chunk))
+            .order_by(Deal.lead_id, Deal.created_at.desc())
+        )
+        for deal, stage in rows.all():
+            out.setdefault(deal.lead_id, (deal, stage))
     return out
 
 
 async def open_task_counts(db: AsyncSession, lead_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
-    if not lead_ids:
-        return {}
-    rows = await db.execute(
-        select(LeadTask.lead_id, func.count())
-        .where(LeadTask.lead_id.in_(lead_ids), LeadTask.status == "open")
-        .group_by(LeadTask.lead_id)
-    )
-    return {lead_id: n for lead_id, n in rows.all()}
+    out: dict[uuid.UUID, int] = {}
+    for chunk in chunked(list(lead_ids)):
+        rows = await db.execute(
+            select(LeadTask.lead_id, func.count())
+            .where(LeadTask.lead_id.in_(chunk), LeadTask.status == "open")
+            .group_by(LeadTask.lead_id)
+        )
+        out.update({lead_id: n for lead_id, n in rows.all()})
+    return out
 
 
 def lead_dict(lead: Lead, deal: Optional[Deal] = None, deal_stage: Optional[str] = None, open_tasks: int = 0) -> dict:
@@ -125,11 +134,25 @@ async def next_ref_no(db: AsyncSession, tenant_id: uuid.UUID) -> int:
 
 async def record_activity(
     db: AsyncSession, tenant_id: uuid.UUID, lead_id: uuid.UUID, kind: str, summary: str,
-    details: Optional[dict] = None, actor: Actor = SYSTEM,
+    details: Optional[dict] = None, actor: Actor = SYSTEM, idempotency_key: Optional[str] = None,
 ) -> LeadActivity:
+    """Add a timeline entry. With an idempotency_key the entry is unique per
+    (lead, kind, key): a retry returns the existing row instead of a duplicate
+    (backed by uq_lead_activities_idem in schema.py)."""
+    details = dict(details or {})
+    if idempotency_key:
+        existing = (await db.execute(
+            select(LeadActivity).where(
+                LeadActivity.lead_id == lead_id, LeadActivity.kind == kind,
+                LeadActivity.details["idem_key"].astext == idempotency_key,
+            ).limit(1)
+        )).scalars().first()
+        if existing is not None:
+            return existing
+        details["idem_key"] = idempotency_key
     activity = LeadActivity(
         id=uuid.uuid4(), tenant_id=tenant_id, lead_id=lead_id, kind=kind, summary=summary[:300],
-        details=details or {}, actor_id=actor.id, actor_name=actor.name, created_at=utcnow(),
+        details=details, actor_id=actor.id, actor_name=actor.name, created_at=utcnow(),
     )
     db.add(activity)
     return activity
@@ -165,12 +188,15 @@ async def ensure_lead_contact(db: AsyncSession, lead: Lead) -> uuid.UUID:
 
 
 async def _stage_id(db: AsyncSession, tenant_id: uuid.UUID, name: str) -> uuid.UUID:
+    # .first() with a stable order: a tenant that already holds two stages of the
+    # same name must not 500 every stage change.
     row = (await db.execute(
         select(DealStage.id)
         .join(Pipeline, Pipeline.id == DealStage.pipeline_id)
         .where(Pipeline.tenant_id == tenant_id, Pipeline.is_default == True,  # noqa: E712
                func.lower(DealStage.name) == name.lower())
-    )).scalar_one_or_none()
+        .order_by(DealStage.sort_order, DealStage.id)
+    )).scalars().first()
     if row is None:
         raise StageChangeError(f"Unknown pipeline stage '{name}'")
     return row
