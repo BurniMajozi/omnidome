@@ -49,7 +49,7 @@ services:
       - BILLING_WEBHOOK_URL=
       - NETWORK_WEBHOOK_URL=
       - SALES_PROVISIONING_WEBHOOKS=
-      - AUTH_ALLOW_ANONYMOUS=true
+      - AUTH_ALLOW_ANONYMOUS=${AUTH_ALLOW_ANONYMOUS:-false}
     volumes:
       # Hot reload: no rebuild after each edit.
       - ./services/sales:/app/services/sales:ro
@@ -79,7 +79,7 @@ services:
       - AGENTMAIL_INBOX=${AGENTMAIL_INBOX:-omnidome@agentmail.to}
       - SUPPORT_SERVICE_URL=
       - SOCIAL_TICKET_CUSTOMER_ID=
-      - AUTH_ALLOW_ANONYMOUS=true
+      - AUTH_ALLOW_ANONYMOUS=${AUTH_ALLOW_ANONYMOUS:-false}
     ports:
       - "8014:8014"
     volumes:
