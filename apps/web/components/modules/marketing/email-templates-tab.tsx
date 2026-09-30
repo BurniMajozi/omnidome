@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useEffect } from "react"
+import { SandboxedEmailPreview, htmlToExcerpt } from "./email-html-preview"
 import {
   FileText, Plus, Edit3, Trash2, Copy, Eye, Sparkles, AlertTriangle,
   Layers, ArrowLeft, Download, Check, ExternalLink, Mail
@@ -306,13 +307,7 @@ export function EmailTemplatesTab({
                   onClick={() => handleEditTemplate(template)}
                   className="h-28 bg-muted/30 border border-border/60 rounded-md p-3 text-[11px] text-muted-foreground overflow-hidden cursor-pointer hover:border-blue-500 transition-colors relative group"
                 >
-                  <div
-                    dangerouslySetInnerHTML={{
-                      __html: (template.body_html || "")
-                        .replace(/<svg[\s\S]*?<\/svg>/gi, "[Illustration]")
-                        .slice(0, 180),
-                    }}
-                  />
+                  <div>{htmlToExcerpt(template.body_html || "", 180)}</div>
                   <div className="absolute inset-0 bg-blue-600/10 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                     <span className="bg-background text-foreground text-xs px-2.5 py-1 rounded shadow font-medium flex items-center gap-1.5">
                       <Edit3 className="h-3.5 w-3.5 text-blue-600" /> Edit in Builder
@@ -385,10 +380,7 @@ export function EmailTemplatesTab({
           </DialogHeader>
 
           <div className="border rounded-md bg-muted/10 p-4 max-h-[60vh] overflow-y-auto">
-            <div
-              className="bg-white text-zinc-900 rounded p-6 shadow-xs max-w-[560px] mx-auto text-sm leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: previewingTemplate?.body_html || "" }}
-            />
+            <SandboxedEmailPreview html={previewingTemplate?.body_html || ""} className="w-full h-[50vh] max-w-[600px] mx-auto block bg-white rounded border-0" />
           </div>
 
           <DialogFooter>

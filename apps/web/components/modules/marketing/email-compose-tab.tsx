@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useMemo } from "react"
+import { SandboxedEmailPreview } from "./email-html-preview"
 import {
   Send, Mail, Sparkles, AlertTriangle, CheckCircle2, Eye,
   FileText, Users, Sliders, Edit3, ArrowRight, RefreshCw
@@ -377,10 +378,7 @@ export function EmailComposeTab({ initialTemplate }: EmailComposeTabProps) {
             <DialogDescription>Subject: {subject}</DialogDescription>
           </DialogHeader>
           <div className="border rounded-md bg-muted/10 p-4 max-h-[60vh] overflow-y-auto">
-            <div
-              className="bg-white text-zinc-900 rounded p-6 shadow-xs max-w-[560px] mx-auto text-sm leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: bodyHtml }}
-            />
+            <SandboxedEmailPreview html={bodyHtml} className="w-full h-[50vh] max-w-[600px] mx-auto block bg-white rounded border-0" />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowPreviewModal(false)}>Close</Button>

@@ -1162,6 +1162,7 @@ export function EmailBuilder({
                 .replace(/\{\{\s*\.UnsubscribeURL\s*\}\}/g, "#unsubscribe")}
               className="w-full max-w-[620px] h-[540px] bg-white rounded shadow-sm border"
               title="Email Preview"
+              sandbox=""
             />
           </div>
           <DialogFooter>

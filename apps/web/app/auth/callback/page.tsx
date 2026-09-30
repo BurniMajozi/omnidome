@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
-import { supabase } from "@/lib/supabase/client"
+import { supabase, getSessionSafe } from "@/lib/supabase/client"
 import { sanitizeNextUrl } from "@/lib/supabase/redirect"
 import { Button } from "@/components/ui/button"
 
@@ -35,7 +35,7 @@ export default function AuthCallbackPage() {
       }
 
       // 3. Check session
-      const { data, error: sessionError } = await supabase.auth.getSession()
+      const { data, error: sessionError } = await getSessionSafe()
       if (cancelled) return
 
       if (sessionError) {
@@ -49,7 +49,12 @@ export default function AuthCallbackPage() {
         return
       }
 
-      setError("We couldn't complete the sign-in. Please try again.")
+      try {
+        Object.keys(window.localStorage)
+          .filter((k) => k.startsWith("sb-") && k.endsWith("-auth-token"))
+          .forEach((k) => window.localStorage.removeItem(k))
+      } catch {}
+      setError("We couldn't complete the sign-in. Any stale saved session was cleared. Please try again.")
     }
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
