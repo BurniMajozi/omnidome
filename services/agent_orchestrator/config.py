@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     chat_backend: str = "native"
     hermes_base_url: str = "http://hermes:8642/v1"
     hermes_api_key: str = ""
+    mcp_tenant_id: str = ""
+    mcp_user_id: str = "hermes-agent"
 
     # Model routing — maps agent_type -> (primary_model, fallback_model)
     # Keys match the canonical agent_type values used by frontend and routes:

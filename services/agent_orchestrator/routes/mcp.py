@@ -14,6 +14,7 @@ platform's normal per-user JWT/header auth.
 from __future__ import annotations
 
 import contextvars
+import hmac
 import json
 import logging
 import uuid
@@ -94,12 +95,23 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     return [types.TextContent(type="text", text=result.get("content", ""))]
 
 
+def _pinned_tenant() -> str:
+    tenant = (settings.mcp_tenant_id or "").strip()
+    try:
+        return str(uuid.UUID(tenant))
+    except ValueError:
+        return ""
+
+
 def _check_auth(request: Request) -> None:
     expected = settings.hermes_api_key
-    if not expected:
-        return
+    if not expected or not _pinned_tenant():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="MCP endpoint is disabled: HERMES_API_KEY and MCP_TENANT_ID must both be configured",
+        )
     auth_header = request.headers.get("authorization", "")
-    if auth_header != f"Bearer {expected}":
+    if not hmac.compare_digest(auth_header.encode(), f"Bearer {expected}".encode()):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing bearer token")
 
 
@@ -109,8 +121,8 @@ sse_transport = SseServerTransport(_MESSAGES_PATH)
 @router.get(_SSE_PATH)
 async def handle_sse(request: Request):
     _check_auth(request)
-    _tenant_id_ctx.set(request.headers.get("x-tenant-id", ""))
-    _user_id_ctx.set(request.headers.get("x-user-id", "hermes-agent"))
+    _tenant_id_ctx.set(_pinned_tenant())
+    _user_id_ctx.set(settings.mcp_user_id or "hermes-agent")
     # Documented MCP SDK ASGI integration pattern — connect_sse needs the raw
     # ASGI send callable, which Starlette's Request only exposes as `_send`.
     async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
