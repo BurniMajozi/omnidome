@@ -366,3 +366,19 @@ def test_long_history_is_summarised_before_the_turn_and_state_is_returned(harnes
     assert sent[0]["content"].startswith("<conversation_summary>") and "Goals: keep the customer." in sent[0]["content"]
     assert len(sent) < 40
     assert agent.compacted and agent.compaction_update["summary"] == "Goals: keep the customer."
+
+
+# ── A9: the SQL tool knows which agent is asking ────────────────────────────
+
+def test_sql_tool_gets_the_calling_agent_type_for_its_table_allowlist(harness):
+    seen = {}
+
+    class SqlTool(FakeTool):
+        async def execute(self, tool_input, tenant_id=None, user_id=None, agent_type=None):
+            seen["agent_type"] = agent_type
+            return {"success": True, "data": {"rows": []}}
+
+    sql = SqlTool("analytics.query")
+    llm, agent = harness([reply(tool_calls=[call(sql.name, {"query": "SELECT 1"})]), reply("No rows.")], sql)
+    run(agent)
+    assert seen == {"agent_type": "support"}

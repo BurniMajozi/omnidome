@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from services.agent_orchestrator import compaction, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
-from services.agent_orchestrator.tools import tool_registry
+from services.agent_orchestrator.tools import SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
 
@@ -378,7 +378,8 @@ class Agent:
         try:
             result = await asyncio.wait_for(
                 tool.execute(tool_input=enriched_args, tenant_id=tenant,
-                             user_id=str(self.context.get("user_id", ""))),
+                             user_id=str(self.context.get("user_id", "")),
+                             **({"agent_type": self.agent_type} if tool_name in SQL_TOOL_NAMES else {})),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:

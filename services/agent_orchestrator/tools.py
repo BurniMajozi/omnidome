@@ -36,6 +36,10 @@ SERVICE_URLS = {
 }
 
 
+# Run in-process by safe_sql; the calling agent decides which tables it may read.
+SQL_TOOL_NAMES = ("analytics.query", "analytics_query")
+
+
 @dataclass(frozen=True)
 class ToolPolicy:
     """What a tool may do (spec A6). HTTP method is not a reliable signal: the
@@ -145,14 +149,17 @@ class Tool:
         tool_input: Dict[str, Any],
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        agent_type: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Execute the tool by calling the microservice API or internal handler."""
-        if self.name in ("analytics.query", "analytics_query"):
+        """Execute the tool by calling the microservice API or internal handler.
+        agent_type selects the SQL tool's table allowlist (spec A9)."""
+        if self.name in SQL_TOOL_NAMES:
             from services.agent_orchestrator.safe_sql import execute_safe_sql
             return await execute_safe_sql(
                 query=tool_input.get("query") or tool_input.get("sql", ""),
                 tenant_id=tenant_id,
                 user_id=user_id,
+                agent_type=agent_type,
                 timeout_s=self.timeout_s,
                 max_output_chars=self.max_output_chars,
             )

@@ -129,3 +129,68 @@ def test_ctes_rewrite_underlying_tables_not_cte_alias():
     assert f"(SELECT * FROM deals WHERE tenant_id = '{TENANT_A}') AS deals" in rewritten
     # top_deals in outer query is CTE alias, not rewritten to table subquery
     assert "FROM top_deals" in rewritten
+
+
+# ── Bypass attempts found in the checkpoint-3 review ────────────────────────
+
+def test_cte_named_like_a_table_cannot_read_the_real_table_unscoped():
+    # In a non-recursive CTE, "deals" inside the body means the physical table,
+    # which the rewrite skipped because the name matched a CTE.
+    with pytest.raises(ValueError):
+        validate_and_rewrite_query(
+            "WITH deals AS (SELECT * FROM deals) SELECT * FROM deals", tenant_id=TENANT_A)
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT query_to_xml('select * from users', true, false, '')",
+    "SELECT table_to_xml('users', true, false, '')",
+    "SELECT * FROM ts_stat('select to_tsvector(email) from users')",
+    "SELECT dblink('dbname=coreconnect', 'select * from users')",
+    "SELECT pg_read_binary_file('/etc/passwd')",
+    "SELECT current_setting('data_directory')",
+    "SELECT lo_import('/etc/passwd')",
+    "SELECT id FROM leads WHERE upper(pg_read_file('/etc/passwd')) = ''",
+])
+def test_functions_that_run_sql_or_read_the_server_are_rejected(sql):
+    with pytest.raises(ValueError):
+        validate_and_rewrite_query(sql, tenant_id=TENANT_A)
+
+
+def test_ordinary_functions_still_work():
+    rewritten = validate_and_rewrite_query(
+        "SELECT upper(stage), count(*), date_trunc('month', created_at) FROM deals GROUP BY 1, 3",
+        tenant_id=TENANT_A)
+    assert "UPPER" in rewritten.upper() and "COUNT" in rewritten.upper()
+
+
+def test_unknown_agent_gets_no_tables():
+    # A skill can hand analytics.query to any agent; only agents with a list may read.
+    assert get_allowlist_for_agent("customer_facing") == set()
+    with pytest.raises(ValueError):
+        validate_and_rewrite_query("SELECT * FROM deals", tenant_id=TENANT_A, agent_type="customer_facing")
+
+
+def test_query_without_a_tenant_is_refused():
+    import asyncio
+    from services.agent_orchestrator.safe_sql import execute_safe_sql
+    out = asyncio.run(execute_safe_sql("SELECT * FROM deals", tenant_id=None, agent_type="analytics"))
+    assert out["success"] is False and "tenant" in out["error"].lower()
+
+
+@pytest.mark.parametrize("sql", [
+    # nested WITH shadowing a table used elsewhere in the query
+    "SELECT * FROM (WITH users AS (SELECT 1 AS id) SELECT * FROM users) x, users",
+    # forward reference: inside the first CTE, 'b' is the physical table
+    "WITH a AS (SELECT * FROM b), b AS (SELECT * FROM leads) SELECT * FROM a",
+    "WITH RECURSIVE leads AS (SELECT * FROM leads) SELECT * FROM leads",
+])
+def test_cte_scoping_tricks_are_rejected(sql):
+    with pytest.raises(ValueError):
+        validate_and_rewrite_query(sql, tenant_id=TENANT_A)
+
+
+def test_chained_ctes_still_work():
+    rewritten = validate_and_rewrite_query(
+        "WITH won AS (SELECT * FROM deals WHERE stage = 'won'), big AS (SELECT * FROM won WHERE amount > 1000) "
+        "SELECT count(*) FROM big", tenant_id=TENANT_A)
+    assert f"tenant_id = '{TENANT_A}'" in rewritten and "FROM won" in rewritten

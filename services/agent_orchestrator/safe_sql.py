@@ -58,17 +58,29 @@ AGENT_TABLE_ALLOWLISTS: Dict[str, Set[str]] = {
     "retention": {"deals", "leads", "customers", "invoices", "subscriptions", "tickets"},
 }
 
+# Functions that read the server, run SQL given as a string (and so bypass the
+# table allowlist and tenant rewrite), or reach other databases.
 DISALLOWED_FUNCTIONS = re.compile(
-    r"^(pg_sleep|pg_read_file|pg_write_file|pg_ls_dir|system|exec|sleep)$",
+    r"^(pg_.*|lo_.*|dblink.*|.*_to_xml.*|.*_to_xmlschema|ts_stat|current_setting|set_config|"
+    r"txid_.*|inet_(server|client)_.*|version|system|exec|sleep)$",
     re.IGNORECASE,
 )
 
+def _function_name(func: exp.Func) -> str:
+    """The SQL function's own name. For functions sqlglot knows, `.name` is the
+    first argument's name, not the function's, so use sql_name() for those."""
+    if isinstance(func, exp.Anonymous):
+        return str(func.this or "").lower()
+    return func.sql_name().lower()
+
 
 def get_allowlist_for_agent(agent_type: Optional[str] = None) -> Set[str]:
-    """Get the table allowlist for a specific agent type."""
+    """Get the table allowlist for a specific agent type. None (direct API use)
+    gets the default list; an agent without a list gets no tables — an OKF
+    skill can hand analytics.query to any agent."""
     if not agent_type:
         return set(DEFAULT_ALLOWLIST)
-    return set(AGENT_TABLE_ALLOWLISTS.get(agent_type.lower(), DEFAULT_ALLOWLIST))
+    return set(AGENT_TABLE_ALLOWLISTS.get(agent_type.lower(), set()))
 
 
 def validate_and_rewrite_query(
@@ -106,12 +118,32 @@ def validate_and_rewrite_query(
 
     # Disallow dangerous functions
     for func in statement.find_all(exp.Func):
-        fname = func.name.lower() if func.name else ""
+        fname = _function_name(func)
         if DISALLOWED_FUNCTIONS.match(fname):
             raise ValueError(f"Function '{fname}' is not permitted")
 
-    # Collect CTE names so we don't treat CTE aliases as physical tables
-    ctes = {cte.alias.lower() for cte in statement.find_all(exp.CTE) if cte.alias}
+    # CTEs. The rewrite below treats a table reference as a CTE (and leaves it
+    # unscoped) when its name is a CTE name, so that must match Postgres'
+    # scoping exactly or a CTE could hide a physical table from the tenant
+    # filter ("WITH deals AS (SELECT * FROM deals) ..." reads every tenant):
+    # - one top-level WITH only, not RECURSIVE;
+    # - inside CTE i, a CTE name may only refer to a CTE defined before it.
+    withs = list(statement.find_all(exp.With))
+    top_with = next((w for w in withs if w.parent is statement), None)   # arg key differs by sqlglot version
+    if withs and (len(withs) > 1 or withs[0] is not top_with):
+        raise ValueError("Only one top-level WITH clause is permitted")
+    ctes: Set[str] = set()
+    if top_with is not None:
+        if top_with.args.get("recursive"):
+            raise ValueError("WITH RECURSIVE is not permitted")
+        names = [(cte.alias or "").lower() for cte in top_with.expressions]
+        for i, cte in enumerate(top_with.expressions):
+            earlier = set(names[:i])
+            for table in cte.this.find_all(exp.Table):
+                tname = (table.name or "").lower()
+                if tname in names and tname not in earlier:
+                    raise ValueError(f"WITH name '{tname}' may not reuse the name of a table it reads")
+        ctes = set(names)
 
     allowlist = get_allowlist_for_agent(agent_type)
 
@@ -189,7 +221,8 @@ async def execute_safe_sql(
 ) -> Dict[str, Any]:
     """Validate, rewrite and execute query against database in read-only transaction."""
     if not tenant_id:
-        tenant_id = "00000000-0000-0000-0000-000000000001"
+        # Never guess a tenant: every row this tool returns is scoped to one.
+        return {"success": False, "error": "No tenant for this query; refusing to run it."}
 
     try:
         rewritten_sql = validate_and_rewrite_query(query, tenant_id=tenant_id, agent_type=agent_type)
