@@ -6,7 +6,7 @@ live subscriptions.
 import logging
 import uuid
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -30,6 +30,7 @@ class PlanCreate(BaseModel):
     billing_cycle: str = "MONTHLY"
     fno_provider: Optional[str] = None
     is_active: bool = True
+    pricing_model: Literal["flat", "per_seat"] = "flat"  # per_seat: `price` is the unit price per seat per cycle
 
 
 class BundleCreate(BaseModel):
@@ -63,7 +64,7 @@ async def list_plans(ctx: AuthContext = Depends(get_auth_context)):
             {
                 "id": str(p.id), "name": p.name, "category": p.category,
                 "price": float(p.price), "currency": p.currency, "billing_cycle": p.billing_cycle,
-                "fno_provider": p.fno_provider, "is_active": p.is_active,
+                "fno_provider": p.fno_provider, "is_active": p.is_active, "pricing_model": p.pricing_model,
                 "subscribers": stats.get(p.id, {}).get("subscribers", 0),
                 "mrr": stats.get(p.id, {}).get("mrr", 0.0),
             }
@@ -81,7 +82,7 @@ async def create_plan(body: PlanCreate, ctx: AuthContext = Depends(get_auth_cont
         return {
             "id": str(plan.id), "name": plan.name, "category": plan.category,
             "price": float(plan.price), "currency": plan.currency, "billing_cycle": plan.billing_cycle,
-            "fno_provider": plan.fno_provider, "is_active": plan.is_active,
+            "fno_provider": plan.fno_provider, "is_active": plan.is_active, "pricing_model": plan.pricing_model,
             "subscribers": 0, "mrr": 0.0,
         }
 

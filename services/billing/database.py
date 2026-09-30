@@ -41,14 +41,45 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
+_SCHEMA_LOCK_KEY = 0x0B111_5EA7  # arbitrary constant: serialises startup DDL across workers
+
+
 def init_tables() -> None:
-    """Create all Billing tables if they don't exist (dev convenience)."""
+    """Create all Billing tables if they don't exist (dev convenience).
+
+    Runs under a Postgres advisory lock so several uvicorn workers starting at
+    once don't deadlock on the ALTERs.
+    """
     engine = get_engine()
-    reconcile_legacy_tables(engine)
-    Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        for statement in _RESTORED_COLUMNS:
-            conn.execute(text(statement))
+    is_pg = engine.dialect.name == "postgresql"
+    lock_conn = engine.connect() if is_pg else None
+    try:
+        if lock_conn is not None:
+            lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+            lock_conn.commit()
+        reconcile_legacy_tables(engine)
+        Base.metadata.create_all(bind=engine)
+        with engine.begin() as conn:
+            for statement in _RESTORED_COLUMNS + _SEAT_BILLING_COLUMNS:
+                conn.execute(text(statement))
+    finally:
+        if lock_conn is not None:
+            try:
+                lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+                lock_conn.commit()
+            finally:
+                lock_conn.close()
+
+
+# Per-seat billing columns on tables that may predate them (create_all never
+# ALTERs). seat_billing_runs / seat_proration_charges are new tables, so
+# create_all builds them.
+_SEAT_BILLING_COLUMNS = [
+    "ALTER TABLE billing_plans ADD COLUMN IF NOT EXISTS pricing_model VARCHAR(20) NOT NULL DEFAULT 'flat'",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS quantity INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_start DATE",
+    "ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_end DATE",
+]
 
 
 # Columns that went missing from billing-shaped tables and came back

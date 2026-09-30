@@ -24,6 +24,7 @@ from services.billing.routes.radius_billing import router as radius_billing_rout
 from services.billing.routes.billing_accounts import router as billing_accounts_router
 from services.billing.routes.subscription_transfers import router as transfers_router
 from services.billing.routes.plans import router as plans_router
+from services.billing.routes.seats import router as seats_router
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -53,6 +54,11 @@ async def startup() -> None:
     if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
         init_tables()
         logger.info("Billing tables ensured")
+    # Seat-billing scheduler: OFF unless SEAT_BILLING_WORKER_ENABLED=true.
+    from services.billing import seat_runs
+    if seat_runs.worker_enabled():
+        import asyncio
+        app.state.seat_worker = asyncio.create_task(seat_runs.worker_loop())
 
 
 @app.middleware("http")
@@ -84,6 +90,7 @@ app.include_router(cancellations_router)
 app.include_router(billing_accounts_router)
 app.include_router(transfers_router)
 app.include_router(plans_router)
+app.include_router(seats_router)
 
 
 app.include_router(radius_billing_router)

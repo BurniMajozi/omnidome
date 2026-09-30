@@ -17,6 +17,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
@@ -368,6 +369,10 @@ class BillingPlan(Base):
     fno_provider: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     paystack_plan_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)  # PLN_xxx (recurring)
+    # 'flat' = `price` is the whole charge per period; 'per_seat' = `price` is the
+    # unit price PER SEAT per cycle (charged by seat_billing, never synced to
+    # Paystack as a fixed amount).
+    pricing_model: Mapped[str] = mapped_column(String(20), nullable=False, default="flat", server_default="flat")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -446,6 +451,8 @@ class Subscription(Base):
         JSONB, nullable=True, default=dict,
         comment="Per-segment price overrides, e.g. {'Enterprise': 1299.99, 'Premium': 899.99}",
     )
+    # Seats on a per_seat plan (1 for flat plans).
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     billing_anchor: Mapped[date] = mapped_column(Date, nullable=False, default=date.today)
     current_period_start: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     current_period_end: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -879,4 +886,48 @@ class FNOCancellation(Base):
         Index("ix_fno_cancellation_customer", "customer_id"),
         Index("ix_fno_cancellation_request", "cancellation_request_id"),
         Index("ix_fno_cancellation_job", "automation_job_id"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-seat billing (see seat_billing.py / seat_runs.py)
+# ---------------------------------------------------------------------------
+
+class SeatBillingRun(Base):
+    """One end-of-cycle seat invoice per tenant per period (idempotency key)."""
+    __tablename__ = "seat_billing_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    peak_seats: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=Decimal("0.00"))  # ex VAT
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="invoiced")  # invoiced | skipped
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period_start", name="uq_seat_billing_runs_tenant_period"),
+    )
+
+
+class SeatProrationCharge(Base):
+    """A pro rata charge for seats added mid-cycle; credited on the cycle invoice."""
+    __tablename__ = "seat_proration_charges"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    added_seats: Mapped[int] = mapped_column(Integer, nullable=False)
+    unit_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)  # ex VAT
+    charged_on: Mapped[date] = mapped_column(Date, nullable=False)
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_seat_proration_tenant_period", "tenant_id", "period_start"),
     )

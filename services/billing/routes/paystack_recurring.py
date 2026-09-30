@@ -102,6 +102,11 @@ async def sync_plan_to_paystack(
         ).scalar_one_or_none()
         if not plan:
             raise HTTPException(status_code=404, detail="Billing plan not found")
+        if (getattr(plan, "pricing_model", "flat") or "flat") == "per_seat":
+            raise HTTPException(
+                status_code=400,
+                detail="per_seat plans are billed by seat reconciliation (seat_billing), not as a fixed Paystack plan amount",
+            )
         name = plan.name
         amount_cents = int(Decimal(str(plan.price)) * 100)
         currency = plan.currency or "ZAR"
