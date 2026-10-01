@@ -54,7 +54,8 @@ export function reconnectDelay(attempt: number, rand: number = Math.random(), ba
   return Math.min(Math.round(raw * jitter), cap)
 }
 
-export const WS_AUTH_CLOSE_CODES = [1008, 4401, 4403]
+// 4001/4003 = communication service auth/channel-access denied; 4408 = idle (unanswered pings) close
+export const WS_AUTH_CLOSE_CODES = [1008, 4001, 4003, 4401, 4403, 4408]
 export const WS_MAX_FAILURES = 5
 
 /** Stop reconnecting after an auth-style close or too many consecutive failures. */

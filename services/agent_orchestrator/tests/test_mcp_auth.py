@@ -51,3 +51,25 @@ def test_unconfigured_tenant_fails_closed(monkeypatch, tenant):
 def test_tenant_comes_from_config_not_headers(monkeypatch):
     configure(monkeypatch)
     assert mcp_route._pinned_tenant() == TENANT
+
+
+def test_key_rotation_comma_separated(monkeypatch):
+    configure(monkeypatch, key="new-key, old-key-rotation")
+    # Both new and old keys are accepted
+    mcp_route._check_auth(FakeRequest({"authorization": "Bearer new-key"}))
+    mcp_route._check_auth(FakeRequest({"authorization": "Bearer old-key-rotation"}))
+    # Unrelated key is rejected
+    with pytest.raises(HTTPException) as exc:
+        mcp_route._check_auth(FakeRequest({"authorization": "Bearer third-key"}))
+    assert exc.value.status_code == 401
+
+
+def test_key_rotation_previous_setting(monkeypatch):
+    configure(monkeypatch, key="new-key")
+    monkeypatch.setattr(mcp_route.settings, "hermes_api_key_previous", "fallback-key")
+    mcp_route._check_auth(FakeRequest({"authorization": "Bearer new-key"}))
+    mcp_route._check_auth(FakeRequest({"authorization": "Bearer fallback-key"}))
+    with pytest.raises(HTTPException) as exc:
+        mcp_route._check_auth(FakeRequest({"authorization": "Bearer unknown"}))
+    assert exc.value.status_code == 401
+

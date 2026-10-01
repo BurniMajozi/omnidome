@@ -17,43 +17,126 @@ from typing import Any, Callable, Dict, List, Optional
 
 import httpx
 
+from services.iot.url_policy import validate_ha_url
+
 logger = logging.getLogger("iot.ha_client")
 
 # ---------------------------------------------------------------------------
-# Token encryption (AES-256-GCM via Fernet-like approach)
+# Token encryption (Fernet, key REQUIRED -- fail closed)
 # ---------------------------------------------------------------------------
 
-def _get_encryption_key() -> bytes:
-    """Derive a 32-byte key from the configured secret."""
-    secret = os.getenv("IOT_TOKEN_ENCRYPTION_KEY", os.getenv("AUTH_JWT_SECRET", "omnidome-default-key-change-me"))
-    return hashlib.sha256(secret.encode()).digest()
+_LEGACY_DEFAULT_SECRET = "omnidome-default-key-change-me"
+
+
+class TokenEncryptionUnavailable(RuntimeError):
+    """IOT_TOKEN_ENCRYPTION_KEY is missing/invalid or `cryptography` is not installed (HTTP 503)."""
+
+
+class ReconnectRequired(RuntimeError):
+    """The stored token cannot be decrypted under any known key: the user must re-enter it."""
+
+
+def _fernet():
+    """Fernet built from IOT_TOKEN_ENCRYPTION_KEY (a Fernet key: 32 url-safe base64 bytes)."""
+    key = os.getenv("IOT_TOKEN_ENCRYPTION_KEY", "").strip()
+    if not key:
+        raise TokenEncryptionUnavailable("IOT_TOKEN_ENCRYPTION_KEY is not set")
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError as exc:  # never fall back to base64
+        raise TokenEncryptionUnavailable("cryptography is not installed") from exc
+    try:
+        return Fernet(key.encode())
+    except (ValueError, TypeError) as exc:
+        raise TokenEncryptionUnavailable("IOT_TOKEN_ENCRYPTION_KEY is not a valid Fernet key") from exc
+
+
+def _legacy_fernets() -> list:
+    """Keys older releases may have used (sha256 of IOT key string / AUTH_JWT_SECRET / the hard-coded default)."""
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError:
+        return []
+    secrets = []
+    for name in ("IOT_TOKEN_ENCRYPTION_KEY", "AUTH_JWT_SECRET"):
+        v = os.getenv(name, "").strip()
+        if v:
+            secrets.append(v)
+    secrets.append(_LEGACY_DEFAULT_SECRET)
+    return [Fernet(base64.urlsafe_b64encode(hashlib.sha256(sec.encode()).digest())) for sec in secrets]
 
 
 def encrypt_token(token: str) -> str:
-    """Encrypt a HA token for storage. Returns base64-encoded ciphertext."""
+    """Encrypt a HA token for storage. Raises TokenEncryptionUnavailable when no key is configured."""
+    return _fernet().encrypt(token.encode()).decode()
+
+
+def decrypt_token_ex(encrypted: str) -> tuple:
+    """(plaintext, needs_reencrypt). Tries the configured key, then the legacy derived keys once.
+    Raises TokenEncryptionUnavailable (no key configured) or ReconnectRequired."""
+    from cryptography.fernet import InvalidToken
+    primary = _fernet()
     try:
-        from cryptography.fernet import Fernet
-        key = base64.urlsafe_b64encode(_get_encryption_key())
-        f = Fernet(key)
-        return f.encrypt(token.encode()).decode()
-    except ImportError:
-        # Fallback: base64 encode (not encrypted — install cryptography for real encryption)
-        logger.warning("cryptography not installed — tokens stored as base64 (not encrypted)")
-        return base64.b64encode(token.encode()).decode()
+        return primary.decrypt(encrypted.encode()).decode(), False
+    except InvalidToken:
+        pass
+    for legacy in _legacy_fernets():
+        try:
+            return legacy.decrypt(encrypted.encode()).decode(), True
+        except InvalidToken:
+            continue
+    raise ReconnectRequired("stored token cannot be decrypted; reconnect required")
 
 
 def decrypt_token(encrypted: str) -> str:
-    """Decrypt a stored HA token."""
-    try:
-        from cryptography.fernet import Fernet
-        key = base64.urlsafe_b64encode(_get_encryption_key())
-        f = Fernet(key)
-        return f.decrypt(encrypted.encode()).decode()
-    except ImportError:
-        return base64.b64decode(encrypted.encode()).decode()
-    except Exception as exc:
-        logger.error("Failed to decrypt token: %s", exc)
-        raise
+    return decrypt_token_ex(encrypted)[0]
+
+
+def token_for_integration(integration) -> str:
+    """Decrypt an integration's token; a token still under a legacy key is re-encrypted under
+    the configured key on the ORM object (persisted when the caller's session commits)."""
+    plain, legacy = decrypt_token_ex(integration.ha_token_encrypted)
+    if legacy:
+        integration.ha_token_encrypted = encrypt_token(plain)
+        logger.warning("integration %s token migrated to IOT_TOKEN_ENCRYPTION_KEY", getattr(integration, "id", "?"))
+    return plain
+
+
+def describe_ha_error(exc: BaseException) -> tuple:
+    """(code, message) with fixed wording only: never the raw exception text (it can name internal hosts)."""
+    from services.common.url_safety import UnsafeUrl
+    if isinstance(exc, TokenEncryptionUnavailable):
+        return "encryption_unavailable", "Token encryption is not configured"
+    if isinstance(exc, ReconnectRequired):
+        return "reconnect_required", "Reconnect required: please re-enter the Home Assistant token"
+    if isinstance(exc, UnsafeUrl):
+        return "url_not_allowed", "The Home Assistant URL is not allowed"
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout", "Connection failed (timeout)"
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        if code in (401, 403):
+            return "auth_failed", "Connection failed (authentication rejected)"
+        return f"http_{code}", f"Connection failed (HTTP {code})"
+    if isinstance(exc, httpx.HTTPError):
+        return "unreachable", "Connection failed"
+    return "error", "Connection failed"
+
+
+def ha_http_error(exc: BaseException):
+    """HTTPException for a failed Home Assistant interaction, generic wording only."""
+    from fastapi import HTTPException
+    from services.common.url_safety import UnsafeUrl
+    code, message = describe_ha_error(exc)
+    if isinstance(exc, TokenEncryptionUnavailable):
+        status = 503
+    elif isinstance(exc, ReconnectRequired):
+        status = 409
+    elif isinstance(exc, UnsafeUrl):
+        status = 422
+    else:
+        status = 502
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
 # ---------------------------------------------------------------------------
@@ -70,12 +153,18 @@ class HARestClient:
             "Content-Type": "application/json",
         }
         self._client: Optional[httpx.AsyncClient] = None
+        self._validated = False
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
+            if not self._validated:
+                # Re-check on every client (DNS may have changed since the URL was saved).
+                await asyncio.to_thread(validate_ha_url, self.ha_url)
+                self._validated = True
             self._client = httpx.AsyncClient(
                 headers=self.headers,
-                timeout=httpx.Timeout(30.0, connect=10.0),
+                timeout=httpx.Timeout(15.0, connect=5.0),
+                follow_redirects=False,  # a redirect could point at an internal address
             )
         return self._client
 
@@ -201,6 +290,7 @@ class HAWebSocketClient:
 
     def __init__(self, ha_url: str, token: str):
         # Convert http(s) URL to ws(s)
+        self._ha_url = ha_url
         self.ws_url = ha_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         self.token = token
         self._ws = None
@@ -210,6 +300,7 @@ class HAWebSocketClient:
 
     async def connect(self):
         """Connect to HA WebSocket API."""
+        await asyncio.to_thread(validate_ha_url, self._ha_url)
         try:
             import websockets
             self._ws = await websockets.connect(

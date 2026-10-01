@@ -17,6 +17,7 @@ import contextvars
 import hmac
 import json
 import logging
+import os
 import uuid
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -103,16 +104,27 @@ def _pinned_tenant() -> str:
         return ""
 
 
+def _allowed_keys() -> list[str]:
+    raw_keys = settings.hermes_api_key or ""
+    keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+    prev = (getattr(settings, "hermes_api_key_previous", "") or os.getenv("HERMES_API_KEY_PREVIOUS", "")).strip()
+    if prev and prev not in keys:
+        keys.append(prev)
+    return keys
+
+
 def _check_auth(request: Request) -> None:
-    expected = settings.hermes_api_key
-    if not expected or not _pinned_tenant():
+    keys = _allowed_keys()
+    if not keys or not _pinned_tenant():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="MCP endpoint is disabled: HERMES_API_KEY and MCP_TENANT_ID must both be configured",
         )
     auth_header = request.headers.get("authorization", "")
-    if not hmac.compare_digest(auth_header.encode(), f"Bearer {expected}".encode()):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing bearer token")
+    for expected in keys:
+        if hmac.compare_digest(auth_header.encode(), f"Bearer {expected}".encode()):
+            return
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or missing bearer token")
 
 
 sse_transport = SseServerTransport(_MESSAGES_PATH)

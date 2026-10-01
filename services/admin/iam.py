@@ -42,7 +42,8 @@ accept_limiter = RateLimiter(max_requests=20, window_seconds=60, key_func=identi
 
 
 def app_public_url() -> str:
-    return os.getenv("APP_PUBLIC_URL", "http://localhost:3000").rstrip("/")
+    url = (os.getenv("APP_PUBLIC_URL") or os.getenv("NEXT_PUBLIC_SITE_URL") or "http://localhost:3000").strip()
+    return url.rstrip("/")
 
 
 # ---------------------------------------------------------------------------

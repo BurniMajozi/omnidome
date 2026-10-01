@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.models import IoTAutomation, IoTEvent
 
@@ -239,7 +240,7 @@ async def get_automation(
 @router.post("", response_model=AutomationRead, status_code=status.HTTP_201_CREATED)
 async def create_automation(
     body: AutomationCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Create a new IoT automation."""
     async with get_session() as session:
@@ -265,7 +266,7 @@ async def create_automation(
 async def update_automation(
     automation_id: uuid.UUID,
     body: AutomationUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Update an existing IoT automation."""
     async with get_session() as session:
@@ -283,7 +284,7 @@ async def update_automation(
 @router.delete("/{automation_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_automation(
     automation_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Delete an IoT automation."""
     async with get_session() as session:
@@ -294,7 +295,7 @@ async def delete_automation(
 @router.post("/{automation_id}/enable", response_model=AutomationRead)
 async def enable_automation(
     automation_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Enable an IoT automation."""
     async with get_session() as session:
@@ -308,7 +309,7 @@ async def enable_automation(
 @router.post("/{automation_id}/disable", response_model=AutomationRead)
 async def disable_automation(
     automation_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Disable an IoT automation."""
     async with get_session() as session:
@@ -322,7 +323,7 @@ async def disable_automation(
 @router.post("/{automation_id}/trigger", response_model=AutomationTriggerResponse)
 async def trigger_automation(
     automation_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Manually trigger an automation.
 

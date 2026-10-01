@@ -14,8 +14,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
-from services.iot.ha_client import HARestClient, decrypt_token
+from services.iot.ha_client import HARestClient, ReconnectRequired, TokenEncryptionUnavailable, ha_http_error, token_for_integration
 from services.iot.models import IoTIntegration, IoTScene
 
 logger = logging.getLogger("iot.scenes")
@@ -102,7 +103,10 @@ async def _get_ha_client(session, tenant_id: uuid.UUID) -> HARestClient | None:
         integration = result.scalar_one_or_none()
     if not integration:
         return None
-    token = decrypt_token(integration.ha_token_encrypted)
+    try:
+        token = token_for_integration(integration)
+    except (TokenEncryptionUnavailable, ReconnectRequired) as exc:
+        raise ha_http_error(exc) from exc
     return HARestClient(integration.ha_url, token)
 
 
@@ -185,7 +189,7 @@ async def get_scene(
 @router.post("", response_model=SceneRead, status_code=status.HTTP_201_CREATED)
 async def create_scene(
     body: SceneCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Create a new IoT scene."""
     async with get_session() as session:
@@ -209,7 +213,7 @@ async def create_scene(
 async def update_scene(
     scene_id: uuid.UUID,
     body: SceneUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Update an existing IoT scene."""
     async with get_session() as session:
@@ -235,7 +239,7 @@ async def update_scene(
 @router.delete("/{scene_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_scene(
     scene_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Delete an IoT scene."""
     async with get_session() as session:
@@ -256,7 +260,7 @@ async def delete_scene(
 @router.post("/{scene_id}/activate", response_model=SceneActivateResponse)
 async def activate_scene(
     scene_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Activate an IoT scene by calling the HA scene.turn_on service.
 
@@ -290,10 +294,7 @@ async def activate_scene(
                     service_data={"entity_id": ha_scene_id},
                 )
             except Exception as exc:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Home Assistant scene.turn_on failed: {exc}",
-                ) from exc
+                raise ha_http_error(exc) from exc
             finally:
                 await ha_client.aclose()
 

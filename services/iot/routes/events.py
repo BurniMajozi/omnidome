@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from starlette.responses import StreamingResponse
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.models import IoTEvent
 
@@ -63,22 +64,55 @@ class PaginatedEventResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# SSE event queue (in-memory pub/sub per process)
+# SSE fan-out (in-memory, per process: run the iot service with a single worker, or
+# replace this with Postgres LISTEN/NOTIFY, for events to reach every viewer)
 # ---------------------------------------------------------------------------
 
-_event_queues: Dict[uuid.UUID, asyncio.Queue] = {}
+SUBSCRIBER_QUEUE_SIZE = 200
+MAX_SUBSCRIBERS_PER_TENANT = 50
+
+# tenant -> one bounded queue PER CONNECTION (a shared queue would split events between viewers)
+_subscribers: Dict[uuid.UUID, set] = {}
 
 
-def _get_queue(tenant_id: uuid.UUID) -> asyncio.Queue:
-    """Get or create an event queue for the given tenant."""
-    if tenant_id not in _event_queues:
-        _event_queues[tenant_id] = asyncio.Queue(maxsize=1000)
-    return _event_queues[tenant_id]
+def subscribe(tenant_id: uuid.UUID) -> asyncio.Queue:
+    subs = _subscribers.setdefault(tenant_id, set())
+    if len(subs) >= MAX_SUBSCRIBERS_PER_TENANT:
+        raise HTTPException(status_code=429, detail="Too many open event streams")
+    queue: asyncio.Queue = asyncio.Queue(maxsize=SUBSCRIBER_QUEUE_SIZE)
+    subs.add(queue)
+    return queue
+
+
+def unsubscribe(tenant_id: uuid.UUID, queue: asyncio.Queue) -> None:
+    subs = _subscribers.get(tenant_id)
+    if subs is None:
+        return
+    subs.discard(queue)
+    if not subs:
+        _subscribers.pop(tenant_id, None)
+
+
+def _offer(queue: asyncio.Queue, payload: str) -> None:
+    try:
+        queue.put_nowait(payload)
+    except asyncio.QueueFull:
+        # slow consumer: drop its oldest message to make room
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            pass
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass
 
 
 async def publish_event(event: IoTEvent) -> None:
-    """Publish an event to the tenant's SSE stream (called by event producers)."""
-    queue = _get_queue(event.tenant_id)
+    """Publish an event to every open SSE stream of the event's tenant."""
+    subs = _subscribers.get(event.tenant_id)
+    if not subs:
+        return
     payload = json.dumps(
         {
             "id": str(event.id),
@@ -93,32 +127,23 @@ async def publish_event(event: IoTEvent) -> None:
         },
         default=str,
     )
+    for queue in list(subs):
+        _offer(queue, payload)
+
+
+async def _sse_event_generator(tenant_id: uuid.UUID, queue: asyncio.Queue) -> AsyncGenerator[str, None]:
+    """Yield SSE frames from this connection's own queue; always unsubscribes on exit."""
     try:
-        queue.put_nowait(payload)
-    except asyncio.QueueFull:
-        # Drop oldest message to make room
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-        try:
-            queue.put_nowait(payload)
-        except asyncio.QueueFull:
-            pass
-
-
-async def _sse_event_generator(tenant_id: uuid.UUID) -> AsyncGenerator[str, None]:
-    """Yield SSE-formatted event payloads for the tenant's event stream."""
-    queue = _get_queue(tenant_id)
-    # Send initial connection event
-    yield f"event: connected\ndata: {json.dumps({'tenant_id': str(tenant_id)})}\n\n"
-    while True:
-        try:
-            payload = await asyncio.wait_for(queue.get(), timeout=30.0)
-            yield f"event: iot_event\ndata: {payload}\n\n"
-        except asyncio.TimeoutError:
-            # Send keep-alive comment to prevent proxy timeouts
-            yield ": keep-alive\n\n"
+        conn_data = json.dumps({"tenant_id": str(tenant_id)})
+        yield f"event: connected\ndata: {conn_data}\n\n"
+        while True:
+            try:
+                payload = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield f"event: iot_event\ndata: {payload}\n\n"
+            except asyncio.TimeoutError:
+                yield ": keep-alive\n\n"  # keep proxies from closing the stream
+    finally:  # client disconnect cancels the generator
+        unsubscribe(tenant_id, queue)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +218,33 @@ async def list_events(
         )
 
 
+# NOTE: static paths (/stream) must be declared before /{event_id} or they are parsed as an event id (422).
+@router.get("/stream")
+async def stream_events(
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Server-Sent Events (SSE) stream for real-time IoT events.
+
+    Streams new events as they are published via `publish_event()`.
+    Sends a `connected` event on initial connection and periodic
+    keep-alive comments to prevent proxy timeouts.
+
+    SSE event types:
+    - `connected` — sent once on connection
+    - `iot_event` — sent for each new event
+    """
+    queue = subscribe(ctx.tenant_id)
+    return StreamingResponse(
+        _sse_event_generator(ctx.tenant_id, queue),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/{event_id}", response_model=EventRead)
 async def get_event(
     event_id: uuid.UUID,
@@ -211,35 +263,10 @@ async def get_event(
         return EventRead.model_validate(event)
 
 
-@router.get("/stream")
-async def stream_events(
-    ctx: AuthContext = Depends(get_auth_context),
-):
-    """Server-Sent Events (SSE) stream for real-time IoT events.
-
-    Streams new events as they are published via `publish_event()`.
-    Sends a `connected` event on initial connection and periodic
-    keep-alive comments to prevent proxy timeouts.
-
-    SSE event types:
-    - `connected` — sent once on connection
-    - `iot_event` — sent for each new event
-    """
-    return StreamingResponse(
-        _sse_event_generator(ctx.tenant_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.post("", response_model=EventRead, status_code=status.HTTP_201_CREATED)
 async def create_event(
     body: EventCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Create a manual event in the IoT event log.
 

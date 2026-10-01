@@ -203,6 +203,9 @@ def verify_unsubscribe_token(token: str, now: Optional[float] = None) -> Tuple[u
 def unsubscribe_base_url() -> str:
     base = os.getenv("EMAIL_UNSUBSCRIBE_BASE_URL", "").strip().rstrip("/")
     if not base:
+        app_url = (os.getenv("APP_PUBLIC_URL") or os.getenv("NEXT_PUBLIC_SITE_URL") or "").strip().rstrip("/")
+        if app_url:
+            return f"{app_url}/svc/marketing"
         raise UnsubscribeNotConfigured(
             "EMAIL_UNSUBSCRIBE_BASE_URL is not set (e.g. https://app.example.com/svc/marketing)")
     return base
@@ -230,19 +233,26 @@ STORED_PAYLOAD_MAX = 64 * 1024
 
 def verify_zernio_signature(headers: Any, raw_body: bytes) -> None:
     """Fail closed. Zernio signs HMAC-SHA256(secret, raw_body) hex in X-Zernio-Signature
-    (no timestamp in that scheme, so replay protection is event-id dedupe)."""
-    secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "")
-    if not secret:
+    (no timestamp in that scheme, so replay protection is event-id dedupe). Supports comma-separated
+    secrets for zero-downtime secret rotation."""
+    raw_secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "").strip()
+    if not raw_secret:
         if _truthy("ZERNIO_WEBHOOK_ALLOW_UNSIGNED"):
             logger.critical("ZERNIO_WEBHOOK_ALLOW_UNSIGNED=true: accepting an UNSIGNED Zernio webhook")
             return
         logger.error("ZERNIO_WEBHOOK_SECRET not set: rejecting Zernio webhook")
         raise HTTPException(status_code=503, detail="Webhook secret not configured")
-    signature = headers.get("X-Zernio-Signature", "") or ""
-    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected.encode(), signature.encode("utf-8", "ignore")):
-        logger.warning("Zernio signature mismatch: sig_present=%s body_len=%d", bool(signature), len(raw_body))
+    signature = (headers.get("X-Zernio-Signature") or headers.get("x-zernio-signature") or "").strip()
+    if not signature:
+        logger.warning("Zernio signature missing: body_len=%d", len(raw_body))
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    secrets = [s.strip() for s in raw_secret.split(",") if s.strip()]
+    for s in secrets:
+        expected = hmac.new(s.encode(), raw_body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected.encode(), signature.encode("utf-8", "ignore")):
+            return
+    logger.warning("Zernio signature mismatch: sig_present=%s body_len=%d", bool(signature), len(raw_body))
+    raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
 
 def webhook_event_id(headers: Any, payload: Any, raw_body: bytes) -> str:

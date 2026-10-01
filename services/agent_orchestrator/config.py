@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     chat_backend: str = "native"
     hermes_base_url: str = "http://hermes:8642/v1"
     hermes_api_key: str = ""
+    hermes_api_key_previous: str = ""
     mcp_tenant_id: str = ""
     mcp_user_id: str = "hermes-agent"
 

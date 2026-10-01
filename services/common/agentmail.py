@@ -429,12 +429,19 @@ def _row_secret(row) -> tuple[bool, str]:
 # ── Per-tenant encrypted storage ───────────────────────────────────────────
 
 def _fernet():
-    key = os.getenv("SECRETS_ENCRYPTION_KEY", "")
-    if not key:
+    raw_key = os.getenv("SECRETS_ENCRYPTION_KEY", "").strip()
+    if not raw_key:
         raise SecretsUnavailable("SECRETS_ENCRYPTION_KEY is not set; refusing to store/read tenant secrets")
     try:
-        from cryptography.fernet import Fernet
-        return Fernet(key.encode())
+        from cryptography.fernet import Fernet, MultiFernet
+        keys = [k.strip() for k in raw_key.split(",") if k.strip()]
+        prev = os.getenv("SECRETS_ENCRYPTION_KEY_PREVIOUS", "").strip()
+        if prev and prev not in keys:
+            keys.append(prev)
+        if not keys:
+            raise ValueError("No valid encryption keys provided")
+        fernets = [Fernet(k.encode()) for k in keys]
+        return MultiFernet(fernets) if len(fernets) > 1 else fernets[0]
     except Exception as exc:  # noqa: BLE001
         raise SecretsUnavailable(f"SECRETS_ENCRYPTION_KEY is invalid (needs a Fernet key): {exc}") from exc
 

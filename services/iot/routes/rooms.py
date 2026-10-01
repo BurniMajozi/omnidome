@@ -11,12 +11,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.models import IoTDevice, IoTRoom
 
 logger = logging.getLogger("iot.rooms")
 
-router = APIRouter(prefix="/rooms", tags=["iot-rooms"])
+router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +140,7 @@ async def get_room(
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_room(
     body: dict,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Create a new room/zone."""
     name = body.get("name")
@@ -173,7 +174,7 @@ async def create_room(
 async def update_room(
     room_id: uuid.UUID,
     body: dict,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Update an existing room/zone."""
     async with get_session() as session:
@@ -203,7 +204,7 @@ async def update_room(
 @router.delete("/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_room(
     room_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Delete a room. Devices in the room are unassigned (room_id set to NULL)."""
     async with get_session() as session:
@@ -271,7 +272,7 @@ async def list_room_devices(
 async def assign_device_to_room(
     room_id: uuid.UUID,
     device_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Assign an IoT device to a room."""
     async with get_session() as session:
@@ -309,7 +310,7 @@ async def assign_device_to_room(
 async def remove_device_from_room(
     room_id: uuid.UUID,
     device_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Remove an IoT device from a room (sets device.room_id to NULL)."""
     async with get_session() as session:

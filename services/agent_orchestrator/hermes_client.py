@@ -24,7 +24,8 @@ class HermesClient:
 
     def __init__(self, base_url: Optional[str] = None, api_key: Optional[str] = None, timeout: float = 60.0):
         self.base_url = (base_url or settings.hermes_base_url).rstrip("/")
-        self.api_key = api_key if api_key is not None else settings.hermes_api_key
+        raw_key = api_key if api_key is not None else settings.hermes_api_key
+        self.api_key = raw_key.split(",")[0].strip() if raw_key else ""
         self.timeout = timeout
 
     def _headers(self) -> Dict[str, str]:

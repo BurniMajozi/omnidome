@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.ha_client import (
     HARestClient,
@@ -217,7 +218,7 @@ async def get_integration(
 @router.post("", response_model=IntegrationRead, status_code=status.HTTP_201_CREATED)
 async def register_integration(
     body: IntegrationCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Register a new Home Assistant instance.
 
@@ -264,7 +265,7 @@ async def register_integration(
 async def update_integration(
     integration_id: uuid.UUID,
     body: IntegrationUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Update an existing HA integration.
 
@@ -311,7 +312,7 @@ async def update_integration(
 @router.delete("/{integration_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_integration(
     integration_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Delete an HA integration. Associated devices will have their integration_id set to NULL."""
     async with get_session() as session:
@@ -329,7 +330,7 @@ async def delete_integration(
 @router.post("/{integration_id}/connect", response_model=ConnectionTestResponse)
 async def test_connection(
     integration_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Test the connection to a Home Assistant instance.
 
@@ -379,7 +380,7 @@ async def test_connection(
 @router.post("/{integration_id}/sync", response_model=SyncResponse)
 async def sync_devices(
     integration_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Perform a full device sync from Home Assistant.
 
@@ -567,7 +568,7 @@ async def sync_devices(
 @router.get("/{integration_id}/health", response_model=HealthResponse)
 async def integration_health(
     integration_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Check the health / connection status of a HA integration.
 
@@ -621,7 +622,7 @@ async def integration_health(
 @router.post("/{integration_id}/discover", response_model=DiscoverResponse)
 async def discover_devices(
     integration_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Discover new devices from Home Assistant that are not yet registered.
 

@@ -14,10 +14,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.models import IoTAlert, IoTDevice, IoTDeviceState
 
-router = APIRouter(prefix="/api/iot/sensors", tags=["iot-sensors"])
+router = APIRouter()
 
 # ---------------------------------------------------------------------------
 # Pydantic schemas
@@ -339,7 +340,7 @@ async def get_current_reading(
 async def set_sensor_threshold(
     sensor_id: uuid.UUID,
     body: ThresholdCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Set an alert threshold for a sensor device.
 

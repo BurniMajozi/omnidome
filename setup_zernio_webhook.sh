@@ -165,19 +165,28 @@ def apply_patch():
     PATCH_FILE.parent.mkdir(parents=True, exist_ok=True)
     PATCH_FILE.write_text('''"""Zernio Signature Verification Patch — auto-applied on startup."""
 import hashlib, hmac, os
-_SECRET = os.getenv("ZERNIO_WEBHOOK_SECRET", "")
+_RAW_SECRET = os.getenv("ZERNIO_WEBHOOK_SECRET", "").strip()
+_ALLOW_UNSIGNED = os.getenv("ZERNIO_WEBHOOK_ALLOW_UNSIGNED", "").lower() in ("1", "true", "yes")
+_SECRETS = [s.strip() for s in _RAW_SECRET.split(",") if s.strip()]
 def verify(body: bytes, sig: str) -> bool:
-    if not _SECRET: return True
-    return hmac.compare_digest(hmac.new(_SECRET.encode(), body, hashlib.sha256).hexdigest(), sig)
+    if not _SECRETS:
+        return _ALLOW_UNSIGNED
+    if not sig:
+        return False
+    return any(hmac.compare_digest(hmac.new(s.encode(), body, hashlib.sha256).hexdigest(), sig.strip()) for s in _SECRETS)
 ''')
     log.info(f"Signature patch applied: {PATCH_FILE}")
 
 def verify_sig(body: bytes, sig: str) -> bool:
-    if not ZERNIO_WEBHOOK_SECRET:
-        return True
-    return hmac.compare_digest(
-        hmac.new(ZERNIO_WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest(), sig
-    )
+    raw_secret = os.getenv("ZERNIO_WEBHOOK_SECRET", "").strip()
+    allow_unsigned = os.getenv("ZERNIO_WEBHOOK_ALLOW_UNSIGNED", "").lower() in ("1", "true", "yes")
+    secrets = [s.strip() for s in raw_secret.split(",") if s.strip()]
+    if not secrets:
+        return allow_unsigned
+    if not sig:
+        return False
+    return any(hmac.compare_digest(hmac.new(s.encode(), body, hashlib.sha256).hexdigest(), sig.strip()) for s in secrets)
+
 
 # ── Event Processing ─────────────────────────────────────────────────────────
 def normalize(evt: dict) -> dict:

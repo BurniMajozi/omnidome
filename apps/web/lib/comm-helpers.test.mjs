@@ -2,7 +2,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  displayNameFromUser, resolveAuthorLabel, nextPollDelay, reconnectDelay, shouldStopReconnect, corpTargetText, looksLikeUuid,
+  displayNameFromUser, resolveAuthorLabel, nextPollDelay, reconnectDelay, shouldStopReconnect, corpTargetText, looksLikeUuid, WS_AUTH_CLOSE_CODES,
 } from "./comm-helpers.ts"
 
 const U = "11111111-1111-4111-8111-111111111111"
@@ -46,4 +46,13 @@ test("corpTargetText", () => {
   assert.equal(corpTargetText({ budget: null, actual: 5 }, f), null)
   assert.equal(corpTargetText({ budget: 0, actual: 5 }, f), null)
   assert.equal(corpTargetText(null, f), null)
+})
+
+test("shouldStopReconnect stops on the service's own close codes", () => {
+  for (const c of [1008, 4001, 4003, 4401, 4403, 4408]) {
+    assert.equal(shouldStopReconnect(c, 0), true, String(c))
+    assert.ok(WS_AUTH_CLOSE_CODES.includes(c))
+  }
+  assert.equal(shouldStopReconnect(1006, 0), false)
+  assert.equal(shouldStopReconnect(1006, 6), true)
 })

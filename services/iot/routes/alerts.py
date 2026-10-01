@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require_tier
 from services.iot.database import get_session
 from services.iot.models import IoTAlert, IoTEvent
 
@@ -275,7 +276,7 @@ async def get_alert(
 @router.post("", response_model=AlertRead, status_code=status.HTTP_201_CREATED)
 async def create_alert(
     body: AlertCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Create a new IoT alert rule."""
     async with get_session() as session:
@@ -305,7 +306,7 @@ async def create_alert(
 async def update_alert(
     alert_id: uuid.UUID,
     body: AlertUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Update an existing IoT alert rule."""
     async with get_session() as session:
@@ -323,7 +324,7 @@ async def update_alert(
 @router.delete("/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_alert(
     alert_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Delete an IoT alert rule."""
     async with get_session() as session:
@@ -334,7 +335,7 @@ async def delete_alert(
 @router.post("/{alert_id}/enable", response_model=AlertRead)
 async def enable_alert(
     alert_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Enable an IoT alert rule."""
     async with get_session() as session:
@@ -348,7 +349,7 @@ async def enable_alert(
 @router.post("/{alert_id}/disable", response_model=AlertRead)
 async def disable_alert(
     alert_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Disable an IoT alert rule."""
     async with get_session() as session:
@@ -362,7 +363,7 @@ async def disable_alert(
 @router.post("/{alert_id}/test", response_model=AlertTestResponse)
 async def test_alert(
     alert_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Manually trigger an alert for testing purposes.
 

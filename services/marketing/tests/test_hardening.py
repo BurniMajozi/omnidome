@@ -163,6 +163,21 @@ def test_zernio_bad_signature_rejected_before_processing(zernio, env):
     assert calls == []
 
 
+def test_zernio_secret_rotation_comma_separated(zernio, env):
+    c, log, calls = zernio
+    env.setenv("ZERNIO_WEBHOOK_SECRET", "new-secret, old-secret")
+    r1 = c.post("/social/webhooks/zernio/inbound", content=EVENT,
+                headers={"X-Zernio-Signature": zsign(EVENT, "new-secret"), "X-Zernio-Event-Id": "rot-1"})
+    assert r1.status_code == 200
+    r2 = c.post("/social/webhooks/zernio/inbound", content=EVENT,
+                headers={"X-Zernio-Signature": zsign(EVENT, "old-secret"), "X-Zernio-Event-Id": "rot-2"})
+    assert r2.status_code == 200
+    r3 = c.post("/social/webhooks/zernio/inbound", content=EVENT,
+                headers={"X-Zernio-Signature": zsign(EVENT, "other-secret")})
+    assert r3.status_code == 401
+
+
+
 def test_zernio_duplicate_event_has_no_side_effects(zernio, env):
     c, log, calls = zernio
     env.setenv("ZERNIO_WEBHOOK_SECRET", "whsec-test")
@@ -392,6 +407,24 @@ def test_token_fails_closed_without_secret(env):
     env.delenv("EMAIL_UNSUBSCRIBE_SECRET")
     with pytest.raises(sec.UnsubscribeNotConfigured):
         sec.sign_unsubscribe_token(TENANT, "a@b.co")
+
+
+def test_unsubscribe_base_url_fallbacks(env):
+    env.delenv("EMAIL_UNSUBSCRIBE_BASE_URL", raising=False)
+    env.delenv("APP_PUBLIC_URL", raising=False)
+    env.delenv("NEXT_PUBLIC_SITE_URL", raising=False)
+    with pytest.raises(sec.UnsubscribeNotConfigured):
+        sec.unsubscribe_base_url()
+
+    env.setenv("NEXT_PUBLIC_SITE_URL", "https://site.example.com")
+    assert sec.unsubscribe_base_url() == "https://site.example.com/svc/marketing"
+
+    env.setenv("APP_PUBLIC_URL", "https://app.example.com")
+    assert sec.unsubscribe_base_url() == "https://app.example.com/svc/marketing"
+
+    env.setenv("EMAIL_UNSUBSCRIBE_BASE_URL", "https://marketing.example.com")
+    assert sec.unsubscribe_base_url() == "https://marketing.example.com"
+
 
 
 def test_unsubscribe_get_confirms_post_applies(client, env):

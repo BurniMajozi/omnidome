@@ -81,6 +81,27 @@ def test_no_or_bad_encryption_key_refuses_instead_of_storing_in_clear(monkeypatc
         agentmail.encrypt_secret("x")
 
 
+def test_secrets_encryption_key_rotation(monkeypatch):
+    from cryptography.fernet import Fernet
+    k_old = Fernet.generate_key().decode()
+    k_new = Fernet.generate_key().decode()
+
+    # Encrypt with k_old
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", k_old)
+    old_cipher = agentmail.encrypt_secret("secret_data_123")
+
+    # Set rotated key as comma-separated or via SECRETS_ENCRYPTION_KEY_PREVIOUS
+    monkeypatch.setenv("SECRETS_ENCRYPTION_KEY", f"{k_new}, {k_old}")
+    # Can decrypt old cipher with rotated keys
+    assert agentmail.decrypt_secret(old_cipher) == "secret_data_123"
+
+    # New cipher is encrypted with k_new
+    new_cipher = agentmail.encrypt_secret("secret_data_456")
+    assert agentmail.decrypt_secret(new_cipher) == "secret_data_456"
+    assert Fernet(k_new.encode()).decrypt(new_cipher.encode()).decode() == "secret_data_456"
+
+
+
 # ── Message normalisation ───────────────────────────────────────────────────
 
 def test_webhook_and_rest_message_shapes_normalise_the_same():

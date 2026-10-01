@@ -9,10 +9,10 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.iot.database import get_session
-from services.iot.ha_client import HARestClient, decrypt_token
+from services.iot.ha_client import HARestClient, ReconnectRequired, TokenEncryptionUnavailable, ha_http_error, token_for_integration
 from services.iot.models import IoTDevice, IoTEvent, IoTIntegration
 
-router = APIRouter(prefix="/api/iot/cameras", tags=["iot-cameras"])
+router = APIRouter()
 
 
 async def _get_ha_client(session, tenant_id: uuid.UUID) -> HARestClient:
@@ -36,7 +36,10 @@ async def _get_ha_client(session, tenant_id: uuid.UUID) -> HARestClient:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="No Home Assistant integration configured for this tenant",
         )
-    token = decrypt_token(integration.ha_token_encrypted)
+    try:
+        token = token_for_integration(integration)
+    except (TokenEncryptionUnavailable, ReconnectRequired) as exc:
+        raise ha_http_error(exc) from exc
     return HARestClient(ha_url=integration.ha_url, token=token)
 
 

@@ -14,10 +14,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.iot.access import require, require_tier, required_tier_for_control
 from services.iot.database import get_session
 from services.iot.ha_client import (
     HARestClient,
-    decrypt_token,
+    ReconnectRequired,
+    TokenEncryptionUnavailable,
+    ha_http_error,
+    token_for_integration,
     ha_entity_to_device_type,
     ha_state_to_device_status,
 )
@@ -176,7 +180,10 @@ async def _get_ha_client(session, tenant_id: uuid.UUID) -> Optional[HARestClient
         integration = result.scalar_one_or_none()
     if not integration:
         return None
-    token = decrypt_token(integration.ha_token_encrypted)
+    try:
+        token = token_for_integration(integration)
+    except (TokenEncryptionUnavailable, ReconnectRequired) as exc:
+        raise ha_http_error(exc) from exc
     return HARestClient(integration.ha_url, token)
 
 
@@ -291,7 +298,7 @@ async def get_device(
 @router.post("", response_model=DeviceRead, status_code=status.HTTP_201_CREATED)
 async def register_device(
     body: DeviceCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Register a new IoT device in the tenant's device registry."""
     async with get_session() as session:
@@ -337,7 +344,7 @@ async def register_device(
 async def update_device(
     device_id: uuid.UUID,
     body: DeviceUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Update an existing IoT device."""
     async with get_session() as session:
@@ -362,7 +369,7 @@ async def update_device(
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_device(
     device_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("admin")),
 ):
     """Delete an IoT device from the registry."""
     async with get_session() as session:
@@ -381,9 +388,13 @@ async def delete_device(
 async def control_device(
     device_id: uuid.UUID,
     body: DeviceControlRequest,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Control a device by calling a Home Assistant service.
+
+    Needs the operator role for non-critical domains with an allow-listed service; security
+    domains (lock, alarm_control_panel, siren, camera) and free-form services/service_data need
+    the admin role. `service` must match ^[a-z_]+$ and service_data may not retarget the call.
 
     Common service calls:
     - light/turn_on, light/turn_off, light/toggle
@@ -409,6 +420,9 @@ async def control_device(
                 detail=f"Device '{device.friendly_name}' is not controllable",
             )
 
+        if required_tier_for_control(device.ha_domain, body.service, body.service_data) == "admin":
+            await require(ctx, "admin")
+
         ha_client = await _get_ha_client(session, ctx.tenant_id)
         if not ha_client:
             raise HTTPException(
@@ -431,10 +445,7 @@ async def control_device(
                 ha_response=ha_response,
             )
         except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Home Assistant service call failed: {exc}",
-            ) from exc
+            raise ha_http_error(exc) from exc
         finally:
             await ha_client.aclose()
 
@@ -442,7 +453,7 @@ async def control_device(
 @router.post("/{device_id}/sync", response_model=DeviceSyncResponse)
 async def sync_device(
     device_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_tier("operator")),
 ):
     """Sync a single device's state from Home Assistant.
 
@@ -503,10 +514,7 @@ async def sync_device(
                 message="Device synced successfully from Home Assistant",
             )
         except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Home Assistant sync failed: {exc}",
-            ) from exc
+            raise ha_http_error(exc) from exc
         finally:
             await ha_client.aclose()
 
@@ -549,9 +557,6 @@ async def get_device_state(
                 fetched_at=datetime.now(timezone.utc),
             )
         except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Home Assistant state query failed: {exc}",
-            ) from exc
+            raise ha_http_error(exc) from exc
         finally:
             await ha_client.aclose()

@@ -41,6 +41,7 @@ from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.lifecycle.database import get_session, init_tables
+from services.lifecycle.security import bridge_tenant_scope, ensure_same_tenant, tenant_scope
 from services.lifecycle.models import (
     CustomerLifecycle,
     CustomerSegmentAssignment,
@@ -127,8 +128,9 @@ class TransitionCreate(BaseModel):
     metadata_: Optional[dict] = Field(default=None, alias="metadata")
 
 class SaleBridgeCreate(BaseModel):
-    """Called by Sales service when a deal is closed won."""
-    tenant_id: str
+    """Called by Sales service when a deal is closed won. tenant_id is accepted for
+    backward compatibility only; the authenticated tenant is the scope."""
+    tenant_id: Optional[str] = None
     customer_id: str
     deal_id: str
     agent_id: Optional[str] = None
@@ -138,7 +140,7 @@ class SaleBridgeCreate(BaseModel):
 
 class JourneyBridgeCreate(BaseModel):
     """Called by Journey Engine when customer cancels or is saved."""
-    tenant_id: str
+    tenant_id: Optional[str] = None
     customer_id: str
     cancel_event_id: str
     outcome: str  # "accepted", "rejected", "expired"
@@ -153,12 +155,12 @@ class JourneyBridgeCreate(BaseModel):
 
 @app.get("/lifecycle/stages")
 async def list_stages(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     category: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
     query = select(LifecycleStage).where(
-        LifecycleStage.tenant_id == uuid.UUID(tenant_id),
+        LifecycleStage.tenant_id == tenant_uuid,
         LifecycleStage.is_active == True,
     )
     if category:
@@ -172,13 +174,13 @@ async def list_stages(
 
 @app.post("/lifecycle/stages")
 async def create_or_ensure_stages(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     """Create default stages for a tenant if they don't exist."""
     existing = await session.execute(
         select(func.count(LifecycleStage.id)).where(
-            LifecycleStage.tenant_id == uuid.UUID(tenant_id)
+            LifecycleStage.tenant_id == tenant_uuid
         )
     )
     count = existing.scalar()
@@ -187,7 +189,7 @@ async def create_or_ensure_stages(
         # Already has stages — just return them
         result = await session.execute(
             select(LifecycleStage)
-            .where(LifecycleStage.tenant_id == uuid.UUID(tenant_id))
+            .where(LifecycleStage.tenant_id == tenant_uuid)
             .order_by(LifecycleStage.sort_order)
         )
         stages = result.scalars().all()
@@ -200,7 +202,7 @@ async def create_or_ensure_stages(
     created = []
     for stage_data in DEFAULT_STAGES:
         stage = LifecycleStage(
-            tenant_id=uuid.UUID(tenant_id),
+            tenant_id=tenant_uuid,
             name=stage_data["name"],
             category=stage_data["category"],
             color=stage_data["color"],
@@ -221,13 +223,13 @@ async def create_or_ensure_stages(
 async def update_stage(
     stage_id: str,
     data: StageUpdate,
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
         select(LifecycleStage).where(
             LifecycleStage.id == uuid.UUID(stage_id),
-            LifecycleStage.tenant_id == uuid.UUID(tenant_id),
+            LifecycleStage.tenant_id == tenant_uuid,
         )
     )
     stage = result.scalar_one_or_none()
@@ -248,12 +250,11 @@ async def update_stage(
 @app.post("/lifecycle/transition")
 async def create_transition(
     data: TransitionCreate,
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(bridge_tenant_scope),  # sales close-lost bridge sends no user id
     session: AsyncSession = Depends(get_session),
 ):
     """Move a customer to a new lifecycle stage."""
     customer_id = uuid.UUID(data.customer_id)
-    tenant_uuid = uuid.UUID(tenant_id)
 
     # Find the target stage
     stage_result = await session.execute(
@@ -274,6 +275,7 @@ async def create_transition(
     lc = lc_result.scalar_one_or_none()
 
     now = datetime.now(timezone.utc)
+    from_stage = None
 
     if lc:
         from_stage = lc.current_stage
@@ -316,7 +318,7 @@ async def create_transition(
     event = LifecycleEvent(
         tenant_id=tenant_uuid,
         customer_id=customer_id,
-        from_stage=from_stage if lc else None,
+        from_stage=from_stage,
         to_stage=data.to_stage,
         trigger_source=data.trigger_source,
         trigger_id=uuid.UUID(data.trigger_id) if data.trigger_id else None,
@@ -328,7 +330,7 @@ async def create_transition(
 
     return {
         "customer_id": str(customer_id),
-        "from_stage": from_stage if lc and hasattr(lc, "current_stage") else None,
+        "from_stage": from_stage,
         "to_stage": data.to_stage,
         "success": True,
     }
@@ -336,13 +338,13 @@ async def create_transition(
 
 @app.get("/lifecycle/events")
 async def list_events(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     customer_id: Optional[str] = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ):
     query = select(LifecycleEvent).where(
-        LifecycleEvent.tenant_id == uuid.UUID(tenant_id),
+        LifecycleEvent.tenant_id == tenant_uuid,
     )
     if customer_id:
         query = query.where(LifecycleEvent.customer_id == uuid.UUID(customer_id))
@@ -360,13 +362,13 @@ async def list_events(
 @app.get("/lifecycle/customer/{customer_id}")
 async def get_customer_lifecycle(
     customer_id: str,
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
         select(CustomerLifecycle).where(
             CustomerLifecycle.customer_id == uuid.UUID(customer_id),
-            CustomerLifecycle.tenant_id == uuid.UUID(tenant_id),
+            CustomerLifecycle.tenant_id == tenant_uuid,
         )
     )
     lc = result.scalar_one_or_none()
@@ -377,17 +379,17 @@ async def get_customer_lifecycle(
 
 @app.get("/lifecycle/customers")
 async def list_customer_lifecycles(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     stage: Optional[str] = None,
     is_at_risk: Optional[bool] = None,
     min_health: Optional[int] = None,
     max_health: Optional[int] = None,
-    page: int = 1,
-    page_size: int = 50,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ):
     query = select(CustomerLifecycle).where(
-        CustomerLifecycle.tenant_id == uuid.UUID(tenant_id),
+        CustomerLifecycle.tenant_id == tenant_uuid,
     )
     if stage:
         query = query.where(CustomerLifecycle.current_stage == stage)
@@ -425,12 +427,11 @@ async def list_customer_lifecycles(
 
 @app.get("/lifecycle/dashboard")
 async def get_dashboard(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     days: int = 30,
     session: AsyncSession = Depends(get_session),
 ):
     """Aggregated lifecycle metrics for dashboard."""
-    tenant_uuid = uuid.UUID(tenant_id)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Count by stage
@@ -509,12 +510,11 @@ async def get_dashboard(
 
 @app.get("/lifecycle/funnel")
 async def get_funnel(
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     days: int = 30,
     session: AsyncSession = Depends(get_session),
 ):
     """Stage transition funnel."""
-    tenant_uuid = uuid.UUID(tenant_id)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
     query = (
@@ -545,10 +545,11 @@ async def get_funnel(
 @app.post("/lifecycle/from-sale")
 async def record_sale_bridge(
     data: SaleBridgeCreate,
+    tenant_uuid: uuid.UUID = Depends(bridge_tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     """Sales service notifies lifecycle when deal closes."""
-    tenant_uuid = uuid.UUID(data.tenant_id)
+    ensure_same_tenant(tenant_uuid, data.tenant_id)
     customer_id = uuid.UUID(data.customer_id)
     now = datetime.now(timezone.utc)
 
@@ -621,10 +622,11 @@ async def record_sale_bridge(
 @app.post("/lifecycle/from-journey")
 async def record_journey_bridge(
     data: JourneyBridgeCreate,
+    tenant_uuid: uuid.UUID = Depends(bridge_tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     """Journey Engine notifies lifecycle of cancel/save outcome."""
-    tenant_uuid = uuid.UUID(data.tenant_id)
+    ensure_same_tenant(tenant_uuid, data.tenant_id)
     customer_id = uuid.UUID(data.customer_id)
     now = datetime.now(timezone.utc)
 
@@ -697,11 +699,10 @@ async def record_journey_bridge(
 @app.get("/lifecycle/context/{customer_id}")
 async def get_context(
     customer_id: str,
-    tenant_id: str,
+    tenant_uuid: uuid.UUID = Depends(tenant_scope),
     session: AsyncSession = Depends(get_session),
 ):
     """Full lifecycle context + recent events for a customer."""
-    tenant_uuid = uuid.UUID(tenant_id)
     cid = uuid.UUID(customer_id)
 
     # Lifecycle state
