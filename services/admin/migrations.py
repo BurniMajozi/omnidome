@@ -87,6 +87,12 @@ DDL: List[str] = [
     "DROP TRIGGER IF EXISTS trg_seat_events_no_update ON seat_events",
     """CREATE TRIGGER trg_seat_events_no_update BEFORE UPDATE ON seat_events
        FOR EACH ROW EXECUTE FUNCTION seat_events_no_update()""",
+    # delete-blocking too (DDL runs under pg_advisory_xact_lock, so this is race-free)
+    """CREATE OR REPLACE FUNCTION seat_events_no_delete() RETURNS trigger AS $$
+       BEGIN RAISE EXCEPTION 'seat_events is append-only'; END; $$ LANGUAGE plpgsql""",
+    "DROP TRIGGER IF EXISTS trg_seat_events_no_delete ON seat_events",
+    """CREATE TRIGGER trg_seat_events_no_delete BEFORE DELETE ON seat_events
+       FOR EACH ROW EXECUTE FUNCTION seat_events_no_delete()""",
     # --- invites -------------------------------------------------------------------------
     """CREATE TABLE IF NOT EXISTS invites (
         id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),

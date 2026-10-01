@@ -68,7 +68,13 @@ class FakeSupabase:
         return dict(self.users[uid])
 
     async def revoke_sessions(self, uid):
-        return True
+        return False  # real GoTrue has no admin session revocation
+
+    async def set_email(self, uid, email):
+        if uid not in self.users:
+            raise supabase_sync.SupabaseError(404, "not found")
+        self.users[uid]["email"] = email
+        return dict(self.users[uid])
 
     async def invite(self, email, redirect_to):
         self.invited.append((email, redirect_to))
@@ -454,7 +460,7 @@ def test_reconcile_detects_and_fixes_drift(client, sb):
     assert dry.status_code == 200 and dry.json()["dry_run"] is True
     drift = [d for d in dry.json()["drift"] if d["email"] == email]
     assert drift and drift[0]["fixed"] is False
-    assert drift[0]["supabase"]["roles"] == ["platform_admin"] and drift[0]["db"]["roles"] == ["org_admin"]
+    assert drift[0]["supabase"]["roles"] == ["platform_admin"] and drift[0]["db"]["roles"] == ["org_admin", "platform_admin"]
     assert sb.users[sid]["app_metadata"]["roles"] == ["platform_admin"]  # dry run touched nothing
     assert any(o["supabase_id"] == orphan for o in dry.json()["orphans_in_supabase_only"])
     assert client.post("/admin/sync/reconcile", headers=as_user(t, uid)).status_code == 403
@@ -462,7 +468,7 @@ def test_reconcile_detects_and_fixes_drift(client, sb):
     fixed = client.post("/admin/sync/reconcile?apply=true", headers=platform(t))
     assert fixed.status_code == 200
     assert [d["fixed"] for d in fixed.json()["drift"] if d["email"] == email] == [True]
-    assert sb.users[sid]["app_metadata"]["tenant_id"] == str(t) and sb.users[sid]["app_metadata"]["roles"] == ["org_admin"]
+    assert sb.users[sid]["app_metadata"]["tenant_id"] == str(t) and sb.users[sid]["app_metadata"]["roles"] == ["org_admin", "platform_admin"]  # never stripped
     assert sb.users[orphan]["app_metadata"]["tenant_id"] == str(t)  # orphans untouched unless adopt_orphans
     assert q("SELECT supabase_synced FROM users WHERE id=:u", u=uid)[0][0] is True
     again = client.post("/admin/sync/reconcile", headers=platform(t)).json()
@@ -559,7 +565,6 @@ def test_migration_skips_unique_email_index_when_duplicates_exist(client):
         assert q("SELECT count(*) FROM users WHERE lower(email)=:e", e=e)[0][0] == 2
     finally:
         q("DELETE FROM user_roles WHERE user_id IN (SELECT id FROM users WHERE lower(email)=:e)", e=e)
-        q("DELETE FROM seat_events WHERE user_id IN (SELECT id FROM users WHERE lower(email)=:e)", e=e)
         q("DELETE FROM users WHERE lower(email)=:e", e=e)
         q("CREATE UNIQUE INDEX IF NOT EXISTS users_email_lower_key ON users (lower(email))")
 

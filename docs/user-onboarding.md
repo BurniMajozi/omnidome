@@ -33,6 +33,22 @@ Roles services check today: `org_admin`, `org_user` (tenant defaults from `provi
 (KPI approve/reject), `admin`/`owner`/`tenant_admin`/`super_admin` (HR and marketing admin gates),
 `platform_admin` (cross-tenant).
 
+Identity enforcement and sessions:
+- The proxy asks the admin service (`/internal/users/by-email`, exempt from the global rate limit when it
+  carries `INTERNAL_SERVICE_KEY`) on every cache miss (5s). `is_active:false` is 403 at once.
+- If that lookup fails (5xx/429/timeout) the proxy FAILS CLOSED: an identity resolved for the same token
+  in the last 30s is reused, otherwise 503 `identity_unavailable` (Retry-After 5). `app_metadata` is used only
+  for users the admin DB has never known (404) or when `INTERNAL_SERVICE_KEY` is unset (local dev).
+- GoTrue has no admin API to revoke sessions (`sessions_revoked` is always `false` in API responses). On
+  deactivation the user is banned (`ban_duration`), which blocks refresh and sign-in; the proxy gate blocks
+  all `/svc` and `/api` traffic immediately. Only a verifier that checks the JWT alone would still accept an
+  already-issued access token until it expires (Supabase default 1h).
+- `platform_admin` lives only in Supabase `app_metadata`. Syncs preserve it. Grant/remove it with
+  `PUT|DELETE /platform/admins/{user_id}` (platform admin only, audited, refuses to remove the last one).
+- Tenant admins cannot create users directly (`POST /users` returns 409 `use_invites`); use
+  `POST /tenants/{id}/invites`. System roles (owner, org_admin, org_user, manager, hr_manager) are immutable;
+  custom roles cannot hold `org.*`, `platform.*` or `*` permissions and rank at most 40.
+
 Caveats:
 - HR does not treat `org_admin` as an HR admin. Give HR staff `hr_manager`.
 - `link-employees` uses the backend `users.id` when the email exists there, otherwise the Supabase id,

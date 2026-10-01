@@ -12,7 +12,7 @@ import asyncio
 import logging
 import os
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from sqlalchemy import text
@@ -76,14 +76,23 @@ class SupabaseAdmin:
             body["ban_duration"] = "876000h" if banned else "none"
         return await self._req("PUT", f"/admin/users/{user_id}", json=body)
 
+    async def set_email(self, user_id: str, email: str) -> Dict[str, Any]:
+        """Change a Supabase user's email (admin API; confirmed immediately: platform-admin initiated)."""
+        return await self._req("PUT", f"/admin/users/{user_id}", json={"email": email, "email_confirm": True})
+
     async def revoke_sessions(self, user_id: str) -> bool:
-        """Best effort: invalidate the user's refresh tokens / sessions (not supported on every GoTrue)."""
-        try:
-            await self._req("DELETE", f"/admin/users/{user_id}/sessions")
-            return True
-        except SupabaseError as exc:
-            logger.info("revoke_sessions not available (%s)", exc.status)
-            return False
+        """GoTrue has NO admin endpoint to revoke a user's sessions (checked against the
+        supabase/auth openapi: /admin/users/{id} supports GET/PUT/DELETE and /factors only;
+        POST /logout?scope=global needs the USER's own JWT). The earlier DELETE
+        /admin/users/{id}/sessions call did not exist, so this is always False and callers report
+        sessions_revoked=false.
+
+        What actually ends access: (1) the ban (ban_duration, set by set_app_metadata) blocks
+        refresh-token grants and new sign-ins; (2) the web proxy resolves is_active from the admin DB
+        on every request (5s cache) and answers 403 at once; (3) an already-issued access JWT stays
+        valid until it expires (Supabase default 1h) only for a verifier that checks the JWT alone;
+        all /svc and /api traffic passes through the proxy gate in (2)."""
+        return False
 
     async def invite(self, email: str, redirect_to: str) -> Dict[str, Any]:
         return await self._req("POST", "/invite", params={"redirect_to": redirect_to}, json={"email": email})
@@ -113,6 +122,15 @@ def desired_metadata(tenant_id: Optional[str], roles: List[str], is_active: bool
         # a deactivated / tenant-less user must resolve to nothing on the proxy fallback path
         return {"tenant_id": None, "roles": [], "is_active": False}
     return {"tenant_id": str(tenant_id), "roles": sorted(set(roles)), "is_active": True}
+
+
+def merge_platform_admin(roles: List[str], existing_meta_roles: Any) -> List[str]:
+    """platform_admin lives ONLY in app_metadata (granted via PUT /platform/admins/{id}). Every sync
+    is a read-modify-write that keeps it; it is never removed implicitly."""
+    out = set(roles)
+    if isinstance(existing_meta_roles, list) and "platform_admin" in existing_meta_roles:
+        out.add("platform_admin")
+    return sorted(out)
 
 
 async def load_user_state(session, user_id: uuid.UUID) -> Optional[Dict[str, Any]]:
@@ -166,23 +184,24 @@ async def sync_user(user_id: uuid.UUID, revoke: bool = False) -> Dict[str, Any]:
             state = await load_user_state(s, user_id)
         if not state:
             return {"synced": False, "error": "user_not_found"}
-        meta = desired_metadata(state["tenant_id"], state["roles"], state["is_active"])
-
         sid = str(state["supabase_user_id"] or state["id"])
         try:
-            await client.set_app_metadata(sid, meta, banned=not state["is_active"])
+            existing = await client.get_user(sid)
         except SupabaseError as exc:
             if exc.status not in (404, 422):
                 raise
-            found = await client.find_by_email(state["email"])
-            if not found:
+            existing = await client.find_by_email(state["email"])
+            if not existing:
                 await _record(user_id, False, NO_SUPABASE_USER)
                 return {"synced": False, "error": NO_SUPABASE_USER}
-            sid = found["id"]
-            await client.set_app_metadata(sid, meta, banned=not state["is_active"])
-        revoked = await client.revoke_sessions(sid) if revoke else None
+            sid = existing["id"]
+        meta = desired_metadata(state["tenant_id"], state["roles"], state["is_active"])
+        meta["roles"] = merge_platform_admin(meta["roles"], (existing.get("app_metadata") or {}).get("roles"))
+        await client.set_app_metadata(sid, meta, banned=not state["is_active"])
+        revoked = bool(await client.revoke_sessions(sid)) if revoke else False
         await _record(user_id, True, None, sid)
-        return {"synced": True, "sessions_revoked": revoked}
+        # sessions_revoked is False on real GoTrue (no admin API); refresh_blocked says the ban is set.
+        return {"synced": True, "sessions_revoked": revoked, "refresh_blocked": not state["is_active"]}
     except Exception as exc:  # noqa: BLE001 - recorded + retried
         msg = str(exc)[:300]
         logger.warning("supabase sync failed for %s: %s", user_id, msg)
@@ -228,7 +247,7 @@ async def retry_loop(interval: float = 60.0) -> None:
             logger.exception("sync retry loop error")
 
 
-async def reconcile(apply: bool = False, adopt_orphans: bool = False) -> Dict[str, Any]:
+async def reconcile(apply: bool = False, adopt_orphans: bool = False, actor_id: Optional[uuid.UUID] = None) -> Dict[str, Any]:
     """Compare DB truth with Supabase app_metadata for every user; optionally fix the drift."""
     client = get_client()
     if client is None:
@@ -255,6 +274,7 @@ async def reconcile(apply: bool = False, adopt_orphans: bool = False) -> Dict[st
             continue
         seen.add(sb["id"])
         am = sb.get("app_metadata") or {}
+        want["roles"] = merge_platform_admin(want["roles"], am.get("roles"))
         have = {"tenant_id": am.get("tenant_id"), "roles": sorted(am.get("roles") or []), "is_active": am.get("is_active", True)}
         # a user with no DB roles yet and never synced keeps whatever metadata roles it has
         if have["tenant_id"] == want["tenant_id"] and have["roles"] == want["roles"] and bool(have["is_active"]) == want["is_active"]:
@@ -276,8 +296,9 @@ async def reconcile(apply: bool = False, adopt_orphans: bool = False) -> Dict[st
         orphans.append({"supabase_id": sb["id"], "email": sb.get("email"), "app_metadata_tenant": am.get("tenant_id"), "app_metadata_roles": am.get("roles") or []})
 
     adopted: List[str] = []
+    adopt_skipped: List[Dict[str, str]] = []
     if apply and adopt_orphans:
-        adopted = await _adopt(orphans)
+        adopted, adopt_skipped = await _adopt(orphans, actor_id)
     return {
         "dry_run": not apply,
         "db_users": len(db_users),
@@ -286,49 +307,133 @@ async def reconcile(apply: bool = False, adopt_orphans: bool = False) -> Dict[st
         "drift": drift,
         "orphans_in_supabase_only": orphans,
         "adopted": adopted,
+        "adopt_skipped": adopt_skipped,
     }
 
 
-async def _adopt(orphans: List[Dict[str, Any]]) -> List[str]:
-    """Create DB users for Supabase-only users that already carry a tenant in app_metadata."""
-    out: List[str] = []
+async def _adopt(orphans: List[Dict[str, Any]], actor_id: Optional[uuid.UUID] = None) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Create DB users for Supabase-only users that already carry a tenant in app_metadata.
+
+    Each adoption is its own transaction that takes the tenant lock, enforces the seat limit, grants
+    ONLY tenant-scope roles of that tenant (never platform_admin / PLATFORM roles from metadata),
+    sets is_owner consistently, records the seat event and writes a per-user audit row.
+    Returns (adopted emails, [{email, reason}] skipped)."""
+    from fastapi import HTTPException
+
+    from services.admin import iam  # lazy: iam imports this module
+
+    adopted: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    new_ids: List[uuid.UUID] = []
     for o in orphans:
-        tid = o["app_metadata_tenant"]
-        if not tid or not o["email"]:
+        tid, email = o["app_metadata_tenant"], o["email"]
+        if not tid or not email:
             continue
-        async with session_scope() as s:
-            ok = (await s.execute(text("SELECT 1 FROM tenants WHERE id = :t"), {"t": tid})).first()
-            if not ok:
-                continue
-            await s.execute(
-                text(
-                    """
-                    INSERT INTO users (id, tenant_id, email, hashed_password, is_active, supabase_user_id)
-                    VALUES (:id, :t, :e, 'supabase-managed-no-local-login', true, :id)
-                    ON CONFLICT (email) DO NOTHING
-                    """
-                ),
-                {"id": o["supabase_id"], "t": tid, "e": o["email"]},
-            )
-            for rn in o["app_metadata_roles"]:
-                await s.execute(
+        try:
+            tenant_uuid = uuid.UUID(str(tid))
+            sid = uuid.UUID(str(o["supabase_id"]))
+        except ValueError:
+            skipped.append({"email": email, "reason": "invalid_id"})
+            continue
+        norm = email.strip().lower()
+        try:
+            async with session_scope() as s:
+                if not (await s.execute(text("SELECT 1 FROM tenants WHERE id = :t"), {"t": str(tenant_uuid)})).first():
+                    skipped.append({"email": email, "reason": "unknown_tenant"})
+                    continue
+                tenant = await iam.lock_tenant(s, tenant_uuid)
+                if str(tenant["status"]).upper() in {"CLOSED", "SUSPENDED"}:
+                    skipped.append({"email": email, "reason": "tenant_not_active"})
+                    continue
+                if (await s.execute(text("SELECT 1 FROM users WHERE lower(email) = :e OR id = :id"), {"e": norm, "id": str(sid)})).first():
+                    skipped.append({"email": email, "reason": "already_in_db"})
+                    continue
+                other_invite = (
+                    await s.execute(
+                        text(
+                            "SELECT 1 FROM invites WHERE lower(email) = :e AND status = 'pending' "
+                            "AND expires_at > now() AND tenant_id <> :t"
+                        ),
+                        {"e": norm, "t": str(tenant_uuid)},
+                    )
+                ).first()
+                if other_invite:
+                    skipped.append({"email": email, "reason": "pending_invite_elsewhere"})
+                    continue
+                await iam.require_seat(s, tenant_uuid)  # 409 seat_limit_reached
+                # tenant-scope roles of THIS tenant only; anything else in metadata is ignored
+                wanted = [n for n in (o["app_metadata_roles"] or []) if isinstance(n, str)]
+                rows = (
+                    await s.execute(
+                        text("SELECT id, name FROM roles WHERE tenant_id = :t AND scope = 'TENANT' AND name = ANY(:n)"),
+                        {"t": str(tenant_uuid), "n": wanted},
+                    )
+                ).fetchall()
+                if not rows:
+                    rows = (
+                        await s.execute(
+                            text("SELECT id, name FROM roles WHERE tenant_id = :t AND scope = 'TENANT' AND name = 'org_user'"),
+                            {"t": str(tenant_uuid)},
+                        )
+                    ).fetchall()
+                names = sorted(r[1] for r in rows)
+                is_owner = "owner" in names
+                ins = await s.execute(
                     text(
                         """
-                        INSERT INTO user_roles (user_id, role_id, tenant_id)
-                        SELECT :u, r.id, CASE WHEN r.scope='PLATFORM' THEN NULL ELSE :t END FROM roles r
-                        WHERE r.name = :n AND (r.tenant_id = :t OR r.scope = 'PLATFORM')
+                        INSERT INTO users (id, tenant_id, email, hashed_password, is_active, supabase_user_id, is_owner)
+                        VALUES (:id, :t, :e, 'supabase-managed-no-local-login', true, :id, :o)
                         ON CONFLICT DO NOTHING
                         """
                     ),
-                    {"u": o["supabase_id"], "t": tid, "n": rn},
+                    {"id": str(sid), "t": str(tenant_uuid), "e": norm, "o": is_owner},
                 )
-            await s.execute(
-                text(
-                    """INSERT INTO seat_events (tenant_id, user_id, delta, reason, active_after, pending_after)
-                       SELECT :t, :u, 1, 'adopted', (SELECT count(*) FROM users WHERE tenant_id=:t AND is_active), 0
-                       WHERE EXISTS (SELECT 1 FROM users WHERE id=:u)"""
-                ),
-                {"t": tid, "u": o["supabase_id"]},
-            )
-        out.append(o["email"])
-    return out
+                if ins.rowcount == 0:
+                    skipped.append({"email": email, "reason": "already_in_db"})
+                    continue
+                for rid, _ in rows:
+                    await s.execute(
+                        text("INSERT INTO user_roles (user_id, role_id, tenant_id) VALUES (:u, :r, :t) ON CONFLICT DO NOTHING"),
+                        {"u": str(sid), "r": str(rid), "t": str(tenant_uuid)},
+                    )
+                if is_owner:
+                    await s.execute(
+                        text("UPDATE tenants SET owner_user_id = :u WHERE id = :t AND owner_user_id IS NULL"),
+                        {"u": str(sid), "t": str(tenant_uuid)},
+                    )
+                await iam.record_seat_event(s, tenant_uuid, sid, 1, "adopted", actor_id)
+                await iam.write_audit(s, actor_id, "sync.adopt", "user", sid, tenant_uuid, {"email": norm, "roles": names})
+        except HTTPException as exc:
+            detail = exc.detail.get("error") if isinstance(exc.detail, dict) else str(exc.detail)
+            skipped.append({"email": email, "reason": str(detail)})
+            continue
+        adopted.append(email)
+        new_ids.append(sid)
+    for sid in new_ids:
+        await sync_user(sid)
+    return adopted, skipped
+
+
+async def set_platform_admin(client: "SupabaseAdmin", supabase_user_id: str, grant: bool) -> Dict[str, Any]:
+    """Read-modify-write of app_metadata.roles: adds/removes ONLY platform_admin, keeps every other role."""
+    u = await client.get_user(supabase_user_id)
+    roles = list((u.get("app_metadata") or {}).get("roles") or [])
+    has = "platform_admin" in roles
+    if grant and not has:
+        roles.append("platform_admin")
+    elif not grant and has:
+        roles = [r for r in roles if r != "platform_admin"]
+    else:
+        return {"changed": False, "platform_admin": has}
+    await client.set_app_metadata(supabase_user_id, {"roles": sorted(set(roles))})
+    return {"changed": True, "platform_admin": grant}
+
+
+async def count_platform_admins(client: "SupabaseAdmin", exclude: Optional[str] = None) -> int:
+    n = 0
+    for u in await client.list_users():
+        if exclude and u.get("id") == exclude:
+            continue
+        if "platform_admin" in ((u.get("app_metadata") or {}).get("roles") or []):
+            n += 1
+    return n

@@ -19,8 +19,10 @@
  *
  * Tenant + roles resolution (lib/api-auth.ts semantics): the admin service's
  * /internal/users/by-email (authoritative backend `users` + roles tables, incl. is_active)
- * when reachable, otherwise `app_metadata` (a cache the admin service writes server-side
- * only). `user_metadata` is user-editable and is NEVER trusted. No tenant -> 403;
+ * when reachable. `app_metadata` (a cache the admin service writes server-side only) is used ONLY for
+ * users the admin DB has never known (definitive 404) or when no INTERNAL_SERVICE_KEY is configured; if the admin
+ * service is failing (5xx/429/timeout) the proxy FAILS CLOSED: a same-token identity <= 30s old is reused,
+ * otherwise 503 identity_unavailable (Retry-After). `user_metadata` is user-editable and is NEVER trusted. No tenant -> 403;
  * a deactivated user -> 403 account_inactive (checked on every cache miss, TTL 5s).
  *
  * Page routes (/dashboard etc.) are not handled here: the Supabase session lives
@@ -31,13 +33,21 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { backendPathForSvc, signHeaders } from "@/lib/internal-identity"
 import { hasUnsafePath } from "@/lib/safe-path"
+import {
+  POSITIVE_TTL_MS,
+  STALE_ON_ERROR_MS,
+  RETRY_AFTER_SECONDS,
+  classifyAdminResponse,
+  resolveIdentityDecision,
+  type AdminLookupResult,
+  type Identity,
+} from "@/lib/identity-resolve"
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
 const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
 const ADMIN_SERVICE_URL = process.env.ADMIN_SERVICE_URL || "http://admin:8013"
 const INTERNAL_SERVICE_KEY = process.env.INTERNAL_SERVICE_KEY || ""
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Headers a client must never be able to set toward a backend.
 const IDENTITY_HEADERS = [
@@ -69,23 +79,15 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
 ]
 
-interface Identity {
-  userId: string
-  tenantId: string
-  roles?: string
-}
-
-interface AdminLookup extends Identity {
-  isActive: boolean
-  // true when the admin DB holds at least one role for this user (else app_metadata roles are used)
-  rolesAuthoritative: boolean
-}
+type Verified = Identity | "no-tenant" | "inactive"
 
 // Short TTL: a role change or deactivation in the admin DB is enforced within ~5s.
-const CACHE_TTL_MS = 5_000
 const CACHE_MAX = 500
-const cache = new Map<string, { identity: Identity | "no-tenant" | "inactive"; expires: number }>()
+// `at` is when the entry was resolved; entries outlive POSITIVE_TTL_MS so they can serve as the
+// (<= STALE_ON_ERROR_MS) stale-while-error fallback for the SAME token only.
+const cache = new Map<string, { value: Verified; at: number }>()
 let adminDownUntil = 0
+const ADMIN_COOLDOWN_MS = 5_000
 
 const supabase =
   SUPABASE_URL && SUPABASE_ANON_KEY
@@ -94,83 +96,70 @@ const supabase =
       })
     : null
 
-function json(status: number, error: string) {
-  return NextResponse.json({ error }, { status, headers: { "cache-control": "no-store" } })
+function json(status: number, error: string, extra?: Record<string, string>) {
+  return NextResponse.json({ error }, { status, headers: { "cache-control": "no-store", ...(extra || {}) } })
 }
 
-async function lookupAdmin(email: string): Promise<AdminLookup | null> {
-  if (!INTERNAL_SERVICE_KEY || Date.now() < adminDownUntil) return null
+async function lookupAdmin(email: string): Promise<AdminLookupResult> {
+  if (!INTERNAL_SERVICE_KEY) return { kind: "not_configured" }
+  if (Date.now() < adminDownUntil) return { kind: "unavailable" } // don't pay the timeout on every request
   try {
     const res = await fetch(`${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(email)}`, {
       headers: { "x-internal-key": INTERNAL_SERVICE_KEY },
       cache: "no-store",
       signal: AbortSignal.timeout(1500),
     })
-    if (!res.ok) return null
-    const body = await res.json()
-    if (UUID_RE.test(body?.user_id || "") && UUID_RE.test(body?.tenant_id || "")) {
-      const roles: string[] = Array.isArray(body.roles) ? body.roles.filter((r: unknown) => typeof r === "string" && /^[\w.:-]+$/.test(r as string)) : []
-      return {
-        userId: body.user_id,
-        tenantId: body.tenant_id,
-        roles: roles.join(","),
-        isActive: body.is_active !== false,
-        // Only a NON-EMPTY DB role set is authoritative. A user who is in the admin DB but has
-        // zero DB roles (never provisioned/synced, e.g. test@omnidome.local) falls back to
-        // app_metadata.roles below instead of being stripped to org_user.
-        rolesAuthoritative: roles.length > 0,
-      }
+    let body: unknown
+    try {
+      body = await res.json()
+    } catch {
+      body = undefined
     }
-    return null
+    const result = classifyAdminResponse(res.status, body)
+    if (result.kind === "unavailable") adminDownUntil = Date.now() + ADMIN_COOLDOWN_MS
+    return result
   } catch {
-    adminDownUntil = Date.now() + 30_000 // don't pay the timeout on every request
-    return null
+    adminDownUntil = Date.now() + ADMIN_COOLDOWN_MS
+    return { kind: "unavailable" }
   }
 }
 
-/** Verified identity, "no-tenant" (valid user, no tenant), "inactive" (deactivated in the admin DB), or null (invalid token). */
-async function verify(token: string): Promise<Identity | "no-tenant" | "inactive" | null> {
+/** Verified identity, "no-tenant" (valid user, no tenant), "inactive" (deactivated in the admin DB),
+ * "unavailable" (admin service failing and no fresh cached identity: fail closed), or null (invalid token). */
+async function verify(token: string): Promise<Verified | "unavailable" | null> {
+  const now = Date.now()
   const hit = cache.get(token)
-  if (hit && hit.expires > Date.now()) return hit.identity
+  if (hit && now - hit.at <= POSITIVE_TTL_MS) return hit.value
   if (!supabase) return null
 
   const { data, error } = await supabase.auth.getUser(token)
-  if (error || !data.user) return null
+  if (error || !data.user) {
+    cache.delete(token)
+    return null
+  }
   const user = data.user
   // Identity is keyed on the email: an unconfirmed sign-up must not inherit a provisioned user's tenant.
   if (!user.email_confirmed_at && !user.confirmed_at) return null
 
-  let result: Identity | "no-tenant" | "inactive"
-  const admin = user.email ? await lookupAdmin(user.email) : null
-  if (admin && !admin.isActive) {
-    result = "inactive"
-  } else if (admin) {
-    result = { userId: admin.userId, tenantId: admin.tenantId }
-    // roles come from the admin DB; app_metadata only for users the DB has no roles for yet
-    if (admin.rolesAuthoritative) {
-      result.roles = admin.roles
-      // platform_admin is granted out of band (app_metadata, service role only), never through the
-      // tenant role tables, so keep it when the DB is authoritative for the tenant roles.
-      const meta = (user.app_metadata as Record<string, unknown> | undefined)?.roles
-      if (Array.isArray(meta) && meta.includes("platform_admin") && !(admin.roles || "").split(",").includes("platform_admin")) {
-        result.roles = admin.roles ? `${admin.roles},platform_admin` : "platform_admin"
-      }
-    }
-  } else {
-    // app_metadata is writable only with the service role; user_metadata is not trusted.
-    const appTenant = (user.app_metadata as Record<string, unknown> | undefined)?.tenant_id
-    result = typeof appTenant === "string" && UUID_RE.test(appTenant) ? { userId: user.id, tenantId: appTenant } : "no-tenant"
+  const lookup: AdminLookupResult = user.email ? await lookupAdmin(user.email) : { kind: "not_found" }
+  const stale = hit && typeof hit.value === "object" ? { identity: hit.value, at: hit.at } : null
+  const decision = resolveIdentityDecision({
+    lookup,
+    supabaseUserId: user.id,
+    appMetadata: user.app_metadata as Record<string, unknown> | undefined,
+    stale,
+    now,
+  })
+  if (decision.kind === "unavailable") return "unavailable"
+  const value: Verified = decision.kind === "identity" ? decision.identity : decision.kind
+  if (decision.kind === "identity" && !decision.fresh) return value // stale reuse: keep the original timestamp
+  if (cache.size >= CACHE_MAX) {
+    for (const [k, v] of cache) if (now - v.at > STALE_ON_ERROR_MS) cache.delete(k)
+    if (cache.size >= CACHE_MAX) cache.clear()
   }
-  if (result !== "no-tenant" && result !== "inactive" && result.roles === undefined) {
-    const roles = (user.app_metadata as Record<string, unknown> | undefined)?.roles
-    if (Array.isArray(roles) && roles.every((r) => typeof r === "string" && /^[\w.:-]+$/.test(r))) {
-      result.roles = roles.join(",")
-    }
-  }
-
-  if (cache.size >= CACHE_MAX) cache.clear()
-  cache.set(token, { identity: result, expires: Date.now() + CACHE_TTL_MS })
-  return result
+  // inactive overwrites (evicts) any cached identity for this token
+  cache.set(token, { value, at: now })
+  return value
 }
 
 export async function proxy(request: NextRequest) {
@@ -211,6 +200,9 @@ export async function proxy(request: NextRequest) {
 
   const identity = await verify(token)
   if (!identity) return json(401, "unauthorized")
+  if (identity === "unavailable") {
+    return json(503, "identity_unavailable", { "retry-after": String(RETRY_AFTER_SECONDS) })
+  }
   if (identity === "inactive") return json(403, "account_inactive")
   if (identity === "no-tenant") {
     // A freshly signed-in invitee has no tenant yet: let them (and only them) redeem an invite.

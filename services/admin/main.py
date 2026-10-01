@@ -22,7 +22,7 @@ from services.common.entitlements import EntitlementGuard, EntitlementState
 from services.common.middleware import configure_production
 from services.common.rbac import has_permission, has_role
 from services.common.db import get_async_session
-from services.common.rate_limiter import RateLimiter, identity_key
+from services.common.rate_limiter import RateLimiter, identity_key, internal_key_exempt
 from services.common.db import get_async_engine, run_with_db_retry
 from services.admin import iam, migrations, supabase_sync
 from services.admin.iam import (
@@ -77,9 +77,18 @@ _auth_rate_limiter = RateLimiter(max_requests=10, window_seconds=60, key_func=id
 _global_rate_limiter = RateLimiter(max_requests=100, window_seconds=60, key_func=identity_key)
 
 
+def limiter_exempt(request: Request) -> bool:
+    """/internal/* is service-to-service (the web proxy looks every active session up every ~5s, all
+    from one container IP). A request carrying the valid INTERNAL_SERVICE_KEY skips the global bucket so
+    identity enforcement cannot be starved by load. Without the key the per-IP limit still applies
+    (key brute force stays throttled)."""
+    return internal_key_exempt(request, "/internal/")
+
+
 @app.middleware("http")
 async def global_rate_limit_middleware(request: Request, call_next):
-    await _global_rate_limiter.check(request)
+    if not limiter_exempt(request):
+        await _global_rate_limiter.check(request)
     return await call_next(request)
 
 
@@ -478,9 +487,39 @@ async def delete_tenant(
 
 
 async def _guard_permissions(ctx: AuthContext, permissions: List[str]) -> None:
-    """Tenant admins may not hand out platform-level permissions through a tenant role."""
-    if not ctx.is_platform_admin and any(p.startswith("platform.") for p in permissions):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform.* permissions require a platform admin")
+    """Kept for callers: custom roles never carry platform.* / org.* / wildcard permissions."""
+    iam.check_custom_permissions(permissions, [], True)
+
+
+async def _set_role_permissions(session: AsyncSession, role_id: uuid.UUID, permissions: List[str]) -> None:
+    if not permissions:
+        return
+    perm_stmt = text("select id from permissions where key in :keys").bindparams(bindparam("keys", expanding=True))
+    perm_rows = await session.execute(perm_stmt, {"keys": sorted(set(permissions))})
+    perm_ids = [item[0] for item in perm_rows.fetchall()]
+    if perm_ids:
+        await session.execute(
+            text("insert into role_permissions (role_id, permission_id) values (:role_id, :permission_id)"),
+            [{"role_id": str(role_id), "permission_id": str(pid)} for pid in perm_ids],
+        )
+
+
+async def _load_custom_role(session: AsyncSession, ctx: AuthContext, role_id: uuid.UUID, actor) -> Dict[str, Any]:
+    """Fetch a tenant role for edit/delete: system roles are immutable (409); a non-platform actor may
+    only touch custom roles within its own rank band."""
+    row = (
+        await session.execute(
+            text("select id, name, role_rank, is_system from roles where id = :r and tenant_id = :t FOR UPDATE"),
+            {"r": str(role_id), "t": str(ctx.tenant_id)},
+        )
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
+    if row["is_system"] or str(row["name"]).lower() in iam.SYSTEM_ROLE_NAMES:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System roles cannot be modified")
+    if not actor.platform and int(row["role_rank"]) > iam.custom_role_rank(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit a role above your own rank")
+    return dict(row)
 
 
 @app.post("/roles", status_code=status.HTTP_201_CREATED)
@@ -492,16 +531,18 @@ async def create_role(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
-    if payload.name.strip().lower() in iam.RESERVED_ROLE_NAMES | set(migrations.ROLE_RANKS):
+    if payload.name.strip().lower() in iam.SYSTEM_ROLE_NAMES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Reserved role name")
-    await _guard_permissions(ctx, payload.permissions)
+    actor = await actor_info(ctx, session)  # also loads ctx.permissions
+    iam.check_custom_permissions(payload.permissions, ctx.permissions, actor.platform)
+    rank = iam.custom_role_rank(actor)
     role_id = uuid.uuid4()
 
     result = await session.execute(
         text(
             """
-            insert into roles (id, tenant_id, name, scope, description, is_system)
-            values (:id, :tenant_id, :name, 'TENANT', :description, false)
+            insert into roles (id, tenant_id, name, scope, description, is_system, role_rank)
+            values (:id, :tenant_id, :name, 'TENANT', :description, false, :rank)
             returning id, name, description, scope, is_system, created_at
             """
         ),
@@ -510,29 +551,15 @@ async def create_role(
             "tenant_id": str(ctx.tenant_id),
             "name": payload.name,
             "description": payload.description,
+            "rank": rank,
         },
     )
     row = result.mappings().one()
-
-    if payload.permissions:
-        perm_stmt = text("select id from permissions where key in :keys").bindparams(
-            bindparam("keys", expanding=True)
-        )
-        perm_rows = await session.execute(perm_stmt, {"keys": payload.permissions})
-        perm_ids = [item[0] for item in perm_rows.fetchall()]
-        if perm_ids:
-            await session.execute(
-                text("insert into role_permissions (role_id, permission_id) values (:role_id, :permission_id)"),
-                [{"role_id": str(role_id), "permission_id": str(pid)} for pid in perm_ids],
-            )
-
+    await _set_role_permissions(session, role_id, payload.permissions)
+    # same transaction as the insert: if the audit row cannot be written the role is rolled back
     await _log_audit(
-        session,
-        ctx,
-        action="role.create",
-        resource_type="role",
-        resource_id=role_id,
-        metadata={"permissions": payload.permissions},
+        session, ctx, action="role.create", resource_type="role", resource_id=role_id,
+        metadata={"name": payload.name, "permissions": sorted(set(payload.permissions)), "role_rank": rank},
     )
     return row
 
@@ -581,13 +608,31 @@ async def delete_role(
     session: AsyncSession = Depends(get_async_session),
 ):
     await _require_tenant_admin(ctx, session)
-    result = await session.execute(
-        text("delete from roles where id = :role_id and tenant_id = :tenant_id and is_system = false"),
-        {"role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
+    actor = await actor_info(ctx, session)
+    await lock_tenant(session, ctx.tenant_id)
+    role = await _load_custom_role(session, ctx, role_id, actor)
+    holders = [
+        r[0]
+        for r in (
+            await session.execute(
+                text("select distinct user_id from user_roles where role_id = :r and tenant_id = :t"),
+                {"r": str(role_id), "t": str(ctx.tenant_id)},
+            )
+        ).fetchall()
+    ]
+    for uid in holders:
+        names = await _current_role_names(session, ctx.tenant_id, uid)
+        await guard_last(session, ctx.tenant_id, uid, names, [n for n in names if n != role["name"]])
+    await session.execute(text("delete from user_roles where role_id = :r and tenant_id = :t"), {"r": str(role_id), "t": str(ctx.tenant_id)})
+    await session.execute(text("delete from role_permissions where role_id = :r"), {"r": str(role_id)})
+    await session.execute(text("delete from roles where id = :r and tenant_id = :t and is_system = false"), {"r": str(role_id), "t": str(ctx.tenant_id)})
+    await _log_audit(
+        session, ctx, action="role.delete", resource_type="role", resource_id=role_id,
+        metadata={"name": role["name"], "affected_users": [str(u) for u in holders]},
     )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found or system role")
-    return {"status": "deleted", "id": str(role_id)}
+    await session.commit()
+    sync = await supabase_sync.sync_users(holders, revoke=True) if holders else {}
+    return {"status": "deleted", "id": str(role_id), "affected_users": [str(u) for u in holders], "supabase_sync": sync}
 
 
 @app.put("/roles/{role_id}")
@@ -600,43 +645,15 @@ async def update_role_permissions(
 ):
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
-    await _guard_permissions(ctx, payload.permissions)
-
-    role_row = await session.execute(
-        text("select id, role_rank from roles where id = :role_id and tenant_id = :tenant_id"),
-        {"role_id": str(role_id), "tenant_id": str(ctx.tenant_id)},
-    )
-    role_found = role_row.first()
-    if not role_found:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Role not found")
     actor = await actor_info(ctx, session)
-    if not actor.platform and int(role_found[1]) > actor.rank:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot edit a role above your own rank")
+    role = await _load_custom_role(session, ctx, role_id, actor)
+    iam.check_custom_permissions(payload.permissions, ctx.permissions, actor.platform)
 
-    await session.execute(
-        text("delete from role_permissions where role_id = :role_id"),
-        {"role_id": str(role_id)},
-    )
-
-    if payload.permissions:
-        perm_stmt = text("select id from permissions where key in :keys").bindparams(
-            bindparam("keys", expanding=True)
-        )
-        perm_rows = await session.execute(perm_stmt, {"keys": payload.permissions})
-        perm_ids = [item[0] for item in perm_rows.fetchall()]
-        if perm_ids:
-            await session.execute(
-                text("insert into role_permissions (role_id, permission_id) values (:role_id, :permission_id)"),
-                [{"role_id": str(role_id), "permission_id": str(pid)} for pid in perm_ids],
-            )
-
+    await session.execute(text("delete from role_permissions where role_id = :role_id"), {"role_id": str(role_id)})
+    await _set_role_permissions(session, role_id, payload.permissions)
     await _log_audit(
-        session,
-        ctx,
-        action="role.update",
-        resource_type="role",
-        resource_id=role_id,
-        metadata={"permissions": payload.permissions},
+        session, ctx, action="role.update", resource_type="role", resource_id=role_id,
+        metadata={"name": role["name"], "permissions": sorted(set(payload.permissions))},
     )
     return {"role_id": role_id, "permissions": payload.permissions}
 
@@ -944,12 +961,23 @@ async def create_user(
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    """Direct user creation (break-glass / provisioning). Normal onboarding is invite-based
-    (POST /tenants/{id}/invites). Consumes a seat, so the tenant seat limit applies."""
+    """Direct user creation: PLATFORM ADMIN ONLY (break-glass / provisioning). Tenant admins get 409
+    use_invites and must use POST /tenants/{id}/invites. Consumes a seat (the limit applies)."""
     await _auth_rate_limiter.check(request)
     await _require_tenant_admin(ctx, session)
     actor = await actor_info(ctx, session)
     tenant_id = ctx.tenant_id
+    if not actor.platform:
+        # Pre-provisioning an arbitrary email lets a tenant squat the address (the proxy keys identity on
+        # email). Invitees prove ownership of the address by signing in, so tenant admins must invite.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "use_invites",
+                "message": "Direct user creation is disabled for tenant admins; invite the person instead",
+                "invite_endpoint": f"/tenants/{tenant_id}/invites",
+            },
+        )
     email = payload.email.strip().lower()
     user_id = uuid.uuid4()
     if payload.password:
@@ -957,11 +985,17 @@ async def create_user(
     else:
         hashed_password = os.getenv("DEFAULT_USER_PASSWORD_HASH") or secrets.token_hex(16)
 
-    await lock_tenant(session, tenant_id)
+    tenant = await lock_tenant(session, tenant_id)
+    if str(tenant["status"]).upper() in {"CLOSED", "SUSPENDED"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Tenant is not active")
     if (await session.execute(text("select 1 from users where lower(email) = :e"), {"e": email})).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already belongs to a tenant")
+    if (
+        await session.execute(text("select 1 from invites where lower(email) = :e and status = 'pending' and expires_at > now()"), {"e": email})
+    ).first():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A pending invite already exists for this email")
     if payload.is_active:
-        await require_seat(session, tenant_id)
+        await require_seat(session, tenant_id)  # under the tenant lock taken above
 
     role = None
     if payload.role_id:
@@ -1035,6 +1069,13 @@ async def update_user(
     if payload.email is None and payload.name is None and payload.is_active is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No updates provided")
     tenant_id = ctx.tenant_id
+    if payload.email is not None and not actor.platform:
+        # the email is the identity key shared with Supabase; changing it is a platform decision
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only a platform admin may change a user's email")
+    if payload.email is not None or payload.name is not None:
+        if not (await session.execute(text("select 1 from users where id = :u and tenant_id = :t"), {"u": str(user_id), "t": str(tenant_id)})).first():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        check_can_manage_target(actor, await member_roles(session, tenant_id, user_id))
 
     # activation state changes go through the seat-aware paths
     changed_state = False
@@ -1050,7 +1091,28 @@ async def update_user(
         new_email = payload.email.strip().lower()
         if (await session.execute(text("select 1 from users where lower(email) = :e and id <> :u"), {"e": new_email, "u": str(user_id)})).first():
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already belongs to a tenant")
-        check_can_manage_target(actor, await member_roles(session, tenant_id, user_id))
+        if (
+            await session.execute(text("select 1 from invites where lower(email) = :e and status = 'pending' and expires_at > now()"), {"e": new_email})
+        ).first():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="A pending invite already exists for this email")
+        # Supabase first: the proxy resolves identity by email, so both stores must change together
+        client = supabase_sync.get_client()
+        if client is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Auth provider not configured")
+        cur = (await session.execute(text("select email, supabase_user_id from users where id = :u"), {"u": str(user_id)})).mappings().first()
+        sid = str(cur["supabase_user_id"] or user_id)
+        try:
+            try:
+                await client.set_email(sid, new_email)
+            except supabase_sync.SupabaseError as exc:
+                if exc.status not in (404, 422):
+                    raise
+                found = await client.find_by_email(cur["email"])
+                if not found:
+                    raise
+                await client.set_email(found["id"], new_email)
+        except supabase_sync.SupabaseError as exc:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Auth provider rejected the email change ({exc.status})")
         updates["email"] = new_email
     if payload.name is not None:
         updates["full_name"] = payload.name
@@ -1089,39 +1151,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
         return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
     except (ValueError, TypeError):
         return False
-
-
-class PasswordReset(BaseModel):
-    new_password: str = Field(..., min_length=8, max_length=128)
-
-
-@app.post("/users/{user_id}/reset-password")
-async def reset_user_password(
-    user_id: uuid.UUID,
-    payload: PasswordReset,
-    request: Request,
-    ctx: AuthContext = Depends(get_auth_context),
-    session: AsyncSession = Depends(get_async_session),
-):
-    await _auth_rate_limiter.check(request)
-    await _require_tenant_admin(ctx, session)
-    actor = await actor_info(ctx, session)
-    check_can_manage_target(actor, await member_roles(session, ctx.tenant_id, user_id))
-    new_hash = bcrypt.hashpw(payload.new_password.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
-    result = await session.execute(
-        text("update users set hashed_password = :hp where id = :uid and tenant_id = :tid"),
-        {"hp": new_hash, "uid": str(user_id), "tid": str(ctx.tenant_id)},
-    )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-    await _log_audit(
-        session,
-        ctx,
-        action="user.reset_password",
-        resource_type="user",
-        resource_id=user_id,
-    )
-    return {"status": "password_reset"}
 
 
 @app.delete("/users/{user_id}")

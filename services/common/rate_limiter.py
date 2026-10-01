@@ -47,6 +47,20 @@ def identity_key(request: Request) -> str:
     return "ip:" + (request.client.host if request.client else "unknown")
 
 
+def internal_key_exempt(request: Request, prefix: str = "/internal/") -> bool:
+    """True for service-to-service requests under `prefix` that carry the valid INTERNAL_SERVICE_KEY.
+
+    Such calls (e.g. the web proxy's per-session identity lookup, all from one container IP) must not
+    share a per-IP bucket with browsers, or load starves identity enforcement. A missing/wrong key is
+    not exempt, so key brute force stays throttled."""
+    import os
+    import secrets
+
+    expected = os.getenv("INTERNAL_SERVICE_KEY", "")
+    provided = request.headers.get("x-internal-key") or ""
+    return bool(expected) and request.url.path.startswith(prefix) and secrets.compare_digest(provided, expected)
+
+
 class RateLimiter:
     """Sliding-window rate limiter keyed by client identifier.
 

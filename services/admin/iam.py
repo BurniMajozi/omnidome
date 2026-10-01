@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.admin import supabase_sync
@@ -309,6 +310,33 @@ async def member_roles(session, tenant_id, user_id) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+SYSTEM_ROLE_NAMES = frozenset(RESERVED_ROLE_NAMES | set(ROLE_RANKS) | {"hr_manager", "manager"})
+CUSTOM_ROLE_MAX_RANK = 40
+FORBIDDEN_PERMISSION_NAMESPACES = ("org", "platform")
+
+
+def check_custom_permissions(permissions: List[str], held: List[str], is_platform: bool) -> None:
+    """Custom (tenant-defined) roles: never `*` wildcards or org.* / platform.* permissions, and a
+    non-platform actor may only grant permissions it holds itself."""
+    for p in permissions:
+        if "*" in p:
+            raise HTTPException(status_code=400, detail="Wildcard permissions are not allowed in custom roles")
+        if p.split(".", 1)[0] in FORBIDDEN_PERMISSION_NAMESPACES:
+            raise HTTPException(status_code=403, detail="org.* and platform.* permissions cannot be placed in a custom role")
+    if not is_platform:
+        missing = sorted(set(permissions) - set(held))
+        if missing:
+            raise HTTPException(status_code=403, detail=f"Cannot grant permissions you do not hold: {', '.join(missing)}")
+
+
+def custom_role_rank(actor: "Actor") -> int:
+    """Custom role rank: actor rank - 10, capped at 40. An actor too low-ranked to stay above it is refused."""
+    rank = min(actor.rank - 10, CUSTOM_ROLE_MAX_RANK)
+    if rank < 10:
+        raise HTTPException(status_code=403, detail="Your rank is too low to manage custom roles")
+    return rank
+
+
 def check_can_manage_target(actor: Actor, target_roles: List[Dict[str, Any]]) -> None:
     if actor.platform:
         return
@@ -427,7 +455,9 @@ async def deactivate_member(session, ctx, actor: Actor, tenant_id, user_id) -> D
 
 
 async def reactivate_member(session, ctx, actor: Actor, tenant_id, user_id) -> Dict[str, Any]:
-    await lock_tenant(session, tenant_id)
+    tenant = await lock_tenant(session, tenant_id)
+    if str(tenant["status"]).upper() in {"CLOSED", "SUSPENDED"}:
+        raise HTTPException(status_code=409, detail="Tenant is not active")
     u = (
         await session.execute(
             text("SELECT id, email, is_active FROM users WHERE id = :u AND tenant_id = :t FOR UPDATE"),
@@ -735,6 +765,7 @@ async def revoke_invite(
 ):
     inv = await _invite_for_admin(session, ctx, invite_id)
     tenant_id = inv["tenant_id"]
+    await check_invite_rank(session, await actor_info(ctx, session), tenant_id, inv)
     await lock_tenant(session, tenant_id)
     cur = (await session.execute(text("SELECT status FROM invites WHERE id = :i FOR UPDATE"), {"i": str(invite_id)})).one()
     if cur[0] != "pending":
@@ -745,6 +776,24 @@ async def revoke_invite(
     await session.commit()
     await _cleanup_supabase_invitee(inv)
     return {"invite_id": str(invite_id), "status": "revoked"}
+
+
+async def check_invite_rank(session, actor: Actor, tenant_id, inv: Dict[str, Any]) -> None:
+    """Resend / revoke of an invite needs rank >= the invite's highest role (same rule as granting it)."""
+    if actor.platform:
+        return
+    names = list(inv.get("role_names") or ["org_user"])
+    rows = (
+        await session.execute(
+            text("SELECT coalesce(max(role_rank), 0) FROM roles WHERE name = ANY(:n) AND (tenant_id = :t OR scope = 'PLATFORM')"),
+            {"n": names, "t": str(tenant_id)},
+        )
+    ).one()
+    top = int(rows[0])
+    if "owner" in names and not actor.owner:
+        raise HTTPException(status_code=403, detail="Only an owner or platform admin may manage an owner invite")
+    if top > actor.rank:
+        raise HTTPException(status_code=403, detail="Cannot manage an invite for a role above your own rank")
 
 
 async def _cleanup_supabase_invitee(inv: Dict[str, Any]) -> None:
@@ -773,6 +822,7 @@ async def resend_invite(
     await invite_limiter.check(request)
     inv = await _invite_for_admin(session, ctx, invite_id)
     tenant_id = inv["tenant_id"]
+    await check_invite_rank(session, await actor_info(ctx, session), tenant_id, inv)
     await lock_tenant(session, tenant_id)
     await sweep_expired_invites(session, tenant_id)  # records the -1 for an invite that lapsed unseen
     cur = (await session.execute(text("SELECT status, expires_at FROM invites WHERE id = :i FOR UPDATE"), {"i": str(invite_id)})).mappings().one()
@@ -780,17 +830,34 @@ async def resend_invite(
     if eff not in ("pending", "expired"):
         raise HTTPException(status_code=409, detail=f"Invite is {eff}")
     if eff == "expired":
+        # Reviving must not collide with the unique (tenant, lower(email)) pending index, nor with an
+        # email that has meanwhile become a user / got another pending invite: refuse cleanly.
+        clash = (
+            await session.execute(
+                text(
+                    """SELECT 1 FROM invites WHERE tenant_id = :t AND lower(email) = lower(:e) AND status = 'pending' AND id <> :i
+                       UNION ALL SELECT 1 FROM users WHERE lower(email) = lower(:e)"""
+                ),
+                {"t": str(tenant_id), "e": inv["email"], "i": str(invite_id)},
+            )
+        ).first()
+        if clash:
+            raise HTTPException(status_code=409, detail="This invite can no longer be revived; create a new one")
         await require_seat(session, tenant_id)  # reviving an expired invite takes a seat again
     token = secrets.token_urlsafe(32)
     expires = datetime.now(timezone.utc) + INVITE_TTL
-    await session.execute(
-        text("UPDATE invites SET token_hash = :h, expires_at = :e, status = 'pending' WHERE id = :i"),
-        {"h": hash_token(token), "e": expires, "i": str(invite_id)},
-    )
-    if eff == "expired":
-        await record_seat_event(session, tenant_id, None, 1, "invite_revived", ctx.user_id)
-    await audit(session, ctx, "invite.resend", "invite", invite_id, tenant_id, {"email": inv["email"]})
-    await session.commit()
+    try:
+        await session.execute(
+            text("UPDATE invites SET token_hash = :h, expires_at = :e, status = 'pending' WHERE id = :i"),
+            {"h": hash_token(token), "e": expires, "i": str(invite_id)},
+        )
+        if eff == "expired":
+            await record_seat_event(session, tenant_id, None, 1, "invite_revived", ctx.user_id)
+        await audit(session, ctx, "invite.resend", "invite", invite_id, tenant_id, {"email": inv["email"]})
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="This invite can no longer be revived; create a new one")
     delivery = await deliver_invite(invite_id, inv["email"], token, send_email)
     return {"invite_id": str(invite_id), "status": "pending", "expires_at": expires, **delivery}
 
@@ -819,6 +886,15 @@ async def accept_invite(
     authorization: Optional[str] = Header(None),
     session: AsyncSession = Depends(get_async_session),
 ):
+    try:
+        return await _accept_invite(payload, request, authorization, session)
+    except IntegrityError:
+        # two tenants invited the same email and both were accepted in parallel (users pk / lower(email) unique)
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="This invitation can no longer be accepted")
+
+
+async def _accept_invite(payload: InviteAccept, request: Request, authorization: Optional[str], session: AsyncSession):
     """The caller proves who they are with their Supabase access token (Authorization: Bearer);
     the invite must be addressed to that verified email."""
     # per caller identity + invite token (not global): one flooder cannot lock out other acceptors
@@ -865,6 +941,9 @@ async def accept_invite(
     is_owner = "owner" in role_names
     if existing:
         user_id = existing["id"]
+        if not existing["is_active"]:
+            # a previously deactivated user re-invited: the invite's roles replace whatever they held before
+            await session.execute(text("DELETE FROM user_roles WHERE user_id = :u"), {"u": str(user_id)})
         await session.execute(
             text("UPDATE users SET tenant_id = :t, is_active = true, deactivated_at = NULL, supabase_user_id = :s, is_owner = :o WHERE id = :u"),
             {"t": str(tenant_id), "s": str(sid), "o": is_owner, "u": str(user_id)},
@@ -918,7 +997,11 @@ async def list_members(
             text(
                 """
                 SELECT u.id, u.email, u.full_name, u.is_active, u.is_owner, u.created_at, u.supabase_synced,
-                       u.supabase_sync_error,
+                       CASE WHEN u.supabase_synced THEN 'synced'
+                            WHEN u.supabase_sync_error IS NULL THEN 'pending'
+                            WHEN u.supabase_sync_error = 'no_supabase_user' THEN 'no_supabase_user'
+                            WHEN u.supabase_sync_error = 'supabase_not_configured' THEN 'not_configured'
+                            ELSE 'error' END AS sync_status,
                        coalesce(array_agg(DISTINCT r.name) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.id AND ur.tenant_id = u.tenant_id
@@ -1057,9 +1140,66 @@ async def reconcile_endpoint(
     carry a tenant_id in app_metadata."""
     await require_platform_admin(ctx, session)
     try:
-        result = await supabase_sync.reconcile(apply=apply, adopt_orphans=adopt_orphans)
+        result = await supabase_sync.reconcile(apply=apply, adopt_orphans=adopt_orphans, actor_id=ctx.user_id)
     except supabase_sync.SupabaseError as exc:
         raise HTTPException(status_code=502 if exc.status != 503 else 503, detail=str(exc))
     await write_audit(session, ctx.user_id, "sync.reconcile", "system", None, None,
-                      {"apply": apply, "drift": len(result["drift"]), "orphans": len(result["orphans_in_supabase_only"]), "adopted": result["adopted"]})
+                      {"apply": apply, "drift": len(result["drift"]), "orphans": len(result["orphans_in_supabase_only"]), "adopted": result["adopted"], "adopt_skipped": len(result.get("adopt_skipped", []))})
     return result
+
+
+# ---------------------------------------------------------------------------
+# Platform admins (app_metadata only; never implicit)
+# ---------------------------------------------------------------------------
+
+PLATFORM_ADMIN_LOCK_KEY = 74190202
+
+
+async def _change_platform_admin(user_id: uuid.UUID, grant: bool, ctx: AuthContext, session: AsyncSession) -> Dict[str, Any]:
+    await require_platform_admin(ctx, session)
+    client = supabase_sync.get_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Auth provider not configured")
+    await session.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": PLATFORM_ADMIN_LOCK_KEY})
+    sid = str(user_id)
+    try:
+        await client.get_user(sid)
+    except supabase_sync.SupabaseError as exc:
+        if exc.status in (404, 422):
+            # the admin DB id may differ from the Supabase id: resolve through users.supabase_user_id
+            row = (await session.execute(text("SELECT supabase_user_id FROM users WHERE id = :u"), {"u": sid})).first()
+            if not row or not row[0]:
+                raise HTTPException(status_code=404, detail="User not found")
+            sid = str(row[0])
+        else:
+            raise HTTPException(status_code=502, detail="Auth provider error")
+    if not grant and await supabase_sync.count_platform_admins(client, exclude=sid) == 0:
+        current = await client.get_user(sid)
+        if "platform_admin" in ((current.get("app_metadata") or {}).get("roles") or []):
+            raise HTTPException(status_code=409, detail={"error": "last_platform_admin", "message": "Cannot remove the last platform admin"})
+    await write_audit(session, ctx.user_id, "platform_admin.grant" if grant else "platform_admin.revoke", "user", user_id, None, {"supabase_user_id": sid})
+    try:
+        result = await supabase_sync.set_platform_admin(client, sid, grant)
+    except supabase_sync.SupabaseError as exc:
+        raise HTTPException(status_code=502, detail=f"Auth provider error ({exc.status})")
+    return {"user_id": str(user_id), **result}
+
+
+@router.put("/platform/admins/{user_id}")
+async def grant_platform_admin(
+    user_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Explicit, audited grant of platform_admin (stored in Supabase app_metadata only)."""
+    return await _change_platform_admin(user_id, True, ctx, session)
+
+
+@router.delete("/platform/admins/{user_id}")
+async def revoke_platform_admin(
+    user_id: uuid.UUID,
+    ctx: AuthContext = Depends(get_auth_context),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Explicit, audited removal of platform_admin. Refuses to remove the last platform admin."""
+    return await _change_platform_admin(user_id, False, ctx, session)
