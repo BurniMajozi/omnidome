@@ -1,23 +1,61 @@
 """
 Compliance Service — ICASA, POPI, RICA, Breach Register, Funding Opportunities Routes
+
+Tenant-scoped, explicit request schemas (no mass assignment), role tiers:
+reads = any member, writes = compliance_officer/manager/admin, and personal
+data (DSAR subjects, consent records, RICA subjects, anonymisation audit trail)
+= compliance/hr/finance admin tiers.
 """
+import hashlib
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.common.auth import AuthContext
 from services.common.db import get_async_session as get_db
+from services.compliance import crud
+from services.compliance.access import member_ctx, sensitive_ctx, write_ctx
 from services.compliance.database import (
     IcasaSubmission, IcasaScrapeJob, IcasaRegulationChange,
     PopiDataAccessRequest, PopiAnonymizationLog, PopiConsentRecord,
-    RicaVerification,
-    BreachRegister, BreachRegister, ComplianceCategory,
-    FundingOpportunity, BbbeeLevel,
+    RicaVerification, BreachRegister, FundingOpportunity, Contract,
 )
+from services.compliance.write_schemas import create_schema, dump_set, update_schema
 
 router = APIRouter()
+
+IcasaSubmissionIn = create_schema(IcasaSubmission, protected=("icasa_reference",))
+IcasaSubmissionPatch = update_schema(IcasaSubmission)
+IcasaScrapeJobIn = create_schema(IcasaScrapeJob, protected=("status", "last_run", "changes_detected", "last_changes"))
+IcasaRegulationChangeIn = create_schema(IcasaRegulationChange)
+DsarIn = create_schema(
+    PopiDataAccessRequest,
+    protected=("request_reference", "status", "received_date", "due_date", "completed_date", "response_sent"),
+)
+AnonymizationLogIn = create_schema(PopiAnonymizationLog, protected=("performed_at",))
+ConsentRecordIn = create_schema(PopiConsentRecord)
+BreachIn = create_schema(BreachRegister, protected=("breach_number", "resolved_date"))
+BreachPatch = update_schema(BreachRegister, protected=("breach_number",))
+FundingIn = create_schema(FundingOpportunity)
+
+
+class DsarCompleteIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    notes: Optional[str] = None
+
+
+class RicaVerificationIn(BaseModel):
+    """The raw ID number is hashed on receipt and never stored."""
+    model_config = ConfigDict(extra="forbid")
+    id_number: str = Field(min_length=5, max_length=40)
+    id_type: str = Field(max_length=50)
+    full_name: Optional[str] = Field(None, max_length=200)
+    source: Optional[str] = Field(None, max_length=100)
+    notes: Optional[str] = None
 
 
 # ── ICASA Submissions ───────────────────────────────────────────────────
@@ -29,103 +67,79 @@ icasa_router = APIRouter(prefix="/icasa", tags=["icasa"])
 async def list_icasa_submissions(
     submission_type: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(member_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(IcasaSubmission)
+    where = []
     if submission_type:
-        q = q.where(IcasaSubmission.submission_type == submission_type)
+        where.append(IcasaSubmission.submission_type == submission_type)
     if status:
-        q = q.where(IcasaSubmission.status == status)
-    result = await db.execute(q)
-    return {"items": [s.to_dict() for s in result.scalars().all()]}
+        where.append(IcasaSubmission.status == status)
+    rows = await crud.list_rows(db, ctx, IcasaSubmission, *where)
+    return {"items": [s.to_dict() for s in rows]}
 
 
 @icasa_router.post("/submissions")
-async def create_icasa_submission(body: dict, db: AsyncSession = Depends(get_db)):
-    sub = IcasaSubmission(**body)
-    db.add(sub)
-    await db.commit()
-    await db.refresh(sub)
-    return sub.to_dict()
+async def create_icasa_submission(body: IcasaSubmissionIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    await crud.assert_owned(db, ctx, Contract, data.get("contract_id"), "Contract")
+    return (await crud.create_row(db, ctx, IcasaSubmission, data)).to_dict()
 
 
 @icasa_router.get("/submissions/{sub_id}")
-async def get_icasa_submission(sub_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(IcasaSubmission).where(IcasaSubmission.id == sub_id))
-    sub = result.scalar_one_or_none()
-    if not sub:
-        raise HTTPException(404, "Submission not found")
-    return sub.to_dict()
+async def get_icasa_submission(sub_id: int, ctx: AuthContext = Depends(member_ctx), db: AsyncSession = Depends(get_db)):
+    return (await crud.get_owned(db, ctx, IcasaSubmission, sub_id, "Submission")).to_dict()
 
 
 @icasa_router.put("/submissions/{sub_id}")
-async def update_icasa_submission(sub_id: int, body: dict, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(IcasaSubmission).where(IcasaSubmission.id == sub_id))
-    sub = result.scalar_one_or_none()
-    if not sub:
-        raise HTTPException(404, "Submission not found")
-    for k, v in body.items():
-        setattr(sub, k, v)
-    await db.commit()
-    await db.refresh(sub)
-    return sub.to_dict()
+async def update_icasa_submission(sub_id: int, body: IcasaSubmissionPatch, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    await crud.assert_owned(db, ctx, Contract, data.get("contract_id"), "Contract")
+    return (await crud.update_row(db, ctx, IcasaSubmission, sub_id, data, "Submission")).to_dict()
 
 
 # ── ICASA Scraping ──────────────────────────────────────────────────────
 
 @icasa_router.get("/scrape-jobs")
-async def list_scrape_jobs(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(IcasaScrapeJob))
-    return {"items": [j.to_dict() for j in result.scalars().all()]}
+async def list_scrape_jobs(ctx: AuthContext = Depends(member_ctx), db: AsyncSession = Depends(get_db)):
+    rows = await crud.list_rows(db, ctx, IcasaScrapeJob)
+    return {"items": [j.to_dict() for j in rows]}
 
 
 @icasa_router.post("/scrape-jobs")
-async def create_scrape_job(body: dict, db: AsyncSession = Depends(get_db)):
-    job = IcasaScrapeJob(**body)
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    return job.to_dict()
+async def create_scrape_job(body: IcasaScrapeJobIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    return (await crud.create_row(db, ctx, IcasaScrapeJob, dump_set(body))).to_dict()
 
 
 @icasa_router.post("/scrape-jobs/{job_id}/run")
-async def run_scrape_job(job_id: int, db: AsyncSession = Depends(get_db)):
-    """Trigger ICASA website scrape job."""
-    result = await db.execute(select(IcasaScrapeJob).where(IcasaScrapeJob.id == job_id))
-    job = result.scalar_one_or_none()
-    if not job:
-        raise HTTPException(404, "Scrape job not found")
-    # In production, this would trigger actual web scraping
-    job.last_run = datetime.utcnow()
-    job.status = "completed"
-    job.changes_detected = 0
-    await db.commit()
-    return {"status": "completed", "job_id": job_id}
+async def run_scrape_job(job_id: int, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    """ICASA website scraping is not implemented. It used to record a fake 'completed' run with
+    zero changes; it now says so honestly (the job row is not touched)."""
+    await crud.get_owned(db, ctx, IcasaScrapeJob, job_id, "Scrape job")
+    raise HTTPException(501, "ICASA scraping is not implemented; no run was performed.")
 
 
 @icasa_router.get("/regulation-changes")
 async def list_regulation_changes(
     impact_level: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(member_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(IcasaRegulationChange)
+    where = []
     if impact_level:
-        q = q.where(IcasaRegulationChange.impact_level == impact_level)
+        where.append(IcasaRegulationChange.impact_level == impact_level)
     if status:
-        q = q.where(IcasaRegulationChange.status == status)
-    q = q.order_by(IcasaRegulationChange.detected_at.desc())
-    result = await db.execute(q)
-    return {"items": [c.to_dict() for c in result.scalars().all()]}
+        where.append(IcasaRegulationChange.status == status)
+    rows = await crud.list_rows(db, ctx, IcasaRegulationChange, *where, order_by=IcasaRegulationChange.detected_at.desc())
+    return {"items": [c.to_dict() for c in rows]}
 
 
 @icasa_router.post("/regulation-changes")
-async def create_regulation_change(body: dict, db: AsyncSession = Depends(get_db)):
-    change = IcasaRegulationChange(**body)
-    db.add(change)
-    await db.commit()
-    await db.refresh(change)
-    return change.to_dict()
+async def create_regulation_change(body: IcasaRegulationChangeIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    await crud.assert_owned(db, ctx, IcasaScrapeJob, data.get("scrape_job_id"), "Scrape job")
+    return (await crud.create_row(db, ctx, IcasaRegulationChange, data)).to_dict()
 
 
 # ── POPI Act ────────────────────────────────────────────────────────────
@@ -136,47 +150,44 @@ popi_router = APIRouter(prefix="/popi", tags=["popi"])
 @popi_router.get("/dsar")
 async def list_dsar(
     status: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(sensitive_ctx),  # data-subject names / contact details
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(PopiDataAccessRequest)
-    if status:
-        q = q.where(PopiDataAccessRequest.status == status)
-    q = q.order_by(PopiDataAccessRequest.due_date)
-    result = await db.execute(q)
-    return {"items": [r.to_dict() for r in result.scalars().all()]}
+    where = [PopiDataAccessRequest.status == status] if status else []
+    rows = await crud.list_rows(db, ctx, PopiDataAccessRequest, *where, order_by=PopiDataAccessRequest.due_date)
+    return {"items": [r.to_dict() for r in rows]}
 
 
 @popi_router.post("/dsar")
-async def create_dsar(body: dict, db: AsyncSession = Depends(get_db)):
-    # Auto-set due date to 30 days from now (POPI requirement)
-    if "due_date" not in body:
-        body["due_date"] = datetime.utcnow() + timedelta(days=30)
-    dsar = PopiDataAccessRequest(**body)
-    db.add(dsar)
-    await db.commit()
-    await db.refresh(dsar)
-    return dsar.to_dict()
+async def create_dsar(body: DsarIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    await crud.assert_owned(db, ctx, Contract, data.get("contract_id"), "Contract")
+    now = datetime.utcnow()
+    data["request_reference"] = f"DSAR-{uuid.uuid4().hex[:8].upper()}"
+    data["status"] = "received"
+    data["received_date"] = now
+    data["due_date"] = now + timedelta(days=30)  # POPIA statutory response window
+    return (await crud.create_row(db, ctx, PopiDataAccessRequest, data)).to_dict()
 
 
 @popi_router.put("/dsar/{dsar_id}/complete")
-async def complete_dsar(dsar_id: int, body: dict, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(PopiDataAccessRequest).where(PopiDataAccessRequest.id == dsar_id))
-    dsar = result.scalar_one_or_none()
-    if not dsar:
-        raise HTTPException(404, "DSAR not found")
+async def complete_dsar(dsar_id: int, body: DsarCompleteIn, ctx: AuthContext = Depends(sensitive_ctx), db: AsyncSession = Depends(get_db)):
+    dsar = await crud.get_owned(db, ctx, PopiDataAccessRequest, dsar_id, "DSAR")
     dsar.status = "completed"
     dsar.completed_date = datetime.utcnow()
     dsar.response_sent = True
+    if body.notes:
+        dsar.notes = body.notes
     await db.commit()
     return {"status": "completed", "id": dsar_id}
 
 
 @popi_router.get("/dsar/dashboard")
-async def dsar_dashboard(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(PopiDataAccessRequest))
-    requests = result.scalars().all()
+async def dsar_dashboard(ctx: AuthContext = Depends(member_ctx), db: AsyncSession = Depends(get_db)):
+    requests = await crud.list_rows(db, ctx, PopiDataAccessRequest)
     total = len(requests)
-    overdue = sum(1 for r in requests if r.due_date and r.due_date < datetime.utcnow() and r.status != "completed")
+    now = datetime.utcnow()
+    overdue = sum(1 for r in requests if r.due_date and r.due_date < now and r.status != "completed")
     pending = sum(1 for r in requests if r.status in ("received", "in_progress"))
     completed = sum(1 for r in requests if r.status == "completed")
     return {"total": total, "overdue": overdue, "pending": pending, "completed": completed}
@@ -185,43 +196,35 @@ async def dsar_dashboard(db: AsyncSession = Depends(get_db)):
 @popi_router.get("/anonymization-logs")
 async def list_anonymization_logs(
     table_name: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(sensitive_ctx),  # audit trail
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(PopiAnonymizationLog)
-    if table_name:
-        q = q.where(PopiAnonymizationLog.table_name == table_name)
-    result = await db.execute(q)
-    return {"items": [l.to_dict() for l in result.scalars().all()]}
+    where = [PopiAnonymizationLog.table_name == table_name] if table_name else []
+    rows = await crud.list_rows(db, ctx, PopiAnonymizationLog, *where)
+    return {"items": [r.to_dict() for r in rows]}
 
 
 @popi_router.post("/anonymization-logs")
-async def create_anonymization_log(body: dict, db: AsyncSession = Depends(get_db)):
-    log = PopiAnonymizationLog(**body)
-    db.add(log)
-    await db.commit()
-    await db.refresh(log)
-    return log.to_dict()
+async def create_anonymization_log(body: AnonymizationLogIn, ctx: AuthContext = Depends(sensitive_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    data["performed_by"] = str(ctx.user_id)  # who did it comes from the identity, not the client
+    return (await crud.create_row(db, ctx, PopiAnonymizationLog, data)).to_dict()
 
 
 @popi_router.get("/consent-records")
 async def list_consent_records(
     data_subject_id: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(sensitive_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(PopiConsentRecord)
-    if data_subject_id:
-        q = q.where(PopiConsentRecord.data_subject_id == data_subject_id)
-    result = await db.execute(q)
-    return {"items": [r.to_dict() for r in result.scalars().all()]}
+    where = [PopiConsentRecord.data_subject_id == data_subject_id] if data_subject_id else []
+    rows = await crud.list_rows(db, ctx, PopiConsentRecord, *where)
+    return {"items": [r.to_dict() for r in rows]}
 
 
 @popi_router.post("/consent-records")
-async def create_consent_record(body: dict, db: AsyncSession = Depends(get_db)):
-    rec = PopiConsentRecord(**body)
-    db.add(rec)
-    await db.commit()
-    await db.refresh(rec)
-    return rec.to_dict()
+async def create_consent_record(body: ConsentRecordIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    return (await crud.create_row(db, ctx, PopiConsentRecord, dump_set(body))).to_dict()
 
 
 # ── RICA ────────────────────────────────────────────────────────────────
@@ -232,32 +235,25 @@ rica_router = APIRouter(prefix="/rica", tags=["rica"])
 @rica_router.get("/verifications")
 async def list_rica_verifications(
     status: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(sensitive_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(RicaVerification)
-    if status:
-        q = q.where(RicaVerification.status == status)
-    result = await db.execute(q)
-    return {"items": [v.to_dict() for v in result.scalars().all()]}
+    where = [RicaVerification.status == status] if status else []
+    rows = await crud.list_rows(db, ctx, RicaVerification, *where)
+    return {"items": [v.to_dict() for v in rows]}
 
 
 @rica_router.post("/verifications")
-async def create_rica_verification(body: dict, db: AsyncSession = Depends(get_db)):
-    # Store only hashed ID number (POPI compliance)
-    import hashlib
-    if "id_number" in body:
-        body["id_number_hash"] = hashlib.sha256(body.pop("id_number").encode()).hexdigest()
-    v = RicaVerification(**body)
-    db.add(v)
-    await db.commit()
-    await db.refresh(v)
-    return v.to_dict()
+async def create_rica_verification(body: RicaVerificationIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    # Store only the hashed ID number (POPIA data minimisation)
+    data = body.model_dump(exclude_unset=True)
+    data["id_number_hash"] = hashlib.sha256(data.pop("id_number").encode()).hexdigest()
+    return (await crud.create_row(db, ctx, RicaVerification, data)).to_dict()
 
 
 @rica_router.get("/dashboard")
-async def rica_dashboard(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(RicaVerification))
-    verifications = result.scalars().all()
+async def rica_dashboard(ctx: AuthContext = Depends(member_ctx), db: AsyncSession = Depends(get_db)):
+    verifications = await crud.list_rows(db, ctx, RicaVerification)
     total = len(verifications)
     verified = sum(1 for v in verifications if v.status == "verified")
     pending = sum(1 for v in verifications if v.status == "pending")
@@ -275,46 +271,38 @@ async def list_breaches(
     severity: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(member_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(BreachRegister)
+    where = []
     if severity:
-        q = q.where(BreachRegister.severity == severity)
+        where.append(BreachRegister.severity == severity)
     if status:
-        q = q.where(BreachRegister.status == status)
+        where.append(BreachRegister.status == status)
     if category:
-        q = q.where(BreachRegister.category == category)
-    q = q.order_by(BreachRegister.identified_date.desc())
-    result = await db.execute(q)
-    return {"items": [b.to_dict() for b in result.scalars().all()]}
+        where.append(BreachRegister.category == category)
+    rows = await crud.list_rows(db, ctx, BreachRegister, *where, order_by=BreachRegister.identified_date.desc())
+    return {"items": [b.to_dict() for b in rows]}
 
 
 @breach_router.post("/")
-async def create_breach(body: dict, db: AsyncSession = Depends(get_db)):
-    breach = BreachRegister(**body)
-    db.add(breach)
-    await db.commit()
-    await db.refresh(breach)
-    return breach.to_dict()
+async def create_breach(body: BreachIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    data["breach_number"] = f"BRC-{uuid.uuid4().hex[:8].upper()}"
+    return (await crud.create_row(db, ctx, BreachRegister, data)).to_dict()
 
 
 @breach_router.put("/{breach_id}")
-async def update_breach(breach_id: int, body: dict, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(BreachRegister).where(BreachRegister.id == breach_id))
-    breach = result.scalar_one_or_none()
-    if not breach:
-        raise HTTPException(404, "Breach not found")
-    for k, v in body.items():
-        setattr(breach, k, v)
-    await db.commit()
-    await db.refresh(breach)
-    return breach.to_dict()
+async def update_breach(breach_id: int, body: BreachPatch, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    data = dump_set(body)
+    if data.get("status") == "resolved":
+        data["resolved_date"] = datetime.utcnow()
+    return (await crud.update_row(db, ctx, BreachRegister, breach_id, data, "Breach")).to_dict()
 
 
 @breach_router.get("/dashboard")
-async def breach_dashboard(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(BreachRegister))
-    breaches = result.scalars().all()
+async def breach_dashboard(ctx: AuthContext = Depends(member_ctx), db: AsyncSession = Depends(get_db)):
+    breaches = await crud.list_rows(db, ctx, BreachRegister)
     total = len(breaches)
     open_count = sum(1 for b in breaches if b.status in ("identified", "investigating"))
     critical = sum(1 for b in breaches if b.severity == "critical")
@@ -337,36 +325,33 @@ funding_router = APIRouter(prefix="/funding", tags=["funding"])
 async def list_funding_opportunities(
     status: Optional[str] = Query(None),
     funding_type: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(member_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(FundingOpportunity)
+    where = []
     if status:
-        q = q.where(FundingOpportunity.status == status)
+        where.append(FundingOpportunity.status == status)
     if funding_type:
-        q = q.where(FundingOpportunity.funding_type == funding_type)
-    q = q.order_by(FundingOpportunity.application_deadline)
-    result = await db.execute(q)
-    return {"items": [o.to_dict() for o in result.scalars().all()]}
+        where.append(FundingOpportunity.funding_type == funding_type)
+    rows = await crud.list_rows(db, ctx, FundingOpportunity, *where, order_by=FundingOpportunity.application_deadline)
+    return {"items": [o.to_dict() for o in rows]}
 
 
 @funding_router.post("/")
-async def create_funding_opportunity(body: dict, db: AsyncSession = Depends(get_db)):
-    opp = FundingOpportunity(**body)
-    db.add(opp)
-    await db.commit()
-    await db.refresh(opp)
-    return opp.to_dict()
+async def create_funding_opportunity(body: FundingIn, ctx: AuthContext = Depends(write_ctx), db: AsyncSession = Depends(get_db)):
+    return (await crud.create_row(db, ctx, FundingOpportunity, dump_set(body))).to_dict()
 
 
 @funding_router.post("/match")
 async def match_funding_by_compliance(
     min_score: float = Query(0),
+    ctx: AuthContext = Depends(member_ctx),
     db: AsyncSession = Depends(get_db),
 ):
-    """Match funding opportunities based on compliance score and BBBEE level."""
-    result = await db.execute(
-        select(FundingOpportunity)
-        .where(FundingOpportunity.status == "identified")
-        .where(FundingOpportunity.min_compliance_score <= min_score)
+    """Opportunities this tenant has recorded whose minimum compliance score is at most `min_score`."""
+    rows = await crud.list_rows(
+        db, ctx, FundingOpportunity,
+        FundingOpportunity.status == "identified",
+        FundingOpportunity.min_compliance_score <= min_score,
     )
-    return {"items": [o.to_dict() for o in result.scalars().all()], "min_score": min_score}
+    return {"items": [o.to_dict() for o in rows], "min_score": min_score}

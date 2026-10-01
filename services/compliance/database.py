@@ -13,9 +13,9 @@ from decimal import Decimal
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Enum, Float, ForeignKey,
-    Index, Integer, Numeric, String, Text, UniqueConstraint,
+    Index, Integer, Numeric, String, Text, UniqueConstraint, event,
 )
-from sqlalchemy.orm import DeclarativeBase, relationship
+from sqlalchemy.orm import DeclarativeBase, Session, relationship, with_loader_criteria
 from sqlalchemy.sql import func
 
 
@@ -31,6 +31,40 @@ class Base(DeclarativeBase):
                 val = float(val)
             result[col.name] = val
         return result
+
+
+# ── Automatic tenant filter ────────────────────────────────────────────
+# Every table in this service carries tenant_id (String(100), NOT NULL), so the
+# whole Base is tenant scoped. services.common.db.register_tenant_scoped_base
+# is NOT used: its criteria compare tenant_id to a uuid.UUID, which does not
+# bind to these String columns. This listener applies the same filter with the
+# tenant as a string. Routes ALSO filter explicitly (defence in depth); this
+# only guarantees that a forgotten filter can never read another tenant's rows.
+
+def _current_tenant_str(session) -> str | None:
+    from services.common.db import get_tenant_context
+
+    tid = session.info.get("tenant_id") or get_tenant_context()
+    return str(tid) if tid else None
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _compliance_tenant_criteria(execute_state) -> None:
+    if execute_state.execution_options.get("include_all_tenants", False):
+        return
+    if not execute_state.is_select:
+        return
+    tenant = _current_tenant_str(execute_state.session)
+    if not tenant:
+        return
+    # One criterion per mapped class (the abstract Base itself has no tenant_id attribute).
+    execute_state.statement = execute_state.statement.options(
+        *(
+            with_loader_criteria(m.class_, m.class_.tenant_id == tenant, include_aliases=True)
+            for m in Base.registry.mappers
+            if hasattr(m.class_, "tenant_id")
+        )
+    )
 
 
 # ── Enums ──────────────────────────────────────────────────────────────
@@ -1076,3 +1110,83 @@ class FundingOpportunity(Base):
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
     tenant_id = Column(String(100), nullable=False, index=True)
+
+
+# ── 23. EMP201 working papers (prepared by us, filed by a human on eFiling) ──
+
+class Emp201Workpaper(Base):
+    """An EMP201 working paper built from real payslips.
+
+    The service never files with SARS: status stays PREPARED_NOT_FILED until a
+    hr/finance admin pastes the real PRN / payment receipt from eFiling
+    (status -> MARKED_FILED_BY_USER). Figures are NULL when no paid payroll
+    exists for the period; they are never estimated or substituted.
+    """
+    __tablename__ = "compliance_emp201_workpapers"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "period", name="uq_emp201_workpaper_tenant_period"),
+        Index("ix_emp201_workpaper_tenant_period", "tenant_id", "period"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    period = Column(String(7), nullable=False)               # YYYY-MM
+    status = Column(String(30), nullable=False, default="PREPARED_NOT_FILED")
+    due_date = Column(Date)
+    due_date_note = Column(String(200))
+    employee_count = Column(Integer)
+    gross_remuneration = Column(Numeric(16, 2))
+    paye = Column(Numeric(16, 2))
+    uif_employee = Column(Numeric(16, 2))
+    uif_employer = Column(Numeric(16, 2))
+    sdl = Column(Numeric(16, 2))
+    total_liability = Column(Numeric(16, 2))
+    payroll_run_ids = Column(Text)                           # JSON list of source run ids
+    rates_verified = Column(Boolean, nullable=False, default=False)
+    assumptions = Column(Text)                               # JSON: rates/thresholds used
+    note = Column(Text)
+    prepared_by = Column(String(100))
+    prepared_at = Column(DateTime, default=func.now())
+    prn = Column(String(40))                                 # real PRN, pasted by the user
+    receipt_reference = Column(String(100))
+    filed_at = Column(Date)
+    marked_filed_by = Column(String(100))
+    marked_filed_at = Column(DateTime)
+
+
+# ── Idempotent locked startup migration ────────────────────────────────
+# Every existing table already has tenant_id (NOT NULL, indexed), so no column is
+# added. create_all never ALTERs existing tables, so new tables/indexes are
+# created explicitly here, under an advisory lock so several workers starting at
+# once do not race.
+
+_SCHEMA_LOCK_KEY = 8_019_240_926
+
+_MIGRATIONS = [
+    "CREATE INDEX IF NOT EXISTS ix_compliance_dsar_tenant_status ON compliance_popi_dsar (tenant_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_compliance_scores_tenant_cat ON compliance_scores (tenant_id, category, calculated_at)",
+]
+
+
+async def run_migrations(engine) -> None:
+    from sqlalchemy import text
+
+    async with engine.connect() as lock_conn:
+        is_pg = engine.dialect.name == "postgresql"
+        if is_pg:
+            await lock_conn.execute(text("SELECT pg_advisory_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+            await lock_conn.commit()
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(lambda c: Emp201Workpaper.__table__.create(c, checkfirst=True))
+                if is_pg:
+                    for stmt in _MIGRATIONS:
+                        try:
+                            async with conn.begin_nested():
+                                await conn.execute(text(stmt))
+                        except Exception:  # noqa: BLE001 - a missing base table must not abort startup
+                            pass
+        finally:
+            if is_pg:
+                await lock_conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+                await lock_conn.commit()

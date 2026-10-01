@@ -19,6 +19,7 @@ Processing pipeline:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import json
@@ -102,6 +103,7 @@ class DocumentUnderstanding:
     doc_format: str = ""
     file_size_bytes: int = 0
     content_hash: str = ""
+    stored_path: str = ""      # where the original was saved (server-generated, inside the upload root)
 
     # Raw content
     raw_text: str = ""
@@ -552,9 +554,12 @@ class DocumentUnderstandingArchitect:
     Handles file uploads, URL fetches, and website crawls.
     """
 
-    def __init__(self, upload_dir: str = "/opt/data/uploads/compliance"):
-        self.upload_dir = upload_dir
-        os.makedirs(upload_dir, exist_ok=True)
+    def __init__(self, upload_dir: Optional[str] = None):
+        self.upload_dir = upload_dir or os.getenv("COMPLIANCE_UPLOAD_DIR", "/opt/data/uploads/compliance")
+        try:
+            os.makedirs(self.upload_dir, exist_ok=True)
+        except OSError:
+            pass  # surfaced as "File save failed" when a file is actually stored
 
     async def process_file(
         self,
@@ -644,14 +649,13 @@ class DocumentUnderstandingArchitect:
             result.document_type, result.compliance_category, result.confidence = \
                 classify_document(result.cleaned_text)
 
-        # Step 7: Save file
+        # Step 7: Save file (server-generated path inside the upload root; never from client input)
         try:
-            tenant_dir = os.path.join(self.upload_dir, tenant_id)
-            os.makedirs(tenant_dir, exist_ok=True)
-            safe_name = re.sub(r'[^\w\-.]', '_', filename)
-            file_path = os.path.join(tenant_dir, f"{result.content_hash[:16]}_{safe_name}")
-            async with aiofiles.open(file_path, "wb") as f:
-                await f.write(content)
+            from services.compliance import upload_safety
+            stored = await asyncio.to_thread(
+                upload_safety.write_upload, tenant_id, filename, content, self.upload_dir
+            )
+            result.stored_path = str(stored)
             result.doc_id = result.content_hash[:16]
         except Exception as e:
             result.errors.append(f"File save failed: {e}")
@@ -669,86 +673,110 @@ class DocumentUnderstandingArchitect:
         max_depth: int = 2,
         doc_type_hint: Optional[str] = None,
     ) -> list[DocumentUnderstanding]:
-        """Fetch and process a URL (or crawl a website)."""
-        import httpx
+        """Fetch and process a URL (or crawl one site).
 
-        results = []
-        visited = set()
+        SSRF-safe: every URL (and every redirect hop) is validated, responses are
+        size-capped and content-type allow-listed (services.compliance.safe_fetch).
+        When FIRECRAWL_API_KEY is set and no crawl is requested, the page is
+        scraped by Firecrawl instead (the fetch then leaves our network); the
+        URL is still validated first.
+        """
+        from services.compliance import safe_fetch
 
-        async def _fetch_single(target_url: str) -> Optional[DocumentUnderstanding]:
-            if target_url in visited:
-                return None
-            visited.add(target_url)
+        results: list[DocumentUnderstanding] = []
+        visited: set[str] = set()
 
+        def _error(target_url: str, message: str, input_type=InputType.url_fetch) -> DocumentUnderstanding:
+            err = DocumentUnderstanding()
+            err.source = target_url
+            err.input_type = input_type.value
+            err.errors.append(message)
+            return err
+
+        async def _from_firecrawl(target_url: str) -> Optional[DocumentUnderstanding]:
+            from services.common.firecrawl import FirecrawlClient, FirecrawlError
+            client = FirecrawlClient()
             try:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-                    resp = await client.get(target_url)
-                    content_type = resp.headers.get("content-type", "")
+                scraped = await client.scrape(target_url)
+            except FirecrawlError as e:
+                return _error(target_url, f"URL fetch failed: {e}")
+            markdown = FirecrawlClient.markdown_from(scraped)
+            if not markdown:
+                return _error(target_url, "URL fetch failed: no extractable content")
+            result = await self.process_file(
+                markdown.encode("utf-8"), "webpage.md",
+                tenant_id=tenant_id, doc_type_hint=doc_type_hint,
+            )
+            result.source = target_url
+            result.input_type = InputType.url_fetch.value
+            return result
 
-                    if "application/pdf" in content_type:
-                        # PDF from URL
-                        return await self.process_file(
-                            resp.content,
-                            os.path.basename(urlparse(target_url).path) or "document.pdf",
-                            tenant_id=tenant_id,
-                            doc_type_hint=doc_type_hint,
-                        )
-                    else:
-                        # HTML page
-                        html_text = resp.text
-                        # Try trafilatura first (best content extraction)
-                        main_text = extract_html_trafilatura(html_text)
-                        if not main_text:
-                            main_text = extract_html(html_text)
-
-                        # Convert to bytes for processing
-                        text_bytes = main_text.encode("utf-8")
-                        result = await self.process_file(
-                            text_bytes,
-                            os.path.basename(urlparse(target_url).path) or "webpage.md",
-                            tenant_id=tenant_id,
-                            doc_type_hint=doc_type_hint,
-                        )
-                        result.source = target_url
-                        result.input_type = InputType.url_fetch.value
-                        result.links = extract_links(html_text)
-                        return result
+        async def _fetch_single(target_url: str):
+            """Returns (understanding, html_text_or_None)."""
+            if target_url in visited:
+                return None, None
+            visited.add(target_url)
+            try:
+                fetched = await safe_fetch.fetch_public(target_url)
+            except safe_fetch.FetchRefused as e:
+                return _error(target_url, f"URL fetch refused: {e}"), None
             except Exception as e:
-                err_result = DocumentUnderstanding()
-                err_result.source = target_url
-                err_result.input_type = InputType.url_fetch.value
-                err_result.errors.append(f"URL fetch failed: {e}")
-                return err_result
+                return _error(target_url, f"URL fetch failed: {e}"), None
+            try:
+                if fetched.content_type == "application/pdf":
+                    result = await self.process_file(
+                        fetched.content, "document.pdf",
+                        tenant_id=tenant_id, doc_type_hint=doc_type_hint,
+                    )
+                    result.source = fetched.url
+                    result.input_type = InputType.url_fetch.value
+                    return result, None
+                html_text = fetched.content.decode("utf-8", errors="replace")
+                if fetched.content_type in ("text/html", "application/xhtml+xml"):
+                    main_text = extract_html_trafilatura(html_text) or extract_html(html_text)
+                else:
+                    main_text = html_text
+                result = await self.process_file(
+                    main_text.encode("utf-8"), "webpage.md",
+                    tenant_id=tenant_id, doc_type_hint=doc_type_hint,
+                )
+                result.source = fetched.url
+                result.input_type = InputType.url_fetch.value
+                result.links = extract_links(html_text)
+                return result, html_text
+            except Exception as e:
+                return _error(target_url, f"URL fetch failed: {e}"), None
 
-        # Fetch the main URL
-        main_result = await _fetch_single(url)
+        use_firecrawl = (not crawl) and bool(os.getenv("FIRECRAWL_API_KEY", "").strip())
+        if use_firecrawl:
+            try:
+                await safe_fetch.check_url(url)  # validate before handing the URL to anyone
+            except safe_fetch.FetchRefused as e:
+                return [_error(url, f"URL fetch refused: {e}")]
+            main_result = await _from_firecrawl(url)
+            return [main_result] if main_result else []
+
+        main_result, main_html = await _fetch_single(url)
         if main_result:
             results.append(main_result)
 
-        # Crawl if requested
-        if crawl and max_depth > 0:
+        # Crawl same-host links (re-using the already fetched page); each link is fetched through the guard.
+        if crawl and max_depth > 0 and main_html:
             try:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-                    resp = await client.get(url)
-                    soup = BeautifulSoup(resp.text, "lxml")
-                    base_domain = urlparse(url).netloc
-
-                    for link in soup.find_all("a", href=True):
-                        href = link["href"]
-                        full_url = href if href.startswith("http") else f"{urlparse(url).scheme}://{base_domain}{href}"
-                        if urlparse(full_url).netloc == base_domain and full_url not in visited:
-                            sub_result = await _fetch_single(full_url)
-                            if sub_result:
-                                results.append(sub_result)
-                            if len(results) >= 20:  # Limit crawl
-                                break
+                soup = BeautifulSoup(main_html, "lxml")
+                base_host = urlparse(url).netloc
+                base_scheme = urlparse(url).scheme
+                for link in soup.find_all("a", href=True):
+                    href = link["href"]
+                    full_url = href if href.startswith("http") else f"{base_scheme}://{base_host}{href}"
+                    if urlparse(full_url).netloc == base_host and full_url not in visited:
+                        sub_result, _ = await _fetch_single(full_url)
+                        if sub_result:
+                            results.append(sub_result)
+                        if len(results) >= 20:  # Limit crawl
+                            break
             except Exception as e:
-                err_doc = DocumentUnderstanding(
-                    source=url,
-                    input_type=InputType.website_crawl.value,
-                )
-                err_doc.errors.append(f"Crawl failed: {e}")
-                results.append(err_doc)
+                results.append(_error(url, f"Crawl failed: {e}", InputType.website_crawl))
 
         return results
 

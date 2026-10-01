@@ -42,6 +42,11 @@ services:
     restart: "no"
   retention:
     restart: "no"
+  compliance:
+    restart: "no"
+    # The Dockerfile CMD hard-codes `--workers 2`; each extra worker is a full Python process
+    # (this service imports pymupdf/docx/trafilatura), so run ONE worker on this CPU/RAM-starved host.
+    command: sh -c "uvicorn services.compliance.main:app --host 0.0.0.0 --port 8019 --workers 1"
   marketing:
     restart: "no"
   admin:

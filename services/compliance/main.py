@@ -15,8 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from services.common.auth import AuthContext, get_auth_context
 from services.common.entitlements import EntitlementGuard
-from services.common.db import get_async_session as get_db
+from services.common.db import get_async_session as get_db, get_async_engine, run_with_db_retry
 from services.common.middleware import configure_production
 
 logger = logging.getLogger("compliance")
@@ -28,15 +29,32 @@ guard = EntitlementGuard(
 )
 
 
+async def _init_schema() -> None:
+    """Optional create_all (dev) + the idempotent, advisory-locked migration. Retried while Postgres comes up."""
+    from services.compliance import database as cdb
+
+    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+        async with get_async_engine().begin() as conn:
+            await conn.run_sync(cdb.Base.metadata.create_all)
+        logger.info("Compliance tables ensured")
+    await cdb.run_migrations(get_async_engine())
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     guard.ensure_startup()
-    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
-        from services.compliance.database import Base
-        from services.common.db import get_async_engine
-        async with get_async_engine().begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Compliance tables ensured")
+    logger.info(
+        "compliance starting: pid=%s workers=%s (Dockerfile hard-codes --workers 2; "
+        "docker-compose.local.yml overrides to 1) roles_enforced=%s",
+        os.getpid(), os.getenv("WEB_CONCURRENCY", "1"),
+        os.getenv("COMPLIANCE_ENFORCE_ROLES", "true"),
+    )
+    try:
+        import resource  # POSIX only
+        logger.info("compliance memory at startup: maxrss=%s KiB", resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    except Exception:  # noqa: BLE001 - not available on Windows
+        pass
+    await run_with_db_retry(_init_schema, logger=logger)
     yield
 
 
@@ -70,6 +88,7 @@ from services.compliance.routes.compliance import (
     icasa_router, popi_router, rica_router, breach_router, funding_router,
 )
 from services.compliance.routes.documents import router as documents_router
+from services.compliance.routes.statutory import router as statutory_router
 
 # Contracts & SLAs
 app.include_router(contracts_router, prefix="/api/v1")
@@ -103,6 +122,9 @@ app.include_router(funding_router, prefix="/api/v1")
 # Document Understanding: Upload, Fetch, OCR, Extract
 app.include_router(documents_router, prefix="/api/v1")
 
+# EMP201 working papers (prepare / mark-filed; nothing is filed with SARS by this service)
+app.include_router(statutory_router, prefix="/api/v1")
+
 # Cross-Service Connectors: Sales SLA, Technician Safety, Finance, POPIA, RICA, Orchestrator
 from services.compliance.cross_service import router as cross_service_router
 app.include_router(cross_service_router, prefix="/api/v1")
@@ -119,101 +141,63 @@ async def health():
 
 @app.get("/api/v1/dashboard/overview")
 async def compliance_overview(
+    ctx: AuthContext = Depends(get_auth_context),
     db: AsyncSession = Depends(get_db),
-    ctx=Depends(lambda: None),  # auth enforced by middleware; ctx available via request.state
 ):
-    """Aggregated compliance overview — scores, counts, and category breakdown."""
+    """Overview for the CALLER'S tenant only: latest score snapshot per category (history is not
+    averaged in), overall score = mean over assessed categories (null when none), counts."""
+    from datetime import date, datetime, timedelta
+
+    from services.compliance import crud, scoring
     from services.compliance.database import (
         ComplianceScore, Contract, ContractStatus,
         BreachRegister, PopiDataAccessRequest, ComplianceObligation,
-        TaxReturn, HsIncident, FundingOpportunity, BbbeeScorecard,
+        TaxReturn, TaxReturnStatus, HsIncident, FundingOpportunity, BbbeeScorecard,
     )
-    from datetime import datetime, timedelta
 
-    # Compliance scores
-    scores_result = await db.execute(select(ComplianceScore).order_by(ComplianceScore.calculated_at.desc()))
-    scores = scores_result.scalars().all()
+    tenant = str(ctx.tenant_id)
 
+    async def count(model, *where) -> int:
+        q = select(func.count(model.id)).where(model.tenant_id == tenant, *where)
+        return (await db.execute(q)).scalar() or 0
+
+    rows = await crud.list_rows(db, ctx, ComplianceScore, order_by=ComplianceScore.calculated_at.desc())
+    latest = scoring.latest_per_category(rows)
     categories = [
         {
-            "name": s.category.value if hasattr(s.category, "value") else str(s.category),
-            "score": float(s.score),
-            "status": s.status.value if hasattr(s.status, "value") else str(s.status),
-            "issues": s.issues_count or 0,
-            "critical": s.critical_issues or 0,
+            "name": s_.category.value if hasattr(s_.category, "value") else str(s_.category),
+            "score": float(s_.score),
+            "status": s_.status.value if hasattr(s_.status, "value") else str(s_.status),
+            "issues": s_.issues_count or 0,
+            "critical": s_.critical_issues or 0,
+            "calculated_at": s_.calculated_at.isoformat() if s_.calculated_at else None,
         }
-        for s in scores
+        for s_ in latest
     ]
-    overall_score = (
-        round(sum(c["score"] for c in categories) / len(categories))
-        if categories else 0
-    )
+    overall_score = scoring.overall_score(latest)  # None when nothing has been assessed
 
-    # Expiring contracts (90 days)
-    cutoff = datetime.utcnow() + timedelta(days=90)
-    exp_result = await db.execute(
-        select(func.count(Contract.id)).where(
-            Contract.expiry_date <= cutoff,
-            Contract.status == ContractStatus.active,
-        )
-    )
-    expiring_contracts = exp_result.scalar() or 0
+    today = date.today()
+    expiring_contracts = await count(
+        Contract, Contract.expiry_date <= today + timedelta(days=90), Contract.status == ContractStatus.active)
+    overdue_dsar = await count(
+        PopiDataAccessRequest, PopiDataAccessRequest.due_date < datetime.utcnow(), PopiDataAccessRequest.status != "completed")
+    open_breaches = await count(BreachRegister, BreachRegister.status.in_(["identified", "investigating"]))
+    pending_obligations = await count(ComplianceObligation, ComplianceObligation.status == "pending_review")
+    tax_overdue = await count(TaxReturn, TaxReturn.status == TaxReturnStatus.overdue)
+    hs_open = await count(HsIncident, HsIncident.status == "open")
+    funding_matched = await count(FundingOpportunity, FundingOpportunity.status == "identified")
 
-    # Overdue DSARs
-    dsar_result = await db.execute(
-        select(func.count(PopiDataAccessRequest.id)).where(
-            PopiDataAccessRequest.due_date < datetime.utcnow(),
-            PopiDataAccessRequest.status != "completed",
-        )
-    )
-    overdue_dsar = dsar_result.scalar() or 0
-
-    # Open breaches
-    breach_result = await db.execute(
-        select(func.count(BreachRegister.id)).where(
-            BreachRegister.status.in_(["identified", "investigating"])
-        )
-    )
-    open_breaches = breach_result.scalar() or 0
-
-    # Pending obligations
-    obl_result = await db.execute(
-        select(func.count(ComplianceObligation.id)).where(
-            ComplianceObligation.status == "pending_review"
-        )
-    )
-    pending_obligations = obl_result.scalar() or 0
-
-    # Overdue tax
-    tax_result = await db.execute(
-        select(func.count(TaxReturn.id)).where(TaxReturn.status == "overdue")
-    )
-    tax_overdue = tax_result.scalar() or 0
-
-    # Open H&S incidents
-    hs_result = await db.execute(
-        select(func.count(HsIncident.id)).where(HsIncident.status == "open")
-    )
-    hs_open = hs_result.scalar() or 0
-
-    # BBBEE level (most recent)
-    bbbee_result = await db.execute(
-        select(BbbeeScorecard).order_by(BbbeeScorecard.id.desc()).limit(1)
-    )
-    bbbee = bbbee_result.scalar_one_or_none()
+    bbbee = (await db.execute(
+        select(BbbeeScorecard).where(BbbeeScorecard.tenant_id == tenant).order_by(BbbeeScorecard.id.desc()).limit(1)
+    )).scalar_one_or_none()
     bbbee_level = (
         bbbee.overall_level.value if bbbee and hasattr(bbbee.overall_level, "value")
         else str(bbbee.overall_level) if bbbee else "pending"
     )
 
-    # Funding matched
-    funding_result = await db.execute(
-        select(func.count(FundingOpportunity.id)).where(FundingOpportunity.status == "identified")
-    )
-    funding_matched = funding_result.scalar() or 0
-
     return {
         "overall_score": overall_score,
+        "assessed_categories": len(categories),
         "categories": categories,
         "expiring_contracts": expiring_contracts,
         "overdue_dsar": overdue_dsar,
