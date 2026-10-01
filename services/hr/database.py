@@ -36,6 +36,8 @@ class Employee(Base):
     # South African statutory identification
     id_number: Mapped[Optional[str]] = mapped_column(String(30))
     tax_number: Mapped[Optional[str]] = mapped_column(String(30))
+    # Used only to pick the age-based tax rebates (secondary 65+, tertiary 75+)
+    date_of_birth: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     # Link to call center agent (optional — only for employees who are also CC agents)
     call_center_agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     # ── AI Agent fields (populated when employee is an AI agent) ──────
@@ -262,6 +264,10 @@ class PayrollRun(Base):
     finance_entry_id: Mapped[Optional[str]] = mapped_column(String(100))
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    # SA tax year (start year, 2025 = 2025/26) and table version the run was computed with
+    tax_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tax_table_version: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    acknowledged_unverified_tables: Mapped[Optional[bool]] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -290,6 +296,9 @@ class Payslip(Base):
     sdl: Mapped[float] = mapped_column(Numeric(14, 2), default=0)       # Skills Development Levy
     other_deductions: Mapped[float] = mapped_column(Numeric(14, 2), default=0)
     net: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    tax_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tax_table_version: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    tax_flags: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # e.g. age_unknown
     currency: Mapped[str] = mapped_column(String(3), default="ZAR")
     # Payout tracking (Paystack Transfer)
     payout_status: Mapped[str] = mapped_column(String(20), default="PENDING")  # PENDING, PROCESSING, PAID, FAILED
@@ -391,6 +400,7 @@ async def init_tables():
         await _ensure_kpi_unique_indexes(conn)
         await _ensure_kpi_sheet_columns(conn)
         await _ensure_employee_columns(conn)
+        await _ensure_payroll_columns(conn)
 
 
 async def _ensure_employee_columns(conn) -> None:
@@ -406,6 +416,7 @@ async def _ensure_employee_columns(conn) -> None:
         ("scope", "VARCHAR(500)"),
         ("is_subagent", "BOOLEAN DEFAULT FALSE"),
         ("parent_agent_id", "UUID"),
+        ("date_of_birth", "DATE"),
     ]
     for name, typ in cols:
         try:
@@ -413,6 +424,27 @@ async def _ensure_employee_columns(conn) -> None:
                 await conn.execute(text(f"ALTER TABLE employees ADD COLUMN IF NOT EXISTS {name} {typ}"))
         except Exception as exc:  # never block startup
             log.warning("Could not ensure column employees.%s: %s", name, exc)
+
+
+async def _ensure_payroll_columns(conn) -> None:
+    """Idempotent migration: record the SA tax year + table version on payslips and runs."""
+    import logging
+    from sqlalchemy import text
+    log = logging.getLogger("hr.database")
+    specs = [
+        ("payslips", "tax_year", "INTEGER"),
+        ("payslips", "tax_table_version", "VARCHAR(60)"),
+        ("payslips", "tax_flags", "VARCHAR(200)"),
+        ("payroll_runs", "tax_year", "INTEGER"),
+        ("payroll_runs", "tax_table_version", "VARCHAR(60)"),
+        ("payroll_runs", "acknowledged_unverified_tables", "BOOLEAN DEFAULT FALSE"),
+    ]
+    for table, name, typ in specs:
+        try:
+            async with conn.begin_nested():
+                await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {typ}"))
+        except Exception as exc:  # never block startup
+            log.warning("Could not ensure column %s.%s: %s", table, name, exc)
 
 
 async def _ensure_kpi_sheet_columns(conn) -> None:

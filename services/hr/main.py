@@ -1,14 +1,15 @@
 import os
 import logging
 import json
+import math
 from datetime import date, datetime
 from typing import Optional, List, Dict, Any
 import uuid
 
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi import FastAPI, Depends, Header, HTTPException, Request, status, Query, UploadFile, File
 from pydantic import BaseModel
-from sqlalchemy import select, desc, and_, func
+from sqlalchemy import select, desc, and_, func, or_
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
@@ -22,6 +23,9 @@ from services.hr.database import (
     CompanyKPIConfig, EmployeeKPISheet,
 )
 from services.hr import paystack as ps
+from services.hr import access
+from services.hr import tax_tables
+from services.hr.access import Caller, get_caller, require_hr_admin, redact_employee, scrub_text, mask_tail
 from services.hr.cross_service import router as cross_service_router
 
 app = FastAPI(title="OmniDome HR Service", version="0.2.0")
@@ -29,7 +33,20 @@ guard = EntitlementGuard(module_id="hr")
 logger = logging.getLogger("hr")
 
 configure_production(app)
-app.include_router(cross_service_router)
+
+
+async def _cross_service_gate(request: Request, auth: AuthContext = Depends(get_auth_context), db=Depends(get_session)) -> None:
+    """Cross-service connectors move payroll/commission data and post journals: HR admins only
+    for every write and for the finance/payroll reads; other reads stay open to tenant members."""
+    path = request.url.path
+    sensitive_read = "/finance/" in path or "/commissions/ledger" in path
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"} and not sensitive_read:
+        return
+    if not await access.is_hr_admin(auth, db):
+        raise HTTPException(status_code=403, detail="This action needs an HR admin role")
+
+
+app.include_router(cross_service_router, dependencies=[Depends(_cross_service_gate)])
 
 
 @app.get("/health", tags=["Health"])
@@ -99,6 +116,7 @@ class EmployeeBase(BaseModel):
 class EmployeeCreate(EmployeeBase):
     employee_id: str
     email: Optional[str] = None
+    date_of_birth: Optional[date] = None
     phone: Optional[str] = None
     manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
@@ -120,11 +138,24 @@ class EmployeeUpdate(BaseModel):
     phone: Optional[str] = None
     manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
+    date_of_birth: Optional[date] = None
+
+
+async def _validate_manager(db, tenant_id: uuid.UUID, emp_id: Optional[uuid.UUID], manager_id: Optional[uuid.UUID]) -> None:
+    """422 unless the manager is an employee of the same tenant and the link creates no loop."""
+    if manager_id is None:
+        return
+    pm = await access.parent_map(db, tenant_id)
+    if manager_id not in pm:
+        raise HTTPException(status_code=422, detail="manager_id must be an employee of this organisation")
+    if emp_id is not None and access.would_create_cycle(emp_id, manager_id, pm):
+        raise HTTPException(status_code=422, detail="manager_id would create a reporting loop")
 
 
 @app.get("/employees", response_model=List[dict])
 async def list_employees(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
     department: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
@@ -139,15 +170,86 @@ async def list_employees(
         like = f"%{q.strip()}%"
         stmt = stmt.where(Employee.full_name.ilike(like) | Employee.employee_id.ilike(like))
     result = await db.execute(stmt.order_by(Employee.created_at))
-    return [_emp_to_dict(e) for e in result.scalars().all()]
+    return [redact_employee(_emp_to_dict(e), caller.is_admin) for e in result.scalars().all()]
+
+
+@app.get("/employees/performance/summary")
+async def performance_summary(
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
+    db=Depends(get_session),
+):
+    """One row per tenant employee: {employee_id, overall_score, status, fiscal_year, composite}.
+    HR admins see everyone, managers their reports (direct and indirect); everyone else gets 403.
+    Employees without a saved sheet have status NO_SHEET and a null score. Read-only."""
+    if not (caller.is_admin or caller.is_manager):
+        raise HTTPException(status_code=403, detail="The performance summary needs a manager or HR role")
+    fy = fiscal_year or DEFAULT_FISCAL_YEAR
+    pm = await access.parent_map(db, tenant_id)
+    if caller.is_admin:
+        visible = set(pm.keys())
+    else:
+        if caller.employee is None:
+            raise HTTPException(status_code=403, detail="Your login is not linked to an employee record")
+        visible = access.reports_of(caller.employee.id, pm)
+    emps = (await db.execute(select(Employee).where(Employee.tenant_id == tenant_id).order_by(Employee.full_name))).scalars().all()
+    sheets = (await db.execute(
+        select(EmployeeKPISheet).where(EmployeeKPISheet.tenant_id == tenant_id, EmployeeKPISheet.fiscal_year == fy)
+        .order_by(desc(EmployeeKPISheet.updated_at))
+    )).scalars().all()
+    by_emp: Dict[Any, EmployeeKPISheet] = {}
+    for sh in sheets:
+        by_emp.setdefault(sh.employee_id, sh)  # newest first
+    _cfg, comp_scores, company_missing = await _load_company(db, tenant_id, fy)
+    rows = []
+    for e in emps:
+        if e.id not in visible:
+            continue
+        sh = by_emp.get(e.id)
+        if sh is None:
+            rows.append({"employee_id": str(e.id), "overall_score": None, "status": "NO_SHEET", "fiscal_year": fy, "composite": None})
+            continue
+        kpis_list = json.loads(sh.kpis_json) if sh.kpis_json else []
+        comp = _compute_composite(sh, kpis_list, comp_scores, company_missing)
+        rows.append({"employee_id": str(e.id), "overall_score": comp["total"], "status": sh.status, "fiscal_year": fy, "composite": comp})
+    return rows
+
+
+async def _find_sheet_or_404(emp_id: uuid.UUID, tenant_id: uuid.UUID, fiscal_year: Optional[str], db) -> EmployeeKPISheet:
+    q = select(EmployeeKPISheet).where(
+        EmployeeKPISheet.employee_id == emp_id,
+        EmployeeKPISheet.tenant_id == tenant_id,
+    )
+    if fiscal_year:
+        q = q.where(EmployeeKPISheet.fiscal_year == fiscal_year)
+    sheet = (await db.execute(q.order_by(desc(EmployeeKPISheet.updated_at)))).scalars().first()
+    if not sheet:
+        raise HTTPException(status_code=404, detail="KPI sheet not found")
+    return sheet
+
+
+def _workflow_response(sheet: EmployeeKPISheet) -> Dict[str, Any]:
+    return {
+        "success": True,
+        "sheet_id": str(sheet.id),
+        "status": sheet.status,
+        "approved_by": str(sheet.approved_by) if sheet.approved_by else None,
+        "approved_at": sheet.approved_at,
+        "reject_reason": sheet.reject_reason,
+    }
 
 
 @app.post("/employees", status_code=status.HTTP_201_CREATED)
 async def create_employee(
     data: EmployeeCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
+    await _validate_manager(db, tenant_id, None, data.manager_id)
+    if data.parent_agent_id is not None:
+        await _get_employee_or_404(data.parent_agent_id, tenant_id, db)
     emp = Employee(
         tenant_id=tenant_id,
         employee_id=data.employee_id,
@@ -155,6 +257,7 @@ async def create_employee(
         job_title=data.job_title,
         department=data.department,
         hire_date=data.hire_date,
+        date_of_birth=data.date_of_birth,
         status="ACTIVE",
         email=data.email,
         phone=data.phone,
@@ -171,7 +274,7 @@ async def create_employee(
     db.add(emp)
     await db.flush()
     await db.refresh(emp)
-    logger.info(f"Employee created: {data.full_name} ({data.employee_id})")
+    logger.info("Employee created: id=%s code=%s", emp.id, data.employee_id)
 
     # ── Side-effect: register AI agent with Orchestrator + Tenant Memory ──
     if data.is_agent:
@@ -209,7 +312,7 @@ async def create_employee(
                     json=agent_entry,
                     headers={"x-tenant-id": str(tenant_id)},
                 )
-                logger.info(f"Agent '{data.full_name}' registered with Orchestrator + Memory")
+                logger.info("Agent registered with Orchestrator + Memory: employee=%s", emp.id)
         except Exception as exc:
             logger.warning(f"Agent registration side-effect failed (non-blocking): {exc}")
 
@@ -220,10 +323,11 @@ async def create_employee(
 async def get_employee(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
-    return _emp_to_dict(emp)
+    return redact_employee(_emp_to_dict(emp), caller.is_admin)
 
 
 @app.put("/employees/{emp_id}")
@@ -231,10 +335,13 @@ async def update_employee(
     emp_id: uuid.UUID,
     data: EmployeeUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
-    update_data = data.dict(exclude_unset=True)
+    update_data = data.model_dump(exclude_unset=True)
+    if "manager_id" in update_data:
+        await _validate_manager(db, tenant_id, emp.id, update_data["manager_id"])
     for key, value in update_data.items():
         setattr(emp, key, value)
     await db.flush()
@@ -246,6 +353,7 @@ async def update_employee(
 async def deactivate_employee(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
@@ -258,6 +366,7 @@ async def link_employee_to_agent(
     emp_id: uuid.UUID,
     agent_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     """Link an HR employee record to a call center agent."""
@@ -265,6 +374,32 @@ async def link_employee_to_agent(
     emp.call_center_agent_id = agent_id
     await db.flush()
     return {"status": "linked", "employee_id": str(emp_id), "agent_id": str(agent_id)}
+
+
+class LinkUserBody(BaseModel):
+    user_id: Optional[uuid.UUID] = None
+
+
+@app.put("/employees/{emp_id}/link-user")
+async def link_employee_to_user(
+    emp_id: uuid.UUID,
+    body: LinkUserBody,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
+    db=Depends(get_session),
+):
+    """Bind an employee row to a login (Employee.user_id). This is what lets 'my own payslip',
+    manager scoping and KPI self-approval checks recognise the caller. One login, one employee."""
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+    if body.user_id is not None:
+        clash = (await db.execute(
+            select(Employee.id).where(Employee.tenant_id == tenant_id, Employee.user_id == body.user_id, Employee.id != emp_id)
+        )).first()
+        if clash is not None:
+            raise HTTPException(status_code=409, detail="That user is already linked to another employee")
+    emp.user_id = body.user_id
+    await db.flush()
+    return {"status": "linked" if body.user_id else "unlinked", "employee_id": str(emp_id)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -282,9 +417,12 @@ class LeaveRequestCreate(BaseModel):
 async def list_leave_requests(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(emp_id, tenant_id, db)
+    if not (caller.is_self(emp_id) or await caller.manages(db, emp_id)):
+        raise HTTPException(status_code=403, detail="Leave records are visible to the employee, their manager and HR")
     result = await db.execute(
         select(LeaveRequest)
         .where(LeaveRequest.employee_id == emp_id, LeaveRequest.tenant_id == tenant_id)
@@ -306,9 +444,12 @@ async def create_leave_request(
     emp_id: uuid.UUID,
     data: LeaveRequestCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(emp_id, tenant_id, db)
+    if not (caller.is_self(emp_id) or caller.is_admin):
+        raise HTTPException(status_code=403, detail="Leave can be requested for yourself, or by HR")
     leave = LeaveRequest(
         tenant_id=tenant_id, employee_id=emp_id,
         leave_type=data.leave_type, start_date=data.start_date,
@@ -324,38 +465,40 @@ async def create_leave_request(
     }
 
 
-@app.put("/leave/{leave_id}/approve")
-async def approve_leave(
-    leave_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    db=Depends(get_session),
-):
+async def _decide_leave(leave_id: uuid.UUID, decision: str, tenant_id: uuid.UUID, caller: Caller, db) -> dict:
     result = await db.execute(
         select(LeaveRequest).where(LeaveRequest.id == leave_id, LeaveRequest.tenant_id == tenant_id)
     )
     leave = result.scalars().first()
     if not leave:
         raise HTTPException(status_code=404, detail="Leave request not found")
-    leave.status = "APPROVED"
+    if caller.is_self(leave.employee_id) and not caller.unrestricted:
+        raise HTTPException(status_code=403, detail="You cannot decide your own leave request")
+    if not (caller.is_admin or await caller.manages(db, leave.employee_id)):
+        raise HTTPException(status_code=403, detail="Leave can be decided by the employee's manager or HR")
+    leave.status = decision
     await db.flush()
-    return {"id": leave.id, "status": "APPROVED"}
+    return {"id": leave.id, "status": decision}
+
+
+@app.put("/leave/{leave_id}/approve")
+async def approve_leave(
+    leave_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
+    db=Depends(get_session),
+):
+    return await _decide_leave(leave_id, "APPROVED", tenant_id, caller, db)
 
 
 @app.put("/leave/{leave_id}/decline")
 async def decline_leave(
     leave_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
-    result = await db.execute(
-        select(LeaveRequest).where(LeaveRequest.id == leave_id, LeaveRequest.tenant_id == tenant_id)
-    )
-    leave = result.scalars().first()
-    if not leave:
-        raise HTTPException(status_code=404, detail="Leave request not found")
-    leave.status = "DECLINED"
-    await db.flush()
-    return {"id": leave.id, "status": "DECLINED"}
+    return await _decide_leave(leave_id, "DECLINED", tenant_id, caller, db)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -377,9 +520,12 @@ class PerformanceReviewCreate(BaseModel):
 async def get_employee_performance(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(emp_id, tenant_id, db)
+    if not (caller.is_self(emp_id) or await caller.manages(db, emp_id)):
+        raise HTTPException(status_code=403, detail="Performance reviews are visible to the employee, their manager and HR")
     result = await db.execute(
         select(PerformanceReview)
         .where(PerformanceReview.employee_id == emp_id, PerformanceReview.tenant_id == tenant_id)
@@ -405,11 +551,16 @@ async def create_performance_review(
     emp_id: uuid.UUID,
     data: PerformanceReviewCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(emp_id, tenant_id, db)
+    if caller.is_self(emp_id) and not caller.unrestricted:
+        raise HTTPException(status_code=403, detail="You cannot write your own performance review")
+    if not await caller.manages(db, emp_id):
+        raise HTTPException(status_code=403, detail="Performance reviews can be written by the employee's manager or HR")
     review = PerformanceReview(
-        tenant_id=tenant_id, employee_id=emp_id, **data.dict(),
+        tenant_id=tenant_id, employee_id=emp_id, **data.model_dump(),
     )
     db.add(review)
     await db.flush()
@@ -457,23 +608,39 @@ class CompanyKPIConfigUpdate(BaseModel):
 
 
 VALUE_KEYS = ("ubuntu_empathy", "operational_speed", "staff_wellness_bcea", "popia_ethical_governance")
-HR_ADMIN_ROLES = {"admin", "hr", "hr_admin", "hr_manager", "tenant_admin", "owner", "platform_admin"}
-APPROVER_ROLES = HR_ADMIN_ROLES | {"manager", "line_manager"}
+APPROVER_ROLES = access.HR_ADMIN_ROLES | access.MANAGER_ROLES
 
 
-def _norm_roles(ctx: AuthContext) -> set:
-    return {str(r).strip().lower() for r in (ctx.roles or [])}
+async def _can_decide_sheet(caller: Caller, emp: Employee, db) -> tuple:
+    """(allowed, reason) for approve / reject of ``emp``'s KPI sheet. Fails CLOSED.
 
-
-def _is_hr_admin(ctx: AuthContext) -> bool:
-    return bool(ctx.is_platform_admin) or bool(_norm_roles(ctx) & HR_ADMIN_ROLES)
-
-
-def _can_approve(ctx: AuthContext, emp: Employee) -> bool:
-    """Manager-or-HR role required; the sheet owner (Employee.user_id == caller) may never approve."""
-    if emp.user_id is not None and emp.user_id == ctx.user_id:
-        return False
-    return bool(ctx.is_platform_admin) or bool(_norm_roles(ctx) & APPROVER_ROLES)
+    * the caller must be matched to an employee (Employee.user_id, or a verified-token e-mail);
+      an HR admin who cannot be matched may still decide on OTHER people's sheets because the
+      owner check below can only be bypassed by someone who is not the owner;
+    * the sheet's owner never decides their own sheet;
+    * a looping manager chain blocks everyone until HR fixes the hierarchy;
+    * non-admins must hold a manager role and sit above the employee in the manager chain.
+    """
+    if caller.unrestricted:
+        return True, ""
+    me = caller.employee
+    if me is not None and me.id == emp.id:
+        return False, "Employees cannot act on their own KPI sheet"
+    if emp.user_id is not None and emp.user_id == caller.auth.user_id:
+        return False, "Employees cannot act on their own KPI sheet"
+    pm = await access.parent_map(db, caller.auth.tenant_id)
+    chain, cyclic = access.manager_chain(emp.id, pm)
+    if cyclic:
+        return False, "The reporting line of this employee contains a loop; HR must fix the manager hierarchy first"
+    if caller.is_admin:
+        return True, ""
+    if me is None:
+        return False, "Your login is not linked to an employee record, so your approval rights cannot be verified"
+    if not caller.is_manager:
+        return False, "Approval requires a manager or HR role"
+    if me.id not in chain:
+        return False, "Only the employee's manager chain or HR can decide this KPI sheet"
+    return True, ""
 
 
 def _validate_values_ratings(raw: Any) -> Dict[str, int]:
@@ -509,28 +676,39 @@ def _level_score(level: Any) -> float:
     return (lv or 3.0) / 3.0 * 100.0
 
 
+SCORE_BASIS = (
+    "ui_points_v1: total = shared_index*shared_weight/100 + values_score*values_weight/100 "
+    "+ sum(level_score*kpi_weight)/100; level_score = level/3*100 (level 3 = 100%); "
+    "same arithmetic as performance-objectives-view.tsx, server value is authoritative"
+)
+
+
 def _compute_composite(sheet: EmployeeKPISheet, kpis: List[Dict[str, Any]], comp_scores: Dict[str, Any], company_missing: bool) -> Dict[str, Any]:
     sh_w = float(sheet.company_shared_weight_pct or 0)
     val_w = float(sheet.values_weight_pct or 0)
     ind_w = float(sheet.individual_target_weight_pct or 0)
-    shared_score = 0.0 if company_missing else float(comp_scores.get("corporate_attainment_index") or 0.0)
+    idx = comp_scores.get("corporate_attainment_index")
+    shared_score = 0.0 if (company_missing or idx is None) else float(idx)
     ratings = _load_ratings(sheet)
     values_rated = all(k in ratings for k in VALUE_KEYS)
     values_score = (sum(ratings[k] for k in VALUE_KEYS) / len(VALUE_KEYS)) / 3.0 * 100.0 if values_rated else None
     items = [k for k in kpis if isinstance(k, dict)]
     w_sum = sum(float(k.get("weight_pct") or 0) for k in items)
-    individual_score = (
-        sum(_level_score(k.get("current_level")) * float(k.get("weight_pct") or 0) for k in items) / w_sum
-        if w_sum > 0 else 0.0
-    )
-    total = shared_score * sh_w / 100 + (values_score or 0.0) * val_w / 100 + individual_score * ind_w / 100
+    # Points exactly as the UI adds them (no division by the item-weight sum), so a DRAFT with
+    # incomplete weights scores the same here and in the browser.
+    indiv_points = sum(_level_score(k.get("current_level")) * float(k.get("weight_pct") or 0) for k in items) / 100.0
+    individual_score = (indiv_points / ind_w * 100.0) if ind_w > 0 else 0.0
+    total = shared_score * sh_w / 100 + (values_score or 0.0) * val_w / 100 + indiv_points
     return {
         "total": round(total, 1),
         "shared_score": round(shared_score, 2),
         "values_score": round(values_score, 2) if values_score is not None else None,
         "individual_score": round(individual_score, 2),
+        "individual_points": round(indiv_points, 2),
         "values_rated": values_rated,
         "company_missing": company_missing,
+        "weights_complete": abs(w_sum - ind_w) <= WEIGHT_TOLERANCE,
+        "score_basis": SCORE_BASIS,
     }
 
 
@@ -568,47 +746,90 @@ class AISmartCriteriaRequest(BaseModel):
     department: Optional[str] = None
 
 
+def _company_missing(config: Optional[CompanyKPIConfig]) -> bool:
+    """True when any of the three budgets is unset (0): an index against a zero budget means nothing."""
+    return (
+        config is None
+        or float(config.sales_budget_zar or 0) <= 0
+        or float(config.cost_budget_zar or 0) <= 0
+        or float(config.profit_budget_zar or 0) <= 0
+    )
+
+
+def _empty_company_scores() -> Dict[str, Any]:
+    return {
+        "id": None, "fiscal_year": None,
+        "sales_budget_zar": 0.0, "sales_actual_zar": 0.0, "sales_achievement_pct": None, "sales_source_mode": "LIVE_TABLE",
+        "cost_budget_zar": 0.0, "cost_actual_zar": 0.0, "cost_efficiency_pct": None, "cost_source_mode": "LIVE_TABLE",
+        "profit_budget_zar": 0.0, "profit_actual_zar": 0.0, "profit_achievement_pct": None, "profit_source_mode": "LIVE_TABLE",
+        "company_shared_score_pct": None, "corporate_attainment_index": None, "company_missing": True,
+        "values_weight_pct": 10.0, "values_description": None, "level_weights": DEFAULT_LEVEL_WEIGHTS,
+        "created_at": None, "updated_at": None,
+    }
+
+
 def _calculate_company_scores(config: CompanyKPIConfig) -> Dict[str, Any]:
-    s_budget = float(config.sales_budget_zar) if config.sales_budget_zar else 1.0
-    s_actual = float(config.sales_actual_zar) if config.sales_actual_zar else 0.0
-    sales_ach = round((s_actual / s_budget) * 100.0, 2) if s_budget > 0 else 0.0
+    """Company indexes. When ANY budget is 0 every index is null and company_missing is true, so a
+    cost actual of 0 can no longer read as 100% efficiency and lift the company score."""
+    s_budget = float(config.sales_budget_zar or 0)
+    s_actual = float(config.sales_actual_zar or 0)
+    c_budget = float(config.cost_budget_zar or 0)
+    c_actual = float(config.cost_actual_zar or 0)
+    p_budget = float(config.profit_budget_zar or 0)
+    p_actual = float(config.profit_actual_zar or 0)
+    missing = _company_missing(config)
 
-    c_budget = float(config.cost_budget_zar) if config.cost_budget_zar else 1.0
-    c_actual = float(config.cost_actual_zar) if config.cost_actual_zar else 0.0
-    # Cost efficiency (matches frontend): budget / actual; under budget is >100%
-    cost_eff = round((c_budget / c_actual) * 100.0, 2) if c_actual > 0 else 100.0
+    sales_ach = round((s_actual / s_budget) * 100.0, 2) if s_budget > 0 else None
+    # Cost efficiency (matches frontend): budget / actual; under budget is >100%. No actual yet -> unknown.
+    cost_eff = round((c_budget / c_actual) * 100.0, 2) if (c_budget > 0 and c_actual > 0) else None
+    profit_ach = round((p_actual / p_budget) * 100.0, 2) if p_budget > 0 else None
 
-    p_budget = float(config.profit_budget_zar) if config.profit_budget_zar else 1.0
-    p_actual = float(config.profit_actual_zar) if config.profit_actual_zar else 0.0
-    profit_ach = round((p_actual / p_budget) * 100.0, 2) if p_budget > 0 else 0.0
-
-    # Single source of truth (matches frontend): 45% sales / 35% cost efficiency / 20% profit
-    shared_score = round((sales_ach * 0.45) + (cost_eff * 0.35) + (profit_ach * 0.20), 2)
+    shared_score: Optional[float] = None
+    if not missing and cost_eff is not None:
+        # Single source of truth (matches frontend): 45% sales / 35% cost efficiency / 20% profit
+        shared_score = round((sales_ach * 0.45) + (cost_eff * 0.35) + (profit_ach * 0.20), 2)
+    else:
+        missing = True
     level_weights = json.loads(config.level_weights_json) if config.level_weights_json else DEFAULT_LEVEL_WEIGHTS
 
     return {
-        "id": str(config.id),
+        "id": str(config.id) if config.id else None,
         "fiscal_year": config.fiscal_year,
-        "sales_budget_zar": float(config.sales_budget_zar or 0.0),
-        "sales_actual_zar": float(config.sales_actual_zar or 0.0),
+        "sales_budget_zar": s_budget,
+        "sales_actual_zar": s_actual,
         "sales_achievement_pct": sales_ach,
         "sales_source_mode": config.sales_source_mode or "LIVE_TABLE",
-        "cost_budget_zar": float(config.cost_budget_zar or 0.0),
-        "cost_actual_zar": float(config.cost_actual_zar or 0.0),
+        "cost_budget_zar": c_budget,
+        "cost_actual_zar": c_actual,
         "cost_efficiency_pct": cost_eff,
         "cost_source_mode": config.cost_source_mode or "LIVE_TABLE",
-        "profit_budget_zar": float(config.profit_budget_zar or 0.0),
-        "profit_actual_zar": float(config.profit_actual_zar or 0.0),
+        "profit_budget_zar": p_budget,
+        "profit_actual_zar": p_actual,
         "profit_achievement_pct": profit_ach,
         "profit_source_mode": config.profit_source_mode or "LIVE_TABLE",
         "company_shared_score_pct": shared_score,
         "corporate_attainment_index": shared_score,
-        "values_weight_pct": float(config.values_weight_pct),
+        "company_missing": missing,
+        "values_weight_pct": float(config.values_weight_pct if config.values_weight_pct is not None else 10.0),
         "values_description": config.values_description,
         "level_weights": level_weights,
         "created_at": config.created_at,
         "updated_at": config.updated_at,
     }
+
+
+async def _load_company(db, tenant_id: uuid.UUID, fiscal_year: Optional[str]):
+    """(config or None, scores dict, company_missing). Never writes."""
+    cq = select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id)
+    if fiscal_year:
+        cq = cq.where(CompanyKPIConfig.fiscal_year == fiscal_year)
+    config = (await db.execute(cq.order_by(desc(CompanyKPIConfig.updated_at)))).scalars().first()
+    if config is None:
+        scores = _empty_company_scores()
+        scores["fiscal_year"] = fiscal_year or DEFAULT_FISCAL_YEAR
+        return None, scores, True
+    scores = _calculate_company_scores(config)
+    return config, scores, bool(scores["company_missing"])
 
 
 def _infer_employee_level(job_title: str) -> str:
@@ -628,41 +849,35 @@ async def get_company_kpis(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
-    """Retrieve whole-company shared KPI targets, budget benchmarks, and position level weights."""
-    q = select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id)
-    if fiscal_year:
-        q = q.where(CompanyKPIConfig.fiscal_year == fiscal_year)
-    result = await db.execute(q.order_by(desc(CompanyKPIConfig.updated_at)))
-    config = result.scalars().first()
-    if not config:
-        config = CompanyKPIConfig(
-            tenant_id=tenant_id,
-            fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
-            # Targets and actuals start at zero until the owner sets targets (Talent > Company Shared Setup) and syncs /kpis/live-actuals.
-            sales_budget_zar=0.0,
-            sales_actual_zar=0.0,
-            cost_budget_zar=0.0,
-            cost_actual_zar=0.0,
-            profit_budget_zar=0.0,
-            profit_actual_zar=0.0,
-            values_weight_pct=10.0,
+    """Retrieve whole-company shared KPI targets, budget benchmarks, and position level weights.
+
+    A GET never writes: with no saved configuration it returns an unsaved template
+    (``is_template: true``, zero budgets, null indexes, ``company_missing: true``); PUT /kpis/company
+    creates the row."""
+    config, scores, _ = await _load_company(db, tenant_id, fiscal_year)
+    if config is None:
+        template = CompanyKPIConfig(
+            tenant_id=tenant_id, fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
+            sales_budget_zar=0.0, sales_actual_zar=0.0, cost_budget_zar=0.0, cost_actual_zar=0.0,
+            profit_budget_zar=0.0, profit_actual_zar=0.0, values_weight_pct=10.0,
             values_description="Ubuntu & Customer Empathy, Operational Excellence & Speed, Staff Wellness (BCEA), POPIA & Ethical Governance",
             level_weights_json=json.dumps(DEFAULT_LEVEL_WEIGHTS),
-        )
-        db.add(config)
-        await db.flush()
-        await db.refresh(config)
-
-    return _calculate_company_scores(config)
+        )  # transient: never added to the session
+        scores = _calculate_company_scores(template)
+        scores["is_template"] = True
+        return scores
+    scores["is_template"] = False
+    return scores
 
 
 @app.put("/kpis/company")
 async def update_company_kpis(
     data: CompanyKPIConfigUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
-    """Update whole-company shared KPI budgets (Sales, Cost, Profit) and level weight matrix."""
+    """Update whole-company shared KPI budgets (Sales, Cost, Profit) and level weight matrix. HR admin only."""
     result = await db.execute(
         select(CompanyKPIConfig)
         .where(
@@ -709,7 +924,9 @@ async def update_company_kpis(
 
     await db.flush()
     await db.refresh(config)
-    return _calculate_company_scores(config)
+    out = _calculate_company_scores(config)
+    out["is_template"] = False
+    return out
 
 
 def _fiscal_year_start(fiscal_year: Optional[str]) -> date:
@@ -771,32 +988,70 @@ async def _live_billing_collected_ytd(tenant_id: uuid.UUID, fy_start: date) -> O
         return None
 
 
-@app.get("/kpis/live-actuals")
-async def get_kpis_live_actuals(
-    fiscal_year: Optional[str] = None,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    db=Depends(get_session),
-):
-    """Retrieve ground-truth actual metrics from real sources (sales, billing, payroll).
+def _fy_period_range(fy_start: date) -> tuple:
+    """('YYYY-MM' first, 'YYYY-MM' last) of the 12 payroll periods in the fiscal year."""
+    total = fy_start.year * 12 + (fy_start.month - 1) + 11
+    ey, em = divmod(total, 12)
+    return f"{fy_start.year:04d}-{fy_start.month:02d}", f"{ey:04d}-{em + 1:02d}"
 
-    Values that cannot be read are returned as null with source='unavailable' (never demo numbers).
-    """
+
+PAID_RUN_STATUSES = ("PAID", "PARTIALLY_PAID")
+
+
+def _payroll_cost_statement(tenant_id: uuid.UUID, first_period: str, last_period: str):
+    """Payslip cost rows that count towards the company cost actual: only PAID / PARTIALLY_PAID runs
+    (a payslip of a PARTIALLY_PAID run counts once it is PAID or PROCESSING), periods inside the
+    fiscal year. DRAFT and FAILED runs never count."""
+    return (
+        select(
+            Payslip.employee_id,
+            PayrollRun.period,
+            PayrollRun.created_at,
+            (Payslip.gross + Payslip.uif_employer + Payslip.sdl).label("cost"),
+        )
+        .join(PayrollRun, PayrollRun.id == Payslip.run_id)
+        .where(
+            Payslip.tenant_id == tenant_id,
+            PayrollRun.tenant_id == tenant_id,
+            PayrollRun.status.in_(PAID_RUN_STATUSES),
+            PayrollRun.period >= first_period,
+            PayrollRun.period <= last_period,
+            or_(PayrollRun.status == "PAID", Payslip.payout_status.in_(("PAID", "PROCESSING"))),
+        )
+    )
+
+
+def _dedupe_paid_cost(rows) -> float:
+    """One cost per (employee, period): the latest paid run wins, so a re-run of the same period
+    is not counted twice."""
+    best: Dict[tuple, tuple] = {}
+    for emp_id, period, created_at, cost in rows:
+        key = (emp_id, period)
+        stamp = created_at or datetime.min
+        if hasattr(stamp, "tzinfo") and stamp.tzinfo is not None:
+            stamp = stamp.replace(tzinfo=None)
+        if key not in best or stamp >= best[key][0]:
+            best[key] = (stamp, float(cost or 0))
+    return round(sum(v[1] for v in best.values()), 2)
+
+
+async def _live_payroll_cost(db, tenant_id: uuid.UUID, fy_start: date) -> Optional[float]:
+    first, last = _fy_period_range(fy_start)
+    try:
+        rows = (await db.execute(_payroll_cost_statement(tenant_id, first, last))).all()
+    except Exception as e:
+        logger.warning("Could not query payslips for cost actual: %s", type(e).__name__)
+        return None
+    total = _dedupe_paid_cost(rows)
+    return total if total > 0 else None
+
+
+async def _collect_live_actuals(db, tenant_id: uuid.UUID, fiscal_year: Optional[str]) -> Dict[str, Any]:
     fy_start = _fiscal_year_start(fiscal_year or DEFAULT_FISCAL_YEAR)
 
-    # 1. Operating Cost from Payroll (HR's own table)
-    cost_val: Optional[float] = None
-    cost_source = "unavailable"
-    try:
-        p_res = await db.execute(
-            select(func.sum(Payslip.gross + Payslip.uif_employer + Payslip.sdl))
-            .where(Payslip.tenant_id == tenant_id)
-        )
-        p_sum = p_res.scalar()
-        if p_sum is not None and float(p_sum) > 0:
-            cost_val = round(float(p_sum), 2)
-            cost_source = "live"
-    except Exception as e:
-        logger.warning("Could not query payslips for cost actual: %s", e)
+    # 1. Operating Cost from paid payroll (HR's own table)
+    cost_val = await _live_payroll_cost(db, tenant_id, fy_start)
+    cost_source = "live" if cost_val is not None else "unavailable"
 
     # 2. Revenue: won deals YTD (sales) and payments collected YTD (billing)
     sales_val = await _live_sales_won_ytd(tenant_id, fy_start)
@@ -828,7 +1083,7 @@ async def get_kpis_live_actuals(
                 "current_value": cost_val,
                 "unit": "ZAR",
                 "source": cost_source,
-                "table_source": "hr.payslips (gross + employer UIF + SDL)",
+                "table_source": "hr.payslips of PAID / PARTIALLY_PAID runs inside the fiscal year, one per employee and period (gross + employer UIF + SDL)",
                 "mode": "LIVE_TABLE",
                 "options": [
                     {"id": "payroll_statutory", "label": "Total Payroll & Statutory Levies (ZAR)", "value": cost_val, "unit": "ZAR", "type": "actual", "source": cost_source},
@@ -867,15 +1122,68 @@ async def get_kpis_live_actuals(
     }
 
 
+@app.get("/kpis/live-actuals")
+async def get_kpis_live_actuals(
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
+    db=Depends(get_session),
+):
+    """Ground-truth actual metrics from real sources (sales, billing, paid payroll). HR admin only
+    because the cost figure is an aggregate of payroll. Read-only: nothing is stored (see
+    POST /kpis/sync-actuals). Values that cannot be read are null with source='unavailable'."""
+    return await _collect_live_actuals(db, tenant_id, fiscal_year)
+
+
+class SyncActualsBody(BaseModel):
+    fiscal_year: Optional[str] = None
+
+
+@app.post("/kpis/sync-actuals")
+async def sync_kpi_actuals(
+    body: Optional[SyncActualsBody] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
+    db=Depends(get_session),
+):
+    """Persist the live actuals (sales won, paid payroll cost, derived profit) into the company KPI
+    config so the stored index equals what the dashboard displayed. Only values that could be read
+    are written. HR admin only; audit-logged."""
+    fy = (body.fiscal_year if body else None) or DEFAULT_FISCAL_YEAR
+    live = await _collect_live_actuals(db, tenant_id, fy)
+    src = live["sources"]
+    config = (await db.execute(
+        select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id, CompanyKPIConfig.fiscal_year == fy)
+        .order_by(desc(CompanyKPIConfig.updated_at))
+    )).scalars().first()
+    if config is None:
+        config = CompanyKPIConfig(tenant_id=tenant_id, fiscal_year=fy, sales_actual_zar=0.0, cost_actual_zar=0.0, profit_actual_zar=0.0)
+        db.add(config)
+    written: Dict[str, Any] = {}
+    for key, attr in (("sales", "sales_actual_zar"), ("cost", "cost_actual_zar"), ("profit", "profit_actual_zar")):
+        val = src[key]["current_value"]
+        if val is not None:
+            setattr(config, attr, val)
+            written[attr] = val
+    await db.flush()
+    await db.refresh(config)
+    logger.info("AUDIT hr.kpis.sync_actuals tenant=%s user=%s fy=%s written=%s", tenant_id, admin.user_id, fy, json.dumps(written))
+    out = _calculate_company_scores(config)
+    out["is_template"] = False
+    return {"written": written, "not_available": [k for k in ("sales", "cost", "profit") if src[k]["current_value"] is None],
+            "synced_at": live["synced_at"], "company": out}
+
 
 @app.post("/kpis/cascade")
 async def cascade_company_kpis(
     req: CascadeKPIRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
-    """Cascade shared company KPIs and weights to all employees according to their position level."""
-    # 1. Fetch company config
+    """Cascade shared company KPIs and weights to employees according to their position level.
+    HR admin only. Sheets that are not DRAFT (SUBMITTED / APPROVED) are left untouched and counted
+    in ``sheets_skipped_not_draft``."""
     cascade_fy = req.fiscal_year or DEFAULT_FISCAL_YEAR
     c_res = await db.execute(
         select(CompanyKPIConfig)
@@ -886,19 +1194,19 @@ async def cascade_company_kpis(
     level_weights = json.loads(config.level_weights_json) if config and config.level_weights_json else DEFAULT_LEVEL_WEIGHTS
     values_weight = float(config.values_weight_pct) if config else 10.0
 
-    # 2. Fetch all active employees
     e_res = await db.execute(
         select(Employee).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
     )
     employees = e_res.scalars().all()
     cascaded_count = 0
+    created_count = 0
+    skipped = 0
 
     for emp in employees:
         pos_level = _infer_employee_level(emp.job_title)
         shared_weight = float(level_weights.get(pos_level, 20.0))
         indiv_target_weight = max(0.0, round(100.0 - (shared_weight + values_weight), 2))
 
-        # Check existing sheet
         s_res = await db.execute(
             select(EmployeeKPISheet).where(
                 EmployeeKPISheet.employee_id == emp.id,
@@ -921,6 +1229,10 @@ async def cascade_company_kpis(
                 kpis_json=json.dumps([]),
             )
             db.add(sheet)
+            created_count += 1
+        elif (sheet.status or "DRAFT") != "DRAFT":
+            skipped += 1
+            continue
         else:
             sheet.company_shared_weight_pct = shared_weight
             sheet.values_weight_pct = values_weight
@@ -934,120 +1246,27 @@ async def cascade_company_kpis(
     return {
         "success": True,
         "employees_cascaded": cascaded_count,
+        "sheets_created": created_count,
+        "sheets_skipped_not_draft": skipped,
         "fiscal_year": req.fiscal_year,
         "level_weights_applied": level_weights,
         "values_weight_pct": values_weight,
     }
 
 
-@app.get("/employees/{emp_id}/kpi-sheet")
-async def get_employee_kpi_sheet(
-    emp_id: uuid.UUID,
-    fiscal_year: Optional[str] = None,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    ctx: AuthContext = Depends(get_auth_context),
-    db=Depends(get_session),
-):
-    """Retrieve an individual employee's KPI sheet with shared company cascade and SMART criteria."""
-    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+async def _assert_can_view_sheet(caller: Caller, emp_id: uuid.UUID, db) -> None:
+    if caller.is_self(emp_id) or await caller.manages(db, emp_id):
+        return
+    raise HTTPException(status_code=403, detail="KPI sheets are visible to the employee, their manager chain and HR")
 
-    # Fetch company KPI config
-    cq = select(CompanyKPIConfig).where(CompanyKPIConfig.tenant_id == tenant_id)
-    if fiscal_year:
-        cq = cq.where(CompanyKPIConfig.fiscal_year == fiscal_year)
-    c_res = await db.execute(cq.order_by(desc(CompanyKPIConfig.updated_at)))
-    config = c_res.scalars().first()
-    comp_scores = _calculate_company_scores(config) if config else {
-        "sales_budget_zar": 0.0, "sales_actual_zar": 0.0, "sales_achievement_pct": 0.0,
-        "cost_budget_zar": 0.0, "cost_actual_zar": 0.0, "cost_efficiency_pct": 100.0,
-        "profit_budget_zar": 0.0, "profit_actual_zar": 0.0, "profit_achievement_pct": 0.0,
-        "company_shared_score_pct": 0.0, "corporate_attainment_index": 0.0, "values_weight_pct": 10.0,
-        "level_weights": DEFAULT_LEVEL_WEIGHTS,
-    }
 
-    sq = select(EmployeeKPISheet).where(
-        EmployeeKPISheet.employee_id == emp_id,
-        EmployeeKPISheet.tenant_id == tenant_id,
-    )
-    if fiscal_year:
-        sq = sq.where(EmployeeKPISheet.fiscal_year == fiscal_year)
-    s_res = await db.execute(sq.order_by(desc(EmployeeKPISheet.updated_at)))
-    sheet = s_res.scalars().first()
-    if not sheet:
-        pos_level = _infer_employee_level(emp.job_title)
-        level_weights = comp_scores.get("level_weights", DEFAULT_LEVEL_WEIGHTS)
-        shared_weight = float(level_weights.get(pos_level, 20.0))
-        val_weight = float(comp_scores.get("values_weight_pct", 10.0))
-        indiv_target = max(0.0, round(100.0 - (shared_weight + val_weight), 2))
-
-        # Default sample ISP individual KPI based on role
-        sample_kpis = [
-            {
-                "id": str(uuid.uuid4()),
-                "title": f"Operational Excellence & Department Deliverables ({emp.department})",
-                "category": "Department Goals",
-                "weight_pct": round(indiv_target * 0.6, 1),
-                "timeline": "Quarterly Milestones (Q1-Q4)",
-                "measurable": "100% SLA fulfillment on primary duties with <2% error rate",
-                "requirement": "Monthly department sign-off and JIRA/Service audit records",
-                "current_level": 3,
-                "score": 100.0,
-                "smart_criteria": {
-                    "level_1": {"timeline": "Monthly", "measurable": "<80% target attainment", "requirement": "Audit log"},
-                    "level_2": {"timeline": "Monthly", "measurable": "80-94% target attainment", "requirement": "Supervisor review"},
-                    "level_3": {"timeline": "Monthly", "measurable": "95-100% on budget target", "requirement": "Verified system records"},
-                    "level_4": {"timeline": "Monthly", "measurable": "101-115% stretch performance", "requirement": "Peer and manager sign-off"},
-                    "level_5": {"timeline": "Annual", "measurable": ">115% breakthrough benchmarks", "requirement": "Executive commendation"},
-                }
-            },
-            {
-                "id": str(uuid.uuid4()),
-                "title": "Cost Optimization & Resource Efficiency",
-                "category": "Cost Management",
-                "weight_pct": round(indiv_target * 0.4, 1),
-                "timeline": "Continuous / Monthly",
-                "measurable": "Maintain zero avoidable wastage and identify 1 operational saving opportunity",
-                "requirement": "Documented cost saving proposal submitted to finance",
-                "current_level": 3,
-                "score": 100.0,
-                "smart_criteria": {
-                    "level_1": {"timeline": "Monthly", "measurable": "Over budget spend", "requirement": "Variance report"},
-                    "level_2": {"timeline": "Monthly", "measurable": "Within 2% of budget", "requirement": "Expense logs"},
-                    "level_3": {"timeline": "Monthly", "measurable": "On budget with zero unauthorized spend", "requirement": "Finance verified ledger"},
-                    "level_4": {"timeline": "Monthly", "measurable": "3-5% verified savings", "requirement": "Approved optimization log"},
-                    "level_5": {"timeline": "Annual", "measurable": ">8% structural cost reduction", "requirement": "CFO commendation"},
-                }
-            }
-        ]
-
-        sheet = EmployeeKPISheet(
-            tenant_id=tenant_id,
-            employee_id=emp_id,
-            fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
-            position_level=pos_level,
-            company_shared_weight_pct=shared_weight,
-            values_weight_pct=val_weight,
-            individual_target_weight_pct=indiv_target,
-            total_weight_pct=100.0,
-            status="DRAFT",
-            kpis_json=json.dumps(sample_kpis),
-            overall_score=95.0,
-        )
-        db.add(sheet)
-        await db.flush()
-        await db.refresh(sheet)
-
+def _sheet_view(sheet: EmployeeKPISheet, emp: Employee, comp_scores: Dict[str, Any], company_missing: bool,
+                permissions: Dict[str, bool], is_template: bool) -> Dict[str, Any]:
     kpis_list = json.loads(sheet.kpis_json) if sheet.kpis_json else []
-    company_missing = (
-        config is None
-        or float(config.sales_budget_zar or 0) <= 0
-        or float(config.cost_budget_zar or 0) <= 0
-        or float(config.profit_budget_zar or 0) <= 0
-    )
     composite = _compute_composite(sheet, kpis_list, comp_scores, company_missing)
-
     return {
-        "id": str(sheet.id),
+        "id": str(sheet.id) if sheet.id else None,
+        "is_template": is_template,
         "employee_id": str(emp.id),
         "employee_name": emp.full_name,
         "job_title": emp.job_title,
@@ -1061,6 +1280,7 @@ async def get_employee_kpi_sheet(
         "status": sheet.status,
         "kpis": kpis_list,
         "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
+        "score_basis": SCORE_BASIS,
         "reviewer_notes": sheet.reviewer_notes,
         "company_benchmarks": comp_scores,
         "values_ratings": _load_ratings(sheet),
@@ -1068,37 +1288,54 @@ async def get_employee_kpi_sheet(
         "approved_by": str(sheet.approved_by) if sheet.approved_by else None,
         "approved_at": sheet.approved_at,
         "reject_reason": sheet.reject_reason,
-        "permissions": {
-            "can_approve": _can_approve(ctx, emp),
-            "can_reopen": _is_hr_admin(ctx),
-        },
+        "permissions": permissions,
         "created_at": sheet.created_at,
         "updated_at": sheet.updated_at,
     }
 
 
-async def _find_sheet_or_404(emp_id: uuid.UUID, tenant_id: uuid.UUID, fiscal_year: Optional[str], db) -> EmployeeKPISheet:
-    q = select(EmployeeKPISheet).where(
+@app.get("/employees/{emp_id}/kpi-sheet")
+async def get_employee_kpi_sheet(
+    emp_id: uuid.UUID,
+    fiscal_year: Optional[str] = None,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
+    db=Depends(get_session),
+):
+    """An employee's KPI sheet with the shared company cascade. Visible to the employee, their
+    manager chain and HR. A GET never writes: with no saved sheet it returns an unsaved template
+    (``is_template: true``, no invented KPIs, no score); PUT creates the sheet."""
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+    await _assert_can_view_sheet(caller, emp_id, db)
+
+    config, comp_scores, company_missing = await _load_company(db, tenant_id, fiscal_year)
+
+    sq = select(EmployeeKPISheet).where(
         EmployeeKPISheet.employee_id == emp_id,
         EmployeeKPISheet.tenant_id == tenant_id,
     )
     if fiscal_year:
-        q = q.where(EmployeeKPISheet.fiscal_year == fiscal_year)
-    sheet = (await db.execute(q.order_by(desc(EmployeeKPISheet.updated_at)))).scalars().first()
-    if not sheet:
-        raise HTTPException(status_code=404, detail="KPI sheet not found")
-    return sheet
+        sq = sq.where(EmployeeKPISheet.fiscal_year == fiscal_year)
+    sheet = (await db.execute(sq.order_by(desc(EmployeeKPISheet.updated_at)))).scalars().first()
+    is_template = sheet is None
+    if is_template:
+        pos_level = _infer_employee_level(emp.job_title)
+        level_weights = comp_scores.get("level_weights", DEFAULT_LEVEL_WEIGHTS)
+        shared_weight = float(level_weights.get(pos_level, 20.0))
+        val_weight = float(comp_scores.get("values_weight_pct", 10.0))
+        indiv_target = max(0.0, round(100.0 - (shared_weight + val_weight), 2))
+        sheet = EmployeeKPISheet(  # transient: never added to the session
+            tenant_id=tenant_id, employee_id=emp_id,
+            fiscal_year=fiscal_year or DEFAULT_FISCAL_YEAR,
+            position_level=pos_level,
+            company_shared_weight_pct=shared_weight, values_weight_pct=val_weight,
+            individual_target_weight_pct=indiv_target, total_weight_pct=100.0,
+            status="DRAFT", kpis_json=json.dumps([]), overall_score=None,
+        )
 
-
-def _workflow_response(sheet: EmployeeKPISheet) -> Dict[str, Any]:
-    return {
-        "success": True,
-        "sheet_id": str(sheet.id),
-        "status": sheet.status,
-        "approved_by": str(sheet.approved_by) if sheet.approved_by else None,
-        "approved_at": sheet.approved_at,
-        "reject_reason": sheet.reject_reason,
-    }
+    allowed, _reason = await _can_decide_sheet(caller, emp, db)
+    permissions = {"can_approve": bool(allowed and not is_template), "can_reopen": caller.is_admin}
+    return _sheet_view(sheet, emp, comp_scores, company_missing, permissions, is_template)
 
 
 @app.post("/employees/{emp_id}/kpi-sheet/approve")
@@ -1106,18 +1343,20 @@ async def approve_employee_kpi_sheet(
     emp_id: uuid.UUID,
     body: Optional[KPIFiscalYearBody] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    ctx: AuthContext = Depends(get_auth_context),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
-    """SUBMITTED -> APPROVED. Requires manager/HR role; the sheet owner cannot approve their own sheet."""
+    """SUBMITTED -> APPROVED. Manager chain or HR only; the sheet owner can never approve their own
+    sheet; a caller who cannot be matched to an employee is denied (non-admins)."""
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
-    if not _can_approve(ctx, emp):
-        raise HTTPException(status_code=403, detail="Approval requires a manager or HR role, and employees cannot approve their own KPI sheet")
+    allowed, reason = await _can_decide_sheet(caller, emp, db)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason)
     sheet = await _find_sheet_or_404(emp_id, tenant_id, body.fiscal_year if body else None, db)
     if sheet.status != "SUBMITTED":
         raise HTTPException(status_code=409, detail=f"Only SUBMITTED sheets can be approved (current status: {sheet.status})")
     sheet.status = "APPROVED"
-    sheet.approved_by = ctx.user_id
+    sheet.approved_by = caller.auth.user_id
     sheet.approved_at = datetime.utcnow()
     sheet.reject_reason = None
     await db.flush()
@@ -1130,13 +1369,14 @@ async def reject_employee_kpi_sheet(
     emp_id: uuid.UUID,
     body: KPIRejectRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    ctx: AuthContext = Depends(get_auth_context),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
-    """SUBMITTED -> DRAFT with a stored reason (request changes)."""
+    """SUBMITTED -> DRAFT with a stored reason (request changes). Same rules as approve."""
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
-    if not _can_approve(ctx, emp):
-        raise HTTPException(status_code=403, detail="Rejecting requires a manager or HR role, and employees cannot act on their own KPI sheet")
+    allowed, reason_denied = await _can_decide_sheet(caller, emp, db)
+    if not allowed:
+        raise HTTPException(status_code=403, detail=reason_denied)
     reason = (body.reason or "").strip()
     if not reason:
         raise HTTPException(status_code=422, detail="A reason is required when requesting changes")
@@ -1157,13 +1397,11 @@ async def reopen_employee_kpi_sheet(
     emp_id: uuid.UUID,
     body: Optional[KPIFiscalYearBody] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    ctx: AuthContext = Depends(get_auth_context),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     """APPROVED -> DRAFT. HR/admin roles only."""
     await _get_employee_or_404(emp_id, tenant_id, db)
-    if not _is_hr_admin(ctx):
-        raise HTTPException(status_code=403, detail="Reopening an approved KPI sheet requires an HR/admin role")
     sheet = await _find_sheet_or_404(emp_id, tenant_id, body.fiscal_year if body else None, db)
     if sheet.status != "APPROVED":
         raise HTTPException(status_code=409, detail=f"Only APPROVED sheets can be reopened (current status: {sheet.status})")
@@ -1175,16 +1413,60 @@ async def reopen_employee_kpi_sheet(
     return _workflow_response(sheet)
 
 
+def _validate_kpi_items(eff_kpis: List[Any]) -> tuple:
+    """(errors, item_weight_sum). Includes the current_level 1..5 rule."""
+    item_errors: List[str] = []
+    item_weight_sum = 0.0
+    for idx, item in enumerate(eff_kpis):
+        n = idx + 1
+        if not isinstance(item, dict):
+            item_errors.append(f"KPI #{n}: must be an object")
+            continue
+        if not str(item.get("title") or "").strip():
+            item_errors.append(f"KPI #{n}: title is required")
+        try:
+            w = float(item.get("weight_pct"))
+            if w < 0 or not math.isfinite(w):
+                raise ValueError
+            item_weight_sum += w
+        except (TypeError, ValueError):
+            item_errors.append(f"KPI #{n}: weight_pct must be a number >= 0")
+        if "current_level" in item:
+            lv = item.get("current_level")
+            ok = (
+                not isinstance(lv, bool) and isinstance(lv, (int, float))
+                and math.isfinite(lv) and float(lv).is_integer() and 1 <= int(lv) <= 5
+            )
+            if not ok:
+                item_errors.append(f"KPI #{n}: current_level must be an integer from 1 to 5")
+        sc = item.get("smart_criteria")
+        if sc is not None:
+            allowed = {f"level_{i}" for i in range(1, 6)}
+            if not isinstance(sc, dict) or set(sc.keys()) - allowed:
+                bad = sorted(set(sc.keys()) - allowed) if isinstance(sc, dict) else ["<not an object>"]
+                item_errors.append(f"KPI #{n}: smart_criteria may only contain level_1..level_5 (invalid: {bad})")
+    return item_errors, item_weight_sum
+
+
 @app.put("/employees/{emp_id}/kpi-sheet")
 async def update_employee_kpi_sheet(
     emp_id: uuid.UUID,
     data: EmployeeKPISheetUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-    ctx: AuthContext = Depends(get_auth_context),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
-    """Save and validate an employee's KPI sheet with SMART criteria and auto-calculated score."""
+    """Create or save an employee's KPI sheet. Editors: HR admin, the employee's manager chain, or
+    the employee themselves while the sheet is DRAFT (employees may only change KPI items and
+    submit; weights, values ratings and reviewer notes are ignored for them). overall_score from the
+    client is ignored: the server computes it."""
     await _get_employee_or_404(emp_id, tenant_id, db)
+    is_self = caller.is_self(emp_id)
+    is_manager_of = (not is_self or caller.is_admin) and await caller.manages(db, emp_id)
+    if not (caller.is_admin or is_manager_of or is_self):
+        raise HTTPException(status_code=403, detail="KPI sheets can be edited by the employee, their manager chain or HR")
+    self_only = is_self and not (caller.is_admin or is_manager_of)
+
     put_fy = data.fiscal_year or DEFAULT_FISCAL_YEAR
     s_res = await db.execute(
         select(EmployeeKPISheet).where(
@@ -1200,7 +1482,11 @@ async def update_employee_kpi_sheet(
         raise HTTPException(status_code=409, detail="This KPI sheet is APPROVED and locked. An HR/admin must reopen it before it can be edited.")
     if (data.status or "").upper() == "APPROVED":
         raise HTTPException(status_code=409, detail="Use POST /employees/{id}/kpi-sheet/approve to approve a submitted sheet.")
-    new_ratings = _validate_values_ratings(data.values_ratings) if data.values_ratings is not None else None
+    if not caller.is_admin and sheet is not None and (sheet.status or "DRAFT") != "DRAFT":
+        raise HTTPException(status_code=409, detail="Only DRAFT sheets can be edited; ask the approver to send it back or HR to reopen it")
+    new_ratings = None
+    if not self_only and data.values_ratings is not None:
+        new_ratings = _validate_values_ratings(data.values_ratings)
 
     # -- Server-side validation (before any mutation) --
     eff_status = (data.status or (sheet.status if sheet else "DRAFT") or "DRAFT").upper()
@@ -1217,35 +1503,18 @@ async def update_employee_kpi_sheet(
         except Exception:
             eff_kpis = []
     eff_kpis = eff_kpis or []
-    item_errors = []
-    item_weight_sum = 0.0
-    for idx, item in enumerate(eff_kpis):
-        if not isinstance(item, dict):
-            item_errors.append(f"KPI #{idx + 1}: must be an object")
-            continue
-        if not str(item.get("title") or "").strip():
-            item_errors.append(f"KPI #{idx + 1}: title is required")
-        try:
-            w = float(item.get("weight_pct"))
-            if w < 0 or w != w:
-                raise ValueError
-            item_weight_sum += w
-        except (TypeError, ValueError):
-            item_errors.append(f"KPI #{idx + 1}: weight_pct must be a number >= 0")
-        sc = item.get("smart_criteria")
-        if sc is not None:
-            allowed = {f"level_{i}" for i in range(1, 6)}
-            if not isinstance(sc, dict) or set(sc.keys()) - allowed:
-                bad = sorted(set(sc.keys()) - allowed) if isinstance(sc, dict) else ["<not an object>"]
-                item_errors.append(f"KPI #{idx + 1}: smart_criteria may only contain level_1..level_5 (invalid: {bad})")
+    item_errors, item_weight_sum = _validate_kpi_items(eff_kpis)
     if item_errors:
         raise HTTPException(status_code=422, detail={"message": "Invalid KPI items: " + "; ".join(item_errors), "errors": item_errors})
 
     def _pick(new, old, default):
         return float(new if new is not None else (old if old is not None else default))
-    sh_w = _pick(data.company_shared_weight_pct, sheet.company_shared_weight_pct if sheet else None, 20.0)
-    val_w = _pick(data.values_weight_pct, sheet.values_weight_pct if sheet else None, 10.0)
-    ind_w = _pick(data.individual_target_weight_pct, sheet.individual_target_weight_pct if sheet else None, 70.0)
+    in_sh = None if self_only else data.company_shared_weight_pct
+    in_val = None if self_only else data.values_weight_pct
+    in_ind = None if self_only else data.individual_target_weight_pct
+    sh_w = _pick(in_sh, sheet.company_shared_weight_pct if sheet else None, 20.0)
+    val_w = _pick(in_val, sheet.values_weight_pct if sheet else None, 10.0)
+    ind_w = _pick(in_ind, sheet.individual_target_weight_pct if sheet else None, 70.0)
     total_w = round(sh_w + val_w + ind_w, 2)
     item_sum = round(item_weight_sum, 2)
     if eff_status != "DRAFT":
@@ -1263,37 +1532,45 @@ async def update_employee_kpi_sheet(
             })
 
     if not sheet:
-        sheet = EmployeeKPISheet(tenant_id=tenant_id, employee_id=emp_id)
+        sheet = EmployeeKPISheet(
+            tenant_id=tenant_id, employee_id=emp_id, fiscal_year=put_fy,
+            company_shared_weight_pct=sh_w, values_weight_pct=val_w, individual_target_weight_pct=ind_w,
+            total_weight_pct=total_w, status="DRAFT", kpis_json=json.dumps([]),
+        )
         db.add(sheet)
 
     if data.fiscal_year is not None:
         sheet.fiscal_year = data.fiscal_year
-    if data.position_level is not None:
-        sheet.position_level = data.position_level
-    if data.company_shared_weight_pct is not None:
-        sheet.company_shared_weight_pct = data.company_shared_weight_pct
-    if data.values_weight_pct is not None:
-        sheet.values_weight_pct = data.values_weight_pct
-    if data.individual_target_weight_pct is not None:
-        sheet.individual_target_weight_pct = data.individual_target_weight_pct
+    if not self_only:
+        if data.position_level is not None:
+            sheet.position_level = data.position_level
+        if data.company_shared_weight_pct is not None:
+            sheet.company_shared_weight_pct = data.company_shared_weight_pct
+        if data.values_weight_pct is not None:
+            sheet.values_weight_pct = data.values_weight_pct
+        if data.individual_target_weight_pct is not None:
+            sheet.individual_target_weight_pct = data.individual_target_weight_pct
+        if data.reviewer_notes is not None:
+            sheet.reviewer_notes = data.reviewer_notes
+        if new_ratings is not None:
+            sheet.values_ratings = json.dumps(new_ratings)
     if data.status is not None:
         sheet.status = data.status
         if data.status == "SUBMITTED":
             sheet.reject_reason = None
-    if new_ratings is not None:
-        sheet.values_ratings = json.dumps(new_ratings)
     if data.kpis is not None:
         sheet.kpis_json = json.dumps(data.kpis)
-    if data.overall_score is not None:
-        sheet.overall_score = data.overall_score
-    if data.reviewer_notes is not None:
-        sheet.reviewer_notes = data.reviewer_notes
+    # data.overall_score is deliberately ignored (computed below)
 
-    # Verify total weight
     sh_w = float(sheet.company_shared_weight_pct or 0.0)
     val_w = float(sheet.values_weight_pct or 0.0)
     ind_w = float(sheet.individual_target_weight_pct or 0.0)
     sheet.total_weight_pct = round(sh_w + val_w + ind_w, 2)
+
+    _cfg, comp_scores, company_missing = await _load_company(db, tenant_id, sheet.fiscal_year)
+    kpis_now = json.loads(sheet.kpis_json) if sheet.kpis_json else []
+    composite = _compute_composite(sheet, kpis_now, comp_scores, company_missing)
+    sheet.overall_score = composite["total"]
 
     await db.flush()
     await db.refresh(sheet)
@@ -1303,6 +1580,8 @@ async def update_employee_kpi_sheet(
         "status": sheet.status,
         "total_weight_pct": float(sheet.total_weight_pct),
         "overall_score": float(sheet.overall_score) if sheet.overall_score is not None else None,
+        "score_basis": SCORE_BASIS,
+        "composite": composite,
         "values_ratings": _load_ratings(sheet),
     }
 
@@ -1516,6 +1795,7 @@ async def list_schedules(
 async def create_schedule(
     data: ScheduleCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -1547,6 +1827,7 @@ async def create_schedule(
 async def confirm_schedule(
     sched_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -1564,6 +1845,7 @@ async def confirm_schedule(
 async def delete_schedule(
     sched_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -1733,6 +2015,7 @@ async def list_courses(
 async def create_course(
     data: CourseCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     course = TrainingCourse(tenant_id=tenant_id, **data.dict())
@@ -1750,6 +2033,7 @@ async def create_course(
 async def enroll_employee(
     data: EnrollmentCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -1784,6 +2068,7 @@ async def update_progress(
     progress_pct: float,
     score: Optional[float] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -1856,6 +2141,7 @@ class BenefitEnrollCreate(BaseModel):
 @app.get("/benefits")
 async def list_benefits(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
     employee_id: Optional[uuid.UUID] = Query(None),
     benefit_type: Optional[str] = Query(None),
@@ -1887,6 +2173,7 @@ async def list_benefits(
 async def create_benefit_enrollment(
     data: BenefitEnrollCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -1901,6 +2188,7 @@ async def create_benefit_enrollment(
 async def get_employee_benefits(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(emp_id, tenant_id, db)
@@ -1940,6 +2228,7 @@ class DisciplinaryCreate(BaseModel):
 @app.get("/disciplinary")
 async def list_disciplinary(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
     employee_id: Optional[uuid.UUID] = Query(None),
     status: Optional[str] = Query(None),
@@ -1965,6 +2254,7 @@ async def list_disciplinary(
 async def create_disciplinary(
     data: DisciplinaryCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -1984,6 +2274,7 @@ async def resolve_disciplinary(
     outcome: str,
     reviewed_by: str,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -2016,6 +2307,7 @@ class StaffExitCreate(BaseModel):
 @app.get("/exits")
 async def list_exits(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
     status: Optional[str] = Query(None),
 ):
@@ -2042,6 +2334,7 @@ async def list_exits(
 async def create_exit(
     data: StaffExitCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     emp = await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -2065,6 +2358,7 @@ async def update_exit_checklist(
     access_revoked: Optional[bool] = None,
     final_payout_zar: Optional[float] = None,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -2104,6 +2398,7 @@ async def update_exit_checklist(
 async def get_exit_checklist(
     exit_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -2205,6 +2500,7 @@ async def get_onboarding_tasks(
 async def create_onboarding_task(
     data: OnboardingTaskCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -2222,6 +2518,7 @@ async def create_onboarding_task(
 async def bulk_create_onboarding_tasks(
     data: OnboardingTaskBulkCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     await _get_employee_or_404(data.employee_id, tenant_id, db)
@@ -2247,6 +2544,7 @@ async def bulk_create_onboarding_tasks(
 async def complete_onboarding_task(
     task_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -2267,6 +2565,7 @@ async def complete_onboarding_task(
 async def delete_onboarding_task(
     task_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     result = await db.execute(
@@ -2313,6 +2612,7 @@ async def get_onboarding_progress(
 @app.get("/analytics/attrition-risk")
 async def get_attrition_risk_overview(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     emp_result = await db.execute(
@@ -2392,49 +2692,36 @@ async def get_headcount_analytics(
 # PAYROLL  (profiles, runs, payslips, Paystack payouts)
 # ═══════════════════════════════════════════════════════════════════════════
 
-# ── SA deduction helper (simplified estimate) ──────────────────────────────
-# Monthly PAYE from 2024/25 SARS annual brackets / 12, less the primary rebate.
-# UIF is 1% of gross capped at the R17,712 monthly remuneration ceiling.
-# This is a reasonable estimate for demo payroll, not tax advice.
-_SARS_BRACKETS = [
-    (237100, 0.0, 0.18),
-    (370500, 42678.0, 0.26),
-    (512800, 77362.0, 0.31),
-    (673000, 121475.0, 0.36),
-    (857900, 179147.0, 0.39),
-    (1817000, 251258.0, 0.41),
-    (float("inf"), 644489.0, 0.45),
-]
-_PRIMARY_REBATE_ANNUAL = 17235.0
-_UIF_MONTHLY_CEILING = 17712.0
+# ── Statutory deductions ──────────────────────────────────────────────────
+# PAYE / UIF / SDL come from services/hr/tax_tables.py: versioned SARS tables per tax year
+# (1 March - end February), each carrying its source_url, verified_on date and a `verified` flag.
+# A payroll run for a tax year without verified tables is refused (503) unless an HR admin
+# explicitly acknowledges it. Rebates follow the employee's age; bonuses are taxed with the SARS
+# annual-payment method rather than annualised x12. See the tax_tables module docstring.
 
 
-def _payroll_deductions(gross_month: float, other_deductions: float = 0.0) -> dict:
-    annual = gross_month * 12.0
-    lower = 0.0
-    tax_annual = 0.0
-    for upper, base, rate in _SARS_BRACKETS:
-        if annual <= upper:
-            tax_annual = base + (annual - lower) * rate
-            break
-        lower = upper
-    tax_month = max(0.0, (tax_annual - _PRIMARY_REBATE_ANNUAL) / 12.0)
-    uif = round(min(gross_month, _UIF_MONTHLY_CEILING) * 0.01, 2)
-    tax = round(tax_month, 2)
-    sdl = round(gross_month * 0.01, 2)  # employer contribution
-    uif_employer = uif                 # employer matching contribution
-    net = round(gross_month - tax - uif - other_deductions, 2)
-    return {
-        "annual_gross": round(annual, 2),
-        "tax_annual": round(tax_annual, 2),
-        "tax_rebate": _PRIMARY_REBATE_ANNUAL,
-        "tax": tax,
-        "uif": uif,
-        "uif_employer": uif_employer,
-        "sdl": sdl,
-        "other": other_deductions,
-        "net": net,
-    }
+def _payroll_deductions(
+    gross_month: float,
+    other_deductions: float = 0.0,
+    table: Optional[tax_tables.TaxTable] = None,
+    irregular: float = 0.0,
+    age: Optional[int] = None,
+    medical_members: int = 0,
+    sdl_applies: bool = True,
+) -> dict:
+    """Deductions for one month. ``gross_month`` is the REGULAR monthly remuneration; ``irregular``
+    (bonus / commission) is added on top. Without an explicit table the table of the current pay
+    period is used (TaxTableUnavailable if its figures are not verified)."""
+    if table is None:
+        table = tax_tables.resolve_table(date.today().strftime("%Y-%m"))
+    return tax_tables.compute_deductions(
+        table, gross_month, irregular=irregular, age=age, medical_members=medical_members,
+        other_deductions=other_deductions, sdl_applies=sdl_applies,
+    )
+
+
+def _tables_unavailable(exc: tax_tables.TaxTableUnavailable) -> HTTPException:
+    return HTTPException(status_code=503, detail=exc.detail)
 
 
 class PayrollProfileUpsert(BaseModel):
@@ -2449,6 +2736,8 @@ class PayrollProfileUpsert(BaseModel):
 class PayrollRunCreate(BaseModel):
     period: str
     employee_ids: Optional[List[uuid.UUID]] = None
+    # HR admin override for a tax year whose SARS tables are loaded but not verified. Recorded on the run.
+    acknowledge_unverified_tables: bool = False
 
 
 def _profile_to_dict(p: PayrollProfile) -> dict:
@@ -2465,32 +2754,41 @@ def _profile_to_dict(p: PayrollProfile) -> dict:
     }
 
 
+def _num(v: Any) -> Optional[float]:
+    return float(v) if v is not None else None
+
+
 def _payslip_to_dict(s: Payslip, emp: Optional[Employee] = None, prof: Optional[PayrollProfile] = None) -> dict:
+    """Payslip as a dict. Nothing is invented: a missing ID / tax number is null, never a placeholder,
+    and stored figures that are null stay null."""
     return {
         "id": s.id,
         "run_id": s.run_id,
         "employee_id": s.employee_id,
-        "employee_name": emp.full_name if emp else "Employee",
-        "employee_code": emp.employee_id if emp else "",
-        "job_title": emp.job_title if emp else "",
-        "department": emp.department if emp else "",
-        "id_number": getattr(emp, "id_number", None) or "8504125089087",
-        "tax_number": getattr(emp, "tax_number", None) or "9823410582",
-        "bank_code": prof.bank_code if prof else "",
-        "account_number": prof.account_number if prof else "",
-        "account_name": prof.account_name if prof else (emp.full_name if emp else ""),
+        "employee_name": emp.full_name if emp else None,
+        "employee_code": emp.employee_id if emp else None,
+        "job_title": emp.job_title if emp else None,
+        "department": emp.department if emp else None,
+        "id_number": (getattr(emp, "id_number", None) or None) if emp else None,
+        "tax_number": (getattr(emp, "tax_number", None) or None) if emp else None,
+        "bank_code": prof.bank_code if prof else None,
+        "account_number": prof.account_number if prof else None,
+        "account_name": prof.account_name if prof else None,
         "gross": float(s.gross),
-        "basic_salary": float(getattr(s, "basic_salary", s.gross) or s.gross),
-        "commission": float(getattr(s, "commission", 0.0) or 0.0),
-        "allowances": float(getattr(s, "allowances", 0.0) or 0.0),
+        "basic_salary": _num(getattr(s, "basic_salary", None)),
+        "commission": _num(getattr(s, "commission", None)),
+        "allowances": _num(getattr(s, "allowances", None)),
         "tax": float(s.tax),
-        "tax_rebate": float(getattr(s, "tax_rebate", _PRIMARY_REBATE_ANNUAL) or _PRIMARY_REBATE_ANNUAL),
-        "annual_taxable": float(getattr(s, "annual_taxable", float(s.gross) * 12) or float(s.gross) * 12),
+        "tax_rebate": _num(getattr(s, "tax_rebate", None)),
+        "annual_taxable": _num(getattr(s, "annual_taxable", None)),
         "uif": float(s.uif),
-        "uif_employer": float(getattr(s, "uif_employer", s.uif) or s.uif),
-        "sdl": float(getattr(s, "sdl", round(float(s.gross) * 0.01, 2)) or round(float(s.gross) * 0.01, 2)),
+        "uif_employer": _num(getattr(s, "uif_employer", None)),
+        "sdl": _num(getattr(s, "sdl", None)),
         "other_deductions": float(s.other_deductions),
         "net": float(s.net),
+        "tax_year": getattr(s, "tax_year", None),
+        "tax_table_version": getattr(s, "tax_table_version", None),
+        "tax_flags": getattr(s, "tax_flags", None),
         "currency": s.currency,
         "payout_status": s.payout_status,
         "paystack_transfer_code": s.paystack_transfer_code,
@@ -2511,6 +2809,9 @@ def _run_to_dict(r: PayrollRun, payslips: Optional[List[Payslip]] = None) -> dic
         "total_deductions": float(r.total_deductions),
         "total_net": float(r.total_net),
         "finance_entry_id": r.finance_entry_id,
+        "tax_year": getattr(r, "tax_year", None),
+        "tax_table_version": getattr(r, "tax_table_version", None),
+        "acknowledged_unverified_tables": bool(getattr(r, "acknowledged_unverified_tables", False)),
         "created_at": r.created_at,
     }
     if payslips is not None:
@@ -2523,18 +2824,21 @@ async def upsert_payroll_profile(
     emp_id: uuid.UUID,
     body: PayrollProfileUpsert,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
-    """Create/update an employee's salary + bank payout details.
+    """Create/update an employee's salary + bank payout details. HR admin only.
 
     If full bank details are supplied, a Paystack Transfer Recipient is created
     (or refreshed) so payouts can target it later. Recipient creation failure
     does not block saving the profile — it's reported in the response.
     """
+    if not math.isfinite(body.base_salary) or body.base_salary < 0:
+        raise HTTPException(status_code=422, detail="base_salary must be a number >= 0")
     await _get_employee_or_404(emp_id, tenant_id, db)
 
     existing = (await db.execute(
-        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id)
+        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id, PayrollProfile.tenant_id == tenant_id)
     )).scalars().first()
 
     if existing is None:
@@ -2547,6 +2851,8 @@ async def upsert_payroll_profile(
     existing.bank_code = body.bank_code
     existing.account_number = body.account_number
     existing.account_name = body.account_name
+    logger.info("AUDIT hr.payroll_profile.upsert tenant=%s user=%s employee=%s bank_details_set=%s",
+                tenant_id, admin.user_id, emp_id, bool(body.account_number))
 
     recipient_msg = None
     # (Re)create the Paystack recipient when bank details are complete.
@@ -2560,9 +2866,9 @@ async def upsert_payroll_profile(
             )
             if res["ok"]:
                 existing.paystack_recipient_code = res["recipient_code"]
-            recipient_msg = res["message"]
+            recipient_msg = scrub_text(res["message"])
         except ps.PaystackError as exc:
-            recipient_msg = f"recipient not created: {exc}"
+            recipient_msg = scrub_text(f"recipient not created: {exc}")
 
     await db.flush()
     await db.refresh(existing)
@@ -2573,29 +2879,58 @@ async def upsert_payroll_profile(
 async def get_payroll_profile(
     emp_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
+    """Salary + bank profile. HR admin sees it as stored; the employee themselves sees their own with the
+    account number masked to the last 4 digits. Nobody else."""
     await _get_employee_or_404(emp_id, tenant_id, db)
+    if not (caller.is_admin or caller.is_self(emp_id)):
+        raise HTTPException(status_code=403, detail="Payroll details are visible to the employee and HR admins only")
     p = (await db.execute(
-        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id)
+        select(PayrollProfile).where(PayrollProfile.employee_id == emp_id, PayrollProfile.tenant_id == tenant_id)
     )).scalars().first()
     if not p:
         raise HTTPException(status_code=404, detail="No payroll profile for this employee")
-    return _profile_to_dict(p)
+    return access.redact_payslip(_profile_to_dict(p), caller.is_admin)
+
+
+def _employee_age_info(emp: Employee, tax_year: int) -> tuple:
+    """(age on the last day of the tax year or None, source label)."""
+    end = tax_tables.tax_year_end(tax_year)
+    dob = getattr(emp, "date_of_birth", None)
+    if dob is not None:
+        return tax_tables.age_on(dob, end), "date_of_birth"
+    dob = tax_tables.dob_from_sa_id(getattr(emp, "id_number", None))
+    if dob is not None:
+        return tax_tables.age_on(dob, end), "id_number"
+    return None, "unknown"
 
 
 @app.post("/payroll/runs", status_code=201)
 async def create_payroll_run(
     payload: PayrollRunCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
-    """Create a payroll run for a period and generate payslips.
+    """Create a payroll run for a period (YYYY-MM) and generate payslips. HR admin only.
 
     Gross comes from each employee's payroll_profile (employees without a
-    profile are skipped). Does NOT pay anyone — call /payroll/runs/{id}/pay
-    for that. Posts a summary journal entry to Finance (best-effort).
+    profile are skipped). The SA tax year of the period selects the PAYE table; if that table is
+    not verified the call returns 503 unless ``acknowledge_unverified_tables`` is true (recorded on
+    the run). Does NOT pay anyone — call /payroll/runs/{id}/pay for that. Posts a summary journal
+    entry to Finance (best-effort).
     """
+    try:
+        tax_tables.parse_period(payload.period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    try:
+        table = tax_tables.resolve_table(payload.period, allow_unverified=payload.acknowledge_unverified_tables)
+    except tax_tables.TaxTableUnavailable as exc:
+        raise _tables_unavailable(exc)
+
     stmt = select(Employee).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
     if payload.employee_ids:
         stmt = stmt.where(Employee.id.in_(payload.employee_ids))
@@ -2609,21 +2944,16 @@ async def create_payroll_run(
         )).scalars().all()
     }
 
-    run = PayrollRun(tenant_id=tenant_id, period=payload.period, status="DRAFT")
-    db.add(run)
-    await db.flush()  # assign run.id
-
-    total_gross = total_ded = total_net = 0.0
+    # First pass: gross per employee (the SDL exemption depends on the whole payroll).
+    rows = []
     skipped = []
-    payslips: List[Payslip] = []
     for emp in employees:
         prof = profiles.get(emp.id)
         if not prof:
             skipped.append(str(emp.id))
             continue
         base = float(prof.base_salary)
-        
-        # Check for approved bonus/commission claims for this period
+        # Approved bonus/commission claims for this period are IRREGULAR remuneration.
         bonus_stmt = select(func.sum(BenefitEnrollment.bonus_amount_zar)).where(
             BenefitEnrollment.employee_id == emp.id,
             BenefitEnrollment.benefit_type == "BONUS",
@@ -2631,13 +2961,41 @@ async def create_payroll_run(
             BenefitEnrollment.bonus_period == payload.period,
         )
         comm_val = float((await db.execute(bonus_stmt)).scalar() or 0.0)
-        gross = base + comm_val
-        d = _payroll_deductions(gross)
+        rows.append((emp, prof, base, comm_val))
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="No employees have a payroll profile; set base salaries first.",
+        )
+
+    sdl_applies = sum(r[2] + r[3] for r in rows) * 12.0 > table.sdl_payroll_threshold
+
+    run = PayrollRun(
+        tenant_id=tenant_id, period=payload.period, status="DRAFT", created_by=admin.user_id,
+        tax_year=table.tax_year, tax_table_version=table.version,
+        acknowledged_unverified_tables=bool(payload.acknowledge_unverified_tables and not table.verified),
+    )
+    db.add(run)
+    await db.flush()  # assign run.id
+
+    total_gross = total_ded = total_net = 0.0
+    payslips: List[Payslip] = []
+    age_unknown = 0
+    for emp, prof, base, comm_val in rows:
+        age, age_src = _employee_age_info(emp, table.tax_year)
+        d = _payroll_deductions(base, table=table, irregular=comm_val, age=age, sdl_applies=sdl_applies)
+        flags = []
+        if age is None:
+            flags.append("age_unknown_primary_rebate_only")
+            age_unknown += 1
+        if not table.verified:
+            flags.append("unverified_tax_table_acknowledged")
         slip = Payslip(
             tenant_id=tenant_id,
             run_id=run.id,
             employee_id=emp.id,
-            gross=gross,
+            gross=d["gross"],
             basic_salary=base,
             commission=comm_val,
             tax=d["tax"],
@@ -2648,25 +3006,24 @@ async def create_payroll_run(
             sdl=d["sdl"],
             other_deductions=d["other"],
             net=d["net"],
+            tax_year=table.tax_year,
+            tax_table_version=table.version,
+            tax_flags=";".join(flags) or None,
             currency=prof.currency,
             paystack_recipient_code=prof.paystack_recipient_code,
         )
         db.add(slip)
         payslips.append(slip)
-        total_gross += gross
+        total_gross += d["gross"]
         total_ded += d["tax"] + d["uif"] + d["other"]
         total_net += d["net"]
-
-    if not payslips:
-        raise HTTPException(
-            status_code=400,
-            detail="No employees have a payroll profile; set base salaries first.",
-        )
 
     run.employee_count = len(payslips)
     run.total_gross = round(total_gross, 2)
     run.total_deductions = round(total_ded, 2)
     run.total_net = round(total_net, 2)
+    logger.info("AUDIT hr.payroll_run.create tenant=%s user=%s period=%s tax_table=%s payslips=%d",
+                tenant_id, admin.user_id, payload.period, table.version, len(payslips))
 
     # Best-effort Finance journal entry (mirrors the legacy stub).
     finance_url = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
@@ -2695,12 +3052,16 @@ async def create_payroll_run(
     await db.flush()
     result = _run_to_dict(run, payslips)
     result["skipped_employees_without_profile"] = skipped
+    result["tax_table"] = tax_tables.table_summary(table)
+    result["employees_without_age_primary_rebate_only"] = age_unknown
+    result["sdl_applied"] = sdl_applies
     return result
 
 
 @app.get("/payroll/runs")
 async def list_payroll_runs(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     runs = (await db.execute(
@@ -2713,6 +3074,7 @@ async def list_payroll_runs(
 async def get_payroll_run(
     run_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     run = (await db.execute(
@@ -2721,7 +3083,7 @@ async def get_payroll_run(
     if not run:
         raise HTTPException(status_code=404, detail="Payroll run not found")
     slips = (await db.execute(
-        select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
+        select(Payslip).where(Payslip.run_id == run_id, Payslip.tenant_id == tenant_id).order_by(Payslip.created_at)
     )).scalars().all()
     return _run_to_dict(run, slips)
 
@@ -2731,8 +3093,17 @@ async def list_payslips(
     run_id: Optional[uuid.UUID] = Query(None),
     employee_id: Optional[uuid.UUID] = Query(None),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
+    """HR admins: any payslip. Everyone else: only their own (matched through the verified identity);
+    asking for another employee's payslips is 403, an unmatched caller gets 403 as well."""
+    if not caller.is_admin:
+        if caller.employee_id is None:
+            raise HTTPException(status_code=403, detail="Your login is not linked to an employee record")
+        if employee_id is not None and employee_id != caller.employee_id:
+            raise HTTPException(status_code=403, detail="You may only view your own payslips")
+        employee_id = caller.employee_id
     stmt = (
         select(Payslip, Employee, PayrollProfile)
         .outerjoin(Employee, Payslip.employee_id == Employee.id)
@@ -2745,13 +3116,14 @@ async def list_payslips(
         stmt = stmt.where(Payslip.employee_id == employee_id)
 
     result = await db.execute(stmt.order_by(desc(Payslip.created_at)))
-    return [_payslip_to_dict(s, emp, prof) for s, emp, prof in result.all()]
+    return [access.redact_payslip(_payslip_to_dict(s, emp, prof), caller.is_admin) for s, emp, prof in result.all()]
 
 
 @app.get("/payroll/payslips/{payslip_id}")
 async def get_payslip(
     payslip_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    caller: Caller = Depends(get_caller),
     db=Depends(get_session),
 ):
     stmt = (
@@ -2764,49 +3136,61 @@ async def get_payslip(
     if not row:
         raise HTTPException(status_code=404, detail="Payslip not found")
     s, emp, prof = row
-    return _payslip_to_dict(s, emp, prof)
+    if not (caller.is_admin or caller.is_self(s.employee_id)):
+        raise HTTPException(status_code=403, detail="You may only view your own payslips")
+    return access.redact_payslip(_payslip_to_dict(s, emp, prof), caller.is_admin)
 
 
 class SalaryCalculationPreviewRequest(BaseModel):
     gross_salary: float
     allowances: Optional[float] = 0.0
     medical_aid_members: Optional[int] = 0
+    bonus: Optional[float] = 0.0
+    date_of_birth: Optional[date] = None
+    period: Optional[str] = None  # YYYY-MM; defaults to the current month
 
 
 @app.post("/payroll/calculate-preview")
 async def calculate_salary_preview(
     data: SalaryCalculationPreviewRequest,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    gross = float(data.gross_salary + (data.allowances or 0.0))
-    d = _payroll_deductions(gross)
-    med_credits = 0.0
-    if data.medical_aid_members and data.medical_aid_members > 0:
-        if data.medical_aid_members >= 1:
-            med_credits += 364.0
-        if data.medical_aid_members >= 2:
-            med_credits += 364.0
-        if data.medical_aid_members > 2:
-            med_credits += (data.medical_aid_members - 2) * 246.0
-
-    tax_after_med = max(0.0, round(d["tax"] - med_credits, 2))
-    net = round(gross - tax_after_med - d["uif"], 2)
-
+    """What-if calculation (nothing is stored). Uses the verified SARS table of the period's tax year."""
+    period = data.period or date.today().strftime("%Y-%m")
+    try:
+        tax_tables.parse_period(period)
+        table = tax_tables.resolve_table(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except tax_tables.TaxTableUnavailable as exc:
+        raise _tables_unavailable(exc)
+    regular = float((data.gross_salary or 0.0) + (data.allowances or 0.0))
+    age = tax_tables.age_on(data.date_of_birth, tax_tables.tax_year_end(table.tax_year)) if data.date_of_birth else None
+    d = _payroll_deductions(
+        regular, table=table, irregular=float(data.bonus or 0.0), age=age,
+        medical_members=int(data.medical_aid_members or 0),
+    )
     return {
-        "gross_salary": round(gross, 2),
+        "gross_salary": d["gross"],
         "basic_salary": round(data.gross_salary, 2),
         "allowances": round(data.allowances or 0.0, 2),
+        "bonus": round(data.bonus or 0.0, 2),
         "annual_gross": d["annual_gross"],
+        "annual_taxable": d["annual_taxable"],
         "tax_annual": d["tax_annual"],
-        "annual_primary_rebate": d["tax_rebate"],
-        "monthly_paye_tax": tax_after_med,
-        "medical_tax_credit": med_credits,
+        "annual_primary_rebate": table.rebate_primary,
+        "annual_rebates_applied": d["tax_rebate"],
+        "monthly_paye_tax": d["tax"],
+        "medical_tax_credit": d["medical_credit"],
         "uif_employee_contribution": d["uif"],
         "uif_employer_contribution": d["uif_employer"],
         "sdl_employer_contribution": d["sdl"],
-        "total_statutory_deductions": round(tax_after_med + d["uif"], 2),
+        "total_statutory_deductions": round(d["tax"] + d["uif"], 2),
         "total_company_contributions": round(d["uif_employer"] + d["sdl"], 2),
-        "net_take_home_pay": net,
-        "statutory_compliance": "Complies with SARS 2024/2025/2026 progressive tax tables & UIF BCEA Act",
+        "net_take_home_pay": d["net"],
+        "age_known": d["age_known"],
+        "tax_table": tax_tables.table_summary(table),
+        "method": "Annualised regular pay less rebates; bonuses taxed with the SARS annual-payment method. No retirement-fund or other deductions are modelled.",
     }
 
 
@@ -2814,33 +3198,44 @@ async def calculate_salary_preview(
 async def pay_payroll_run(
     run_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db=Depends(get_session),
 ):
-    """Initiate Paystack transfers for every unpaid payslip in the run.
+    """Initiate Paystack transfers for every unpaid payslip in the run. HR admin only.
 
-    Safe-guarded: this is the ONLY endpoint that moves money, and only when
-    called explicitly. Each payslip records the Paystack transfer_code/status;
-    a payslip with no recipient is marked FAILED and skipped. Whatever Paystack
-    returns (including 'pending' on an unfunded test balance) is recorded.
+    This is the ONLY endpoint that moves money, and only when called explicitly. Each transfer uses a
+    reference derived from the PAYSLIP id (``pay-<payslip uuid>``), so a retry, a double click or a
+    concurrent call can never pay the same payslip twice: Paystack rejects a repeated reference and
+    PROCESSING / PAID payslips are skipped. The run and its payslips are row-locked for the duration of
+    the call. An optional Idempotency-Key header is recorded in the audit log. Each payslip records the
+    Paystack transfer_code/status; a payslip with no recipient is marked FAILED and skipped. Whatever
+    Paystack returns (including 'pending' on an unfunded test balance) is recorded, with long digit
+    sequences masked.
     """
     run = (await db.execute(
-        select(PayrollRun).where(PayrollRun.id == run_id, PayrollRun.tenant_id == tenant_id)
+        select(PayrollRun).where(PayrollRun.id == run_id, PayrollRun.tenant_id == tenant_id).with_for_update()
     )).scalars().first()
     if not run:
         raise HTTPException(status_code=404, detail="Payroll run not found")
 
     slips = (await db.execute(
-        select(Payslip).where(Payslip.run_id == run_id, Payslip.payout_status.in_(["PENDING", "FAILED"]))
+        select(Payslip).where(
+            Payslip.run_id == run_id, Payslip.tenant_id == tenant_id,
+            Payslip.payout_status.in_(["PENDING", "FAILED"]),
+        ).with_for_update()
     )).scalars().all()
     if not slips:
         return {"run_id": run_id, "message": "nothing to pay (all payslips already paid)", **_run_to_dict(run)}
+    logger.info("AUDIT hr.payroll_run.pay tenant=%s user=%s run=%s payslips=%d idempotency_key=%s",
+                tenant_id, admin.user_id, run_id, len(slips), (idempotency_key or "")[:64] or "-")
 
     paid = failed = 0
     for slip in slips:
         recipient = slip.paystack_recipient_code
         if not recipient:
             prof = (await db.execute(
-                select(PayrollProfile).where(PayrollProfile.employee_id == slip.employee_id)
+                select(PayrollProfile).where(PayrollProfile.employee_id == slip.employee_id, PayrollProfile.tenant_id == tenant_id)
             )).scalars().first()
             recipient = prof.paystack_recipient_code if prof else None
         if not recipient:
@@ -2849,7 +3244,7 @@ async def pay_payroll_run(
             failed += 1
             continue
 
-        reference = f"PAY-{run.period}-{str(slip.employee_id)[:8]}"
+        reference = _transfer_reference(slip.id)
         try:
             res = await ps.initiate_transfer(
                 amount_zar=float(slip.net),
@@ -2859,14 +3254,14 @@ async def pay_payroll_run(
             )
         except ps.PaystackError as exc:
             slip.payout_status = "FAILED"
-            slip.payout_message = str(exc)
+            slip.payout_message = scrub_text(str(exc))
             failed += 1
             continue
 
         slip.paystack_recipient_code = recipient
         slip.paystack_transfer_code = res.get("transfer_code")
-        slip.paystack_reference = res.get("reference")
-        slip.payout_message = res.get("message")
+        slip.paystack_reference = res.get("reference") or reference
+        slip.payout_message = scrub_text(res.get("message"))
         if res["ok"]:
             # 'success' (or mock) -> PAID; 'pending'/'otp' -> PROCESSING
             slip.payout_status = "PAID" if res.get("status") == "success" else "PROCESSING"
@@ -2884,9 +3279,15 @@ async def pay_payroll_run(
 
     await db.flush()
     slips_all = (await db.execute(
-        select(Payslip).where(Payslip.run_id == run_id).order_by(Payslip.created_at)
+        select(Payslip).where(Payslip.run_id == run_id, Payslip.tenant_id == tenant_id).order_by(Payslip.created_at)
     )).scalars().all()
     return {"initiated": paid, "failed": failed, **_run_to_dict(run, slips_all)}
+
+
+def _transfer_reference(payslip_id: uuid.UUID) -> str:
+    """Deterministic, unique-per-payslip Paystack reference (lower-case, 40 chars). Replaces the old
+    ``PAY-{period}-{employee[:8]}`` which could collide across runs for the same period."""
+    return f"pay-{payslip_id}"
 
 
 # ── Bulk spreadsheet import + roster (onboarding / demo) ───────────────────
@@ -2948,6 +3349,7 @@ def _parse_spreadsheet(filename: str, content: bytes) -> List[dict]:
 async def payroll_roster(
     q: Optional[str] = Query(None, description="Search name / employee id / department"),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     """Active employees joined with their payroll profile — powers the payroll table."""
@@ -2987,6 +3389,7 @@ async def import_payroll(
     file: UploadFile = File(...),
     create_recipients: bool = Query(False, description="Also create Paystack transfer recipients (slower)"),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
     """Bulk-onboard employees + payroll profiles from a CSV/XLSX spreadsheet.
@@ -3080,11 +3483,13 @@ async def import_payroll(
                                 prof.paystack_recipient_code = res["recipient_code"]
                                 recipients += 1
                         except ps.PaystackError as exc:
-                            errors.append({"row": idx, "message": f"recipient: {exc}"})
+                            errors.append({"row": idx, "message": scrub_text(f"recipient: {exc}")})
         except Exception as exc:  # noqa: BLE001 — one bad row shouldn't abort the whole import
             errors.append({"row": idx, "message": str(exc)})
 
     await db.flush()
+    logger.info("AUDIT hr.payroll_import tenant=%s user=%s rows=%d created=%d updated=%d profiles=%d",
+                tenant_id, admin.user_id, len(rows), created, updated, profiles_set)
     return {
         "total_rows": len(rows), "created": created, "updated": updated,
         "profiles_set": profiles_set, "recipients_created": recipients,
@@ -3105,54 +3510,24 @@ class PayrollRunRequest(BaseModel):
 async def run_payroll(
     payload: PayrollRunRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
     db=Depends(get_session),
 ):
-    stmt = select(Employee).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
-    if payload.employee_ids:
-        stmt = stmt.where(Employee.id.in_(payload.employee_ids))
-    result = await db.execute(stmt)
-    employees = result.scalars().all()
-    if not employees:
-        raise HTTPException(status_code=400, detail="No active employees found")
-    total_gross = total_deductions = 0.0
-    dept_salary = {"Support": 18000.0, "Network": 25000.0, "Engineering": 35000.0, "Sales": 22000.0, "Management": 45000.0}
-    for emp in employees:
-        gross = dept_salary.get(emp.department, 20000.0)
-        deductions = gross * 0.18 + gross * 0.01 + gross * 0.075
-        total_gross += gross
-        total_deductions += deductions
-    total_net = total_gross - total_deductions
-    FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
-    finance_entry_id = None
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{FINANCE_URL}/journal-entries",
-                json={
-                    "entry_date": date.today().isoformat(),
-                    "reference": f"PAYROLL-{payload.period}",
-                    "description": f"Payroll run - {payload.period} ({len(employees)} employees)",
-                    "source": "PAYROLL",
-                    "lines": [
-                        {"account_code": "6000", "account_name": "Salaries & Wages", "debit": round(total_gross, 2), "credit": 0},
-                        {"account_code": "2600", "account_name": "Tax Payable", "debit": 0, "credit": round(total_deductions * 0.74, 2)},
-                        {"account_code": "2100", "account_name": "Accrued Expenses", "debit": 0, "credit": round(total_deductions * 0.26, 2)},
-                        {"account_code": "1000", "account_name": "Cash & Bank", "debit": 0, "credit": round(total_net, 2)},
-                    ],
-                },
-                headers={"X-Tenant-Id": str(tenant_id)},
-            )
-            if resp.status_code == 200:
-                finance_entry_id = resp.json().get("id")
-    except Exception:
-        pass
+    """Legacy quick-run, kept for compatibility. It used to invent salaries per department and post
+    them to Finance; it now delegates to POST /payroll/runs (real payroll profiles, verified tax
+    tables) and returns the old summary shape."""
+    run = await create_payroll_run(
+        PayrollRunCreate(period=payload.period, employee_ids=payload.employee_ids),
+        tenant_id=tenant_id, admin=admin, db=db,
+    )
     return {
         "period": payload.period,
-        "employees_processed": len(employees),
-        "total_gross": round(total_gross, 2),
-        "total_deductions": round(total_deductions, 2),
-        "total_net": round(total_net, 2),
-        "finance_entry_id": finance_entry_id,
+        "employees_processed": run["employee_count"],
+        "total_gross": run["total_gross"],
+        "total_deductions": run["total_deductions"],
+        "total_net": run["total_net"],
+        "finance_entry_id": run["finance_entry_id"],
+        "run_id": run["id"],
     }
 
 
