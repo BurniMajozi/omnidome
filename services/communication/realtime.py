@@ -22,9 +22,10 @@ Events accepted from clients (JSON):
 import asyncio
 import json
 import logging
+import os
 import uuid
 from collections import defaultdict
-from typing import Dict, Set
+from typing import Dict, Optional, Set
 
 from fastapi import WebSocket
 
@@ -40,6 +41,68 @@ _connections: Dict[str, Dict[str, Set[tuple]]] = defaultdict(lambda: defaultdict
 
 PING_INTERVAL = 25  # seconds — keeps proxies from closing idle connections
 
+REDIS_URL = os.getenv("REDIS_URL")
+_redis_client = None
+_redis_pubsub = None
+_redis_listener_task: Optional[asyncio.Task] = None
+_subscribed_topics: Set[str] = set()
+
+
+async def _get_redis():
+    global _redis_client
+    if not REDIS_URL:
+        return None
+    if _redis_client is None:
+        try:
+            import redis.asyncio as aioredis
+            _redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+            logger.info("Connected to Redis for WebSocket fan-out at %s", REDIS_URL)
+        except Exception as exc:
+            logger.warning("Redis pub/sub not initialized: %s (using process-local broadcast)", exc)
+            return None
+    return _redis_client
+
+
+async def _ensure_redis_sub(tenant_id: str, channel_id: str) -> None:
+    global _redis_pubsub, _redis_listener_task
+    topic = f"comm:ws:{tenant_id}:{channel_id}"
+    if topic in _subscribed_topics or not REDIS_URL:
+        return
+    r = await _get_redis()
+    if not r:
+        return
+    try:
+        if _redis_pubsub is None:
+            _redis_pubsub = r.pubsub()
+        await _redis_pubsub.subscribe(topic)
+        _subscribed_topics.add(topic)
+
+        if _redis_listener_task is None or _redis_listener_task.done():
+            _redis_listener_task = asyncio.create_task(_redis_listen_loop())
+    except Exception as exc:
+        logger.warning("Failed to subscribe to Redis topic %s: %s", topic, exc)
+
+
+async def _redis_listen_loop() -> None:
+    global _redis_pubsub
+    try:
+        while _redis_pubsub and _subscribed_topics:
+            message = await _redis_pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+            if message and message.get("type") == "message":
+                try:
+                    payload = json.loads(message["data"])
+                    await _local_broadcast(
+                        payload["tenant_id"], payload["channel_id"],
+                        payload["type"], payload["data"]
+                    )
+                except Exception as exc:
+                    logger.debug("Error processing redis ws event: %s", exc)
+            await asyncio.sleep(0.05)
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        logger.warning("Redis pubsub listener exited: %s", exc)
+
 
 # ── Public API ────────────────────────────────────────────────────────────
 
@@ -52,6 +115,9 @@ async def connect(
     await websocket.accept()
     _connections[tenant_id][channel_id].add((user_id, websocket))
     logger.info("WS connected  tenant=%s channel=%s user=%s", tenant_id, channel_id, user_id)
+
+    if REDIS_URL:
+        await _ensure_redis_sub(tenant_id, channel_id)
 
     # Announce presence to channel peers
     await broadcast_event(tenant_id, channel_id, "presence", {"user_id": user_id, "online": True})
@@ -74,7 +140,7 @@ async def broadcast_message(tenant_id: str, channel_id: str, message_data: dict)
     await broadcast_event(tenant_id, channel_id, "message", message_data)
 
 
-async def broadcast_event(
+async def _local_broadcast(
     tenant_id: str,
     channel_id: str,
     event_type: str,
@@ -92,6 +158,31 @@ async def broadcast_event(
 
     for entry in dead:
         _connections[tenant_id][channel_id].discard(entry)
+
+
+async def broadcast_event(
+    tenant_id: str,
+    channel_id: str,
+    event_type: str,
+    data: dict,
+    *,
+    from_pubsub: bool = False,
+) -> None:
+    await _local_broadcast(tenant_id, channel_id, event_type, data)
+
+    if not from_pubsub and REDIS_URL:
+        r = await _get_redis()
+        if r:
+            try:
+                msg = json.dumps({
+                    "tenant_id": tenant_id,
+                    "channel_id": channel_id,
+                    "type": event_type,
+                    "data": data,
+                })
+                await r.publish(f"comm:ws:{tenant_id}:{channel_id}", msg)
+            except Exception as exc:
+                logger.debug("Failed publishing event to Redis: %s", exc)
 
 
 # ── Per-connection handler ────────────────────────────────────────────────

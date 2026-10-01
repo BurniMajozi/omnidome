@@ -610,16 +610,17 @@ async def get_department_cost_allocation(
 # ═══════════════════════════════════════════════════════════════════════════
 
 class StaffComplianceSummary(BaseModel):
+    """Counts come from the compliance tables; every figure with no real source is null (never invented)."""
     total_staff: int
-    popia_certified_count: int
-    popia_compliance_pct: float
-    rica_accredited_officers_count: int
+    popia_certified_count: Optional[int] = None
+    popia_compliance_pct: Optional[float] = None
+    rica_accredited_officers_count: Optional[int] = None
     rica_verifications_completed: int
     health_and_safety_incidents: int
     foreign_workers_with_permits: int
-    expiring_permits_count: int
-    bcea_leave_compliance_pct: float
-    overall_readiness_score: int
+    expiring_permits_count: Optional[int] = None
+    bcea_leave_compliance_pct: Optional[float] = None
+    overall_readiness_score: Optional[int] = None
 
 
 @router.get("/compliance/audit", response_model=StaffComplianceSummary)
@@ -627,51 +628,28 @@ async def get_staff_compliance_audit(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_session),
 ):
-    """Aggregate POPIA, RICA, Health & Safety, and BCEA regulatory readiness."""
+    """Real counts of RICA verifications, foreign-worker permits and H&S incidents for the tenant.
+    There is no POPIA-training, leave-compliance or readiness source here, so those are null."""
     emp_res = await db.execute(
         select(func.count(Employee.id)).where(Employee.tenant_id == tenant_id, Employee.status == "ACTIVE")
     )
     total_staff = emp_res.scalar_one() or 0
 
-    # RICA Accredited Officers
-    rica_query = text("SELECT COUNT(*) FROM compliance_rica_verifications WHERE tenant_id = :tid")
-    try:
-        r_res = await db.execute(rica_query, {"tid": tenant_id})
-        rica_count = r_res.scalar_one() or 0
-    except Exception:
-        rica_count = 5
-
-    # Foreign Worker Permits
-    permit_query = text("SELECT COUNT(*) FROM compliance_foreign_worker_permits WHERE tenant_id = :tid")
-    try:
-        p_res = await db.execute(permit_query, {"tid": tenant_id})
-        permits_count = p_res.scalar_one() or 0
-    except Exception:
-        permits_count = 2
-
-    # H&S Incidents
-    hs_query = text("SELECT COUNT(*) FROM compliance_hs_incidents WHERE tenant_id = :tid")
-    try:
-        hs_res = await db.execute(hs_query, {"tid": tenant_id})
-        hs_count = hs_res.scalar_one() or 0
-    except Exception:
-        hs_count = 0
-
-    # POPIA Training completed
-    popia_training = max(1, int(total_staff * 0.88))
-    popia_pct = round((popia_training / total_staff * 100), 1) if total_staff > 0 else 100.0
+    async def count(table: str) -> int:
+        # compliance tables key tenant_id as varchar, so bind a string (a uuid param raises a type error)
+        try:
+            async with db.begin_nested():
+                res = await db.execute(text(f"SELECT COUNT(*) FROM {table} WHERE tenant_id = :tid"), {"tid": str(tenant_id)})
+                return int(res.scalar_one() or 0)
+        except Exception:  # table not created yet -> no records
+            logger.info("compliance audit: %s unavailable", table)
+            return 0
 
     return StaffComplianceSummary(
         total_staff=total_staff,
-        popia_certified_count=popia_training,
-        popia_compliance_pct=popia_pct,
-        rica_accredited_officers_count=min(total_staff, 4),
-        rica_verifications_completed=rica_count,
-        health_and_safety_incidents=hs_count,
-        foreign_workers_with_permits=permits_count,
-        expiring_permits_count=0,
-        bcea_leave_compliance_pct=96.5,
-        overall_readiness_score=94,
+        rica_verifications_completed=await count("compliance_rica_verifications"),
+        health_and_safety_incidents=await count("compliance_hs_incidents"),
+        foreign_workers_with_permits=await count("compliance_foreign_worker_permits"),
     )
 
 

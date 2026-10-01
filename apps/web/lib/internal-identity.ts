@@ -143,8 +143,17 @@ export async function signHeaders(headers: Headers, method: string, path: string
  * handler that builds backend identity headers itself.
  */
 export async function signedFetch(input: string | URL, init: RequestInit = {}): Promise<Response> {
-  const headers = new Headers(init.headers)
-  const url = typeof input === "string" ? new URL(input) : input
-  await signHeaders(headers, init.method || "GET", decodedPath(url.pathname))
-  return fetch(input, { ...init, headers })
+  let url = typeof input === "string" ? new URL(input) : input
+  // The signature covers the exact path, so a backend redirect (FastAPI /x -> /x/) must be followed
+  // here and re-signed for the new path; letting fetch follow it replays the old signature (401).
+  for (let hop = 0; ; hop++) {
+    const headers = new Headers(init.headers)
+    await signHeaders(headers, init.method || "GET", decodedPath(url.pathname))
+    const res = await fetch(url, { ...init, headers, redirect: "manual" })
+    const location = res.headers.get("location")
+    if (![307, 308].includes(res.status) || !location || hop >= 3) return res
+    const next = new URL(location, url)
+    if (next.origin !== url.origin) return res
+    url = next
+  }
 }

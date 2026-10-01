@@ -395,13 +395,22 @@ async def get_customer_cx(
             for at in timeline_result.scalars().all()
         ]
 
-        # NPS score from contacts
+        # NPS score from contact matching this customer
         contact_result = await session.execute(
             select(Contact).where(
                 Contact.tenant_id == ctx.tenant_id,
-            ).order_by(Contact.created_at.desc()).limit(1)
+                Contact.id == customer_id,
+            ).limit(1)
         )
         contact = contact_result.scalar_one_or_none()
+        if not contact and customer.email:
+            contact_result = await session.execute(
+                select(Contact).where(
+                    Contact.tenant_id == ctx.tenant_id,
+                    Contact.email == customer.email,
+                ).limit(1)
+            )
+            contact = contact_result.scalar_one_or_none()
         nps_score = contact.nps_score if contact else None
 
         # CX summary
@@ -463,20 +472,24 @@ async def get_customer_crm(
         lead = lead_result.scalar_one_or_none()
         lead_data = None
         if lead:
+            converted_at_val = getattr(lead, "converted_at", None)
             lead_data = {
                 "id": str(lead.id),
                 "source": lead.source,
                 "status": lead.status,
                 "coverage_area": lead.coverage_area,
                 "interested_package": lead.interested_package,
-                "converted_at": lead.converted_at.isoformat() if lead.converted_at else None,
+                "converted_at": converted_at_val.isoformat() if converted_at_val else None,
             }
 
-        # Deals (via contact → customer link)
+        # Deals (via contact/customer link)
         deals_result = await session.execute(
             select(Deal, DealStage.name.label("stage_name"), DealStage.probability)
             .outerjoin(DealStage, Deal.stage_id == DealStage.id)
-            .where(Deal.tenant_id == ctx.tenant_id)
+            .where(
+                Deal.tenant_id == ctx.tenant_id,
+                Deal.contact_id == customer_id,
+            )
             .order_by(Deal.created_at.desc()).limit(50)
         )
         deals = []
@@ -513,19 +526,24 @@ async def get_customer_crm(
             for q in quotes_result.scalars().all()
         ]
 
-        # Commissions
-        comm_result = await session.execute(
-            select(Commission).where(
-                Commission.tenant_id == ctx.tenant_id,
-            ).order_by(Commission.created_at.desc()).limit(50)
-        )
-        commissions = [
-            CommissionSummary(
-                id=c.id, agent_id=c.agent_id, amount_zar=c.amount_zar,
-                rate_percent=c.rate_percent, status=c.status,
+        # Commissions for this customer's deals
+        deal_ids = [d.id for d in deals]
+        if deal_ids:
+            comm_result = await session.execute(
+                select(Commission).where(
+                    Commission.tenant_id == ctx.tenant_id,
+                    Commission.deal_id.in_(deal_ids),
+                ).order_by(Commission.created_at.desc()).limit(50)
             )
-            for c in comm_result.scalars().all()
-        ]
+            commissions = [
+                CommissionSummary(
+                    id=c.id, agent_id=c.agent_id, amount_zar=c.amount_zar,
+                    rate_percent=c.rate_percent, status=c.status,
+                )
+                for c in comm_result.scalars().all()
+            ]
+        else:
+            commissions = []
 
         # Tags
         tags_result = await session.execute(

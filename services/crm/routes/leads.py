@@ -1,10 +1,11 @@
 """Lead Management routes — CRUD and conversion to customer."""
 
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import generate_account_number, get_session
@@ -70,7 +71,7 @@ async def list_leads(
             stmt = stmt.where(Lead.assigned_to == assigned_to)
 
         # Count total
-        count_stmt = select(Lead.id).where(Lead.tenant_id == ctx.tenant_id)
+        count_stmt = select(func.count(Lead.id)).where(Lead.tenant_id == ctx.tenant_id)
         if status_filter:
             count_stmt = count_stmt.where(Lead.status == status_filter)
         if source:
@@ -78,8 +79,8 @@ async def list_leads(
         if assigned_to:
             count_stmt = count_stmt.where(Lead.assigned_to == assigned_to)
 
-        total_result = await session.execute(select(Lead.id).select_from(Lead).where(Lead.tenant_id == ctx.tenant_id))
-        total = len(total_result.scalars().all())
+        total_result = await session.execute(count_stmt)
+        total = total_result.scalar() or 0
 
         items_result = await session.execute(
             stmt.order_by(Lead.created_at.desc())
@@ -163,6 +164,7 @@ async def convert_lead(
         # Update lead
         lead.status = "converted"
         lead.converted_customer_id = customer.id
+        lead.converted_at = datetime.now(timezone.utc)
 
         # Timeline event
         event = ActivityEvent(

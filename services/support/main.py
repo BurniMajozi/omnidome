@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -20,6 +21,7 @@ from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.support.database import Ticket, TicketReply, get_session, init_tables
 
+logger = logging.getLogger("support.main")
 app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
 
@@ -409,8 +411,8 @@ async def resolve_ticket(
                 },
                 headers={"X-Tenant-Id": str(auth.tenant_id)},
             )
-    except Exception:
-        pass  # Non-blocking
+    except Exception as exc:
+        logger.warning("Finance expense bridge failed for ticket %s: %s", ticket_id, exc)
 
     return {
         "id": str(ticket_id),

@@ -88,7 +88,12 @@ def limiter_exempt(request: Request) -> bool:
 @app.middleware("http")
 async def global_rate_limit_middleware(request: Request, call_next):
     if not limiter_exempt(request):
-        await _global_rate_limiter.check(request)
+        try:
+            await _global_rate_limiter.check(request)
+        except HTTPException as exc:  # raised inside middleware it would surface as a 500, not a 429
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
     return await call_next(request)
 
 

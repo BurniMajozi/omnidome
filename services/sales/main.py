@@ -759,8 +759,12 @@ def _next_day_start(d: date, zone: Optional[tzinfo] = None) -> datetime:
     return _local_midnight_utc(d + timedelta(days=1), zone)
 
 
-async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
-    """The tenant's default pipeline, created on first use.
+def _auto_seed_pipeline_enabled() -> bool:
+    return os.getenv("SALES_AUTO_SEED_DEFAULT_PIPELINE", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID, *, allow_create: bool = True) -> Optional[uuid.UUID]:
+    """The tenant's default pipeline, optionally created on first use.
 
     Creation is serialised per tenant with a transaction-scoped advisory lock (the
     board fires /deals and /pipeline/stages at the same moment on a fresh tenant)
@@ -776,6 +780,9 @@ async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uu
     found = await _find()
     if found:
         return found
+    if not allow_create or not _auto_seed_pipeline_enabled():
+        return None
+
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"sales_pipeline:{tenant_id}"})
     found = await _find()  # another request may have created it while we waited for the lock
     if found:
@@ -796,7 +803,9 @@ async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uu
     return pipeline_id
 
 
-async def _get_stages(db: AsyncSession, pipeline_id: uuid.UUID) -> List[DealStage]:
+async def _get_stages(db: AsyncSession, pipeline_id: Optional[uuid.UUID]) -> List[DealStage]:
+    if not pipeline_id:
+        return []
     result = await db.execute(
         select(DealStage)
         .where(DealStage.pipeline_id == pipeline_id)
@@ -1071,8 +1080,8 @@ async def _notify_lifecycle_won(deal: Deal, tenant_id: uuid.UUID) -> None:
                 },
                 headers={"X-Tenant-Id": str(tenant_id)},
             )
-    except Exception:
-        pass  # Don't fail the sale if lifecycle is down
+    except Exception as exc:
+        logger.warning("Lifecycle bridge failed for won deal %s: %s", deal.id, exc)
 
 
 async def _notify_lifecycle_lost(deal: Deal, tenant_id: uuid.UUID, reason: str) -> None:
@@ -1093,8 +1102,8 @@ async def _notify_lifecycle_lost(deal: Deal, tenant_id: uuid.UUID, reason: str) 
                 },
                 headers={"X-Tenant-Id": str(tenant_id)},
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Lifecycle bridge failed for lost deal %s: %s", deal.id, exc)
 
 
 async def _notify_finance_won(deal: Deal, tenant_id: uuid.UUID, now: datetime) -> None:
@@ -1130,8 +1139,8 @@ async def _notify_finance_won(deal: Deal, tenant_id: uuid.UUID, now: datetime) -
                 },
                 headers={"X-Tenant-Id": str(tenant_id)},
             )
-    except Exception:
-        pass  # Don't fail the sale if finance is down
+    except Exception as exc:
+        logger.warning("Finance journal bridge failed for won deal %s: %s", deal.id, exc)
 
 
 def _actor(ctx: Optional[AuthContext]) -> Actor:
@@ -1217,6 +1226,17 @@ async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None
         "value_zar": float(deal.value_zar or 0), "closed_at": now.isoformat(),
     }
 
+    # Durable outbox event on the event bus
+    try:
+        from services.common import event_bus
+        await event_bus.publish(
+            db, tenant_id, "sales.deal.won", payload,
+            source="sales", subject=("deal", str(deal.id)),
+            idempotency_key=f"deal_won:{deal.id}",
+        )
+    except Exception as exc:
+        logger.warning("Could not record sales.deal.won domain event: %s", exc)
+
     async def _bridges() -> None:
         await _notify_lifecycle_won(deal, tenant_id)
         await _notify_finance_won(deal, tenant_id, now)
@@ -1241,6 +1261,23 @@ async def _close_lost(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal, reason
     if closed_stage_id:
         deal.stage_id = closed_stage_id
     await db.flush()
+
+    lost_payload = {
+        "event": "deal.closed_lost", "deal_id": str(deal.id),
+        "tenant_id": str(tenant_id), "customer_id": str(deal.contact_id),
+        "reason": reason, "closed_at": now.isoformat(),
+    }
+
+    # Durable outbox event on the event bus
+    try:
+        from services.common import event_bus
+        await event_bus.publish(
+            db, tenant_id, "sales.deal.lost", lost_payload,
+            source="sales", subject=("deal", str(deal.id)),
+            idempotency_key=f"deal_lost:{deal.id}",
+        )
+    except Exception as exc:
+        logger.warning("Could not record sales.deal.lost domain event: %s", exc)
 
     async def _bridges() -> None:
         await _notify_lifecycle_lost(deal, tenant_id, reason)

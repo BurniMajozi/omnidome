@@ -1190,7 +1190,7 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Safety Certifications</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {fleetSafety ? `${fleetSafety.working_at_heights_certified_count} Heights · ${fleetSafety.optical_laser_safety_certified_count} Laser` : "N/A"}
+                {fleetSafety && fleetSafety.working_at_heights_certified_count != null && fleetSafety.optical_laser_safety_certified_count != null ? `${fleetSafety.working_at_heights_certified_count} Heights · ${fleetSafety.optical_laser_safety_certified_count} Laser` : "N/A"}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">Certified field staff</p>
             </Card>

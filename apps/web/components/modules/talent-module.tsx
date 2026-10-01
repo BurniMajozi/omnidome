@@ -454,9 +454,9 @@ export function TalentModule() {
             {(c) => (
               <div className="space-y-6">
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <StatCard title="Overall Readiness Score" value={`${c.overall_readiness_score}%`} icon={ShieldCheck} description="as reported by the compliance audit" />
-                  <StatCard title="RICA Accredited Officers" value={c.rica_accredited_officers_count} icon={CheckCircle2} description={`${c.rica_verifications_completed} verifications completed`} />
-                  <StatCard title="Foreign Worker DHA Permits" value={c.foreign_workers_with_permits} icon={FileText} description={`${c.expiring_permits_count} expiring soon`} />
+                  <StatCard title="Overall Readiness Score" value={c.overall_readiness_score == null ? "Not assessed" : `${c.overall_readiness_score}%`} icon={ShieldCheck} description={c.overall_readiness_score == null ? "no readiness source is connected" : "as reported by the compliance audit"} />
+                  <StatCard title="RICA Accredited Officers" value={c.rica_accredited_officers_count ?? "Not assessed"} icon={CheckCircle2} description={`${c.rica_verifications_completed} verifications completed`} />
+                  <StatCard title="Foreign Worker DHA Permits" value={c.foreign_workers_with_permits} icon={FileText} description={c.expiring_permits_count == null ? "expiry not tracked" : `${c.expiring_permits_count} expiring soon`} />
                   <StatCard title="H&S Incidents (YTD)" value={c.health_and_safety_incidents} icon={AlertTriangle} description="recorded incidents" />
                 </div>
 
@@ -472,7 +472,7 @@ export function TalentModule() {
                       <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
                         <span className="font-semibold text-foreground">RICA Act</span>
                         <div className="pt-2 text-xs text-muted-foreground flex justify-between">
-                          <span>RICA officers: <strong>{c.rica_accredited_officers_count}</strong></span>
+                          <span>RICA officers: <strong>{c.rica_accredited_officers_count ?? "Not assessed"}</strong></span>
                           <span>Verifications completed: <strong>{c.rica_verifications_completed}</strong></span>
                         </div>
                       </div>
@@ -480,20 +480,20 @@ export function TalentModule() {
                         <span className="font-semibold text-foreground">DHA Foreign Worker Permits</span>
                         <div className="pt-2 text-xs text-muted-foreground flex justify-between">
                           <span>Active permits: <strong>{c.foreign_workers_with_permits}</strong></span>
-                          <span>Expiring soon: <strong>{c.expiring_permits_count}</strong></span>
+                          <span>Expiring soon: <strong>{c.expiring_permits_count ?? "Not tracked"}</strong></span>
                         </div>
                       </div>
                       <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
                         <span className="font-semibold text-foreground">POPIA</span>
                         <div className="pt-2 text-xs text-muted-foreground flex justify-between">
-                          <span>Certified staff: <strong>{c.popia_certified_count} of {c.total_staff}</strong></span>
-                          <span>Compliance: <strong>{c.popia_compliance_pct}%</strong></span>
+                          <span>Certified staff: <strong>{c.popia_certified_count == null ? "Not assessed" : `${c.popia_certified_count} of ${c.total_staff}`}</strong></span>
+                          <span>Compliance: <strong>{c.popia_compliance_pct == null ? "Not assessed" : `${c.popia_compliance_pct}%`}</strong></span>
                         </div>
                       </div>
                       <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
                         <span className="font-semibold text-foreground">BCEA leave & OHS</span>
                         <div className="pt-2 text-xs text-muted-foreground flex justify-between">
-                          <span>BCEA leave compliance: <strong>{c.bcea_leave_compliance_pct}%</strong></span>
+                          <span>BCEA leave compliance: <strong>{c.bcea_leave_compliance_pct == null ? "Not assessed" : `${c.bcea_leave_compliance_pct}%`}</strong></span>
                           <span>H&S incidents: <strong>{c.health_and_safety_incidents}</strong></span>
                         </div>
                       </div>

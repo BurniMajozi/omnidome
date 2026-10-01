@@ -28,6 +28,12 @@ async def create_event(
     body: ScheduleEventCreate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
+    from services.communication.routes.ws import _check_channel_access
+
+    has_access = await _check_channel_access(ctx.tenant_id, body.channel_id, ctx.user_id)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Channel not accessible")
+
     async with get_session() as session:
         event = ScheduleEvent(
             tenant_id=ctx.tenant_id,
@@ -43,6 +49,7 @@ async def create_event(
             source_message_id=body.source_message_id,
             linked_task_id=body.linked_task_id,
             status=body.status or "upcoming",
+            created_by=ctx.user_id,
         )
         session.add(event)
         await session.flush()

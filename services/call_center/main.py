@@ -1048,13 +1048,51 @@ async def stop_voice_agent(
 
 
 @app.post("/reports/import")
-async def import_external_report(file: UploadFile = File(...)):
-    return {"status": "SUCCESS", "processed_records": 1500, "anomalies_detected": 3, "message": f"Report '{file.filename}' successfully integrated."}
+async def import_external_report(
+    file: UploadFile = File(...),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    content = await file.read()
+    lines = [line for line in content.decode("utf-8", errors="ignore").splitlines() if line.strip()]
+    record_count = max(0, len(lines) - 1) if len(lines) > 1 else len(lines)
+    return {
+        "status": "SUCCESS",
+        "processed_records": record_count,
+        "anomalies_detected": 0,
+        "filename": file.filename,
+        "message": f"Report '{file.filename}' processed ({record_count} records).",
+    }
 
 
 @app.get("/reports/intelligence")
-async def get_hub_intelligence(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    return {"resolution_rate": 92.0, "avg_talk_time_seconds": 252, "closed_queries": 642, "peak_volume_period": "17:00 - 19:00", "health_status": "OPTIMAL"}
+async def get_hub_intelligence(
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
+):
+    stmt = select(CallSession).where(CallSession.tenant_id == tenant_id)
+    result = await db.execute(stmt)
+    sessions = result.scalars().all()
+    if not sessions:
+        return {
+            "resolution_rate": 0.0,
+            "avg_talk_time_seconds": 0,
+            "closed_queries": 0,
+            "peak_volume_period": "None",
+            "health_status": "IDLE",
+        }
+    total = len(sessions)
+    durations = [s.duration_seconds for s in sessions if s.duration_seconds]
+    avg_duration = round(sum(durations) / len(durations)) if durations else 0
+    resolved = sum(1 for s in sessions if (s.outcome and s.outcome.upper() in ("RESOLVED", "COMPLETED")) or s.end_time is not None)
+    res_rate = round((resolved / total) * 100, 1)
+    status_label = "OPTIMAL" if res_rate >= 80 else "NEEDS_ATTENTION" if res_rate >= 50 else "CRITICAL"
+    return {
+        "resolution_rate": res_rate,
+        "avg_talk_time_seconds": avg_duration,
+        "closed_queries": resolved,
+        "peak_volume_period": "Business Hours (08:00 - 17:00)",
+        "health_status": status_label,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════

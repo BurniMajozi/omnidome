@@ -814,15 +814,15 @@ export interface DepartmentCostAllocation {
 
 export interface StaffComplianceSummary {
   total_staff: number
-  popia_certified_count: number
-  popia_compliance_pct: number
-  rica_accredited_officers_count: number
+  popia_certified_count: number | null
+  popia_compliance_pct: number | null
+  rica_accredited_officers_count: number | null
   rica_verifications_completed: number
   health_and_safety_incidents: number
   foreign_workers_with_permits: number
-  expiring_permits_count: number
-  bcea_leave_compliance_pct: number
-  overall_readiness_score: number
+  expiring_permits_count: number | null
+  bcea_leave_compliance_pct: number | null
+  overall_readiness_score: number | null
 }
 
 export interface OrchestratorWellnessAlert {
