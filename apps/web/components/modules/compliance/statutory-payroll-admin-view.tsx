@@ -1,946 +1,652 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useCallback, useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
-import { NotConnected } from "@/components/ui/not-connected"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import {
   Landmark,
-  ShieldCheck,
   FileText,
-  AlertTriangle,
   CheckCircle2,
-  Calendar,
-  Clock,
-  Send,
-  Download,
-  Users,
-  Building2,
-  Scale,
   RefreshCw,
   Search,
-  Check,
-  X,
+  Users,
+  Scale,
   FileCheck,
-  DollarSign,
-  Briefcase,
-  HelpCircle,
-  TrendingUp,
+  ExternalLink,
+  Info,
 } from "lucide-react"
 import {
   getPayrollStatutorySummary,
-  fileEmp201Declaration,
+  prepareEmp201,
+  markEmp201Filed,
   getUifDeclarations,
-  submitUifDeclaration,
-  issueUi27Certificate,
   getLaborComplianceAudit,
   type StatutoryPayrollSummaryResponse,
   type UifDeclarationsResponse,
   type LaborComplianceAuditResponse,
   type Emp201ReturnItem,
-  type UifDeclarationItem,
+  type PrepareEmp201Result,
 } from "@/lib/compliance-api"
+import type { Loadable } from "@/lib/service-state"
+import {
+  SARS_EFILING_URL,
+  isFiledStatus,
+  loadableFromError,
+  scoreView,
+  validateFiledDate,
+  validatePeriod,
+  validatePrn,
+  zarOrNA,
+} from "@/lib/compliance-state"
+import { RatesNotVerifiedChip, SectionStateNotice } from "./section-state"
 
-const money = (v: number | null | undefined): string =>
-  v === null || v === undefined ? "N/A" : `R ${v.toLocaleString()}`
+async function load<T>(fn: () => Promise<T>): Promise<Loadable<T>> {
+  try {
+    return { state: "ready", data: await fn() }
+  } catch (e) {
+    return loadableFromError(e) as unknown as Loadable<T>
+  }
+}
+
+const NA = "Not available"
+const val = (v: string | number | null | undefined): string => (v === null || v === undefined || v === "" ? NA : String(v))
+
+/** YYYY-MM of the previous calendar month: the EMP201 period normally due next. */
+function previousPeriod(now = new Date()): string {
+  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`
+}
+
+function today(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`
+}
+
+function ManualFilingNote() {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-blue-500/30 bg-blue-500/5 p-3 text-xs text-blue-300">
+      <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
+      <p>
+        Filing is done manually on SARS eFiling. OmniDome prepares a working paper from paid payslips and records the
+        receipt you paste back; it never submits anything to SARS.{" "}
+        <a
+          href={SARS_EFILING_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 font-medium underline"
+        >
+          Open SARS eFiling <ExternalLink className="h-3 w-3" />
+        </a>
+      </p>
+    </div>
+  )
+}
 
 export function StatutoryPayrollAdminView() {
   const [activeTab, setActiveTab] = useState<"emp201" | "uif" | "labor" | "emp501">("emp201")
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  // Data states
-  const [summary, setSummary] = useState<StatutoryPayrollSummaryResponse | null>(null)
-  const [uifData, setUifData] = useState<UifDeclarationsResponse | null>(null)
-  const [laborAudit, setLaborAudit] = useState<LaborComplianceAuditResponse | null>(null)
-
-  // Search & filter
+  const [summary, setSummary] = useState<Loadable<StatutoryPayrollSummaryResponse>>({ state: "loading" })
+  const [uif, setUif] = useState<Loadable<UifDeclarationsResponse>>({ state: "loading" })
+  const [labor, setLabor] = useState<Loadable<LaborComplianceAuditResponse>>({ state: "loading" })
   const [uifSearch, setUifSearch] = useState("")
 
-  // Modals state
-  const [emp201ModalOpen, setEmp201ModalOpen] = useState(false)
-  const [filingEmp201, setFilingEmp201] = useState(false)
-  const [emp201Form, setEmp201Form] = useState({
-    period: new Date().toISOString().slice(0, 7),
-    amount_paye: 0,
-    amount_uif: 0,
-    amount_sdl: 0,
-    payment_method: "sars_efiling",
-    notes: "",
-  })
-  const [emp201SuccessMsg, setEmp201SuccessMsg] = useState<string | null>(null)
+  // Prepare working paper
+  const [period, setPeriod] = useState(previousPeriod())
+  const [preparing, setPreparing] = useState(false)
+  const [prepared, setPrepared] = useState<PrepareEmp201Result | null>(null)
+  const [prepareError, setPrepareError] = useState<string | null>(null)
 
-  const [uifModalOpen, setUifModalOpen] = useState(false)
-  const [submittingUif, setSubmittingUif] = useState(false)
-  const [uifForm, setUifForm] = useState({
-    period: new Date().toISOString().slice(0, 7),
-    declarer_name: "Compliance Officer",
-    notes: "Official monthly UI-19 declaration",
-  })
-  const [uifSuccessMsg, setUifSuccessMsg] = useState<string | null>(null)
+  // Mark as filed
+  const [markTarget, setMarkTarget] = useState<{ id: number; period: string } | null>(null)
+  const [prnInput, setPrnInput] = useState("")
+  const [filedDate, setFiledDate] = useState(today())
+  const [marking, setMarking] = useState(false)
+  const [markError, setMarkError] = useState<string | null>(null)
+  const [markedMsg, setMarkedMsg] = useState<string | null>(null)
 
-  const [ui27ModalOpen, setUi27ModalOpen] = useState(false)
-  const [selectedEmpForUi27, setSelectedEmpForUi27] = useState<UifDeclarationItem | null>(null)
-  const [ui27Reason, setUi27Reason] = useState("maternity")
-  const [ui27SuccessMsg, setUi27SuccessMsg] = useState<string | null>(null)
-  const [issuingUi27, setIssuingUi27] = useState(false)
-
-  // Load all statutory data
-  const loadData = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [sumRes, uifRes, laborRes] = await Promise.all([
-        getPayrollStatutorySummary().catch(() => null),
-        getUifDeclarations().catch(() => null),
-        getLaborComplianceAudit().catch(() => null),
-      ])
-      if (sumRes) {
-        setSummary(sumRes)
-        setEmp201Form((prev) => ({
-          ...prev,
-          amount_paye: sumRes.paye_withheld_zar,
-          amount_uif: sumRes.uif_employee_zar + sumRes.uif_employer_zar,
-          amount_sdl: sumRes.sdl_zar,
-        }))
-      }
-      if (uifRes) setUifData(uifRes)
-      if (laborRes) setLaborAudit(laborRes)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    loadData()
+  const loadAll = useCallback(async () => {
+    setSummary({ state: "loading" })
+    setUif({ state: "loading" })
+    setLabor({ state: "loading" })
+    const [s, u, l] = await Promise.all([
+      load(() => getPayrollStatutorySummary()),
+      load(() => getUifDeclarations()),
+      load(() => getLaborComplianceAudit()),
+    ])
+    setSummary(s)
+    setUif(u)
+    setLabor(l)
   }, [])
 
-  // Handle filing EMP201
-  const handleFileEmp201 = async (e: React.FormEvent) => {
+  useEffect(() => {
+    loadAll()
+  }, [loadAll])
+
+  const reloadSummary = async () => setSummary(await load(() => getPayrollStatutorySummary()))
+
+  const handlePrepare = async (e: React.FormEvent) => {
     e.preventDefault()
-    setFilingEmp201(true)
+    setPrepareError(null)
+    if (!validatePeriod(period)) {
+      setPrepareError("Enter the tax period as YYYY-MM.")
+      return
+    }
+    setPreparing(true)
     try {
-      const res = await fileEmp201Declaration(emp201Form)
-      setEmp201SuccessMsg(res.message)
-      setEmp201ModalOpen(false)
-      loadData()
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to file EMP201")
+      const res = await prepareEmp201({ period: period.trim() })
+      setPrepared(res)
+      await reloadSummary()
+    } catch (err) {
+      // Server message verbatim (403 role, 404/409 no paid payslips, etc.)
+      setPrepareError(err instanceof Error ? err.message : "Could not prepare the working paper")
     } finally {
-      setFilingEmp201(false)
+      setPreparing(false)
     }
   }
 
-  // Handle submitting UIF return
-  const handleSubmitUif = async (e: React.FormEvent) => {
+  const handleMarkFiled = async (e: React.FormEvent) => {
     e.preventDefault()
-    setSubmittingUif(true)
+    if (!markTarget) return
+    setMarkError(null)
+    const prn = validatePrn(prnInput)
+    if (!prn.ok) return setMarkError(prn.error)
+    const date = validateFiledDate(filedDate)
+    if (!date.ok) return setMarkError(date.error)
+    setMarking(true)
     try {
-      const res = await submitUifDeclaration(uifForm)
-      setUifSuccessMsg(res.message)
-      setUifModalOpen(false)
-      loadData()
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to submit UI-19")
+      await markEmp201Filed(markTarget.id, { prn: prn.prn, filed_at: date.date })
+      setMarkedMsg(`Recorded: EMP201 for ${markTarget.period} marked as filed with PRN ${prn.prn} on ${date.date}.`)
+      setMarkTarget(null)
+      setPrnInput("")
+      await reloadSummary()
+    } catch (err) {
+      setMarkError(err instanceof Error ? err.message : "Could not record the filing")
     } finally {
-      setSubmittingUif(false)
+      setMarking(false)
     }
   }
 
-  // Handle issuing UI-2.7 certificate
-  const handleIssueUi27 = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!selectedEmpForUi27) return
-    setIssuingUi27(true)
-    try {
-      const res = await issueUi27Certificate({
-        employee_id: selectedEmpForUi27.employee_id,
-        reason_for_claim: ui27Reason,
-        last_day_worked: new Date().toISOString().slice(0, 10),
-      })
-      setUi27SuccessMsg(res.message)
-      setUi27ModalOpen(false)
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to issue UI-2.7")
-    } finally {
-      setIssuingUi27(false)
-    }
-  }
+  const tabBtn = (key: typeof activeTab, icon: React.ReactNode, label: string) => (
+    <Button size="sm" variant={activeTab === key ? "secondary" : "ghost"} onClick={() => setActiveTab(key)} className="gap-1.5">
+      {icon} {label}
+    </Button>
+  )
 
-  const filteredEmployees = (uifData?.employees || []).filter((emp) => {
+  if (summary.state !== "ready") {
+    return <SectionStateNotice state={summary} onRetry={loadAll} />
+  }
+  const sum = summary.data
+  const ratesUnverified = sum.rates_verified !== true
+  const hasFigures =
+    typeof sum.total_emp201_liability_zar === "number" ||
+    typeof sum.paye_withheld_zar === "number" ||
+    typeof sum.sdl_zar === "number"
+  const uifTotal =
+    typeof sum.uif_employee_zar === "number" && typeof sum.uif_employer_zar === "number"
+      ? sum.uif_employee_zar + sum.uif_employer_zar
+      : null
+  const laborScore = labor.state === "ready" ? scoreView(labor.data.overall_labor_score) : null
+  const returns: Emp201ReturnItem[] = sum.recent_emp201_returns ?? []
+
+  const filteredEmployees = (uif.state === "ready" ? uif.data.employees ?? [] : []).filter((emp) => {
     const q = uifSearch.toLowerCase()
     return (
-      emp.full_name.toLowerCase().includes(q) ||
-      emp.department.toLowerCase().includes(q) ||
-      emp.id_number.includes(q) ||
-      emp.employee_code.toLowerCase().includes(q)
+      (emp.full_name ?? "").toLowerCase().includes(q) ||
+      (emp.department ?? "").toLowerCase().includes(q) ||
+      (emp.id_number ?? "").includes(q) ||
+      (emp.employee_code ?? "").toLowerCase().includes(q)
     )
   })
-
-  // No fabricated payroll figures: without the real summary show an honest state.
-  if (loading || !summary) {
-    return (
-      <NotConnected
-        loadable={loading ? { state: "loading" } : { state: "error", status: null, message: "statutory payroll summary could not be loaded" }}
-        service="Statutory payroll"
-        onRetry={loadData}
-      />
-    )
-  }
 
   return (
     <div className="space-y-6">
-      {/* Success Banners */}
-      {emp201SuccessMsg && (
+      {markedMsg && (
         <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3.5 text-sm text-emerald-400 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-            <span>{emp201SuccessMsg}</span>
+            <span>{markedMsg}</span>
           </div>
-          <Button size="sm" variant="ghost" onClick={() => setEmp201SuccessMsg(null)}>Dismiss</Button>
+          <Button size="sm" variant="ghost" onClick={() => setMarkedMsg(null)}>Dismiss</Button>
         </div>
       )}
 
-      {uifSuccessMsg && (
-        <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 p-3.5 text-sm text-blue-400 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-            <span>{uifSuccessMsg}</span>
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => setUifSuccessMsg(null)}>Dismiss</Button>
-        </div>
-      )}
+      <ManualFilingNote />
 
-      {ui27SuccessMsg && (
-        <div className="rounded-lg border border-purple-500/40 bg-purple-500/10 p-3.5 text-sm text-purple-400 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-            <span>{ui27SuccessMsg}</span>
-          </div>
-          <Button size="sm" variant="ghost" onClick={() => setUi27SuccessMsg(null)}>Dismiss</Button>
-        </div>
-      )}
-
-      {/* Top Statutory Metric Cards */}
+      {/* Top metric cards: real values only */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
-        <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
-          <p className="text-xs text-muted-foreground flex items-center justify-between">
-            <span>SARS EMP201 Liability</span>
-            <Badge variant="outline" className="border-emerald-500/30 text-emerald-400 text-[10px]">
-              Live Payroll
-            </Badge>
+        <Card className="p-3.5">
+          <p className="text-xs text-muted-foreground flex items-center justify-between gap-2">
+            <span>EMP201 liability ({sum.period ?? "no period"})</span>
+            {ratesUnverified && hasFigures && <RatesNotVerifiedChip />}
           </p>
+          <p className="text-2xl font-bold text-foreground mt-1.5">{zarOrNA(sum.total_emp201_liability_zar)}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">PAYE {zarOrNA(sum.paye_withheld_zar)} + UIF + SDL</p>
+        </Card>
+        <Card className="p-3.5">
+          <p className="text-xs text-muted-foreground">SARS tax clearance (TCC)</p>
+          <p className="text-2xl font-bold text-foreground mt-1.5">{sum.sars_tcc_pin ? "TCC on file" : NA}</p>
+          <p className="text-[11px] text-muted-foreground mt-1">{val(sum.sars_tcc_status)}</p>
+        </Card>
+        <Card className="p-3.5">
+          <p className="text-xs text-muted-foreground">UIF contributors</p>
           <p className="text-2xl font-bold text-foreground mt-1.5">
-            {money(summary?.total_emp201_liability_zar)}
+            {uif.state === "ready" && typeof uif.data.total_contributors === "number" ? uif.data.total_contributors : NA}
           </p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            PAYE {money(summary?.paye_withheld_zar)} + UIF + SDL
+            {uif.state === "ready" ? "From the payroll register" : uif.state === "loading" ? "Loading" : "Register not loaded"}
           </p>
         </Card>
-
-        <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
-          <p className="text-xs text-muted-foreground flex items-center justify-between">
-            <span>SARS Tax Clearance (TCC)</span>
-            <span className="h-2 w-2 rounded-full bg-muted-foreground" />
-          </p>
-          <p className="text-2xl font-bold text-foreground mt-1.5">{summary?.sars_tcc_pin ? "TCC on file" : "N/A"}</p>
-          <p className="text-[11px] text-muted-foreground mt-1 font-mono">
-            PIN: {summary?.sars_tcc_pin ?? "N/A"}
-          </p>
-        </Card>
-
-        <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
-          <p className="text-xs text-muted-foreground flex items-center justify-between">
-            <span>UIF uFiling Status</span>
-            <span className="text-[10px] text-blue-400 font-medium">UI-19 Electronic</span>
-          </p>
-          <p className="text-2xl font-bold text-foreground mt-1.5">{uifData ? `${uifData.total_contributors} on register` : "N/A"}</p>
+        <Card className="p-3.5">
+          <p className="text-xs text-muted-foreground">Labour standards score</p>
+          <p className="text-2xl font-bold text-foreground mt-1.5">{laborScore ? laborScore.label : NA}</p>
           <p className="text-[11px] text-muted-foreground mt-1">
-            {uifData?.total_contributors ?? "N/A"} Contributors Registered
-          </p>
-        </Card>
-
-        <Card className="p-3.5 bg-gradient-to-br from-background to-muted/20 border-border/70">
-          <p className="text-xs text-muted-foreground flex items-center justify-between">
-            <span>Labor & PSIRA Standards</span>
-            <span className="text-[10px] text-emerald-400 font-semibold">{laborAudit?.bcea_readiness_status ?? "N/A"}</span>
-          </p>
-          <p className="text-2xl font-bold text-foreground mt-1.5">
-            {laborAudit?.overall_labor_score ?? "N/A"} / 100
-          </p>
-          <p className="text-[11px] text-muted-foreground mt-1">
-            {laborAudit?.psira_registered_officers ?? "N/A"} PSIRA Verified
+            {laborScore && !laborScore.assessed ? "Not assessed" : labor.state === "ready" ? val(labor.data.bcea_readiness_status) : "Audit not loaded"}
           </p>
         </Card>
       </div>
 
-      {/* Main Statutory Sub-navigation */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant={activeTab === "emp201" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("emp201")}
-            className="gap-1.5"
-          >
-            <Landmark className="h-4 w-4" /> SARS EMP201 Declarations
-          </Button>
-          <Button
-            size="sm"
-            variant={activeTab === "uif" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("uif")}
-            className="gap-1.5"
-          >
-            <Users className="h-4 w-4" /> Department of Labour UIF (UI-19)
-          </Button>
-          <Button
-            size="sm"
-            variant={activeTab === "labor" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("labor")}
-            className="gap-1.5"
-          >
-            <Scale className="h-4 w-4" /> BCEA & PSIRA Labor Audit
-          </Button>
-          <Button
-            size="sm"
-            variant={activeTab === "emp501" ? "secondary" : "ghost"}
-            onClick={() => setActiveTab("emp501")}
-            className="gap-1.5"
-          >
-            <FileCheck className="h-4 w-4" /> SARS EMP501 Reconciliation
-          </Button>
+        <div className="flex flex-wrap gap-2">
+          {tabBtn("emp201", <Landmark className="h-4 w-4" />, "EMP201 working papers")}
+          {tabBtn("uif", <Users className="h-4 w-4" />, "UIF register")}
+          {tabBtn("labor", <Scale className="h-4 w-4" />, "BCEA & PSIRA audit")}
+          {tabBtn("emp501", <FileCheck className="h-4 w-4" />, "EMP501 reconciliation")}
         </div>
-
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={loadData} disabled={loading} className="gap-1">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} /> Refresh
-          </Button>
-          {activeTab === "emp201" && (
-            <Button size="sm" variant="cta" onClick={() => setEmp201ModalOpen(true)} className="gap-1">
-              <Send className="h-3.5 w-3.5" /> File EMP201 Declaration
-            </Button>
-          )}
-          {activeTab === "uif" && (
-            <Button size="sm" variant="cta" onClick={() => setUifModalOpen(true)} className="gap-1">
-              <Send className="h-3.5 w-3.5" /> Submit UI-19 Return
-            </Button>
-          )}
-        </div>
+        <Button size="sm" variant="outline" onClick={loadAll} className="gap-1">
+          <RefreshCw className="h-3.5 w-3.5" /> Refresh
+        </Button>
       </div>
 
-      {/* ── TAB 1: SARS EMP201 DECLARATIONS ── */}
+      {/* ── EMP201 ── */}
       {activeTab === "emp201" && (
         <div className="space-y-6">
-          {/* Current Month Declaration Card */}
           <Card className="border-border/80 bg-background/50">
             <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Landmark className="h-4 w-4 text-emerald-400" />
-                    Current Month SARS EMP201 Breakdown ({summary?.period ?? "N/A"})
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Statutory remittance due to South African Revenue Service by the 7th of next month.
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Payment Reference (PRN):</span>
-                  <Badge variant="outline" className="font-mono text-xs border-primary/40 text-primary">
-                    {summary?.sars_prn ?? "N/A"}
-                  </Badge>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
-                  <p className="text-xs text-muted-foreground font-mono">SARS Line 4101</p>
-                  <p className="text-xs font-semibold text-foreground">PAYE Tax Withheld</p>
-                  <p className="text-lg font-bold text-foreground">
-                    {money(summary?.paye_withheld_zar)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">Progressive SARS 2026 Brackets</p>
-                </div>
-
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
-                  <p className="text-xs text-muted-foreground font-mono">SARS Line 4102</p>
-                  <p className="text-xs font-semibold text-foreground">Skills Development (SDL)</p>
-                  <p className="text-lg font-bold text-foreground">
-                    {money(summary?.sdl_zar)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">1% of Taxable Remuneration</p>
-                </div>
-
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
-                  <p className="text-xs text-muted-foreground font-mono">SARS Line 4103</p>
-                  <p className="text-xs font-semibold text-foreground">UIF Total (Employee + Employer)</p>
-                  <p className="text-lg font-bold text-foreground">
-                    {summary ? money(summary.uif_employee_zar + summary.uif_employer_zar) : "N/A"}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">1% Employee + 1% Employer match</p>
-                </div>
-
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 space-y-1">
-                  <p className="text-xs text-emerald-400 font-mono">SARS Total Remittance</p>
-                  <p className="text-xs font-semibold text-emerald-400">Total EMP201 Due</p>
-                  <p className="text-xl font-bold text-emerald-400">
-                    {money(summary?.total_emp201_liability_zar)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">Due: {summary?.period ?? "N/A"}-07</p>
-                </div>
-              </div>
-
-              <div className="mt-4 pt-3 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-muted-foreground">
-                <div className="flex items-center gap-4">
-                  <span>Gross Workforce Remuneration: <strong className="text-foreground">{money(summary?.gross_remuneration_zar)}</strong></span>
-                  <span>Net Disbursed to Bank: <strong className="text-foreground">{money(summary?.net_salaries_disbursed_zar)}</strong></span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                    Calculated from Active Payroll
-                  </Badge>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Historical EMP201 Returns Table */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">SARS EMP201 Filing & Payment Register</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Landmark className="h-4 w-4 text-emerald-400" />
+                Prepare EMP201 working paper
+              </CardTitle>
               <CardDescription className="text-xs">
-                Audited monthly returns submitted via SARS eFiling with proof of payment references.
+                Built from PAID payslips for the chosen period. The result is saved as PREPARED_NOT_FILED until you file
+                on SARS eFiling and record the receipt.
               </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="py-2.5 pr-4 font-medium">Tax Period</th>
-                      <th className="py-2.5 pr-4 font-medium">Due Date</th>
-                      <th className="py-2.5 pr-4 font-medium">PAYE Tax</th>
-                      <th className="py-2.5 pr-4 font-medium">UIF (2%)</th>
-                      <th className="py-2.5 pr-4 font-medium">SDL (1%)</th>
-                      <th className="py-2.5 pr-4 font-medium">Total Paid (ZAR)</th>
-                      <th className="py-2.5 pr-4 font-medium">Status</th>
-                      <th className="py-2.5 font-medium">PRN / Receipt</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(summary?.recent_emp201_returns || []).map((ret) => (
-                      <tr key={ret.id || ret.period} className="border-b border-border/50">
-                        <td className="py-3 pr-4 font-semibold text-foreground">{ret.period}</td>
-                        <td className="py-3 pr-4 text-muted-foreground">{ret.due_date}</td>
-                        <td className="py-3 pr-4 text-foreground font-mono">R {ret.paye_zar.toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-muted-foreground font-mono">R {ret.uif_zar.toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-muted-foreground font-mono">R {ret.sdl_zar.toLocaleString()}</td>
-                        <td className="py-3 pr-4 font-semibold text-foreground font-mono">
-                          R {ret.total_payable_zar.toLocaleString()}
-                        </td>
-                        <td className="py-3 pr-4">
-                          <Badge
-                            variant="outline"
-                            className={
-                              ret.status === "PAID"
-                                ? "border-emerald-500/40 text-emerald-400"
-                                : ret.status === "SUBMITTED"
-                                ? "border-blue-500/40 text-blue-400"
-                                : "border-amber-500/40 text-amber-400"
-                            }
-                          >
-                            {ret.status}
-                          </Badge>
-                        </td>
-                        <td className="py-3">
-                          <div className="flex flex-col">
-                            <span className="font-mono text-xs text-primary">{ret.prn}</span>
-                            <span className="text-[11px] text-muted-foreground">{ret.sars_receipt_number || "eFiling Validated"}</span>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ── TAB 2: DEPARTMENT OF LABOUR UIF (UI-19) ── */}
-      {activeTab === "uif" && (
-        <div className="space-y-6">
-          <Card className="border-border/80 bg-background/50">
-            <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Users className="h-4 w-4 text-blue-400" />
-                    Department of Employment & Labour UI-19 Employer Return
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Monthly electronic declaration of all employees and contributions subject to the Unemployment Insurance Act.
-                  </CardDescription>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="outline" className="border-blue-500/40 text-blue-400 font-mono text-xs">
-                    Employer Ref: {uifData?.uif_employer_reference ?? "N/A"}
-                  </Badge>
-                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-xs">
-                    Batch: {uifData?.ufiling_batch_reference ?? "N/A"}
-                  </Badge>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-                <div className="relative w-full sm:max-w-xs">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search by name, ID, or department…"
-                    value={uifSearch}
-                    onChange={(e) => setUifSearch(e.target.value)}
-                    className="pl-9 h-9 text-xs"
-                  />
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>Total Monthly UIF Remittance: <strong className="text-foreground">{money(uifData?.total_monthly_remittance_zar)}</strong></span>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[840px] text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="py-2.5 pr-4 font-medium">Employee</th>
-                      <th className="py-2.5 pr-4 font-medium">RSA ID / Tax No</th>
-                      <th className="py-2.5 pr-4 font-medium">Department</th>
-                      <th className="py-2.5 pr-4 font-medium">Gross Salary</th>
-                      <th className="py-2.5 pr-4 font-medium">UIF Remun. (Cap)</th>
-                      <th className="py-2.5 pr-4 font-medium">Employee (1%)</th>
-                      <th className="py-2.5 pr-4 font-medium">Employer (1%)</th>
-                      <th className="py-2.5 pr-4 font-medium">Status</th>
-                      <th className="py-2.5 font-medium">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredEmployees.map((emp) => (
-                      <tr key={emp.employee_id} className="border-b border-border/50">
-                        <td className="py-3 pr-4">
-                          <div>
-                            <p className="font-semibold text-foreground">{emp.full_name}</p>
-                            <p className="text-xs text-muted-foreground font-mono">{emp.employee_code} · {emp.job_title}</p>
-                          </div>
-                        </td>
-                        <td className="py-3 pr-4">
-                          <div className="font-mono text-xs">
-                            <p className="text-foreground">{emp.id_number}</p>
-                            <p className="text-muted-foreground">Tax: {emp.tax_number}</p>
-                          </div>
-                        </td>
-                        <td className="py-3 pr-4 text-muted-foreground text-xs">{emp.department}</td>
-                        <td className="py-3 pr-4 font-mono text-xs text-foreground">
-                          R {emp.gross_remuneration_zar.toLocaleString()}
-                        </td>
-                        <td className="py-3 pr-4 font-mono text-xs text-muted-foreground">
-                          R {emp.uif_remuneration_zar.toLocaleString()}
-                        </td>
-                        <td className="py-3 pr-4 font-mono text-xs text-foreground">
-                          R {emp.employee_uif_zar.toFixed(2)}
-                        </td>
-                        <td className="py-3 pr-4 font-mono text-xs text-foreground">
-                          R {emp.employer_uif_zar.toFixed(2)}
-                        </td>
-                        <td className="py-3 pr-4">
-                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-xs">
-                            {emp.uif_declaration_status}
-                          </Badge>
-                        </td>
-                        <td className="py-3">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs"
-                            onClick={() => {
-                              setSelectedEmpForUi27(emp)
-                              setUi27ModalOpen(true)
-                            }}
-                          >
-                            Issue UI-2.7
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ── TAB 3: BCEA & PSIRA LABOR STANDARDS AUDIT ── */}
-      {activeTab === "labor" && (
-        <div className="space-y-6">
-          <Card className="border-border/80 bg-background/50">
-            <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Scale className="h-4 w-4 text-emerald-400" />
-                    South African Labor Standards & Statutory Audit
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Basic Conditions of Employment Act (BCEA), Sectoral Determination 6, COIDA, and PSIRA regulatory compliance.
-                  </CardDescription>
-                </div>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 font-semibold text-xs">
-                  Overall Score: {laborAudit?.overall_labor_score ?? "N/A"} / 100
-                </Badge>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 md:grid-cols-2">
-                {(laborAudit?.audit_findings || []).map((finding, idx) => (
-                  <div key={idx} className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-foreground text-sm flex items-center gap-2">
-                        <CheckCircle2 className="h-4 w-4 text-emerald-400 flex-shrink-0" />
-                        {finding.standard}
-                      </span>
-                      <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-xs">
-                        {finding.status_label}
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {finding.details}
-                    </p>
-                    <div className="pt-2 text-[11px] text-muted-foreground flex justify-between border-t border-border/40">
-                      <span>Category: <strong className="text-foreground">{finding.category.replace(/_/g, " ")}</strong></span>
-                      <span className="text-emerald-400 font-medium">Statutory Verified</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ── TAB 4: SARS EMP501 RECONCILIATION ── */}
-      {activeTab === "emp501" && (
-        <div className="space-y-6">
-          <Card className="border-border/80 bg-background/50">
-            <CardHeader className="pb-3">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <FileCheck className="h-4 w-4 text-purple-400" />
-                    SARS EMP501 Bi-Annual & Annual Employer Reconciliation
-                  </CardTitle>
-                  <CardDescription className="text-xs">
-                    Reconciliation between monthly EMP201 declarations, actual SARS payments, and employee tax certificates (IRP5/IT3(a)).
-                  </CardDescription>
-                </div>
-                <Badge variant="outline" className="border-purple-500/40 text-purple-400 font-mono text-xs">
-                  Tax Year: {new Date().getMonth() >= 2 ? `${new Date().getFullYear()}/${new Date().getFullYear() + 1}` : `${new Date().getFullYear() - 1}/${new Date().getFullYear()}`}
-                </Badge>
-              </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
-                  <p className="text-xs text-muted-foreground">Total Declared (EMP201)</p>
-                  <p className="text-xl font-bold text-foreground">
-                    N/A
+              <form onSubmit={handlePrepare} className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="text-xs font-medium text-foreground">Tax period (YYYY-MM)</label>
+                  <Input
+                    value={period}
+                    onChange={(e) => setPeriod(e.target.value)}
+                    className="mt-1 w-36 font-mono text-xs"
+                    aria-label="Tax period"
+                  />
+                </div>
+                <Button type="submit" size="sm" variant="cta" disabled={preparing} className="gap-1">
+                  <FileText className="h-3.5 w-3.5" />
+                  {preparing ? "Preparing…" : "Prepare EMP201 working paper"}
+                </Button>
+              </form>
+              {prepareError && <p role="alert" className="text-xs text-red-400">{prepareError}</p>}
+
+              {prepared && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="border-amber-500/40 text-amber-400">{prepared.status}</Badge>
+                    <span className="font-medium text-foreground">Period {prepared.period}</span>
+                    {prepared.rates_verified !== true && <RatesNotVerifiedChip />}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-4">
+                    <div><p className="text-muted-foreground">PAYE</p><p className="font-mono text-foreground">{zarOrNA(prepared.paye_zar)}</p></div>
+                    <div><p className="text-muted-foreground">UIF</p><p className="font-mono text-foreground">{zarOrNA(prepared.uif_zar)}</p></div>
+                    <div><p className="text-muted-foreground">SDL</p><p className="font-mono text-foreground">{zarOrNA(prepared.sdl_zar)}</p></div>
+                    <div><p className="text-muted-foreground">Total</p><p className="font-mono font-semibold text-foreground">{zarOrNA(prepared.total_payable_zar)}</p></div>
+                  </div>
+                  <p className="text-muted-foreground">
+                    {prepared.note || "File manually on SARS eFiling"}. Then use Mark as filed below with the PRN SARS gives you.
                   </p>
-                  <p className="text-[11px] text-muted-foreground">Not connected: no EMP501 data source</p>
                 </div>
+              )}
+            </CardContent>
+          </Card>
 
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
-                  <p className="text-xs text-muted-foreground">Total Tax Certificates (IRP5)</p>
-                  <p className="text-xl font-bold text-foreground">
-                    N/A
+          <Card className="border-border/80 bg-background/50">
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-base">Latest payroll figures ({sum.period ?? "no period"})</CardTitle>
+                  <CardDescription className="text-xs">From PAID payslips only. Nothing is estimated.</CardDescription>
+                </div>
+                {ratesUnverified && hasFigures && <RatesNotVerifiedChip />}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {!hasFigures ? (
+                <p className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-sm text-muted-foreground">
+                  No payroll data yet: there are no PAID payslips to prepare an EMP201 from.
+                </p>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
+                    <p className="text-xs font-semibold text-foreground">PAYE withheld</p>
+                    <p className="text-lg font-bold text-foreground">{zarOrNA(sum.paye_withheld_zar)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
+                    <p className="text-xs font-semibold text-foreground">Skills Development Levy</p>
+                    <p className="text-lg font-bold text-foreground">{zarOrNA(sum.sdl_zar)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
+                    <p className="text-xs font-semibold text-foreground">UIF (employee + employer)</p>
+                    <p className="text-lg font-bold text-foreground">{zarOrNA(uifTotal)}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
+                    <p className="text-xs font-semibold text-foreground">Total EMP201</p>
+                    <p className="text-lg font-bold text-foreground">{zarOrNA(sum.total_emp201_liability_zar)}</p>
+                  </div>
+                </div>
+              )}
+              <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                <span>Gross remuneration: <strong className="text-foreground">{zarOrNA(sum.gross_remuneration_zar)}</strong></span>
+                <span>Net salaries: <strong className="text-foreground">{zarOrNA(sum.net_salaries_disbursed_zar)}</strong></span>
+                <span>Employees: <strong className="text-foreground">{val(sum.total_employees)}</strong></span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">EMP201 register</CardTitle>
+              <CardDescription className="text-xs">
+                A return counts as filed only after you record the eFiling PRN/receipt. Until then it stays prepared, not filed.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {markTarget && (
+                <form onSubmit={handleMarkFiled} className="rounded-lg border border-border bg-secondary/20 p-3.5 space-y-3 text-xs">
+                  <p className="font-medium text-foreground">
+                    Mark EMP201 for {markTarget.period} as filed
                   </p>
-                  <p className="text-[11px] text-muted-foreground">Not connected: no IRP5 data source</p>
-                </div>
+                  <p className="text-muted-foreground">
+                    Record this only after you have filed on SARS eFiling. This stores the reference you paste; it does
+                    not file anything.
+                  </p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="font-medium text-foreground">PRN / receipt reference (16 to 19 letters or digits)</label>
+                      <Input
+                        value={prnInput}
+                        onChange={(e) => setPrnInput(e.target.value)}
+                        className="mt-1 font-mono text-xs"
+                        aria-label="PRN or receipt reference"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-medium text-foreground">Date filed</label>
+                      <Input
+                        type="date"
+                        value={filedDate}
+                        max={today()}
+                        onChange={(e) => setFiledDate(e.target.value)}
+                        className="mt-1 text-xs"
+                        aria-label="Date filed"
+                      />
+                    </div>
+                  </div>
+                  {markError && <p role="alert" className="text-red-400">{markError}</p>}
+                  <div className="flex gap-2">
+                    <Button type="submit" size="sm" variant="cta" disabled={marking}>
+                      {marking ? "Saving…" : "Mark as filed"}
+                    </Button>
+                    <Button type="button" size="sm" variant="outline" onClick={() => { setMarkTarget(null); setMarkError(null) }}>
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              )}
 
-                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3.5 space-y-1">
-                  <p className="text-xs text-emerald-400 font-semibold">Reconciliation Variance</p>
-                  <p className="text-xl font-bold text-muted-foreground">N/A</p>
-                  <p className="text-[11px] text-muted-foreground">Cannot be computed without EMP501 data</p>
+              {returns.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-sm text-muted-foreground">
+                  No EMP201 working papers yet. Prepare one above.
+                </p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[820px] text-sm">
+                    <thead>
+                      <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                        <th className="py-2.5 pr-4 font-medium">Period</th>
+                        <th className="py-2.5 pr-4 font-medium">PAYE</th>
+                        <th className="py-2.5 pr-4 font-medium">UIF</th>
+                        <th className="py-2.5 pr-4 font-medium">SDL</th>
+                        <th className="py-2.5 pr-4 font-medium">Total</th>
+                        <th className="py-2.5 pr-4 font-medium">Status</th>
+                        <th className="py-2.5 pr-4 font-medium">PRN / receipt</th>
+                        <th className="py-2.5 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {returns.map((ret) => {
+                        const filed = isFiledStatus(ret.status)
+                        return (
+                          <tr key={ret.id ?? ret.period} className="border-b border-border/50 align-top">
+                            <td className="py-3 pr-4 font-semibold text-foreground">{ret.period}</td>
+                            <td className="py-3 pr-4 font-mono text-xs">{zarOrNA(ret.paye_zar)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs">{zarOrNA(ret.uif_zar)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs">{zarOrNA(ret.sdl_zar)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs font-semibold">{zarOrNA(ret.total_payable_zar)}</td>
+                            <td className="py-3 pr-4">
+                              <Badge
+                                variant="outline"
+                                className={filed ? "border-emerald-500/40 text-emerald-400" : "border-amber-500/40 text-amber-400"}
+                              >
+                                {filed ? "Filed (receipt recorded)" : ret.status || "PREPARED_NOT_FILED"}
+                              </Badge>
+                            </td>
+                            <td className="py-3 pr-4">
+                              {filed ? (
+                                <div className="flex flex-col text-xs">
+                                  <span className="font-mono text-primary">{val(ret.prn)}</span>
+                                  <span className="text-muted-foreground">
+                                    Filed {val(ret.filed_at)}
+                                    {ret.filed_by ? ` by ${ret.filed_by}` : ""}
+                                    {ret.marked_filed_at ? ` (recorded ${ret.marked_filed_at.slice(0, 10)})` : ""}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Not filed</span>
+                              )}
+                            </td>
+                            <td className="py-3">
+                              {!filed && typeof ret.id === "number" && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 text-xs"
+                                  onClick={() => {
+                                    setMarkError(null)
+                                    setMarkTarget({ id: ret.id as number, period: ret.period })
+                                  }}
+                                >
+                                  Mark as filed
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-
-              <div className="rounded-lg border border-border/60 p-4 space-y-3 bg-background/40 text-xs">
-                <div className="flex items-center justify-between pb-2 border-b border-border/50">
-                  <span className="font-semibold text-foreground">SARS eFiling EasyFile Status</span>
-                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                    Live Validated (SARS Sync Active)
-                  </Badge>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-muted-foreground">
-                  <div>
-                    <p className="text-[11px]">Interim Period</p>
-                    <p className="font-medium text-foreground">March – August 2026</p>
-                  </div>
-                  <div>
-                    <p className="text-[11px]">Final Period</p>
-                    <p className="font-medium text-foreground">March 2026 – February 2027</p>
-                  </div>
-                  <div>
-                    <p className="text-[11px]">Test File Validation</p>
-                    <p className="text-emerald-400 font-medium">PASSED (0 Errors)</p>
-                  </div>
-                  <div>
-                    <p className="text-[11px]">Submission Deadline</p>
-                    <p className="font-medium text-foreground">31 October 2026</p>
-                  </div>
-                </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* ── MODAL 1: FILE EMP201 RETURN ── */}
-      {emp201ModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <Card className="w-full max-w-lg border-border bg-background shadow-2xl">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
+      {/* ── UIF ── */}
+      {activeTab === "uif" && (
+        <div className="space-y-6">
+          {uif.state !== "ready" ? (
+            <SectionStateNotice state={uif} onRetry={loadAll} />
+          ) : (
+            <Card className="border-border/80 bg-background/50">
+              <CardHeader className="pb-3">
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Landmark className="h-4 w-4 text-emerald-400" /> File SARS EMP201 Return
+                  <Users className="h-4 w-4 text-blue-400" />
+                  UIF contributor register
                 </CardTitle>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setEmp201ModalOpen(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <CardDescription className="text-xs">
-                Submit monthly PAYE, UIF, and SDL statutory return to SARS eFiling.
-              </CardDescription>
-            </CardHeader>
-            <form onSubmit={handleFileEmp201}>
-              <CardContent className="space-y-3.5 text-xs">
-                <div>
-                  <label className="font-medium text-foreground">Tax Period (YYYY-MM)</label>
-                  <Input
-                    value={emp201Form.period}
-                    onChange={(e) => setEmp201Form({ ...emp201Form, period: e.target.value })}
-                    required
-                    className="mt-1 font-mono text-xs"
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="font-medium text-foreground">PAYE (ZAR)</label>
+                <CardDescription className="text-xs">
+                  A working register built from payroll. UIF declarations are made manually on the Department of
+                  Employment and Labour uFiling; nothing is lodged from here.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                  <div className="relative w-full sm:max-w-xs">
+                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                     <Input
-                      type="number"
-                      step="0.01"
-                      value={emp201Form.amount_paye}
-                      onChange={(e) => setEmp201Form({ ...emp201Form, amount_paye: parseFloat(e.target.value) || 0 })}
-                      required
-                      className="mt-1 font-mono text-xs"
+                      placeholder="Search by name or department"
+                      value={uifSearch}
+                      onChange={(e) => setUifSearch(e.target.value)}
+                      className="pl-9 h-9 text-xs"
                     />
                   </div>
-                  <div>
-                    <label className="font-medium text-foreground">UIF 2% (ZAR)</label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={emp201Form.amount_uif}
-                      onChange={(e) => setEmp201Form({ ...emp201Form, amount_uif: parseFloat(e.target.value) || 0 })}
-                      required
-                      className="mt-1 font-mono text-xs"
-                    />
-                  </div>
-                  <div>
-                    <label className="font-medium text-foreground">SDL 1% (ZAR)</label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={emp201Form.amount_sdl}
-                      onChange={(e) => setEmp201Form({ ...emp201Form, amount_sdl: parseFloat(e.target.value) || 0 })}
-                      required
-                      className="mt-1 font-mono text-xs"
-                    />
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                    <span>Monthly UIF: <strong className="text-foreground">{zarOrNA(uif.data.total_monthly_remittance_zar)}</strong></span>
+                    {ratesUnverified && <RatesNotVerifiedChip />}
                   </div>
                 </div>
-
-                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 flex justify-between items-center">
-                  <span className="font-medium text-foreground">Total SARS Remittance:</span>
-                  <span className="text-base font-bold text-emerald-400 font-mono">
-                    R {(emp201Form.amount_paye + emp201Form.amount_uif + emp201Form.amount_sdl).toLocaleString()}
-                  </span>
-                </div>
-
-                <div>
-                  <label className="font-medium text-foreground">Payment Channel</label>
-                  <select
-                    className="w-full mt-1 h-9 rounded-md border border-input bg-background px-3 py-1 text-xs"
-                    value={emp201Form.payment_method}
-                    onChange={(e) => setEmp201Form({ ...emp201Form, payment_method: e.target.value })}
-                  >
-                    <option value="sars_efiling">SARS eFiling Credit Push (Recommended)</option>
-                    <option value="bank_eft">Commercial Bank EFT (PRN Beneficiary)</option>
-                    <option value="paystack_treasury">OmniDome Treasury Payout</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="font-medium text-foreground">Internal Audit Notes</label>
-                  <Input
-                    placeholder="e.g. Cleared by Financial Director"
-                    value={emp201Form.notes}
-                    onChange={(e) => setEmp201Form({ ...emp201Form, notes: e.target.value })}
-                    className="mt-1 text-xs"
-                  />
-                </div>
-              </CardContent>
-              <div className="p-4 border-t border-border flex justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setEmp201ModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" variant="cta" size="sm" disabled={filingEmp201}>
-                  {filingEmp201 ? "Filing to SARS…" : "Confirm & File Return"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
-
-      {/* ── MODAL 2: SUBMIT UI-19 RETURN ── */}
-      {uifModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <Card className="w-full max-w-md border-border bg-background shadow-2xl">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Send className="h-4 w-4 text-blue-400" /> Lodge UI-19 Monthly Declaration
-                </CardTitle>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setUifModalOpen(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <CardDescription className="text-xs">
-                Transmit UI-19 monthly contributor roster to Department of Employment & Labour uFiling.
-              </CardDescription>
-            </CardHeader>
-            <form onSubmit={handleSubmitUif}>
-              <CardContent className="space-y-3 text-xs">
-                <div>
-                  <label className="font-medium text-foreground">Declaration Period</label>
-                  <Input
-                    value={uifForm.period}
-                    onChange={(e) => setUifForm({ ...uifForm, period: e.target.value })}
-                    required
-                    className="mt-1 font-mono text-xs"
-                  />
-                </div>
-                <div>
-                  <label className="font-medium text-foreground">Authorized Declarer Name</label>
-                  <Input
-                    value={uifForm.declarer_name}
-                    onChange={(e) => setUifForm({ ...uifForm, declarer_name: e.target.value })}
-                    required
-                    className="mt-1 text-xs"
-                  />
-                </div>
-                <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 space-y-1">
-                  <p className="font-medium text-blue-400">Declaration Summary</p>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Active Contributors:</span>
-                    <strong className="text-foreground">{uifData?.total_contributors ?? "N/A"} Staff</strong>
-                  </div>
-                  <div className="flex justify-between text-muted-foreground">
-                    <span>Total Monthly UIF:</span>
-                    <strong className="text-foreground">{money(uifData?.total_monthly_remittance_zar)}</strong>
-                  </div>
-                </div>
-                <div>
-                  <label className="font-medium text-foreground">Submission Notes</label>
-                  <Input
-                    value={uifForm.notes}
-                    onChange={(e) => setUifForm({ ...uifForm, notes: e.target.value })}
-                    className="mt-1 text-xs"
-                  />
-                </div>
-              </CardContent>
-              <div className="p-4 border-t border-border flex justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setUifModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" variant="cta" size="sm" disabled={submittingUif}>
-                  {submittingUif ? "Transmitting to uFiling…" : "Lodge UI-19 Declaration"}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </div>
-      )}
-
-      {/* ── MODAL 3: ISSUE UI-2.7 SALARY CERTIFICATE ── */}
-      {ui27ModalOpen && selectedEmpForUi27 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <Card className="w-full max-w-md border-border bg-background shadow-2xl">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-purple-400" /> Issue UI-2.7 Salary Certificate
-                </CardTitle>
-                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setUi27ModalOpen(false)}>
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              <CardDescription className="text-xs">
-                Generate statutory salary certificate for employee UIF benefit claim.
-              </CardDescription>
-            </CardHeader>
-            <form onSubmit={handleIssueUi27}>
-              <CardContent className="space-y-3 text-xs">
-                <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
-                  <p className="font-semibold text-foreground text-sm">{selectedEmpForUi27.full_name}</p>
-                  <p className="text-muted-foreground font-mono text-xs">RSA ID: {selectedEmpForUi27.id_number}</p>
-                  <p className="text-muted-foreground">{selectedEmpForUi27.job_title} ({selectedEmpForUi27.department})</p>
-                  <p className="text-foreground pt-1">
-                    Gross Monthly Remuneration: <strong>R {selectedEmpForUi27.gross_remuneration_zar.toLocaleString()}</strong>
+                {filteredEmployees.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-sm text-muted-foreground">
+                    {(uif.data.employees ?? []).length === 0
+                      ? "No contributors yet: there is no payroll data to list."
+                      : "No contributors match your search."}
                   </p>
-                </div>
-
-                <div>
-                  <label className="font-medium text-foreground">Reason for UIF Claim</label>
-                  <select
-                    className="w-full mt-1 h-9 rounded-md border border-input bg-background px-3 py-1 text-xs"
-                    value={ui27Reason}
-                    onChange={(e) => setUi27Reason(e.target.value)}
-                  >
-                    <option value="maternity">Maternity Leave (Section 24)</option>
-                    <option value="illness">Illness / Temporary Incapacity (Section 20)</option>
-                    <option value="adoption">Adoption / Parental Benefits</option>
-                    <option value="retrenchment">Operational Retrenchment (Section 189)</option>
-                    <option value="dismissal">Unfair Dismissal / Dispute Resolution</option>
-                  </select>
-                </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                          <th className="py-2.5 pr-4 font-medium">Employee</th>
+                          <th className="py-2.5 pr-4 font-medium">Department</th>
+                          <th className="py-2.5 pr-4 font-medium">Gross</th>
+                          <th className="py-2.5 pr-4 font-medium">UIF remuneration</th>
+                          <th className="py-2.5 pr-4 font-medium">Employee UIF</th>
+                          <th className="py-2.5 font-medium">Employer UIF</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredEmployees.map((emp) => (
+                          <tr key={emp.employee_id} className="border-b border-border/50">
+                            <td className="py-3 pr-4">
+                              <p className="font-semibold text-foreground">{val(emp.full_name)}</p>
+                              <p className="text-xs text-muted-foreground font-mono">{val(emp.employee_code)} · {val(emp.job_title)}</p>
+                            </td>
+                            <td className="py-3 pr-4 text-xs text-muted-foreground">{val(emp.department)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs">{zarOrNA(emp.gross_remuneration_zar)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs text-muted-foreground">{zarOrNA(emp.uif_remuneration_zar)}</td>
+                            <td className="py-3 pr-4 font-mono text-xs">{zarOrNA(emp.employee_uif_zar)}</td>
+                            <td className="py-3 font-mono text-xs">{zarOrNA(emp.employer_uif_zar)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </CardContent>
-              <div className="p-4 border-t border-border flex justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" onClick={() => setUi27ModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" variant="cta" size="sm" disabled={issuingUi27}>
-                  {issuingUi27 ? "Generating Certificate…" : "Issue UI-2.7 Certificate"}
-                </Button>
-              </div>
-            </form>
-          </Card>
+            </Card>
+          )}
         </div>
+      )}
+
+      {/* ── Labour audit ── */}
+      {activeTab === "labor" && (
+        <div className="space-y-6">
+          {labor.state !== "ready" ? (
+            <SectionStateNotice state={labor} onRetry={loadAll} />
+          ) : (
+            <Card className="border-border/80 bg-background/50">
+              <CardHeader className="pb-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Scale className="h-4 w-4 text-emerald-400" />
+                      Labour standards audit
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      BCEA, COIDA and PSIRA checks computed from the records the service holds.
+                    </CardDescription>
+                  </div>
+                  <Badge variant="outline" className="text-muted-foreground text-xs">
+                    Score: {scoreView(labor.data.overall_labor_score).label}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {(labor.data.audit_findings ?? []).length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-sm text-muted-foreground">
+                    No audit findings available: there is not enough data to assess.
+                  </p>
+                ) : (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {(labor.data.audit_findings ?? []).map((finding, idx) => (
+                      <div key={idx} className="rounded-lg border border-border/60 bg-muted/20 p-4 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-semibold text-foreground text-sm">{finding.standard}</span>
+                          <Badge
+                            variant="outline"
+                            className={finding.compliant ? "border-emerald-500/40 text-emerald-400 text-xs" : "border-amber-500/40 text-amber-400 text-xs"}
+                          >
+                            {finding.status_label}
+                          </Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">{finding.details}</p>
+                        {finding.remediation && <p className="text-xs text-amber-300">Remediation: {finding.remediation}</p>}
+                        <p className="pt-2 text-[11px] text-muted-foreground border-t border-border/40">
+                          Category: <strong className="text-foreground">{(finding.category ?? "").replace(/_/g, " ")}</strong>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* ── EMP501 ── */}
+      {activeTab === "emp501" && (
+        <Card className="border-border/80 bg-background/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <FileCheck className="h-4 w-4 text-purple-400" />
+              EMP501 reconciliation
+            </CardTitle>
+            <CardDescription className="text-xs">
+              EMP501 and employee tax certificates (IRP5/IT3(a)) are reconciled and submitted on SARS eFiling. OmniDome
+              does not generate or submit them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
+                <p className="text-xs text-muted-foreground">Reconciliation status</p>
+                <p className="text-lg font-bold text-foreground">{val(sum.emp501_reconciliation_status)}</p>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
+                <p className="text-xs text-muted-foreground">Variance</p>
+                <p className="text-lg font-bold text-foreground">{zarOrNA(sum.emp501_variance_zar)}</p>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-muted/20 p-3.5 space-y-1">
+                <p className="text-xs text-muted-foreground">Tax certificates (IRP5)</p>
+                <p className="text-lg font-bold text-foreground">{NA}</p>
+              </div>
+            </div>
+            <ManualFilingNote />
+          </CardContent>
+        </Card>
       )}
     </div>
   )

@@ -65,6 +65,9 @@ const ENTITY_LABELS: Record<string, string> = {
   url: "Link",
 }
 
+/** Matches the proxy's 15 MB request-body guard (app/svc/compliance). */
+const MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN UPLOAD COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -97,9 +100,13 @@ export default function DocumentUploadZone({
   // ── File Upload Handler ─────────────────────────────────────────────
 
   const handleFile = useCallback(async (file: File) => {
-    setUploading(true)
     setError(null)
     setResult(null)
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setError(`File is too large (${(file.size / 1048576).toFixed(1)} MB). The limit is 15 MB.`)
+      return
+    }
+    setUploading(true)
     try {
       const res = await uploadDocument(file, {
         docTypeHint: docTypeHint || undefined,

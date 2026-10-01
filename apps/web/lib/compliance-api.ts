@@ -5,30 +5,24 @@
  * Proxies through Next.js API routes to the Compliance service (port 8019).
  */
 
-import { getSessionSafe } from "@/lib/supabase/client"
+import { extractErrorDetail } from "@/lib/compliance-state"
 
 // Route handler at app/svc/compliance/[...path]/route.ts strips "/svc/compliance/"
 // and forwards the rest to the backend. All backend routes live under /api/v1/.
+// Identity (tenant, user, roles) is injected server-side from the verified
+// session by proxy.ts: the client never sends a tenant id, and the backend
+// ignores any tenant_id supplied by the client.
 const API_BASE = "/svc/compliance/api/v1"
-const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-async function getTenantId(): Promise<string> {
-  const { data } = await getSessionSafe()
-  return (
-    data.session?.user?.user_metadata?.tenant_id ??
-    data.session?.user?.app_metadata?.tenant_id ??
-    FALLBACK_TENANT_ID
-  )
-}
 
 async function fetchCompliance<T>(path: string, init?: RequestInit): Promise<T> {
-  const tenantId = await getTenantId()
+  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData
   let res: Response
   try {
     res = await fetch(`${API_BASE}${path}`, {
       cache: "no-store",
-      signal: AbortSignal.timeout(15_000),
-      headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
+      signal: AbortSignal.timeout(isForm ? 60_000 : 15_000),
+      // Never set Content-Type for FormData: the browser adds the multipart boundary.
+      headers: isForm ? undefined : { "Content-Type": "application/json" },
       ...init,
     })
   } catch (err) {
@@ -39,31 +33,44 @@ async function fetchCompliance<T>(path: string, init?: RequestInit): Promise<T> 
     const body = await res.text().catch(() => "")
     throw new ComplianceApiError(res.status, body)
   }
+  if (res.status === 204) return undefined as T
   return res.json()
 }
 
-/** Carries the HTTP status so the UI can tell "service not running" from "error". */
+/**
+ * Carries the HTTP status so the UI can tell "service not running" from
+ * "error", and the server's own message (`detail`) so validation / SSRF
+ * rejections can be shown verbatim.
+ */
 export class ComplianceApiError extends Error {
   status: number | null
+  detail: string
   constructor(status: number | null, body: string) {
-    super(status === null ? `Compliance API unreachable: ${body}` : `Compliance API error ${status}: ${body}`)
+    const detail = status === null ? "" : extractErrorDetail(body)
+    super(
+      status === null
+        ? `Compliance API unreachable: ${body}`
+        : detail || `Compliance API error ${status}`,
+    )
     this.name = "ComplianceApiError"
     this.status = status
+    this.detail = detail
   }
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
 
 export interface ComplianceOverview {
-  overall_score: number
-  categories: { name: string; score: number; status: string; issues: number; critical: number }[]
+  /** null = not assessed (no obligations/data to score). Never default to 100. */
+  overall_score: number | null
+  categories: { name: string; score: number | null; status: string; issues: number; critical: number }[]
   expiring_contracts: number
   overdue_dsar: number
   open_breaches: number
   pending_obligations: number
   tax_overdue: number
   hs_open_incidents: number
-  bbbee_level: string
+  bbbee_level: string | null
   funding_matched: number
 }
 
@@ -186,7 +193,8 @@ export interface DrBcpPlan {
 export interface ComplianceScore {
   id: number
   category: string
-  score: number
+  /** null = not assessed. */
+  score: number | null
   status: string
   issues_count: number
   critical_issues: number
@@ -604,22 +612,12 @@ export async function uploadDocument(
 ): Promise<DocumentUploadResult> {
   const formData = new FormData()
   formData.append("file", file)
-  formData.append("tenant_id", await getTenantId())
   if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
   if (options?.contractId) formData.append("contract_id", String(options.contractId))
   if (options?.process !== undefined) formData.append("process", String(options.process))
 
-  const res = await fetch(`${API_BASE}/documents/upload`, {
-    method: "POST",
-    headers: { "x-tenant-id": await getTenantId() },
-    cache: "no-store",
-    body: formData,
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    throw new Error(`Document upload error ${res.status}: ${body}`)
-  }
-  return res.json()
+  // Server validation errors surface verbatim via ComplianceApiError.detail.
+  return fetchCompliance<DocumentUploadResult>("/documents/upload", { method: "POST", body: formData })
 }
 
 export async function fetchUrlDocument(
@@ -628,22 +626,12 @@ export async function fetchUrlDocument(
 ): Promise<UrlFetchResult> {
   const formData = new FormData()
   formData.append("url", url)
-  formData.append("tenant_id", await getTenantId())
   if (options?.docTypeHint) formData.append("doc_type_hint", options.docTypeHint)
   if (options?.crawl !== undefined) formData.append("crawl", String(options.crawl))
   if (options?.maxDepth !== undefined) formData.append("max_depth", String(options.maxDepth))
 
-  const res = await fetch(`${API_BASE}/documents/fetch-url`, {
-    method: "POST",
-    headers: { "x-tenant-id": await getTenantId() },
-    cache: "no-store",
-    body: formData,
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => "")
-    throw new Error(`URL fetch error ${res.status}: ${body}`)
-  }
-  return res.json()
+  // SSRF / validation rejections (400/422) surface verbatim via ComplianceApiError.detail.
+  return fetchCompliance<UrlFetchResult>("/documents/fetch-url", { method: "POST", body: formData })
 }
 
 export async function listDocuments(params?: {
@@ -653,7 +641,6 @@ export async function listDocuments(params?: {
   pageSize?: number
 }) {
   const q = new URLSearchParams()
-  q.set("tenant_id", await getTenantId())
   if (params?.documentType) q.set("document_type", params.documentType)
   if (params?.contractId) q.set("contract_id", String(params.contractId))
   if (params?.page) q.set("page", String(params.page))
@@ -662,12 +649,11 @@ export async function listDocuments(params?: {
 }
 
 export async function getDocumentDetail(docId: number): Promise<DocumentRecord> {
-  return fetchCompliance<DocumentRecord>(`/documents/${docId}?tenant_id=${await getTenantId()}`)
+  return fetchCompliance<DocumentRecord>(`/documents/${docId}`)
 }
 
 export async function reprocessDocument(docId: number, docTypeHint?: string) {
   const q = new URLSearchParams()
-  q.set("tenant_id", await getTenantId())
   if (docTypeHint) q.set("doc_type_hint", docTypeHint)
   return fetchCompliance<{ status: string; document_id: number; entities_found: number }>(
     `/documents/${docId}/reprocess?${q}`,
@@ -679,7 +665,7 @@ export async function linkDocumentToContract(docId: number, contractId: number) 
   const formData = new FormData()
   formData.append("contract_id", String(contractId))
   return fetchCompliance<{ status: string; document_id: number; contract_id: number }>(
-    `/documents/${docId}/link-contract?tenant_id=${await getTenantId()}`,
+    `/documents/${docId}/link-contract`,
     { method: "POST", body: formData },
   )
 }
@@ -691,7 +677,7 @@ export async function getDocumentStats() {
     with_financials: number
     with_entities: number
     total_size_bytes: number
-  }>(`/documents/stats/summary?tenant_id=${await getTenantId()}`)
+  }>("/documents/stats/summary")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -884,8 +870,10 @@ export interface ComplianceAlertItem {
 }
 
 export interface ExecutiveComplianceSummaryResponse {
-  overall_compliance_score: number
-  audit_readiness_level: string
+  /** null = not assessed. */
+  overall_compliance_score: number | null
+  /** Server-reported only; null when not assessed. */
+  audit_readiness_level: string | null
   critical_statutory_deadlines_30d: number
   pillars_assessed_count: number
   icasa_regulatory_alerts_count: number
@@ -944,52 +932,76 @@ export async function getExecutiveComplianceSummary(): Promise<ExecutiveComplian
 export interface Emp201ReturnItem {
   id?: number
   period: string
-  due_date: string
-  paye_zar: number
-  uif_zar: number
-  sdl_zar: number
-  total_payable_zar: number
+  due_date?: string | null
+  paye_zar?: number | null
+  uif_zar?: number | null
+  sdl_zar?: number | null
+  total_payable_zar?: number | null
+  /** PREPARED_NOT_FILED until the user records the real eFiling receipt (then FILED). */
   status: string
-  prn: string
-  submission_date?: string
-  sars_receipt_number?: string
+  prn?: string | null
+  prepared_at?: string | null
+  prepared_by?: string | null
+  filed_at?: string | null
+  filed_by?: string | null
+  marked_filed_at?: string | null
+  note?: string | null
 }
 
+/** Every figure may be null: null = no real payroll data, never a placeholder. */
 export interface StatutoryPayrollSummaryResponse {
-  period: string
-  total_employees: number
-  gross_remuneration_zar: number
-  paye_withheld_zar: number
-  uif_employee_zar: number
-  uif_employer_zar: number
-  sdl_zar: number
-  total_emp201_liability_zar: number
-  net_salaries_disbursed_zar: number
-  sars_tcc_pin: string
-  sars_tcc_status: string
-  sars_prn: string
-  emp501_reconciliation_status: string
-  emp501_variance_zar: number
-  recent_emp201_returns: Emp201ReturnItem[]
+  period: string | null
+  total_employees?: number | null
+  gross_remuneration_zar?: number | null
+  paye_withheld_zar?: number | null
+  uif_employee_zar?: number | null
+  uif_employer_zar?: number | null
+  sdl_zar?: number | null
+  total_emp201_liability_zar?: number | null
+  net_salaries_disbursed_zar?: number | null
+  sars_tcc_pin?: string | null
+  sars_tcc_status?: string | null
+  sars_prn?: string | null
+  emp501_reconciliation_status?: string | null
+  emp501_variance_zar?: number | null
+  /** false = PAYE/UIF/SDL rates have not been verified against SARS tables. */
+  rates_verified?: boolean
+  recent_emp201_returns?: Emp201ReturnItem[]
 }
 
-export interface FileEmp201Input {
+export interface PrepareEmp201Input {
   period: string
-  amount_paye: number
-  amount_uif: number
-  amount_sdl: number
-  payment_method?: string
-  notes?: string
 }
 
-export interface FileEmp201Result {
+export interface PrepareEmp201Result {
+  id?: number
   status: string
   period: string
+  paye_zar?: number | null
+  uif_zar?: number | null
+  sdl_zar?: number | null
+  total_payable_zar?: number | null
+  payslips_count?: number | null
+  rates_verified?: boolean
+  note?: string | null
+  prepared_at?: string | null
+  message?: string | null
+}
+
+export interface MarkEmp201FiledInput {
   prn: string
-  total_paid_zar: number
-  sars_receipt_number: string
-  message: string
-  submitted_at: string
+  /** YYYY-MM-DD the user filed on SARS eFiling. */
+  filed_at: string
+}
+
+export interface MarkEmp201FiledResult {
+  id?: number
+  status: string
+  period?: string
+  prn?: string | null
+  filed_at?: string | null
+  filed_by?: string | null
+  marked_filed_at?: string | null
 }
 
 export interface UifDeclarationItem {
@@ -1021,40 +1033,6 @@ export interface UifDeclarationsResponse {
   employees: UifDeclarationItem[]
 }
 
-export interface SubmitUifInput {
-  period: string
-  declarer_name: string
-  notes?: string
-}
-
-export interface SubmitUifResult {
-  status: string
-  period: string
-  batch_reference: string
-  acknowledgment_receipt: string
-  contributors_declared: number
-  total_uif_zar: number
-  message: string
-}
-
-export interface IssueUi27Input {
-  employee_id: string
-  reason_for_claim: string
-  last_day_worked: string
-}
-
-export interface IssueUi27Result {
-  certificate_number: string
-  employee_name: string
-  id_number: string
-  employer_uif_ref: string
-  remuneration_received_zar: number
-  claim_reason: string
-  issue_date: string
-  authorized_signatory: string
-  message: string
-}
-
 export interface LaborAuditFinding {
   standard: string
   category: string
@@ -1065,24 +1043,40 @@ export interface LaborAuditFinding {
 }
 
 export interface LaborComplianceAuditResponse {
-  overall_labor_score: number
-  bcea_readiness_status: string
-  normal_hours_compliant_pct: number
-  overtime_compliant_pct: number
-  mandatory_leave_accrual_compliant_pct: number
-  psira_security_grading_compliant_pct: number
-  total_active_staff: number
-  psira_registered_officers: number
+  /** null = not assessed. */
+  overall_labor_score: number | null
+  bcea_readiness_status: string | null
+  normal_hours_compliant_pct: number | null
+  overtime_compliant_pct: number | null
+  mandatory_leave_accrual_compliant_pct: number | null
+  psira_security_grading_compliant_pct: number | null
+  total_active_staff: number | null
+  psira_registered_officers: number | null
   audit_findings: LaborAuditFinding[]
 }
 
+// Backend router for statutory payroll (EMP201 prepare / mark-filed live under it).
+const PAYROLL_STATUTORY = "/cross-service/payroll-statutory"
+
 export async function getPayrollStatutorySummary(period?: string): Promise<StatutoryPayrollSummaryResponse> {
   const query = period ? `?period=${encodeURIComponent(period)}` : ""
-  return fetchCompliance<StatutoryPayrollSummaryResponse>(`/cross-service/payroll-statutory/summary${query}`)
+  return fetchCompliance<StatutoryPayrollSummaryResponse>(`${PAYROLL_STATUTORY}/summary${query}`)
 }
 
-export async function fileEmp201Declaration(payload: FileEmp201Input): Promise<FileEmp201Result> {
-  return fetchCompliance<FileEmp201Result>("/cross-service/payroll-statutory/emp201/file", {
+/**
+ * Builds an EMP201 WORKING PAPER from real PAID payslips. Nothing is filed with
+ * SARS: status comes back PREPARED_NOT_FILED ("File manually on SARS eFiling").
+ */
+export async function prepareEmp201(payload: PrepareEmp201Input): Promise<PrepareEmp201Result> {
+  return fetchCompliance<PrepareEmp201Result>(`${PAYROLL_STATUTORY}/emp201/prepare`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  })
+}
+
+/** Records the PRN/receipt the user pasted from SARS eFiling (admin only). */
+export async function markEmp201Filed(id: number, payload: MarkEmp201FiledInput): Promise<MarkEmp201FiledResult> {
+  return fetchCompliance<MarkEmp201FiledResult>(`${PAYROLL_STATUTORY}/emp201/${id}/mark-filed`, {
     method: "POST",
     body: JSON.stringify(payload),
   })
@@ -1090,23 +1084,9 @@ export async function fileEmp201Declaration(payload: FileEmp201Input): Promise<F
 
 export async function getUifDeclarations(period?: string): Promise<UifDeclarationsResponse> {
   const query = period ? `?period=${encodeURIComponent(period)}` : ""
-  return fetchCompliance<UifDeclarationsResponse>(`/cross-service/payroll-statutory/uif/declarations${query}`)
-}
-
-export async function submitUifDeclaration(payload: SubmitUifInput): Promise<SubmitUifResult> {
-  return fetchCompliance<SubmitUifResult>("/cross-service/payroll-statutory/uif/submit", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
-}
-
-export async function issueUi27Certificate(payload: IssueUi27Input): Promise<IssueUi27Result> {
-  return fetchCompliance<IssueUi27Result>("/cross-service/payroll-statutory/uif/ui27-certificate", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  })
+  return fetchCompliance<UifDeclarationsResponse>(`${PAYROLL_STATUTORY}/uif/declarations${query}`)
 }
 
 export async function getLaborComplianceAudit(): Promise<LaborComplianceAuditResponse> {
-  return fetchCompliance<LaborComplianceAuditResponse>("/cross-service/payroll-statutory/labor-audit")
+  return fetchCompliance<LaborComplianceAuditResponse>(`${PAYROLL_STATUTORY}/labor-audit`)
 }

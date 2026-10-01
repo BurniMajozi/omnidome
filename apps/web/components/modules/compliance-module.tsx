@@ -29,7 +29,7 @@ import {
   getExpiringPermits, listTravelReadiness, listDrBcpPlans, getDrBcpDashboard,
   listComplianceScores, calculateAllScores, listObligations, listEserviceSubmissions,
   listIcasaSubmissions, listDsar,
-  listBreaches, listFundingOpportunities, matchFundingByScore,
+  listBreaches, listFundingOpportunities, matchFundingByScore, createContract,
   uploadDocument, fetchUrlDocument,
   listDocuments, getDocumentDetail, reprocessDocument, linkDocumentToContract,
   getDocumentStats,
@@ -51,9 +51,9 @@ import {
   type SafetyIncidentItem, type DsarItem,
 } from "@/lib/compliance-api"
 import DocumentUploadZone from "@/components/modules/document-upload-zone"
-import { NotConnected } from "@/components/ui/not-connected"
-import { loadableFromStatus, type Loadable } from "@/lib/service-state"
-import { ComplianceApiError } from "@/lib/compliance-api"
+import type { Loadable } from "@/lib/service-state"
+import { combineErrors, loadableFromError, scoreView } from "@/lib/compliance-state"
+import { SectionGate, SectionStateNotice, PartialNotice } from "./compliance/section-state"
 import { StatutoryPayrollAdminView } from "./compliance/statutory-payroll-admin-view"
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -127,11 +127,25 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant="outline" className={cls}>{status.replace(/_/g, " ")}</Badge>
 }
 
-function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
+function ScoreRing({ score, size = 80 }: { score: number | null | undefined; size?: number }) {
+  const sv = scoreView(score)
   const r = (size - 8) / 2
   const circ = 2 * Math.PI * r
-  const offset = circ - (score / 100) * circ
-  const color = SCORE_COLOR(score)
+  if (!sv.assessed || sv.value === null) {
+    // Never render 0% / 100% for something that was not assessed.
+    return (
+      <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }} title="Not assessed">
+        <svg width={size} height={size} className="-rotate-90">
+          <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#1e293b" strokeWidth={6} strokeDasharray="4 4" />
+        </svg>
+        <span className="absolute px-1 text-center text-[10px] leading-tight text-muted-foreground">
+          {size >= 60 ? "Not assessed" : "N/A"}
+        </span>
+      </div>
+    )
+  }
+  const offset = circ - (sv.value / 100) * circ
+  const color = SCORE_COLOR(sv.value)
   return (
     <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="-rotate-90">
@@ -139,7 +153,7 @@ function ScoreRing({ score, size = 80 }: { score: number; size?: number }) {
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={6}
           strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" />
       </svg>
-      <span className="absolute text-sm font-bold" style={{ color }}>{Math.round(score)}</span>
+      <span className="absolute text-sm font-bold" style={{ color }}>{sv.value}</span>
     </div>
   )
 }
@@ -191,6 +205,12 @@ function EmptyState({ icon, message }: { icon: React.ReactNode; message: string 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN MODULE
 // ═══════════════════════════════════════════════════════════════════════════════
+
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown }
+/** Never rejects: keeps the error so the section can say WHY it has no data. */
+const settle = <T,>(p: Promise<T>): Promise<Settled<T>> =>
+  p.then((value) => ({ ok: true as const, value }), (error: unknown) => ({ ok: false as const, error }))
+const errOf = (r: Settled<unknown>): unknown => (r.ok ? null : r.error)
 
 /** Real value or an honest "N/A" - never a made-up default. */
 const na = (v: number | string | null | undefined, suffix = ""): string =>
@@ -265,29 +285,42 @@ export default function ComplianceModule() {
   const [dsarLoading, setDsarLoading] = useState(false)
   const [dsarResult, setDsarResult] = useState<CreateDsarResult | null>(null)
 
-  /** Returns value or null — never rejects. */
+  // Per-section load state (why a tab is empty: loading / down / forbidden / error)
+  const [sections, setSections] = useState<Record<string, Loadable<null>>>({})
+  // Secondary sources that failed while the tab's primary data loaded
+  const [partials, setPartials] = useState<Record<string, Loadable<null>>>({})
+  const [pulseState, setPulseState] = useState<Loadable<null>>({ state: "loading" })
+  const [documents, setDocuments] = useState<DocumentRecord[]>([])
+  const [calc, setCalc] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  const [fundingError, setFundingError] = useState<string | null>(null)
+
+  const [contractModalOpen, setContractModalOpen] = useState(false)
+  const [contractSaving, setContractSaving] = useState(false)
+  const [contractError, setContractError] = useState<string | null>(null)
+  const [contractForm, setContractForm] = useState({
+    title: "", contract_type: "service", counterparty_name: "", effective_date: "", expiry_date: "", value_zar: "",
+  })
+
+  /** Returns value or null — never rejects. Only for best-effort refreshes after an action. */
   const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
 
   const loadOverview = useCallback(async () => {
     const [data, exec, sla, stat] = await Promise.all([
-      getComplianceOverview().then(
-        (d) => ({ ok: true as const, d }),
-        (e: unknown) => ({ ok: false as const, e }),
-      ),
-      safe(getExecutiveComplianceSummary()),
-      safe(getComplianceSalesSla()),
-      safe(getFinanceStatutoryStatus()),
+      settle(getComplianceOverview()),
+      settle(getExecutiveComplianceSummary()),
+      settle(getComplianceSalesSla()),
+      settle(getFinanceStatutoryStatus()),
     ])
-    if (stat) setStatutoryStatus(stat)
+    if (stat.ok) setStatutoryStatus(stat.value)
+    if (exec.ok) setExecutiveSummary(exec.value)
+    if (sla.ok) setSalesSla(sla.value)
+    setPulseState(combineErrors([errOf(exec), errOf(sla), errOf(stat)]))
     if (data.ok) {
-      setOverview(data.d)
+      setOverview(data.value)
       setServiceState({ state: "ready", data: null })
     } else {
-      const status = data.e instanceof ComplianceApiError ? data.e.status : null
-      setServiceState(loadableFromStatus<null>(status, undefined))
+      setServiceState(loadableFromError(data.error))
     }
-    if (exec) setExecutiveSummary(exec)
-    if (sla) setSalesSla(sla)
   }, [])
 
   const reloadOverview = () => {
@@ -345,107 +378,169 @@ export default function ComplianceModule() {
   }
 
   const loadSection = useCallback(async (tab: string) => {
+    const done = (primary: Settled<unknown>[], secondary: Settled<unknown>[] = []) => {
+      setSections((st) => ({ ...st, [tab]: combineErrors(primary.map(errOf)) }))
+      setPartials((st) => ({ ...st, [tab]: combineErrors(secondary.map(errOf)) }))
+    }
+    setSections((st) => ({ ...st, [tab]: { state: "loading" } }))
     switch (tab) {
       case "contracts": {
         const [c, ec, sla] = await Promise.all([
-          safe(listContracts({ page: 1 })),
-          safe(getExpiringContracts(90)),
-          safe(getComplianceSalesSla()),
+          settle(listContracts({ page: 1 })),
+          settle(getExpiringContracts(90)),
+          settle(getComplianceSalesSla()),
         ])
-        setContracts(c?.items ?? [])
-        setExpiringContracts(ec?.items ?? [])
-        if (sla) setSalesSla(sla)
+        if (c.ok) setContracts(c.value?.items ?? [])
+        if (ec.ok) setExpiringContracts(ec.value?.items ?? [])
+        if (sla.ok) setSalesSla(sla.value)
+        done([c], [ec, sla])
         break
       }
       case "fleet_safety": {
-        const fs = await safe(getTechnicianFleetSafety())
-        if (fs) setFleetSafety(fs)
+        const fs = await settle(getTechnicianFleetSafety())
+        if (fs.ok) setFleetSafety(fs.value)
+        done([fs])
         break
       }
       case "statutory": {
-        const [st, tax] = await Promise.all([
-          safe(getFinanceStatutoryStatus()),
-          safe(listTaxReturns()),
-        ])
-        if (st) setStatutoryStatus(st)
-        setTaxReturns(tax?.items ?? [])
+        const st = await settle(getFinanceStatutoryStatus())
+        if (st.ok) setStatutoryStatus(st.value)
+        done([st])
         break
       }
       case "popia_rica": {
-        const [pa, ra, ds] = await Promise.all([
-          safe(getCallCenterPopiaAudit()),
-          safe(getRicaSubscriberAudit()),
-          safe(listDsar()),
+        const [pa, ra] = await Promise.all([
+          settle(getCallCenterPopiaAudit()),
+          settle(getRicaSubscriberAudit()),
         ])
-        if (pa) setPopiaAudit(pa)
-        if (ra) setRicaAudit(ra)
-        setDsar(ds?.items ?? [])
+        if (pa.ok) setPopiaAudit(pa.value)
+        if (ra.ok) setRicaAudit(ra.value)
+        done([pa], [ra])
         break
       }
       case "executive_ai": {
-        const exec = await safe(getExecutiveComplianceSummary())
-        if (exec) setExecutiveSummary(exec)
+        const [exec, stat] = await Promise.all([
+          settle(getExecutiveComplianceSummary()),
+          settle(getFinanceStatutoryStatus()),
+        ])
+        if (exec.ok) setExecutiveSummary(exec.value)
+        if (stat.ok) setStatutoryStatus(stat.value)
+        done([exec], [stat])
         break
       }
       case "regulatory": {
         const [tax, hs, bbbee, icasa] = await Promise.all([
-          safe(listTaxReturns()),
-          safe(listHsIncidents()),
-          safe(listBbbeeScorecards()),
-          safe(listIcasaSubmissions()),
+          settle(listTaxReturns()),
+          settle(listHsIncidents()),
+          settle(listBbbeeScorecards()),
+          settle(listIcasaSubmissions()),
         ])
-        setTaxReturns(tax?.items ?? [])
-        setHsIncidents(hs?.items ?? [])
-        setBbbeeCards(bbbee?.items ?? [])
-        setIcasaSubs(icasa?.items ?? [])
+        if (tax.ok) setTaxReturns(tax.value?.items ?? [])
+        if (hs.ok) setHsIncidents(hs.value?.items ?? [])
+        if (bbbee.ok) setBbbeeCards(bbbee.value?.items ?? [])
+        if (icasa.ok) setIcasaSubs(icasa.value?.items ?? [])
+        done([tax, hs, bbbee, icasa])
         break
       }
       case "hr": {
         const [leave, veh, fw, tr] = await Promise.all([
-          safe(listLeaveApplications()),
-          safe(listVehicles()),
-          safe(listForeignWorkers()),
-          safe(listTravelReadiness()),
+          settle(listLeaveApplications()),
+          settle(listVehicles()),
+          settle(listForeignWorkers()),
+          settle(listTravelReadiness()),
         ])
-        setLeaveApps(leave?.items ?? [])
-        setVehicles(veh?.items ?? [])
-        setFwPermits(fw?.items ?? [])
-        setTravel(tr?.items ?? [])
+        if (leave.ok) setLeaveApps(leave.value?.items ?? [])
+        if (veh.ok) setVehicles(veh.value?.items ?? [])
+        if (fw.ok) setFwPermits(fw.value?.items ?? [])
+        if (tr.ok) setTravel(tr.value?.items ?? [])
+        done([leave, veh, fw, tr])
         break
       }
       case "risk": {
         const [br, ds, obl] = await Promise.all([
-          safe(listBreaches()),
-          safe(listDsar()),
-          safe(listObligations({ status: "pending_review" })),
+          settle(listBreaches()),
+          settle(listDsar()),
+          settle(listObligations({ status: "pending_review" })),
         ])
-        setBreaches(br?.items ?? [])
-        setDsar(ds?.items ?? [])
-        setObligations(obl?.items ?? [])
+        if (br.ok) setBreaches(br.value?.items ?? [])
+        if (ds.ok) setDsar(ds.value?.items ?? [])
+        if (obl.ok) setObligations(obl.value?.items ?? [])
+        done([br, ds, obl])
         break
       }
       case "operations": {
-        const [dr, sc, es] = await Promise.all([
-          safe(listDrBcpPlans()),
-          safe(listComplianceScores()),
-          safe(listEserviceSubmissions()),
+        const [dr, sc, es, docs] = await Promise.all([
+          settle(listDrBcpPlans()),
+          settle(listComplianceScores()),
+          settle(listEserviceSubmissions()),
+          settle(listDocuments({ pageSize: 20 })),
         ])
-        setDrPlans(dr?.items ?? [])
-        setScores(sc?.items ?? [])
-        setEservices(es?.items ?? [])
+        if (dr.ok) setDrPlans(dr.value?.items ?? [])
+        if (sc.ok) setScores(sc.value?.items ?? [])
+        if (es.ok) setEservices(es.value?.items ?? [])
+        if (docs.ok) setDocuments(docs.value?.items ?? [])
+        done([dr, sc, es, docs])
         break
       }
       case "funding": {
-        const [f, sc] = await Promise.all([
-          safe(listFundingOpportunities({ status: "identified" })),
-          safe(listComplianceScores()),
-        ])
-        setFunding(f?.items ?? [])
-        setScores(sc?.items ?? [])
+        const f = await settle(listFundingOpportunities({ status: "identified" }))
+        if (f.ok) setFunding(f.value?.items ?? [])
+        done([f])
         break
       }
     }
   }, [])
+
+  const handleCalculateScores = async () => {
+    setCalc({ busy: true, error: null })
+    try {
+      await calculateAllScores()
+      await loadOverview()
+      if (activeTab !== "overview") await loadSection(activeTab)
+      setCalc({ busy: false, error: null })
+    } catch (err) {
+      setCalc({ busy: false, error: err instanceof Error ? err.message : "Score calculation failed" })
+    }
+  }
+
+  const handleMatchFunding = async () => {
+    const score = overview?.overall_score
+    if (typeof score !== "number") return
+    setFundingError(null)
+    try {
+      const res = await matchFundingByScore(score)
+      setFunding(res?.items ?? [])
+    } catch (err) {
+      setFundingError(err instanceof Error ? err.message : "Funding match failed")
+    }
+  }
+
+  const handleCreateContract = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!contractForm.title.trim() || !contractForm.counterparty_name.trim()) return
+    setContractSaving(true)
+    setContractError(null)
+    try {
+      await createContract({
+        title: contractForm.title.trim(),
+        contract_type: contractForm.contract_type,
+        counterparty_name: contractForm.counterparty_name.trim(),
+        ...(contractForm.effective_date ? { effective_date: contractForm.effective_date } : {}),
+        ...(contractForm.expiry_date ? { expiry_date: contractForm.expiry_date } : {}),
+        ...(contractForm.value_zar.trim() !== "" && Number.isFinite(Number(contractForm.value_zar))
+          ? { value_zar: Number(contractForm.value_zar) }
+          : {}),
+      })
+      setContractModalOpen(false)
+      setContractForm({ title: "", contract_type: "service", counterparty_name: "", effective_date: "", expiry_date: "", value_zar: "" })
+      await loadSection("contracts")
+    } catch (err) {
+      // Server validation message verbatim.
+      setContractError(err instanceof Error ? err.message : "Could not create contract")
+    } finally {
+      setContractSaving(false)
+    }
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -462,12 +557,19 @@ export default function ComplianceModule() {
 
   const categoryChartData = useMemo(() => {
     if (!overview?.categories) return []
-    return overview.categories.map((c) => ({
-      name: c.name.replace(/_/g, " "),
-      score: c.score,
-      fill: SCORE_COLOR(c.score),
-    }))
+    return overview.categories
+      .filter((c) => scoreView(c.score).assessed)
+      .map((c) => ({
+        name: c.name.replace(/_/g, " "),
+        score: c.score as number,
+        fill: SCORE_COLOR(c.score as number),
+      }))
   }, [overview])
+
+  const unassessedCategories = useMemo(
+    () => (overview?.categories ?? []).filter((c) => !scoreView(c.score).assessed).map((c) => c.name.replace(/_/g, " ")),
+    [overview],
+  )
 
   const breachChartData = useMemo(() => {
     const severityCounts: Record<string, number> = {}
@@ -483,11 +585,13 @@ export default function ComplianceModule() {
 
   const radarData = useMemo(() => {
     if (!overview?.categories) return []
-    return overview.categories.map((c) => ({
-      subject: c.name.replace(/_/g, " ").slice(0, 12),
-      score: c.score,
-      fullMark: 100,
-    }))
+    return overview.categories
+      .filter((c) => scoreView(c.score).assessed)
+      .map((c) => ({
+        subject: c.name.replace(/_/g, " ").slice(0, 12),
+        score: c.score as number,
+        fullMark: 100,
+      }))
   }, [overview])
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -508,7 +612,7 @@ export default function ComplianceModule() {
           title="Compliance Center"
           subtitle="Contracts, regulatory filings, POPIA/RICA and audit readiness"
         />
-        <NotConnected loadable={serviceState} service="Compliance service" onRetry={reloadOverview} className="py-16" />
+        <SectionStateNotice state={serviceState} onRetry={reloadOverview} className="py-16" />
       </div>
     )
   }
@@ -521,11 +625,25 @@ export default function ComplianceModule() {
         subtitle="Full-spectrum compliance management — contracts, regulatory, HR, risk, funding"
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={loadOverview}><RefreshCw className="h-3.5 w-3.5" />Refresh</Button>
-            <Button variant="cta" size="sm" onClick={() => calculateAllScores()}><Zap className="h-3.5 w-3.5" />Calculate Scores</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                loadOverview()
+                if (activeTab !== "overview") loadSection(activeTab)
+              }}
+            ><RefreshCw className="h-3.5 w-3.5" />Refresh</Button>
+            <Button variant="cta" size="sm" disabled={calc.busy} onClick={handleCalculateScores}>
+              <Zap className="h-3.5 w-3.5" />{calc.busy ? "Calculating…" : "Calculate Scores"}
+            </Button>
           </>
         }
       />
+      {calc.error && (
+        <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+          Score calculation failed: {calc.error}
+        </div>
+      )}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
@@ -550,9 +668,11 @@ export default function ComplianceModule() {
                 <CardTitle className="text-sm text-muted-foreground">Overall Compliance</CardTitle>
               </CardHeader>
               <CardContent className="flex flex-col items-center">
-                <ScoreRing score={overview?.overall_score ?? 0} size={120} />
+                <ScoreRing score={overview?.overall_score} size={120} />
                 <p className="mt-2 text-xs text-muted-foreground">
-                  {(overview?.categories?.length ?? 0)} categories tracked
+                  {scoreView(overview?.overall_score).assessed
+                    ? `${overview?.categories?.length ?? 0} categories tracked`
+                    : "Not assessed: no scored obligations yet"}
                 </p>
               </CardContent>
             </Card>
@@ -609,7 +729,7 @@ export default function ComplianceModule() {
               <AlertCard
                 icon={<BadgeCheck className="h-5 w-5 text-emerald-400" />}
                 title="BBBEE Level"
-                value={overview?.bbbee_level ?? "N/A"}
+                value={overview?.bbbee_level ?? "Not recorded"}
                 subtitle="Current scorecard"
                 color="emerald"
                 onClick={() => setActiveTab("regulatory")}
@@ -633,19 +753,20 @@ export default function ComplianceModule() {
                   <Activity className="h-4 w-4 text-primary animate-pulse" />
                   Unified Cross-Service Compliance Pulse
                 </CardTitle>
-                {executiveSummary ? (
-                  <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                    {executiveSummary.audit_readiness_level} · Score {executiveSummary.overall_compliance_score}%
+                {executiveSummary && scoreView(executiveSummary.overall_compliance_score).assessed ? (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    Score {scoreView(executiveSummary.overall_compliance_score).label}
                   </Badge>
                 ) : (
-                  <Badge variant="outline" className="text-muted-foreground">Audit readiness: not connected</Badge>
+                  <Badge variant="outline" className="text-muted-foreground">Score: Not assessed</Badge>
                 )}
               </div>
               <CardDescription className="text-xs">
-                Real-time regulatory telemetry across Commercial Sales SLAs, Field Fleet OHS, Statutory Finance Treasury, Call Center POPIA, and RICA Subscriber Identity.
+                Figures reported by the compliance service for Commercial SLAs, Fleet OHS, Statutory Finance, POPIA and RICA. Anything without data shows as N/A.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <PartialNotice state={pulseState} label="Cross-service pulse" onRetry={loadOverview} />
               <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div
                   className="rounded-lg border border-border/60 bg-background/50 p-3 cursor-pointer hover:border-primary/40 transition-colors"
@@ -727,6 +848,9 @@ export default function ComplianceModule() {
             <Card className="md:col-span-1">
               <CardHeader><CardTitle className="text-sm">Compliance Radar</CardTitle></CardHeader>
               <CardContent>
+                {radarData.length === 0 ? (
+                  <EmptyState icon={<Target className="h-8 w-8" />} message="No categories assessed yet" />
+                ) : (
                 <ResponsiveContainer width="100%" height={250}>
                   <RadarChart data={radarData}>
                     <PolarGrid stroke="#334155" />
@@ -735,12 +859,19 @@ export default function ComplianceModule() {
                     <Radar name="Score" dataKey="score" stroke="#6366f1" fill="#6366f1" fillOpacity={0.3} />
                   </RadarChart>
                 </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
             <Card className="md:col-span-1">
               <CardHeader><CardTitle className="text-sm">Category Scores</CardTitle></CardHeader>
               <CardContent>
+                {unassessedCategories.length > 0 && (
+                  <p className="mb-2 text-[11px] text-muted-foreground">Not assessed: {unassessedCategories.join(", ")}</p>
+                )}
+                {categoryChartData.length === 0 ? (
+                  <EmptyState icon={<Target className="h-8 w-8" />} message="No categories assessed yet" />
+                ) : (
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={categoryChartData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -754,6 +885,7 @@ export default function ComplianceModule() {
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
+                )}
               </CardContent>
             </Card>
 
@@ -816,7 +948,8 @@ export default function ComplianceModule() {
                     </Badge>
                   </div>
                 )}
-                {(!overview || (overview.open_breaches === 0 && overview.overdue_dsar === 0 && overview.tax_overdue === 0)) && (
+                {overview && overview.open_breaches === 0 && overview.overdue_dsar === 0 && overview.tax_overdue === 0 &&
+                  overview.expiring_contracts === 0 && overview.hs_open_incidents === 0 && (
                   <div className="flex items-center justify-center py-6 text-emerald-400">
                     <CheckCircle className="h-5 w-5 mr-2" />
                     <span className="text-sm">No active escalations</span>
@@ -834,16 +967,18 @@ export default function ComplianceModule() {
         {/* 1. COMMERCIAL CONTRACTS & SLAS TAB                               */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="contracts" className="space-y-4">
+          <SectionGate state={sections.contracts} onRetry={() => loadSection("contracts")}>
+          <PartialNotice state={partials.contracts} label="Carrier SLAs / expiring contracts" onRetry={() => loadSection("contracts")} />
           <SectionHeader
             icon={<FileText className="h-5 w-5 text-blue-400" />}
             title="Commercial Contracts & Carrier SLAs"
-            subtitle="B2B fiber backhaul, dark interconnects, 99.5% uptime guarantees & automated FICA clearance"
+            subtitle="Carrier and customer agreements, SLA targets and FICA clearance"
             action={
               <div className="flex gap-2">
                 <Button size="sm" variant="outline" onClick={() => { setFicaResult(null); setFicaModalOpen(true) }}>
                   <ShieldCheck className="h-4 w-4 mr-1 text-emerald-400" /> Vet Customer FICA
                 </Button>
-                <Button size="sm"><Plus className="h-4 w-4 mr-1" /> New Contract</Button>
+                <Button size="sm" onClick={() => { setContractError(null); setContractModalOpen(true) }}><Plus className="h-4 w-4 mr-1" /> New Contract</Button>
               </div>
             }
           />
@@ -853,7 +988,7 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">B2B Portfolio Value</p>
               <p className="text-xl font-bold text-foreground mt-1">
-                {salesSla ? `R ${salesSla.total_portfolio_value_zar.toLocaleString()}` : "N/A"}
+                {typeof salesSla?.total_portfolio_value_zar === "number" ? `R ${salesSla.total_portfolio_value_zar.toLocaleString()}` : "N/A"}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">{na(salesSla?.total_contracts, " contracts")}</p>
             </Card>
@@ -909,7 +1044,7 @@ export default function ComplianceModule() {
                     <div className="flex flex-wrap items-center gap-4 sm:justify-end">
                       <div className="text-right min-w-[100px]">
                         <p className="text-xs text-muted-foreground">Annual Value</p>
-                        <p className="text-sm font-semibold text-foreground">R {c.annual_value_zar.toLocaleString()}</p>
+                        <p className="text-sm font-semibold text-foreground">{typeof c.annual_value_zar === "number" ? `R ${c.annual_value_zar.toLocaleString()}` : "N/A"}</p>
                       </div>
                       <div className="text-right min-w-[90px]">
                         <p className="text-xs text-muted-foreground">SLA Target</p>
@@ -929,6 +1064,12 @@ export default function ComplianceModule() {
                     </div>
                   </div>
                 ))}
+                {(salesSla?.contracts ?? []).length === 0 && (
+                  <EmptyState
+                    icon={<Briefcase className="h-8 w-8" />}
+                    message={salesSla ? "No carrier agreements yet" : "Carrier SLA data not available"}
+                  />
+                )}
               </div>
             </CardContent>
           </Card>
@@ -969,7 +1110,12 @@ export default function ComplianceModule() {
             <CardHeader><CardTitle className="text-sm">Contract Governance Repository</CardTitle></CardHeader>
             <CardContent>
               {contracts.length === 0 ? (
-                <EmptyState icon={<FileText className="h-8 w-8" />} message="No contracts loaded" />
+                <div className="flex flex-col items-center gap-3">
+                  <EmptyState icon={<FileText className="h-8 w-8" />} message="No contracts yet" />
+                  <Button size="sm" onClick={() => { setContractError(null); setContractModalOpen(true) }}>
+                    <Plus className="h-4 w-4 mr-1" /> Add the first contract
+                  </Button>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {contracts.map((c) => (
@@ -988,7 +1134,7 @@ export default function ComplianceModule() {
                           <p className="text-xs text-muted-foreground">Value</p>
                           <p className="text-sm font-medium">R{c.value_zar?.toLocaleString() ?? "—"}</p>
                         </div>
-                        <ScoreRing score={c.compliance_score ?? 0} size={40} />
+                        <ScoreRing score={c.compliance_score} size={40} />
                         <StatusBadge status={c.status} />
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />
                       </div>
@@ -998,16 +1144,18 @@ export default function ComplianceModule() {
               )}
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* 2. FIELD TECHNICIANS & FLEET SAFETY TAB                          */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="fleet_safety" className="space-y-4">
+          <SectionGate state={sections.fleet_safety} onRetry={() => loadSection("fleet_safety")}>
           <SectionHeader
             icon={<Truck className="h-5 w-5 text-amber-400" />}
             title="Field Technicians & Fleet Safety"
-            subtitle="Vehicle roadworthiness, municipal disc renewals, OHS Act zero-incident tracking & safety certifications"
+            subtitle="Vehicle roadworthiness, licence disc renewals, incident tracking and safety certifications"
             action={
               <Button size="sm" variant="cta" onClick={() => { setIncidentResult(null); setIncidentModalOpen(true) }}>
                 <AlertTriangle className="h-4 w-4 mr-1" /> Log Safety Incident (OHS / COIDA)
@@ -1027,7 +1175,8 @@ export default function ComplianceModule() {
             <Card className="p-3">
               <p className="text-xs text-muted-foreground">Roadworthy Compliance</p>
               <p className="text-xl font-bold text-emerald-400 mt-1">
-                {fleetSafety ? `${fleetSafety.roadworthy_compliant_count} / ${fleetSafety.total_fleet_vehicles}` : "N/A"}
+                {fleetSafety && fleetSafety.roadworthy_compliant_count != null && fleetSafety.total_fleet_vehicles != null
+                  ? `${fleetSafety.roadworthy_compliant_count} / ${fleetSafety.total_fleet_vehicles}` : "N/A"}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">{na(fleetSafety?.expiring_license_discs_30d, " renewals in 30 days")}</p>
             </Card>
@@ -1056,7 +1205,7 @@ export default function ComplianceModule() {
                   <CardDescription className="text-xs">Natis e-Services licensing, roadworthy certificates, and assigned field staff.</CardDescription>
                 </div>
                 <Badge variant="outline" className="text-muted-foreground">
-                  {fleetSafety ? `${fleetSafety.vehicles?.length ?? 0} units` : "Not connected"}
+                  {fleetSafety ? `${fleetSafety.vehicles?.length ?? 0} units` : "Not available"}
                 </Badge>
               </div>
             </CardHeader>
@@ -1081,14 +1230,17 @@ export default function ComplianceModule() {
                       </span>
                     </div>
                     <div className="flex items-center justify-between pt-1 border-t border-border/40 text-[11px] text-muted-foreground">
-                      <span className="flex items-center gap-1 text-emerald-400">
-                        <Radio className="h-3 w-3" /> Telematics Active
+                      <span className={`flex items-center gap-1 ${v.tracking_unit_active ? "text-emerald-400" : "text-muted-foreground"}`}>
+                        <Radio className="h-3 w-3" /> {v.tracking_unit_active ? "Telematics active" : "No active tracker"}
                       </span>
                       <span>Inspected: {v.last_safety_inspection}</span>
                     </div>
                   </div>
                 ))}
               </div>
+              {(fleetSafety?.vehicles ?? []).length === 0 && (
+                <EmptyState icon={<Truck className="h-8 w-8" />} message="No vehicles registered yet" />
+              )}
             </CardContent>
           </Card>
 
@@ -1100,17 +1252,14 @@ export default function ComplianceModule() {
                   <CardTitle className="text-sm">Occupational Health & Safety (OHS) Incident Register</CardTitle>
                   <CardDescription className="text-xs">Section 24 COIDA statutory accident reporting & hazard tracking.</CardDescription>
                 </div>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                  COIDA In Good Standing
+                <Badge variant="outline" className="text-muted-foreground">
+                  {na(fleetSafety?.coida_reportable_accidents_ytd, " COIDA reportable YTD")}
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {(fleetSafety?.recent_incidents ?? [
-                  { id: 1, incident_number: "INC-2CF509", incident_type: "near_miss", severity: "low", incident_date: "2026-09-25", description: "[Musa Sithole] Ladder footing slipped on damp grass during residential ONT drop; no injury.", status: "investigating", coida_reported: false },
-                  { id: 2, incident_number: "INC-8812A", incident_type: "property_damage", severity: "low", incident_date: "2026-08-14", description: "[Sipho Khumalo] Trenching spade caught unmapped municipal water poly-pipe. Water department repaired.", status: "resolved", coida_reported: false },
-                ]).map((inc) => (
+                {(fleetSafety?.recent_incidents ?? []).map((inc) => (
                   <div key={inc.id} className="p-3 rounded-lg border border-border/50 bg-background/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -1124,15 +1273,19 @@ export default function ComplianceModule() {
                     </div>
                     <div className="flex items-center gap-2 sm:self-center">
                       <Badge variant="outline" className={inc.coida_reported ? "border-red-500/40 text-red-400" : "border-emerald-500/40 text-emerald-400"}>
-                        {inc.coida_reported ? "Form W.Cl.2 Filed" : "Internal Log Only"}
+                        {inc.coida_reported ? "Marked COIDA reported" : "Internal log only"}
                       </Badge>
                       <StatusBadge status={inc.status} />
                     </div>
                   </div>
                 ))}
+                {(fleetSafety?.recent_incidents ?? []).length === 0 && (
+                  <EmptyState icon={<ShieldCheck className="h-8 w-8" />} message="No safety incidents recorded" />
+                )}
               </div>
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
@@ -1143,6 +1296,7 @@ export default function ComplianceModule() {
           <StatutoryPayrollAdminView />
 
           <div className="pt-4 border-t border-border/40 space-y-4">
+            <SectionGate state={sections.statutory} onRetry={() => loadSection("statutory")}>
             <SectionHeader
               icon={<Landmark className="h-5 w-5 text-emerald-400" />}
               title="CIPC Corporate Standing & B-BBEE Governance"
@@ -1166,9 +1320,6 @@ export default function ComplianceModule() {
                   <span className="text-muted-foreground">Next Filing Deadline</span>
                   <span className="font-medium text-foreground">{statutoryStatus?.cipc_next_filing_deadline ?? "N/A"}</span>
                 </div>
-                {!statutoryStatus && (
-                  <p className="pt-2 text-muted-foreground">Not connected: statutory status has not loaded.</p>
-                )}
               </CardContent>
             </Card>
 
@@ -1182,7 +1333,9 @@ export default function ComplianceModule() {
                 <div className="flex justify-between py-1 border-b border-border/40">
                   <span className="text-muted-foreground">Contributor Status</span>
                   <span className="font-medium text-foreground">
-                    {statutoryStatus ? `${statutoryStatus.bbbee_contributor_level} (${statutoryStatus.bbbee_procurement_recognition_pct}% recognition)` : "N/A"}
+                    {statutoryStatus?.bbbee_contributor_level
+                      ? `${statutoryStatus.bbbee_contributor_level}${statutoryStatus.bbbee_procurement_recognition_pct != null ? ` (${statutoryStatus.bbbee_procurement_recognition_pct}% recognition)` : ""}`
+                      : "N/A"}
                   </span>
                 </div>
                 <div className="flex justify-between py-1">
@@ -1192,6 +1345,7 @@ export default function ComplianceModule() {
               </CardContent>
             </Card>
           </div>
+            </SectionGate>
         </div>
       </TabsContent>
 
@@ -1199,10 +1353,12 @@ export default function ComplianceModule() {
         {/* 4. POPIA & RICA SUBSCRIBER CENTER TAB                            */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="popia_rica" className="space-y-4">
+          <SectionGate state={sections.popia_rica} onRetry={() => loadSection("popia_rica")}>
+          <PartialNotice state={partials.popia_rica} label="RICA subscriber audit" onRetry={() => loadSection("popia_rica")} />
           <SectionHeader
             icon={<ShieldCheck className="h-5 w-5 text-cyan-400" />}
             title="POPIA Privacy & RICA Subscriber Center"
-            subtitle="Section 14 call center voice consent, 30-day statutory DSAR clock, and biometric RICA subscriber verification"
+            subtitle="Call recording consent, the 30-day DSAR clock and RICA subscriber verification"
             action={
               <Button size="sm" variant="cta" onClick={() => { setDsarResult(null); setDsarModalOpen(true) }}>
                 <Lock className="h-4 w-4 mr-1" /> Register POPIA DSAR
@@ -1257,11 +1413,7 @@ export default function ComplianceModule() {
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
-                {(popiaAudit?.requests ?? [
-                  { id: 1, request_number: "DSAR-001", request_type: "access", requester_name: "Hendrik van der Merwe", requester_email: "hendrik.vdm@outlook.com", status: "in_progress", received_date: "2026-09-20", due_date: "2026-10-20", days_remaining: 25 },
-                  { id: 2, request_number: "DSAR-002", request_type: "deletion", requester_name: "Fatima Patel", requester_email: "fatima.patel@gmail.com", status: "completed", received_date: "2026-09-05", due_date: "2026-10-05", days_remaining: 10 },
-                  { id: 3, request_number: "DSAR-003", request_type: "objection", requester_name: "Thabo Molefe", requester_email: "thabo.molefe@icloud.com", status: "in_progress", received_date: "2026-09-23", due_date: "2026-10-23", days_remaining: 28 },
-                ]).map((req) => (
+                {(popiaAudit?.requests ?? []).map((req) => (
                   <div key={req.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-border/50 bg-background/40 gap-2">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -1285,6 +1437,9 @@ export default function ComplianceModule() {
                     </div>
                   </div>
                 ))}
+                {(popiaAudit?.requests ?? []).length === 0 && (
+                  <EmptyState icon={<Lock className="h-8 w-8" />} message="No data subject access requests yet" />
+                )}
               </div>
             </CardContent>
           </Card>
@@ -1298,40 +1453,38 @@ export default function ComplianceModule() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-xs">
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">SA Smart ID Card (DHA HANIS Match)</span>
-                    <span className="font-semibold text-foreground">78% ({Math.round(340 * 0.976 * 0.78)} subs)</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: "78%" }} />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Foreign Passport & DHA Work Permit</span>
-                    <span className="font-semibold text-foreground">12% ({Math.round(340 * 0.976 * 0.12)} subs)</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full bg-blue-500 rounded-full" style={{ width: "12%" }} />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Green Barcode ID Book (Home Affairs Legacy)</span>
-                    <span className="font-semibold text-foreground">10% ({Math.round(340 * 0.976 * 0.10)} subs)</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full bg-amber-500 rounded-full" style={{ width: "10%" }} />
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-border/40 flex items-center justify-between text-muted-foreground">
-                  <span>SmileID AI Biometric Liveness SLA:</span>
-                  <span className="text-emerald-400 font-semibold">180ms Latency</span>
-                </div>
+                {ricaAudit ? (
+                  <>
+                    {([
+                      { label: "SA Smart ID Card", count: ricaAudit.sa_smart_id_verified_count, bar: "bg-emerald-500" },
+                      { label: "Foreign Passport & Work Permit", count: ricaAudit.foreign_passport_permit_count, bar: "bg-blue-500" },
+                      { label: "Green Barcode ID Book", count: ricaAudit.green_barcode_book_count, bar: "bg-amber-500" },
+                    ]).map((row) => {
+                      const total = ricaAudit.total_active_subscribers
+                      const pct = typeof row.count === "number" && typeof total === "number" && total > 0
+                        ? Math.round((row.count / total) * 100) : null
+                      return (
+                        <div key={row.label} className="space-y-1">
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">{row.label}</span>
+                            <span className="font-semibold text-foreground">
+                              {na(row.count, " subs")}{pct !== null ? ` (${pct}%)` : ""}
+                            </span>
+                          </div>
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
+                            <div className={`h-full ${row.bar} rounded-full`} style={{ width: `${pct ?? 0}%` }} />
+                          </div>
+                        </div>
+                      )
+                    })}
+                    <div className="pt-2 border-t border-border/40 flex items-center justify-between text-muted-foreground">
+                      <span>Average verification latency:</span>
+                      <span className="text-foreground font-semibold">{na(ricaAudit.average_audit_latency_ms, " ms")}</span>
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState icon={<UserCheck className="h-8 w-8" />} message="RICA audit not available" />
+                )}
               </CardContent>
             </Card>
 
@@ -1343,38 +1496,41 @@ export default function ComplianceModule() {
               </CardHeader>
               <CardContent className="space-y-3 text-xs">
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300">
-                  <p className="font-semibold">8 Subscribers Quarantined</p>
+                  <p className="font-semibold">
+                    {typeof ricaAudit?.unverified_quarantine_count === "number"
+                      ? `${ricaAudit.unverified_quarantine_count} subscribers quarantined`
+                      : "Quarantine count not available"}
+                  </p>
                   <p className="mt-1 text-[11px] text-muted-foreground">
-                    Subscribers provisioned but halted before ONT drop activation due to pending Proof of Address (utility bill &lt; 3 months) under Section 3 RICA.
+                    Subscribers held before activation until RICA verification is complete.
                   </p>
                 </div>
                 <div className="space-y-1.5 pt-1">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Information Officer</span>
-                    <span className="font-medium text-foreground">Advocate (Compliance Head)</span>
+                    <span className="font-medium text-foreground">{popiaAudit?.registered_information_officer || "Not recorded"}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Regulator Registration</span>
-                    <span className="font-mono text-primary">IR-POPIA-2024/09842</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Information Officer Email</span>
-                    <span className="text-foreground">advocate.compliance@omnidome.co.za</span>
+                    <span className="font-mono text-primary">{popiaAudit?.regulator_registration_number || "Not recorded"}</span>
                   </div>
                 </div>
               </CardContent>
             </Card>
           </div>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* 5. EXECUTIVE COPILOT & ORCHESTRATOR TAB                          */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="executive_ai" className="space-y-4">
+          <SectionGate state={sections.executive_ai} onRetry={() => loadSection("executive_ai")}>
+          <PartialNotice state={partials.executive_ai} label="Statutory status" onRetry={() => loadSection("executive_ai")} />
           <SectionHeader
             icon={<Zap className="h-5 w-5 text-purple-400" />}
             title="Executive Compliance Copilot & AI Orchestrator"
-            subtitle="Autonomous statutory synthesis across all operational pillars with prioritized statutory risk mitigation"
+            subtitle="Summary of compliance signals across the operational pillars"
           />
 
           {/* Executive Readiness Banner */}
@@ -1383,14 +1539,17 @@ export default function ComplianceModule() {
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base flex items-center gap-2">
                   <Zap className="h-5 w-5 text-purple-400" />
-                  Autonomous Compliance Readiness Rating: {executiveSummary ? executiveSummary.audit_readiness_level.replace(/_/g, " ") : "not connected"}
+                  Compliance readiness:{" "}
+                  {executiveSummary && scoreView(executiveSummary.overall_compliance_score).assessed && executiveSummary.audit_readiness_level
+                    ? executiveSummary.audit_readiness_level.replace(/_/g, " ")
+                    : "Not assessed"}
                 </CardTitle>
-                <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-sm font-bold">
-                  {executiveSummary ? `Score ${executiveSummary.overall_compliance_score}%` : "Score N/A"}
+                <Badge variant="outline" className="text-muted-foreground text-sm font-bold">
+                  {executiveSummary ? `Score ${scoreView(executiveSummary.overall_compliance_score).label}` : "Score N/A"}
                 </Badge>
               </div>
               <CardDescription className="text-xs">
-                Continuous AI assessment active across Commercial B2B Contracts, Field Fleet Safety, Statutory Finance, POPIA Consent, and RICA Verification.
+                Readiness and score are shown only when the service has assessed them. Pillars without data are not scored.
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -1405,7 +1564,7 @@ export default function ComplianceModule() {
                 </div>
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">ICASA Regulatory Breaches</p>
-                  <p className="text-lg font-bold text-emerald-400">{na(executiveSummary?.icasa_regulatory_alerts_count, " Breaches")}</p>
+                  <p className="text-lg font-bold text-foreground">{na(executiveSummary?.icasa_regulatory_alerts_count, " Breaches")}</p>
                 </div>
                 <div className="rounded-lg bg-background/60 p-2.5 border border-border/40">
                   <p className="text-[11px] text-muted-foreground">Statutory Standing</p>
@@ -1419,7 +1578,7 @@ export default function ComplianceModule() {
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm">Autonomous Regulatory & Statutory Action Items</CardTitle>
-              <CardDescription className="text-xs">AI-synthesized statutory risk mitigation roadmap based on live telemetry.</CardDescription>
+              <CardDescription className="text-xs">Action items derived from the records the service holds.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
@@ -1443,15 +1602,20 @@ export default function ComplianceModule() {
                     </div>
                   </div>
                 ))}
+                {(executiveSummary?.alerts ?? []).length === 0 && (
+                  <EmptyState icon={<CheckCircle className="h-8 w-8" />} message="No action items right now" />
+                )}
               </div>
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* REGULATORY TAB                                                   */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="regulatory" className="space-y-4">
+          <SectionGate state={sections.regulatory} onRetry={() => loadSection("regulatory")}>
           <SectionHeader
             icon={<Landmark className="h-5 w-5" />}
             title="Regulatory Compliance"
@@ -1534,13 +1698,13 @@ export default function ComplianceModule() {
                           ].map((e) => (
                             <div key={e.label} className="p-1.5 rounded bg-muted/30">
                               <p className="text-[10px] text-muted-foreground">{e.label}</p>
-                              <p className="text-xs font-medium">{e.val}</p>
+                              <p className="text-xs font-medium">{na(e.val)}</p>
                             </div>
                           ))}
                         </div>
                         <div className="mt-2 flex items-center justify-between">
                           <span className="text-xs text-muted-foreground">
-                            Score: {sc.overall_score}/118
+                            Score: {typeof sc.overall_score === "number" ? `${sc.overall_score}/118` : "Not assessed"}
                           </span>
                           {sc.is_verified && (
                             <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px]">
@@ -1580,12 +1744,14 @@ export default function ComplianceModule() {
               </CardContent>
             </Card>
           </div>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* HR OPS TAB                                                       */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="hr" className="space-y-4">
+          <SectionGate state={sections.hr} onRetry={() => loadSection("hr")}>
           <SectionHeader
             icon={<Users className="h-5 w-5" />}
             title="HR Operations"
@@ -1685,12 +1851,14 @@ export default function ComplianceModule() {
               </CardContent>
             </Card>
           </div>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* RISK TAB                                                         */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="risk" className="space-y-4">
+          <SectionGate state={sections.risk} onRetry={() => loadSection("risk")}>
           <SectionHeader
             icon={<ShieldAlert className="h-5 w-5" />}
             title="Risk & Compliance"
@@ -1780,16 +1948,18 @@ export default function ComplianceModule() {
               )}
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* OPERATIONS TAB                                                   */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="operations" className="space-y-4">
+          <SectionGate state={sections.operations} onRetry={() => loadSection("operations")}>
           <SectionHeader
             icon={<Settings className="h-5 w-5" />}
             title="Operations"
-            subtitle="DR/BCP, Compliance Scores, e-Services, Documents"
+            subtitle="DR/BCP, compliance scores, e-Services records, documents"
           />
 
           {/* Document Upload Zone */}
@@ -1845,6 +2015,31 @@ export default function ComplianceModule() {
             </Card>
           </div>
 
+          {/* Documents */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                <FileText className="h-4 w-4 text-blue-400" /> Documents
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {documents.length === 0 ? (
+                <EmptyState icon={<FileText className="h-8 w-8" />} message="No documents yet. Upload one above." />
+              ) : (
+                <div className="space-y-2">
+                  {documents.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between p-2 rounded-lg bg-muted/30">
+                      <div className="min-w-0">
+                        <p className="text-sm truncate">{d.title}</p>
+                        <p className="text-xs text-muted-foreground">{d.document_type}{d.created_at ? ` · ${d.created_at.slice(0, 10)}` : ""}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Compliance Scores Table */}
           <Card>
             <CardHeader className="pb-2">
@@ -1861,7 +2056,9 @@ export default function ComplianceModule() {
                     <div key={s.id} className="flex flex-col items-center p-3 rounded-lg border border-border/50">
                       <ScoreRing score={s.score} size={56} />
                       <p className="text-[10px] text-muted-foreground mt-1 text-center">{s.category.replace(/_/g, " ")}</p>
-                      <StatusBadge status={s.status} />
+                      {scoreView(s.score).assessed ? <StatusBadge status={s.status} /> : (
+                        <Badge variant="outline" className="border-gray-500/40 text-gray-400">not assessed</Badge>
+                      )}
                       {s.critical_issues > 0 && (
                         <p className="text-[10px] text-red-400 mt-0.5">{s.critical_issues} critical</p>
                       )}
@@ -1871,20 +2068,30 @@ export default function ComplianceModule() {
               )}
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
 
         {/* ════════════════════════════════════════════════════════════════ */}
         {/* FUNDING TAB                                                      */}
         {/* ════════════════════════════════════════════════════════════════ */}
         <TabsContent value="funding" className="space-y-4">
+          <SectionGate state={sections.funding} onRetry={() => loadSection("funding")}>
           <SectionHeader
             icon={<Coins className="h-5 w-5" />}
             title="Funding Opportunities"
             subtitle="Matched by compliance score and BBBEE level"
-            action={<Button size="sm" onClick={() => matchFundingByScore(overview?.overall_score ?? 0)}>
+            action={<Button
+              size="sm"
+              disabled={typeof overview?.overall_score !== "number"}
+              title={typeof overview?.overall_score !== "number" ? "Compliance score is not assessed yet" : undefined}
+              onClick={handleMatchFunding}
+            >
               <Search className="h-4 w-4 mr-1" /> Match by Score
             </Button>}
           />
+          {fundingError && (
+            <div role="alert" className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-400">{fundingError}</div>
+          )}
 
           <Card>
             <CardHeader className="pb-2">
@@ -1928,8 +2135,58 @@ export default function ComplianceModule() {
               )}
             </CardContent>
           </Card>
+          </SectionGate>
         </TabsContent>
       </Tabs>
+
+      {/* ── New contract modal ─────────────────────────────────────── */}
+      {contractModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+          <Card className="w-full max-w-lg border-primary/30 shadow-2xl bg-card">
+            <CardHeader className="pb-3 border-b border-border/50">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">New contract</CardTitle>
+                <Button size="sm" variant="ghost" onClick={() => setContractModalOpen(false)}>✕</Button>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <form onSubmit={handleCreateContract} className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-foreground">Title *</label>
+                  <Input required value={contractForm.title} onChange={(e) => setContractForm({ ...contractForm, title: e.target.value })} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-foreground">Counterparty *</label>
+                  <Input required value={contractForm.counterparty_name} onChange={(e) => setContractForm({ ...contractForm, counterparty_name: e.target.value })} />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Type</label>
+                    <Input value={contractForm.contract_type} onChange={(e) => setContractForm({ ...contractForm, contract_type: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Value (ZAR)</label>
+                    <Input type="number" min="0" step="0.01" value={contractForm.value_zar} onChange={(e) => setContractForm({ ...contractForm, value_zar: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Effective date</label>
+                    <Input type="date" value={contractForm.effective_date} onChange={(e) => setContractForm({ ...contractForm, effective_date: e.target.value })} />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-foreground">Expiry date</label>
+                    <Input type="date" value={contractForm.expiry_date} onChange={(e) => setContractForm({ ...contractForm, expiry_date: e.target.value })} />
+                  </div>
+                </div>
+                {contractError && <p role="alert" className="text-xs text-red-400">{contractError}</p>}
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setContractModalOpen(false)}>Cancel</Button>
+                  <Button type="submit" size="sm" disabled={contractSaving}>{contractSaving ? "Saving…" : "Create contract"}</Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* ── MODAL 1: FICA Customer Vetting Modal ─────────────────── */}
       {ficaModalOpen && (
@@ -1949,16 +2206,18 @@ export default function ComplianceModule() {
             </CardHeader>
             <CardContent className="pt-4 space-y-4">
               {ficaResult ? (
-                <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 space-y-3">
-                  <div className="flex items-center gap-2 text-emerald-400 font-semibold text-sm">
-                    <CheckCircle className="h-5 w-5" />
-                    FICA Clearance Approved: {ficaResult.company_name}
+                <div className="p-4 rounded-lg bg-secondary/30 border border-border space-y-3">
+                  <div className="flex items-center gap-2 text-foreground font-semibold text-sm">
+                    <ShieldCheck className="h-5 w-5" />
+                    FICA check result: {ficaResult.company_name}
                   </div>
                   <div className="text-xs space-y-1 text-muted-foreground font-mono">
                     <p>Certificate ID: <strong className="text-foreground">{ficaResult.fica_certificate_id}</strong></p>
                     <p>CIPC Reg Number: <strong className="text-foreground">{ficaResult.registration_number}</strong></p>
-                    <p>Status: <strong className="text-emerald-400">{ficaResult.verification_status}</strong></p>
-                    <p>AML Sanctions Check: <strong className="text-emerald-400">PASSED (CLEARED)</strong></p>
+                    <p>Status: <strong className="text-foreground">{ficaResult.verification_status}</strong></p>
+                    <p>Director validated: <strong className="text-foreground">{ficaResult.director_validated ? "Yes" : "No"}</strong></p>
+                    <p>CIPC registered: <strong className="text-foreground">{ficaResult.cipc_registered ? "Yes" : "No"}</strong></p>
+                    <p>AML sanctions screening: <strong className={ficaResult.aml_sanctions_clear ? "text-emerald-400" : "text-red-400"}>{ficaResult.aml_sanctions_clear ? "Clear" : "Not clear"}</strong></p>
                     <p>Timestamp: {ficaResult.timestamp}</p>
                   </div>
                   <div className="pt-2 flex justify-end">
@@ -2100,7 +2359,7 @@ export default function ComplianceModule() {
                     <div className="space-y-1">
                       <label className="text-xs font-medium text-foreground">Employee Involved</label>
                       <Input
-                        placeholder="e.g. Musa Sithole"
+                        placeholder="Full name"
                         value={incidentForm.employee_involved || ""}
                         onChange={(e) => setIncidentForm({ ...incidentForm, employee_involved: e.target.value })}
                       />

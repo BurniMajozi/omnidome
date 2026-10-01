@@ -3,6 +3,7 @@ import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
+import { readBodyLimited, isNullBodyStatus } from "@/lib/proxy-body"
 
 const COMPLIANCE_SERVICE_URL =
   process.env.COMPLIANCE_SERVICE_URL || "http://compliance:8019"
@@ -40,17 +41,25 @@ async function proxy(
 
     const init: RequestInit = { method, headers, cache: "no-store" }
     if (method !== "GET" && method !== "HEAD") {
-      init.body = await req.text()
-      headers["Content-Type"] = req.headers.get("content-type") || "application/json"
+      // Raw bytes + the ORIGINAL Content-Type (multipart boundary included);
+      // req.text() would corrupt binary uploads. Content-Length is recomputed
+      // by fetch from the exact bytes. Oversize bodies are rejected with 413.
+      const read = await readBodyLimited(req)
+      if (!read.ok) return NextResponse.json({ error: read.error }, { status: read.status })
+      if (read.body) init.body = read.body as unknown as BodyInit
+      if (read.contentType) headers["Content-Type"] = read.contentType
+      else if (read.body) headers["Content-Type"] = "application/octet-stream"
     }
 
     const res = await signedFetch(url, init)
-    const contentType = res.headers.get("content-type") || ""
-    const body = contentType.includes("application/json") ? await res.json() : await res.text()
-
-    return contentType.includes("application/json")
-      ? NextResponse.json(body, { status: res.status })
-      : new NextResponse(body, { status: res.status })
+    if (isNullBodyStatus(res.status)) return new NextResponse(null, { status: res.status })
+    const out = new Headers()
+    for (const h of ["content-type", "content-disposition"]) {
+      const v = res.headers.get(h)
+      if (v) out.set(h, v)
+    }
+    // Pass bytes through untouched (JSON, text and file downloads alike).
+    return new NextResponse(await res.arrayBuffer(), { status: res.status, headers: out })
   } catch (err) {
     console.error("Compliance service proxy error:", err)
     return NextResponse.json({ error: "Compliance service unavailable" }, { status: 503 })
