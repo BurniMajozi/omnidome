@@ -62,7 +62,8 @@ function describeFailure(status: number, detail: unknown, email: string | null):
   if (status === 401) {
     return { title: "Please sign in again", message: "Your session could not be verified. Sign in and reopen this link." }
   }
-  return { title: "Something went wrong", message: text || `The server returned an error (${status}). Try again shortly.` }
+  // Never show raw 5xx bodies; 4xx server text (e.g. the generic conflict message) is shown verbatim.
+  return { title: "Something went wrong", message: status < 500 && text ? text : `The server returned an error (${status}). Try again shortly.` }
 }
 
 export default function AcceptInvitePage() {

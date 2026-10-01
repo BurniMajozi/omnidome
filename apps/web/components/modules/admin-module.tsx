@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   Activity,
@@ -18,7 +18,6 @@ import {
   XCircle,
   Bot,
   Workflow,
-  ArrowRight,
   ThumbsUp,
   ThumbsDown,
   UserPlus,
@@ -26,22 +25,19 @@ import {
   Trash2,
   Edit3,
   ExternalLink,
-  Lock,
   Settings2,
-  Sparkles,
-  Check,
   CheckSquare,
   Square,
   AlertCircle,
   Info,
-  X,
-  CreditCard,
+  Lock,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { PageHeader } from "@/components/ui/page-header"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { NotConnected, StatValue } from "@/components/ui/not-connected"
 import {
   Table,
   TableBody,
@@ -65,8 +61,6 @@ import {
   listIntentMandates,
   listPaymentMandates,
   listAgentActions,
-  createUCPSession,
-  createIntentMandate,
   type UCPCheckoutSession,
   type IntentMandate,
   type PaymentMandate,
@@ -74,6 +68,9 @@ import {
 } from "@/lib/orchestrator-api"
 import {
   adminApi,
+  adminErrorMessage,
+  invalidateAdminCache,
+  type AdminRole,
   type AdminUser,
   type AuditLogEntry,
   type CommissionTier,
@@ -84,74 +81,37 @@ import {
   type Tenant,
   type Whoami,
 } from "@/lib/admin-api"
+import {
+  adminVisibility,
+  canRequestSection,
+  deniedState,
+  isSystemRole,
+  loadableFromError,
+  readyData,
+  requiredRoleLabel,
+  validateTier,
+  type AdminSection,
+} from "@/lib/admin-state"
+import type { Loadable } from "@/lib/service-state"
 import { CreateTenantCard, SeatsBillingTab, TeamTab, TenantSeatControls } from "@/components/modules/admin-team"
 import { cn } from "@/lib/utils"
 
-interface RoleDefinition {
-  id: string
-  name: string
-  description: string
-  badge: string
-  color: string
-  permissions: string[]
-}
-
-const AVAILABLE_ROLES: RoleDefinition[] = [
-  {
-    id: "platform_admin",
-    name: "Platform Administrator",
-    description: "Master administrative control across all organizations, autonomous agents, and system protocols.",
-    badge: "Superadmin",
-    color: "cyan",
-    permissions: ["platform.admin", "org.admin", "org.manage", "module.manage", "billing.manage", "agent.manage"],
-  },
-  {
-    id: "org_admin",
-    name: "Organization Admin",
-    description: "Full management of tenant users, teams, workflows, and module entitlements.",
-    badge: "Admin",
-    color: "purple",
-    permissions: ["org.admin", "org.manage", "module.manage", "user.manage"],
-  },
-  {
-    id: "billing_admin",
-    name: "Commercial & Billing Admin",
-    description: "Invoicing, commission plans, payment reconciliation, and UCP/AP2 commercial protocols.",
-    badge: "Billing",
-    color: "emerald",
-    permissions: ["billing.manage", "invoices.read", "invoices.write", "commission.manage"],
-  },
-  {
-    id: "support_specialist",
-    name: "Support Specialist",
-    description: "Customer 360 diagnosis, ticket automation, and SupportBot diagnostic runs.",
-    badge: "Support",
-    color: "blue",
-    permissions: ["support.read", "support.write", "customer360.read", "agent.invoke"],
-  },
-  {
-    id: "sales_rep",
-    name: "Sales & Retention Executive",
-    description: "Lead management, ChurnGuard retention workflows, and contract provisioning.",
-    badge: "Sales",
-    color: "amber",
-    permissions: ["sales.read", "sales.write", "retention.read", "leads.manage"],
-  },
-  {
-    id: "compliance_auditor",
-    name: "Security & Compliance Auditor",
-    description: "Read-only access to immutable audit trails, agent action histories, and transaction logs.",
-    badge: "Auditor",
-    color: "rose",
-    permissions: ["audit.read", "system.read"],
-  },
-]
+const LOADING: Loadable<never> = { state: "loading" }
 
 const fmtDate = (value?: string) => {
   if (!value) return "-"
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return "-"
   return date.toLocaleString()
+}
+
+/** Run `fn` and store the outcome as a Loadable. Never swallows: failures become a real state. */
+async function runInto<T>(setter: (l: Loadable<T>) => void, fn: () => Promise<T>): Promise<void> {
+  try {
+    setter({ state: "ready", data: await fn() })
+  } catch (e) {
+    setter(loadableFromError<T>(e, adminErrorMessage))
+  }
 }
 
 function StatusBadge({ active, label }: { active?: boolean; label?: string }) {
@@ -173,237 +133,433 @@ function DataRow({ label, value }: { label: string; value: string | number }) {
   )
 }
 
+/** Non-ready section state: loading skeleton, Service not running, Error + Retry, Not permitted (naming the role). */
+function SectionState({
+  state,
+  service,
+  section,
+  onRetry,
+}: {
+  state: Loadable<unknown>
+  service: string
+  section: AdminSection
+  onRetry?: () => void
+}) {
+  if (state.state === "ready") return null
+  return (
+    <div className="space-y-1.5">
+      <NotConnected loadable={state} service={service} onRetry={state.state === "denied" ? undefined : onRetry} />
+      {state.state === "denied" && (
+        <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <Lock className="h-3 w-3" /> Requires the {requiredRoleLabel(section)} role.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** Small confirm dialog for destructive actions. */
+function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel,
+  busy,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  open: boolean
+  title: string
+  description: string
+  confirmLabel: string
+  busy: boolean
+  error?: string | null
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        {error && (
+          <div role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={onConfirm} disabled={busy}>
+            {busy ? "Working..." : confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const LAZY_SECTIONS = { audit: "audit", commission: "commission", protocols: "protocols", users: "users" } as const
+
 export function AdminModule() {
   const router = useRouter()
-  const [tenants, setTenants] = useState<Tenant[]>([])
-  const [modules, setModules] = useState<ModuleCatalogItem[]>([])
-  const [tenantModules, setTenantModules] = useState<ModuleCatalogItem[]>([])
-  const [users, setUsers] = useState<AdminUser[]>([])
-  const [auditLog, setAuditLog] = useState<AuditLogEntry[]>([])
-  const [commissionTiers, setCommissionTiers] = useState<CommissionTier[]>([])
+
+  // Identity (one /api/whoami per mount; roles decide what is requested at all)
+  const [identity, setIdentity] = useState<Whoami | null>(null)
+  const [identityState, setIdentityState] = useState<Loadable<Whoami>>(LOADING)
+
+  // Per-section request state. `loading` -> `ready | unreachable | denied | error`; never an empty fallback.
+  const [tenants, setTenants] = useState<Loadable<Tenant[]>>(LOADING)
+  const [catalog, setCatalog] = useState<Loadable<ModuleCatalogItem[]>>(LOADING)
+  const [tenantModules, setTenantModules] = useState<Loadable<ModuleCatalogItem[]>>(LOADING)
+  const [seatRows, setSeatRows] = useState<Loadable<PlatformSeatRow[]>>(LOADING)
+  const [ownSeats, setOwnSeats] = useState<Loadable<SeatUsage>>(LOADING)
+  const [users, setUsers] = useState<Loadable<AdminUser[]>>(LOADING)
+  const [auditLog, setAuditLog] = useState<Loadable<AuditLogEntry[]>>(LOADING)
+  const [tiers, setTiers] = useState<Loadable<CommissionTier[]>>(LOADING)
+  const [ucpSessions, setUcpSessions] = useState<Loadable<UCPCheckoutSession[]>>(LOADING)
+  const [intentMandates, setIntentMandates] = useState<Loadable<IntentMandate[]>>(LOADING)
+  const [paymentMandates, setPaymentMandates] = useState<Loadable<PaymentMandate[]>>(LOADING)
+  const [agentActions, setAgentActions] = useState<Loadable<AgentActionAuditItem[]>>(LOADING)
+
   const [selectedTenantId, setSelectedTenantId] = useState<string>("")
-  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [successBanner, setSuccessBanner] = useState<string | null>(null)
-  const [identity, setIdentity] = useState<Whoami | null>(null)
-  const [seatRows, setSeatRows] = useState<PlatformSeatRow[]>([])
-  const [ownSeats, setOwnSeats] = useState<SeatUsage | null>(null)
   const [activeTab, setActiveTab] = useState<string | null>(null)
+  const [teamFocusTenant, setTeamFocusTenant] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const [moduleBusy, setModuleBusy] = useState<string | null>(null)
 
-  // Protocols & Mandates
-  const [ucpSessions, setUcpSessions] = useState<UCPCheckoutSession[]>([])
-  const [intentMandates, setIntentMandates] = useState<IntentMandate[]>([])
-  const [paymentMandates, setPaymentMandates] = useState<PaymentMandate[]>([])
-  const [agentActions, setAgentActions] = useState<AgentActionAuditItem[]>([])
   const [auditSubTab, setAuditSubTab] = useState<"agents" | "system">("agents")
   const [agentFilter, setAgentFilter] = useState<string>("all")
 
-  // 1. Invite User Modal
-  const [inviteModalOpen, setInviteModalOpen] = useState(false)
-  const [inviteEmail, setInviteEmail] = useState("")
-  const [inviteName, setInviteName] = useState("")
-  const [inviteTenantId, setInviteTenantId] = useState("")
-  const [inviteRoleId, setInviteRoleId] = useState("org_admin")
-  const [inviteSubmitting, setInviteSubmitting] = useState(false)
-
-  // 2. Role Access Grant Journey Modal
-  const [roleGrantModalOpen, setRoleGrantModalOpen] = useState(false)
+  // Role grant dialog (real roles from GET /roles; ids are the server's)
+  const [roleGrantOpen, setRoleGrantOpen] = useState(false)
   const [roleGrantUser, setRoleGrantUser] = useState<AdminUser | null>(null)
+  const [roleOptions, setRoleOptions] = useState<Loadable<AdminRole[]>>(LOADING)
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
   const [roleSaving, setRoleSaving] = useState(false)
+  const [roleErr, setRoleErr] = useState<string | null>(null)
 
-  // 3. Commission Tier Modal
-  const [commissionModalOpen, setCommissionModalOpen] = useState(false)
+  // Commission tier dialog + delete confirm
+  const [commissionOpen, setCommissionOpen] = useState(false)
   const [editingTier, setEditingTier] = useState<CommissionTier | null>(null)
   const [tierName, setTierName] = useState("")
-  const [tierMinDeals, setTierMinDeals] = useState<number>(0)
+  const [tierMinDeals, setTierMinDeals] = useState<string>("0")
   const [tierMaxDeals, setTierMaxDeals] = useState<string>("")
-  const [tierRate, setTierRate] = useState<string>("5.0")
+  const [tierRate, setTierRate] = useState<string>("")
   const [tierActive, setTierActive] = useState(true)
   const [commissionSaving, setCommissionSaving] = useState(false)
+  const [tierErr, setTierErr] = useState<string | null>(null)
+  const [deleteTier, setDeleteTier] = useState<CommissionTier | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
+  const [deleteErr, setDeleteErr] = useState<string | null>(null)
 
-  // 4. Protocol Controls
-  const [ucpAutoApprove, setUcpAutoApprove] = useState(250)
-  const [ap2DualSignThreshold, setAp2DualSignThreshold] = useState(500)
-  const [simulatingProtocol, setSimulatingProtocol] = useState(false)
+  // Refs: the initial load runs once; tenant switches only reload tenant-scoped data.
+  const booted = useRef(false)
+  const identityRef = useRef<Whoami | null>(null)
+  const selectedTenantRef = useRef("")
+  const tenantSeq = useRef(0)
+  const loadedSections = useRef<Set<string>>(new Set())
 
+  const tenantList = readyData(tenants)
   const selectedTenant = useMemo(
-    () => tenants.find((tenant) => tenant.id === selectedTenantId) || tenants[0],
-    [selectedTenantId, tenants],
+    () => tenantList.find((tenant) => tenant.id === selectedTenantId) || tenantList[0],
+    [selectedTenantId, tenantList],
   )
 
   // UI gating only; services/admin enforces every action. Roles come from the verified edge identity.
-  const actorRoles = identity?.roles ?? []
-  const isPlatformAdmin = actorRoles.includes("platform_admin")
-  const canManageTeam = isPlatformAdmin || actorRoles.includes("owner") || actorRoles.includes("org_admin")
+  const vis = adminVisibility(identity?.roles)
+  const isPlatformAdmin = vis.platform
+  const canManageTeam = vis.tenantAdmin
   const currentTab = activeTab ?? (isPlatformAdmin ? "tenants" : canManageTeam ? "team" : "modules")
 
   const filteredAgentActions = useMemo(() => {
-    if (agentFilter === "all") return agentActions
-    return agentActions.filter((a) => a.agent_type === agentFilter)
+    const items = readyData(agentActions)
+    if (agentFilter === "all") return items
+    return items.filter((a) => a.agent_type === agentFilter)
   }, [agentActions, agentFilter])
 
-  const loadAdminData = useCallback(async () => {
-    setLoading(true)
+  const loadTenantModules = useCallback(async (tenantId: string) => {
+    const seq = ++tenantSeq.current
+    if (!tenantId) {
+      setTenantModules({ state: "ready", data: [] })
+      return
+    }
+    setTenantModules(LOADING)
+    let next: Loadable<ModuleCatalogItem[]>
+    try {
+      next = { state: "ready", data: await adminApi.listTenantModules(tenantId) }
+    } catch (e) {
+      next = loadableFromError<ModuleCatalogItem[]>(e, adminErrorMessage)
+    }
+    if (seq === tenantSeq.current) setTenantModules(next)
+  }, [])
+
+  /** (Re)load one lazily-fetched section. Not requested at all when the role cannot read it. */
+  const loadSection = useCallback((section: keyof typeof LAZY_SECTIONS): Promise<unknown> => {
+    const roles = identityRef.current?.roles
+    if (!canRequestSection(roles, section)) {
+      const d = deniedState()
+      if (section === "users") setUsers(d)
+      if (section === "audit") {
+        setAuditLog(d)
+        setAgentActions(d)
+      }
+      if (section === "commission") setTiers(d)
+      if (section === "protocols") {
+        setUcpSessions(d)
+        setIntentMandates(d)
+        setPaymentMandates(d)
+      }
+      return Promise.resolve()
+    }
+    switch (section) {
+      case "users":
+        setUsers(LOADING)
+        return runInto(setUsers, () => adminApi.listUsers())
+      case "audit":
+        setAuditLog(LOADING)
+        setAgentActions(LOADING)
+        return Promise.all([
+          runInto(setAuditLog, () => adminApi.listAuditLog({ limit: 50 })),
+          runInto(setAgentActions, async () => (await listAgentActions({ limit: 100 })).items ?? []),
+        ])
+      case "commission":
+        setTiers(LOADING)
+        return runInto(setTiers, () => adminApi.listCommissionTiers())
+      case "protocols":
+        setUcpSessions(LOADING)
+        setIntentMandates(LOADING)
+        setPaymentMandates(LOADING)
+        return Promise.all([
+          runInto(setUcpSessions, () => listUCPSessions(20)),
+          runInto(setIntentMandates, () => listIntentMandates(20)),
+          runInto(setPaymentMandates, () => listPaymentMandates(20)),
+        ])
+    }
+  }, [])
+
+  const retrySection = useCallback(
+    (section: keyof typeof LAZY_SECTIONS) => {
+      invalidateAdminCache()
+      void loadSection(section)
+    },
+    [loadSection],
+  )
+
+  /**
+   * Identity first, then only what this role may read. Platform-only lists are never requested for tenant
+   * admins; users load eagerly (KPI), audit/commission/protocols load when their tab is first opened.
+   */
+  const bootstrap = useCallback(async () => {
+    invalidateAdminCache()
+    loadedSections.current.clear()
+    setIdentityState(LOADING)
+    let who: Whoami
+    try {
+      who = await adminApi.whoami()
+    } catch (e) {
+      setIdentityState(loadableFromError<Whoami>(e, adminErrorMessage))
+      return
+    }
+    identityRef.current = who
+    setIdentity(who)
+    setIdentityState({ state: "ready", data: who })
+
+    const v = adminVisibility(who.roles)
+    const own = who.tenant_id || ""
+    const jobs: Promise<unknown>[] = []
+
+    if (v.platform) {
+      setOwnSeats(deniedState())
+      jobs.push(
+        (async () => {
+          try {
+            const list = await adminApi.listTenants()
+            setTenants({ state: "ready", data: list })
+            const keep = selectedTenantRef.current && list.some((t) => t.id === selectedTenantRef.current)
+            const id = keep ? selectedTenantRef.current : list[0]?.id || ""
+            selectedTenantRef.current = id
+            setSelectedTenantId(id)
+            await loadTenantModules(id)
+          } catch (e) {
+            const l = loadableFromError<Tenant[]>(e, adminErrorMessage)
+            setTenants(l)
+            setTenantModules(l as Loadable<ModuleCatalogItem[]>)
+          }
+        })(),
+        runInto(setCatalog, () => adminApi.listModules()),
+        runInto(setSeatRows, async () => (await adminApi.platformSeatUsage()).tenants ?? []),
+      )
+    } else {
+      setCatalog(deniedState())
+      setSeatRows(deniedState())
+      selectedTenantRef.current = own
+      setSelectedTenantId(own)
+      if (v.tenantAdmin && own) {
+        jobs.push(
+          runInto(setTenants, async () => [await adminApi.getTenant(own)]),
+          runInto(setOwnSeats, () => adminApi.getSeats(own)),
+        )
+      } else {
+        setTenants(deniedState())
+        setOwnSeats(deniedState())
+      }
+      jobs.push(loadTenantModules(own))
+    }
+
+    if (v.tenantAdmin) {
+      loadedSections.current.add("users")
+      jobs.push(loadSection("users"))
+    } else {
+      setUsers(deniedState())
+    }
+    await Promise.all(jobs)
+  }, [loadTenantModules, loadSection])
+
+  // Exactly one initial load (ref guard survives StrictMode's double effect).
+  useEffect(() => {
+    if (booted.current) return
+    booted.current = true
+    void bootstrap()
+  }, [bootstrap])
+
+  // Lazy tabs: fetched the first time they are shown (and never for roles that cannot read them).
+  useEffect(() => {
+    if (!identity) return
+    if (currentTab === "audit" || currentTab === "commission" || currentTab === "protocols") {
+      if (loadedSections.current.has(currentTab)) return
+      loadedSections.current.add(currentTab)
+      void loadSection(currentTab)
+    }
+  }, [currentTab, identity, loadSection])
+
+  const refreshAll = async () => {
+    setRefreshing(true)
     setError(null)
     try {
-      // Identity first: platform-only endpoints (/tenants, /modules, /platform/seat-usage) are never
-      // called for tenant admins (they 403 by design); they get their own tenant's scoped reads.
-      const who = await adminApi.whoami().catch(() => null)
-      const platform = !!who?.roles?.includes("platform_admin")
-      const ownTenantId = who?.tenant_id || ""
-      const [tenantData, moduleData, seatData, userData, auditData, tierData, ucpData, mandateData, paymentData, actionsData] = await Promise.all([
-        platform
-          ? adminApi.listTenants().catch(() => [] as Tenant[])
-          : ownTenantId
-            ? adminApi.getTenant(ownTenantId).then((t) => [t]).catch(() => [] as Tenant[])
-            : Promise.resolve([] as Tenant[]),
-        platform ? adminApi.listModules().catch(() => [] as ModuleCatalogItem[]) : Promise.resolve([] as ModuleCatalogItem[]),
-        platform
-          ? adminApi.platformSeatUsage().catch(() => null)
-          : ownTenantId
-            ? adminApi.getSeats(ownTenantId).catch(() => null)
-            : Promise.resolve(null),
-        adminApi.listUsers().catch(() => []),
-        adminApi.listAuditLog({ limit: 50 }).catch(() => []),
-        adminApi.listCommissionTiers().catch(() => []),
-        listUCPSessions(20).catch(() => []),
-        listIntentMandates(20).catch(() => []),
-        listPaymentMandates(20).catch(() => []),
-        listAgentActions({ limit: 100 }).catch(() => ({ items: [] })),
-      ])
-      setIdentity(who)
-      if (platform) {
-        setSeatRows((seatData as { tenants?: PlatformSeatRow[] } | null)?.tenants ?? [])
-        setOwnSeats(null)
-      } else {
-        setSeatRows([])
-        setOwnSeats((seatData as SeatUsage | null) ?? null)
-      }
-      setTenants(tenantData)
-      setModules(moduleData)
-      setUsers(userData)
-      setAuditLog(auditData)
-      setCommissionTiers(tierData)
-      setUcpSessions(ucpData)
-      setIntentMandates(mandateData)
-      setPaymentMandates(paymentData)
-      setAgentActions(actionsData.items || [])
-      const tenantId = platform ? selectedTenantId || tenantData[0]?.id || "" : ownTenantId
-      setSelectedTenantId(tenantId)
-      if (tenantId) {
-        setTenantModules(await adminApi.listTenantModules(tenantId).catch(() => [] as ModuleCatalogItem[]))
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load admin data")
+      await bootstrap()
+      // Lazy sections already shown reload too.
+      const shown = ["audit", "commission", "protocols"].filter((s) => s === currentTab)
+      await Promise.all(shown.map((s) => (loadedSections.current.add(s), loadSection(s as keyof typeof LAZY_SECTIONS))))
     } finally {
-      setLoading(false)
+      setRefreshing(false)
     }
-  }, [selectedTenantId])
+  }
 
-  useEffect(() => {
-    void loadAdminData()
-  }, [loadAdminData])
-
-  const refreshTenantModules = async (tenantId: string) => {
+  const selectTenant = (tenantId: string) => {
+    selectedTenantRef.current = tenantId
     setSelectedTenantId(tenantId)
-    setTenantModules(await adminApi.listTenantModules(tenantId))
+    void loadTenantModules(tenantId)
+  }
+
+  const flash = (message: string) => {
+    setSuccessBanner(message)
+    setTimeout(() => setSuccessBanner(null), 5000)
   }
 
   const toggleTenantModule = async (moduleItem: ModuleCatalogItem) => {
-    if (!selectedTenant || !isPlatformAdmin) return  // module entitlements are platform-admin only (PUT /tenants/{id}/modules)
+    if (!selectedTenant || !isPlatformAdmin || moduleBusy) return // entitlements are platform-admin only
     const moduleName = moduleItem.module_name || moduleItem.key || moduleItem.name
-    await adminApi.updateTenantModules(selectedTenant.id, [
-      { name: moduleName, enabled: !moduleItem.enabled, config: moduleItem.config },
-    ])
-    await refreshTenantModules(selectedTenant.id)
-  }
-
-  // ── Invite User Handler ──
-  const openInviteModal = (presetTenantId?: string) => {
-    setInviteTenantId(presetTenantId || selectedTenant?.id || tenants[0]?.id || "")
-    setInviteEmail("")
-    setInviteName("")
-    setInviteRoleId("org_admin")
-    setInviteModalOpen(true)
-  }
-
-  const handleSendInvite = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!inviteEmail.trim()) return
-    setInviteSubmitting(true)
+    setModuleBusy(moduleName)
+    setError(null)
     try {
-      await adminApi.inviteUser({
-        email: inviteEmail.trim(),
-        name: inviteName.trim() || undefined,
-        is_active: true,
-      })
-      setSuccessBanner(`Invitation sent to ${inviteEmail}. User registered with ${inviteRoleId.replace("_", " ")} access.`)
-      setTimeout(() => setSuccessBanner(null), 5000)
-      setInviteModalOpen(false)
-      await loadAdminData()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to invite user")
+      await adminApi.updateTenantModules(selectedTenant.id, [
+        { name: moduleName, enabled: !moduleItem.enabled, config: moduleItem.config },
+      ])
+      await loadTenantModules(selectedTenant.id)
+    } catch (e) {
+      setError(adminErrorMessage(e))
     } finally {
-      setInviteSubmitting(false)
+      setModuleBusy(null)
     }
   }
 
-  // ── Role Access Grant Journey Handler ──
+  /** Invitations go through Team -> Invite (seat-aware, role-ranked, hashed token); the direct create-user path is gone. */
+  const goInvite = (tenantId?: string) => {
+    setTeamFocusTenant(tenantId ?? null)
+    setActiveTab("team")
+  }
+
+  // ── Role grant ──
   const openRoleGrant = (user: AdminUser) => {
     setRoleGrantUser(user)
-    setSelectedRoleIds(["org_admin"])
-    setRoleGrantModalOpen(true)
+    setSelectedRoleIds([])
+    setRoleErr(null)
+    setRoleGrantOpen(true)
+    setRoleOptions(LOADING)
+    void runInto(setRoleOptions, () => adminApi.listRoles())
   }
 
   const toggleRoleSelection = (roleId: string) => {
-    setSelectedRoleIds((prev) =>
-      prev.includes(roleId) ? prev.filter((r) => r !== roleId) : [...prev, roleId],
-    )
+    setSelectedRoleIds((prev) => (prev.includes(roleId) ? prev.filter((r) => r !== roleId) : [...prev, roleId]))
   }
 
   const handleSaveRoleGrant = async () => {
-    if (!roleGrantUser) return
+    if (!roleGrantUser || roleSaving || selectedRoleIds.length === 0) return
     setRoleSaving(true)
-    try {
-      for (const rId of selectedRoleIds) {
-        await adminApi.assignUserRole(roleGrantUser.id, rId).catch(() => {})
+    setRoleErr(null)
+    const roles = readyData(roleOptions)
+    const failures: string[] = []
+    const granted: string[] = []
+    for (const rId of selectedRoleIds) {
+      const name = roles.find((r) => r.id === rId)?.name ?? rId
+      try {
+        await adminApi.assignUserRole(roleGrantUser.id, rId)
+        granted.push(name)
+      } catch (e) {
+        failures.push(`${name}: ${adminErrorMessage(e)}`)
       }
-      setSuccessBanner(`Updated role assignments for ${roleGrantUser.name || roleGrantUser.email}: [${selectedRoleIds.join(", ")}].`)
-      setTimeout(() => setSuccessBanner(null), 5000)
-      setRoleGrantModalOpen(false)
-      await loadAdminData()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update user roles")
-    } finally {
-      setRoleSaving(false)
     }
+    setRoleSaving(false)
+    if (failures.length) {
+      setRoleErr(failures.join(" | "))
+      setSelectedRoleIds((prev) => prev.filter((id) => !granted.includes(roles.find((r) => r.id === id)?.name ?? id)))
+      if (granted.length) flash(`Granted ${granted.join(", ")} to ${roleGrantUser.name || roleGrantUser.email}. Some roles failed, see the dialog.`)
+      return
+    }
+    flash(`Granted ${granted.join(", ")} to ${roleGrantUser.name || roleGrantUser.email}.`)
+    setRoleGrantOpen(false)
   }
 
-  // ── Commission Tier Handlers ──
+  // ── Commission tiers ──
   const openCommissionModal = (tier?: CommissionTier) => {
+    setTierErr(null)
     if (tier) {
       setEditingTier(tier)
       setTierName(tier.tier_name)
-      setTierMinDeals(tier.min_deals)
+      setTierMinDeals(String(tier.min_deals))
       setTierMaxDeals(tier.max_deals !== null ? String(tier.max_deals) : "")
       setTierRate(String(tier.rate_percent))
       setTierActive(tier.is_active)
     } else {
       setEditingTier(null)
       setTierName("")
-      setTierMinDeals(0)
+      setTierMinDeals("0")
       setTierMaxDeals("")
-      setTierRate("5.0")
+      setTierRate("")
       setTierActive(true)
     }
-    setCommissionModalOpen(true)
+    setCommissionOpen(true)
   }
+
+  const refreshTiers = () => runInto(setTiers, () => adminApi.listCommissionTiers())
 
   const handleSaveCommissionTier = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!tierName.trim()) return
+    if (commissionSaving) return
+    const invalid = validateTier({ name: tierName, minDeals: tierMinDeals, maxDeals: tierMaxDeals, rate: tierRate })
+    if (invalid) {
+      setTierErr(invalid)
+      return
+    }
     setCommissionSaving(true)
+    setTierErr(null)
     try {
       const payload: CommissionTierCreate = {
         tier_name: tierName.trim(),
@@ -414,83 +570,39 @@ export function AdminModule() {
       }
       if (editingTier) {
         await adminApi.updateCommissionTier(editingTier.id, payload)
-        setSuccessBanner(`Commission tier "${tierName}" updated successfully.`)
+        flash(`Commission tier "${tierName.trim()}" updated.`)
       } else {
         await adminApi.createCommissionTier(payload)
-        setSuccessBanner(`Commission tier "${tierName}" created successfully.`)
+        flash(`Commission tier "${tierName.trim()}" created.`)
       }
-      setTimeout(() => setSuccessBanner(null), 5000)
-      setCommissionModalOpen(false)
-      const freshTiers = await adminApi.listCommissionTiers()
-      setCommissionTiers(freshTiers)
+      setCommissionOpen(false)
+      await refreshTiers()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save commission tier")
+      setTierErr(adminErrorMessage(err))
     } finally {
       setCommissionSaving(false)
     }
   }
 
-  const handleDeleteCommissionTier = async (tierId: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete tier "${name}"?`)) return
+  const handleDeleteCommissionTier = async () => {
+    if (!deleteTier || deleteBusy) return
+    setDeleteBusy(true)
+    setDeleteErr(null)
     try {
-      await adminApi.deleteCommissionTier(tierId)
-      setSuccessBanner(`Commission tier "${name}" deleted.`)
-      setTimeout(() => setSuccessBanner(null), 5000)
-      const freshTiers = await adminApi.listCommissionTiers()
-      setCommissionTiers(freshTiers)
+      await adminApi.deleteCommissionTier(deleteTier.id)
+      flash(`Commission tier "${deleteTier.tier_name}" deleted.`)
+      setDeleteTier(null)
+      await refreshTiers()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete tier")
-    }
-  }
-
-  // ── Protocol Simulation Handlers ──
-  const handleSimulateUCP = async () => {
-    setSimulatingProtocol(true)
-    try {
-      await createUCPSession({
-        merchant: "OmniDome Store",
-        purpose: "Broadband Fiber 100Mbps Provisioning",
-        line_items: [
-          { item_id: "pkg-100", label: "Fibre Uncapped 100Mbps", quantity: 1, unit_amount: 799, currency: "ZAR" },
-          { item_id: "inst-01", label: "Standard Installation & Router", quantity: 1, unit_amount: 0, currency: "ZAR" },
-        ],
-        metadata: { simulated_by: "Admin Console", timestamp: new Date().toISOString() },
-      })
-      setSuccessBanner("Simulated UCP Checkout Session created and dispatched to the ledger.")
-      setTimeout(() => setSuccessBanner(null), 5000)
-      const freshSessions = await listUCPSessions(20)
-      setUcpSessions(freshSessions)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to simulate UCP session")
+      setDeleteErr(adminErrorMessage(err))
     } finally {
-      setSimulatingProtocol(false)
+      setDeleteBusy(false)
     }
   }
 
-  const handleSimulateAP2 = async () => {
-    setSimulatingProtocol(true)
-    try {
-      await createIntentMandate({
-        natural_language_description: "Authorize ProvisionBot to bill recurring customer upgrades up to R1,500/mo.",
-        merchants: ["ProvisionBot", "DomeBot"],
-        max_amount: 1500,
-        currency: "ZAR",
-        expires_in_minutes: 60,
-        requires_user_confirmation: false,
-      })
-      setSuccessBanner("Simulated AP2 Intent Mandate issued and registered with cryptographic authorization.")
-      setTimeout(() => setSuccessBanner(null), 5000)
-      const freshMandates = await listIntentMandates(20)
-      setIntentMandates(freshMandates)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to simulate AP2 mandate")
-    } finally {
-      setSimulatingProtocol(false)
-    }
-  }
-
-  const enabledModules = tenantModules.filter((item) => item.enabled).length
-  const activeTenants = tenants.filter((tenant) => tenant.active || tenant.status === "ACTIVE").length
+  const modulesList = readyData(tenantModules)
+  const enabledModules = modulesList.filter((item) => item.enabled).length
+  const activeTenants = tenantList.filter((tenant) => tenant.active || tenant.status === "ACTIVE").length
 
   return (
     <div className="space-y-6">
@@ -518,12 +630,14 @@ export function AdminModule() {
               <Workflow className="mr-1.5 h-3.5 w-3.5 text-purple-400" />
               Workflows
             </Button>
-            <Button variant="default" size="sm" onClick={() => openInviteModal()} className="gap-1.5 bg-primary text-primary-foreground">
-              <UserPlus className="h-3.5 w-3.5" />
-              Invite Member
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => void loadAdminData()} disabled={loading}>
-              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
+            {canManageTeam && (
+              <Button variant="default" size="sm" onClick={() => goInvite()} className="gap-1.5 bg-primary text-primary-foreground">
+                <UserPlus className="h-3.5 w-3.5" />
+                Invite Member
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={refreshing || identityState.state === "loading"}>
+              <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", (refreshing || identityState.state === "loading") && "animate-spin")} />
               Refresh
             </Button>
           </div>
@@ -531,7 +645,7 @@ export function AdminModule() {
       />
 
       {error && (
-        <Card className="border-red-500/30 bg-red-500/10">
+        <Card role="alert" className="border-red-500/30 bg-red-500/10">
           <CardContent className="flex items-center justify-between p-4 text-sm text-red-400">
             <div className="flex items-center gap-2">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -545,7 +659,7 @@ export function AdminModule() {
       )}
 
       {successBanner && (
-        <Card className="border-emerald-500/30 bg-emerald-500/10">
+        <Card role="status" className="border-emerald-500/30 bg-emerald-500/10">
           <CardContent className="flex items-center justify-between p-4 text-sm text-emerald-400">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -558,343 +672,403 @@ export function AdminModule() {
         </Card>
       )}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {isPlatformAdmin ? (
-          <>
+      {identityState.state !== "ready" ? (
+        <NotConnected loadable={identityState} service="Admin" onRetry={() => void bootstrap()} />
+      ) : (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {isPlatformAdmin ? (
+              <>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Tenants</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={tenants}>{(d) => d.length}</StatValue>
+                      </p>
+                    </div>
+                    <Building2 className="h-5 w-5 text-cyan-400" />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Active Tenants</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={tenants}>{() => activeTenants}</StatValue>
+                      </p>
+                    </div>
+                    <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Catalog Modules</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={catalog}>{(d) => d.length}</StatValue>
+                      </p>
+                    </div>
+                    <SlidersHorizontal className="h-5 w-5 text-amber-400" />
+                  </CardContent>
+                </Card>
+              </>
+            ) : (
+              <>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Modules Enabled</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={tenantModules}>{() => enabledModules}</StatValue>
+                      </p>
+                    </div>
+                    <SlidersHorizontal className="h-5 w-5 text-amber-400" />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Modules Available</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={tenantModules}>{(d) => d.length}</StatValue>
+                      </p>
+                    </div>
+                    <Building2 className="h-5 w-5 text-cyan-400" />
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="flex items-center justify-between p-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">Seats Used</p>
+                      <p className="text-2xl font-semibold">
+                        <StatValue loadable={ownSeats}>{(s) => `${s.seats_used} / ${s.seat_limit ?? "unlimited"}`}</StatValue>
+                      </p>
+                    </div>
+                    <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                  </CardContent>
+                </Card>
+              </>
+            )}
             <Card>
               <CardContent className="flex items-center justify-between p-4">
                 <div>
-                  <p className="text-sm text-muted-foreground">Tenants</p>
-                  <p className="text-2xl font-semibold">{tenants.length}</p>
-                </div>
-                <Building2 className="h-5 w-5 text-cyan-400" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="flex items-center justify-between p-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Active Tenants</p>
-                  <p className="text-2xl font-semibold">{activeTenants}</p>
-                </div>
-                <ShieldCheck className="h-5 w-5 text-emerald-400" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="flex items-center justify-between p-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Catalog Modules</p>
-                  <p className="text-2xl font-semibold">{modules.length}</p>
-                </div>
-                <SlidersHorizontal className="h-5 w-5 text-amber-400" />
-              </CardContent>
-            </Card>
-          </>
-        ) : (
-          <>
-            <Card>
-              <CardContent className="flex items-center justify-between p-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Modules Enabled</p>
-                  <p className="text-2xl font-semibold">{enabledModules}</p>
-                </div>
-                <SlidersHorizontal className="h-5 w-5 text-amber-400" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="flex items-center justify-between p-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Modules Available</p>
-                  <p className="text-2xl font-semibold">{tenantModules.length}</p>
-                </div>
-                <Building2 className="h-5 w-5 text-cyan-400" />
-              </CardContent>
-            </Card>
-            <Card>
-              <CardContent className="flex items-center justify-between p-4">
-                <div>
-                  <p className="text-sm text-muted-foreground">Seats Used</p>
+                  <p className="text-sm text-muted-foreground">Users</p>
                   <p className="text-2xl font-semibold">
-                    {ownSeats ? `${ownSeats.seats_used} / ${ownSeats.seat_limit ?? "unlimited"}` : "-"}
+                    <StatValue loadable={users}>{(d) => d.length}</StatValue>
                   </p>
                 </div>
-                <ShieldCheck className="h-5 w-5 text-emerald-400" />
+                <Users className="h-5 w-5 text-violet-400" />
               </CardContent>
             </Card>
-          </>
-        )}
-        <Card>
-          <CardContent className="flex items-center justify-between p-4">
-            <div>
-              <p className="text-sm text-muted-foreground">Users</p>
-              <p className="text-2xl font-semibold">{users.length}</p>
-            </div>
-            <Users className="h-5 w-5 text-violet-400" />
-          </CardContent>
-        </Card>
-      </div>
-
-      <Tabs value={currentTab} onValueChange={setActiveTab} className="space-y-4">
-        <TabsList className="flex w-full justify-start overflow-x-auto">
-          {isPlatformAdmin && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
-          {canManageTeam && <TabsTrigger value="team">Team</TabsTrigger>}
-          {isPlatformAdmin && <TabsTrigger value="seats">Seats &amp; Billing</TabsTrigger>}
-          <TabsTrigger value="modules">Modules</TabsTrigger>
-          <TabsTrigger value="users">Users</TabsTrigger>
-          <TabsTrigger value="audit">Audit</TabsTrigger>
-          <TabsTrigger value="commission">Commission</TabsTrigger>
-          <TabsTrigger value="protocols">Protocols</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="team" className="space-y-4">
-          <TeamTab identity={identity} tenants={tenants} />
-        </TabsContent>
-
-        <TabsContent value="seats" className="space-y-4">
-          <SeatsBillingTab tenants={tenants} />
-        </TabsContent>
-
-        <TabsContent value="tenants" className="space-y-4">
-          <CreateTenantCard onCreated={() => void loadAdminData()} />
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold text-foreground">Registered Organizations</h3>
-              <p className="text-xs text-muted-foreground">Manage organization scopes, domains, and team members</p>
-            </div>
-            <Button size="sm" onClick={() => openInviteModal()} className="gap-1.5">
-              <UserPlus className="h-3.5 w-3.5" />
-              Invite Member to Tenant
-            </Button>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            {tenants.map((tenant) => (
-              <Card key={tenant.id} className="border-border bg-card">
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <CardTitle className="text-base">{tenant.name}</CardTitle>
-                      <p className="text-xs text-muted-foreground font-mono mt-0.5">{tenant.id}</p>
-                    </div>
-                    <StatusBadge active={tenant.active} label={tenant.status} />
-                  </div>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <DataRow label="Domain" value={tenant.domain || tenant.subdomain || "Internal Subdomain"} />
-                  <DataRow label="Tier" value={tenant.tier || "Enterprise"} />
-                  <DataRow label="Org Code" value={tenant.org_code || "OMNI-CORP"} />
-                  <DataRow label="Created" value={fmtDate(tenant.created_at)} />
-                  <TenantSeatControls
-                    tenant={tenant}
-                    usage={seatRows.find((r) => r.tenant_id === tenant.id)}
-                    onChanged={() => void loadAdminData()}
-                  />
+          <Tabs value={currentTab} onValueChange={setActiveTab} className="space-y-4">
+            <TabsList className="flex w-full justify-start overflow-x-auto" aria-label="Administration sections">
+              {isPlatformAdmin && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
+              {canManageTeam && <TabsTrigger value="team">Team</TabsTrigger>}
+              {isPlatformAdmin && <TabsTrigger value="seats">Seats &amp; Billing</TabsTrigger>}
+              <TabsTrigger value="modules">Modules</TabsTrigger>
+              <TabsTrigger value="users">Users</TabsTrigger>
+              <TabsTrigger value="audit">Audit</TabsTrigger>
+              <TabsTrigger value="commission">Commission</TabsTrigger>
+              <TabsTrigger value="protocols">Protocols</TabsTrigger>
+            </TabsList>
 
-                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/60">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs h-8 gap-1.5"
-                      onClick={() => openInviteModal(tenant.id)}
-                    >
-                      <UserPlus className="h-3.5 w-3.5 text-cyan-400" />
-                      Invite Member
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-xs h-8 gap-1.5 text-muted-foreground hover:text-foreground"
-                      onClick={() => {
-                        setSelectedTenantId(tenant.id)
-                        const el = document.querySelector('[data-value="modules"]') as HTMLElement
-                        el?.click()
-                      }}
-                    >
-                      <SlidersHorizontal className="h-3.5 w-3.5" />
-                      Entitlements
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </TabsContent>
+            {canManageTeam && (
+              <TabsContent value="team" className="space-y-4">
+                <TeamTab identity={identity} tenants={tenantList} focusTenantId={teamFocusTenant} />
+              </TabsContent>
+            )}
 
-        <TabsContent value="modules">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <CardTitle className="text-base">Tenant Module Entitlements</CardTitle>
-                  <CardDescription>
-                    {isPlatformAdmin
-                      ? "Grant or revoke functional platform modules per organization"
-                      : "Modules enabled for your organization. Only the platform team can change these."}
-                  </CardDescription>
+            {isPlatformAdmin && (
+              <TabsContent value="seats" className="space-y-4">
+                <SeatsBillingTab tenants={tenantList} />
+              </TabsContent>
+            )}
+
+            {isPlatformAdmin && (
+              <TabsContent value="tenants" className="space-y-4">
+                <CreateTenantCard onCreated={() => void bootstrap()} />
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-semibold text-foreground">Registered Organizations</h3>
+                    <p className="text-xs text-muted-foreground">Manage organization scopes, domains, and team members</p>
+                  </div>
+                  <Button size="sm" onClick={() => goInvite(selectedTenant?.id)} className="gap-1.5">
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Invite Member to Tenant
+                  </Button>
                 </div>
-                {isPlatformAdmin && <select
-                  className="h-9 rounded-md border border-border bg-background px-3 text-sm font-medium"
-                  value={selectedTenant?.id || ""}
-                  onChange={(event) => void refreshTenantModules(event.target.value)}
-                >
-                  {tenants.map((tenant) => (
-                    <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
-                  ))}
-                </select>}
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="mb-4 text-sm text-muted-foreground">
-                <span className="font-semibold text-foreground">{enabledModules}</span> modules active for{" "}
-                <span className="font-medium text-foreground">{selectedTenant?.name || "selected tenant"}</span>
-              </div>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {tenantModules.map((item) => {
-                  const key = item.module_name || item.key || item.name
-                  const Wrapper: React.ElementType = isPlatformAdmin ? "button" : "div"
-                  return (
-                    <Wrapper
-                      key={key}
-                      {...(isPlatformAdmin ? { type: "button" as const, onClick: () => void toggleTenantModule(item) } : {})}
-                      className={`rounded-lg border border-border bg-card p-4 text-left transition-colors group ${isPlatformAdmin ? "hover:border-primary/50" : ""}`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-foreground group-hover:text-primary transition-colors">{item.name || key}</p>
-                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.description || key}</p>
-                        </div>
-                        {item.enabled ? <ToggleRight className="h-6 w-6 text-emerald-400 shrink-0" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground shrink-0" />}
-                      </div>
-                    </Wrapper>
-                  )
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
 
-        <TabsContent value="users">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <KeyRound className="h-4 w-4 text-cyan-400" /> Platform & Tenant Users
-                  </CardTitle>
-                  <CardDescription>Assign functional access roles, permissions, and tenant memberships</CardDescription>
-                </div>
-                <Button size="sm" onClick={() => openInviteModal()} className="gap-1.5">
-                  <UserPlus className="h-3.5 w-3.5" />
-                  Invite User
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {users.map((user) => (
-                  <div key={user.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-border p-3.5 bg-card hover:bg-secondary/20 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-xs shrink-0">
-                        {(user.name || user.full_name || user.email || "U").slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <p className="font-medium text-foreground text-sm">{user.name || user.full_name || user.email}</p>
-                        <p className="text-xs text-muted-foreground">{user.email}</p>
-                      </div>
-                    </div>
+                {tenants.state !== "ready" ? (
+                  <SectionState state={tenants} service="Admin" section="tenants" onRetry={() => void bootstrap()} />
+                ) : tenantList.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">No tenants exist yet. Create one above.</p>
+                ) : (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {tenantList.map((tenant) => (
+                      <Card key={tenant.id} className="border-border bg-card">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <CardTitle className="text-base">{tenant.name}</CardTitle>
+                              <p className="text-xs text-muted-foreground font-mono mt-0.5">{tenant.id}</p>
+                            </div>
+                            <StatusBadge active={tenant.active} label={tenant.status} />
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <DataRow label="Domain" value={tenant.domain || tenant.subdomain || "-"} />
+                          <DataRow label="Tier" value={tenant.tier || "-"} />
+                          <DataRow label="Org Code" value={tenant.org_code || "-"} />
+                          <DataRow label="Created" value={fmtDate(tenant.created_at)} />
+                          <TenantSeatControls
+                            tenant={tenant}
+                            usage={readyData(seatRows).find((r) => r.tenant_id === tenant.id)}
+                            onChanged={() => void bootstrap()}
+                          />
 
-                    <div className="flex items-center gap-2.5">
-                      <StatusBadge active={user.is_active} />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => openRoleGrant(user)}
-                        className="h-8 text-xs gap-1.5 border-primary/40 text-foreground hover:bg-primary/10"
-                      >
-                        <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-                        Grant Role Access
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                {users.length === 0 && (
-                  <div className="py-12 text-center text-muted-foreground space-y-2">
-                    <Users className="h-8 w-8 mx-auto text-muted-foreground/40" />
-                    <p className="text-sm font-medium">No users discovered in this scope.</p>
-                    <p className="text-xs">Click Invite User to send access credentials to team members.</p>
+                          <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/60">
+                            <Button size="sm" variant="outline" className="text-xs h-8 gap-1.5" onClick={() => goInvite(tenant.id)}>
+                              <UserPlus className="h-3.5 w-3.5 text-cyan-400" />
+                              Invite Member
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="text-xs h-8 gap-1.5 text-muted-foreground hover:text-foreground"
+                              onClick={() => {
+                                selectTenant(tenant.id)
+                                setActiveTab("modules")
+                              }}
+                            >
+                              <SlidersHorizontal className="h-3.5 w-3.5" />
+                              Entitlements
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
                   </div>
                 )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
+              </TabsContent>
+            )}
 
-        <TabsContent value="audit">
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <Button
-                  variant={auditSubTab === "agents" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setAuditSubTab("agents")}
-                  className="gap-2 text-xs"
-                >
-                  <Bot className="h-4 w-4 text-primary" />
-                  <span>Agent Actions & AI Audits</span>
-                  <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
-                    {agentActions.length}
-                  </Badge>
-                </Button>
-                <Button
-                  variant={auditSubTab === "system" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setAuditSubTab("system")}
-                  className="gap-2 text-xs"
-                >
-                  <Activity className="h-4 w-4 text-muted-foreground" />
-                  <span>Platform System Events</span>
-                  <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
-                    {auditLog.length}
-                  </Badge>
-                </Button>
-              </div>
-
-              {auditSubTab === "agents" && (
-                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-                  <span className="text-xs text-muted-foreground mr-1">Agent:</span>
-                  {["all", "executive", "retention", "customer_facing", "provisioning", "support", "assistant"].map((ag) => (
-                    <Button
-                      key={ag}
-                      variant={agentFilter === ag ? "secondary" : "outline"}
-                      size="sm"
-                      onClick={() => setAgentFilter(ag)}
-                      className="h-6 text-[11px] px-2 capitalize"
-                    >
-                      {ag === "all" ? "All" : ag.replace("_", " ")}
-                    </Button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {auditSubTab === "agents" ? (
+            <TabsContent value="modules">
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center justify-between text-base">
-                    <span className="flex items-center gap-2">
-                      <Bot className="h-4 w-4 text-primary" /> Autonomous Agent Action Trail
-                    </span>
-                    <Badge variant="outline" className="font-mono text-xs">
-                      {filteredAgentActions.length} actions
-                    </Badge>
-                  </CardTitle>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <CardTitle className="text-base">Tenant Module Entitlements</CardTitle>
+                      <CardDescription>
+                        {isPlatformAdmin
+                          ? "Grant or revoke functional platform modules per organization"
+                          : "Modules enabled for your organization. Only the platform team can change these."}
+                      </CardDescription>
+                    </div>
+                    {isPlatformAdmin && (
+                      <select
+                        aria-label="Tenant"
+                        className="h-9 rounded-md border border-border bg-background px-3 text-sm font-medium"
+                        value={selectedTenant?.id || ""}
+                        onChange={(event) => selectTenant(event.target.value)}
+                      >
+                        {tenantList.map((tenant) => (
+                          <option key={tenant.id} value={tenant.id}>{tenant.name}</option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent>
-                  {filteredAgentActions.length === 0 ? (
-                    <p className="py-10 text-center text-sm text-muted-foreground">
-                      No agent actions recorded yet. Conversations and tool invocations will appear here.
-                    </p>
+                  {tenantModules.state !== "ready" ? (
+                    <SectionState
+                      state={tenantModules}
+                      service="Admin"
+                      section="modules"
+                      onRetry={() => {
+                        invalidateAdminCache()
+                        void loadTenantModules(selectedTenant?.id || identity?.tenant_id || "")
+                      }}
+                    />
                   ) : (
-                    <div className="overflow-x-auto">
+                    <>
+                      <div className="mb-4 text-sm text-muted-foreground">
+                        <span className="font-semibold text-foreground">{enabledModules}</span> modules active for{" "}
+                        <span className="font-medium text-foreground">{selectedTenant?.name || "your organization"}</span>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                        {modulesList.map((item) => {
+                          const key = item.module_name || item.key || item.name
+                          const Wrapper: React.ElementType = isPlatformAdmin ? "button" : "div"
+                          return (
+                            <Wrapper
+                              key={key}
+                              {...(isPlatformAdmin
+                                ? {
+                                    type: "button" as const,
+                                    onClick: () => void toggleTenantModule(item),
+                                    disabled: moduleBusy !== null,
+                                    "aria-pressed": !!item.enabled,
+                                  }
+                                : {})}
+                              className={`rounded-lg border border-border bg-card p-4 text-left transition-colors group ${isPlatformAdmin ? "hover:border-primary/50 disabled:opacity-60" : ""}`}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-medium text-foreground group-hover:text-primary transition-colors">{item.name || key}</p>
+                                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.description || key}</p>
+                                </div>
+                                {item.enabled ? <ToggleRight className="h-6 w-6 text-emerald-400 shrink-0" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground shrink-0" />}
+                              </div>
+                            </Wrapper>
+                          )
+                        })}
+                        {modulesList.length === 0 && <p className="col-span-full text-sm text-muted-foreground">No modules returned for this organization.</p>}
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="users">
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <KeyRound className="h-4 w-4 text-cyan-400" /> Tenant Users
+                      </CardTitle>
+                      <CardDescription>Assign functional access roles to the users of your organization</CardDescription>
+                    </div>
+                    {canManageTeam && (
+                      <Button size="sm" onClick={() => goInvite()} className="gap-1.5">
+                        <UserPlus className="h-3.5 w-3.5" />
+                        Add user (Team invite)
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {users.state !== "ready" ? (
+                    <SectionState state={users} service="Admin" section="users" onRetry={() => retrySection("users")} />
+                  ) : (
+                    <div className="space-y-3">
+                      {users.data.map((user) => (
+                        <div key={user.id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-border p-3.5 bg-card hover:bg-secondary/20 transition-colors">
+                          <div className="flex items-center gap-3">
+                            <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-semibold text-xs shrink-0">
+                              {(user.name || user.full_name || user.email || "U").slice(0, 2).toUpperCase()}
+                            </div>
+                            <div>
+                              <p className="font-medium text-foreground text-sm">{user.name || user.full_name || user.email}</p>
+                              <p className="text-xs text-muted-foreground">{user.email}</p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2.5">
+                            <StatusBadge active={user.is_active} />
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => openRoleGrant(user)}
+                              className="h-8 text-xs gap-1.5 border-primary/40 text-foreground hover:bg-primary/10"
+                            >
+                              <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                              Grant Role Access
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                      {users.data.length === 0 && (
+                        <div className="py-12 text-center text-muted-foreground space-y-2">
+                          <Users className="h-8 w-8 mx-auto text-muted-foreground/40" />
+                          <p className="text-sm font-medium">No users in this organization yet.</p>
+                          <p className="text-xs">Use the Team tab to invite people.</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="audit">
+              <div className="space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant={auditSubTab === "agents" ? "secondary" : "ghost"}
+                      size="sm"
+                      aria-pressed={auditSubTab === "agents"}
+                      onClick={() => setAuditSubTab("agents")}
+                      className="gap-2 text-xs"
+                    >
+                      <Bot className="h-4 w-4 text-primary" />
+                      <span>Agent Actions & AI Audits</span>
+                      <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
+                        {agentActions.state === "ready" ? agentActions.data.length : "-"}
+                      </Badge>
+                    </Button>
+                    <Button
+                      variant={auditSubTab === "system" ? "secondary" : "ghost"}
+                      size="sm"
+                      aria-pressed={auditSubTab === "system"}
+                      onClick={() => setAuditSubTab("system")}
+                      className="gap-2 text-xs"
+                    >
+                      <Activity className="h-4 w-4 text-muted-foreground" />
+                      <span>Platform System Events</span>
+                      <Badge variant="outline" className="text-[10px] ml-1 bg-background font-mono">
+                        {auditLog.state === "ready" ? auditLog.data.length : "-"}
+                      </Badge>
+                    </Button>
+                  </div>
+
+                  {auditSubTab === "agents" && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+                      <span className="text-xs text-muted-foreground mr-1">Agent:</span>
+                      {["all", "executive", "retention", "customer_facing", "provisioning", "support", "assistant"].map((ag) => (
+                        <Button
+                          key={ag}
+                          variant={agentFilter === ag ? "secondary" : "outline"}
+                          size="sm"
+                          aria-pressed={agentFilter === ag}
+                          onClick={() => setAgentFilter(ag)}
+                          className="h-6 text-[11px] px-2 capitalize"
+                        >
+                          {ag === "all" ? "All" : ag.replace("_", " ")}
+                        </Button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {auditSubTab === "agents" ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center justify-between text-base">
+                        <span className="flex items-center gap-2">
+                          <Bot className="h-4 w-4 text-primary" /> Autonomous Agent Action Trail
+                        </span>
+                        {agentActions.state === "ready" && (
+                          <Badge variant="outline" className="font-mono text-xs">
+                            {filteredAgentActions.length} actions
+                          </Badge>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {agentActions.state !== "ready" ? (
+                        <SectionState state={agentActions} service="Agent orchestrator" section="audit" onRetry={() => retrySection("audit")} />
+                      ) : filteredAgentActions.length === 0 ? (
+                        <p className="py-10 text-center text-sm text-muted-foreground">
+                          No agent actions recorded yet. Conversations and tool invocations will appear here.
+                        </p>
+                      ) : (
+                        <div className="overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -979,574 +1153,447 @@ export function AdminModule() {
                           ))}
                         </TableBody>
                       </Table>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Activity className="h-4 w-4" /> Platform Resource Audit Events
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      {auditLog.state !== "ready" ? (
+                        <SectionState state={auditLog} service="Admin" section="audit" onRetry={() => retrySection("audit")} />
+                      ) : (
+                        <div className="space-y-2">
+                          {auditLog.data.map((event) => (
+                            <div key={event.id} className="rounded-lg border border-border p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="font-medium">{event.action}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {event.resource_type} {event.resource_id ? `- ${event.resource_id}` : ""}
+                                  </p>
+                                </div>
+                                <span className="text-xs text-muted-foreground">{fmtDate(event.created_at)}</span>
+                              </div>
+                            </div>
+                          ))}
+                          {auditLog.data.length === 0 && <p className="text-sm text-muted-foreground">No audit events recorded.</p>}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* ── COMMISSION TIERS TAB ────────── */}
+            <TabsContent value="commission" className="space-y-4">
+              <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 text-xs text-foreground flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <Info className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-sm">Commission tiers</p>
+                    <p className="text-muted-foreground mt-0.5">
+                      Tiers you define here belong to your organization. Review statements and payouts in <strong>Finance & Billing</strong>.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => router.push("/dashboard/billing")}
+                  className="gap-1 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10 shrink-0 self-start sm:self-center"
+                >
+                  <span>Finance & Billing</span>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <CircleDollarSign className="h-4 w-4 text-emerald-400" /> Commission Tier Structures
+                      </CardTitle>
+                      <CardDescription>Payout percentages mapped against closed deal milestones</CardDescription>
+                    </div>
+                    {tiers.state === "ready" && (
+                      <Button size="sm" onClick={() => openCommissionModal()} className="gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white">
+                        <Plus className="h-3.5 w-3.5" />
+                        Add Commission Tier
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {tiers.state !== "ready" ? (
+                    <SectionState state={tiers} service="Admin" section="commission" onRetry={() => retrySection("commission")} />
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {tiers.data.map((tier) => (
+                        <div key={tier.id} className="rounded-lg border border-border p-4 bg-card hover:border-emerald-500/40 transition-colors">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <p className="font-semibold text-foreground text-sm">{tier.tier_name}</p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {tier.min_deals} to {tier.max_deals ?? "uncapped"} closed deals
+                              </p>
+                            </div>
+                            <StatusBadge active={tier.is_active} />
+                          </div>
+
+                          <div className="mt-4 flex items-baseline justify-between">
+                            <div>
+                              <span className="text-3xl font-bold text-foreground">{tier.rate_percent}%</span>
+                              <span className="text-xs text-muted-foreground ml-1.5">rate</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                onClick={() => openCommissionModal(tier)}
+                                title="Edit Tier"
+                                aria-label={`Edit tier ${tier.tier_name}`}
+                              >
+                                <Edit3 className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                className="h-7 w-7 text-muted-foreground hover:text-red-400"
+                                onClick={() => {
+                                  setDeleteErr(null)
+                                  setDeleteTier(tier)
+                                }}
+                                title="Delete Tier"
+                                aria-label={`Delete tier ${tier.tier_name}`}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {tiers.data.length === 0 && (
+                        <div className="col-span-full py-10 text-center text-sm text-muted-foreground">
+                          No commission tiers configured. Click Add Commission Tier to configure sales structures.
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
               </Card>
-            ) : (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Activity className="h-4 w-4" /> Platform Resource Audit Events
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-2">
-                    {auditLog.map((event) => (
-                      <div key={event.id} className="rounded-lg border border-border p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="font-medium">{event.action}</p>
-                            <p className="text-xs text-muted-foreground">
-                              {event.resource_type} {event.resource_id ? `- ${event.resource_id}` : ""}
-                            </p>
-                          </div>
-                          <span className="text-xs text-muted-foreground">{fmtDate(event.created_at)}</span>
-                        </div>
-                      </div>
-                    ))}
-                    {auditLog.length === 0 && <p className="text-sm text-muted-foreground">No audit events returned.</p>}
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </TabsContent>
+            </TabsContent>
 
-        {/* ── 5. COMMISSION TIERS TAB (COMMERCIAL & BILLING ENGINE) ────────── */}
-        <TabsContent value="commission" className="space-y-4">
-          {/* Informative Cross-Navigation Banner */}
-          <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4 text-xs text-foreground flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-start gap-2.5">
-              <Info className="h-4 w-4 text-cyan-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold text-sm">Commercial Commission Rules & Sales Tiers</p>
-                <p className="text-muted-foreground mt-0.5">
-                  Commission calculation models are dynamically tied to customer billing cycles and automated sales payouts. You can manage platform defaults here, or navigate to <strong>Finance & Billing</strong> to review real-time statements.
-                </p>
-              </div>
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => router.push("/dashboard/billing")}
-              className="gap-1 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10 shrink-0 self-start sm:self-center"
-            >
-              <span>Finance & Billing</span>
-              <ExternalLink className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <CircleDollarSign className="h-4 w-4 text-emerald-400" /> Commission Tier Structures
-                  </CardTitle>
-                  <CardDescription>Payout percentages mapped against closed deal milestones</CardDescription>
-                </div>
-                <Button size="sm" onClick={() => openCommissionModal()} className="gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white">
-                  <Plus className="h-3.5 w-3.5" />
-                  Add Commission Tier
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {commissionTiers.map((tier) => (
-                  <div key={tier.id} className="rounded-lg border border-border p-4 bg-card hover:border-emerald-500/40 transition-colors">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <p className="font-semibold text-foreground text-sm">{tier.tier_name}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {tier.min_deals} to {tier.max_deals ?? "uncapped"} closed deals
-                        </p>
-                      </div>
-                      <StatusBadge active={tier.is_active} />
-                    </div>
-
-                    <div className="mt-4 flex items-baseline justify-between">
-                      <div>
-                        <span className="text-3xl font-bold text-foreground">{tier.rate_percent}%</span>
-                        <span className="text-xs text-muted-foreground ml-1.5">rate</span>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                          onClick={() => openCommissionModal(tier)}
-                          title="Edit Tier"
-                        >
-                          <Edit3 className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-muted-foreground hover:text-red-400"
-                          onClick={() => void handleDeleteCommissionTier(tier.id, tier.tier_name)}
-                          title="Delete Tier"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {commissionTiers.length === 0 && (
-                  <div className="col-span-full py-10 text-center text-sm text-muted-foreground">
-                    No commission tiers configured. Click Add Commission Tier to configure sales structures.
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ── 6. PROTOCOLS & MANDATES TAB ──────────────────────────────────── */}
-        <TabsContent value="protocols">
-          <div className="space-y-6">
-            {/* Protocol Configuration & Control Panel */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
+            {/* ── PROTOCOLS & MANDATES TAB (read-only; no simulation, no invented policy values) ── */}
+            <TabsContent value="protocols">
+              <div className="space-y-6">
+                <Card className="border-border bg-card">
+                  <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-base">
-                      <Settings2 className="h-4 w-4 text-cyan-400" /> Protocol Runtime Controls
+                      <Settings2 className="h-4 w-4 text-cyan-400" /> Protocol Policy
                     </CardTitle>
                     <CardDescription>
-                      Govern UCP (Universal Commerce Protocol) and AP2 (Agent Payments Protocol) policies
+                      UCP (Universal Commerce Protocol) and AP2 (Agent Payments Protocol) records created by agents for your organization.
                     </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleSimulateUCP()}
-                      disabled={simulatingProtocol}
-                      className="text-xs gap-1 border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/10"
-                    >
-                      <Sparkles className="h-3.5 w-3.5" />
-                      Simulate UCP Checkout
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => void handleSimulateAP2()}
-                      disabled={simulatingProtocol}
-                      className="text-xs gap-1 border-purple-500/40 text-purple-400 hover:bg-purple-500/10"
-                    >
-                      <CreditCard className="h-3.5 w-3.5" />
-                      Issue Test Mandate
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="rounded-lg border border-border p-3.5 space-y-2.5 bg-secondary/20">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-sm flex items-center gap-1.5">
-                        <LinkIcon className="h-4 w-4 text-cyan-400" />
-                        Universal Commerce Protocol (UCP)
-                      </span>
-                      <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px]">
-                        Active Engine
-                      </Badge>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="rounded-lg border border-border p-3.5 space-y-2 bg-secondary/20">
+                        <span className="font-semibold text-sm flex items-center gap-1.5">
+                          <LinkIcon className="h-4 w-4 text-cyan-400" />
+                          Universal Commerce Protocol (UCP)
+                        </span>
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>Auto-approve cart limit</span>
+                          <span className="font-medium text-foreground">Not configured here</span>
+                        </div>
+                      </div>
+                      <div className="rounded-lg border border-border p-3.5 space-y-2 bg-secondary/20">
+                        <span className="font-semibold text-sm flex items-center gap-1.5">
+                          <ShieldCheck className="h-4 w-4 text-purple-400" />
+                          Agent Payments Protocol (AP2)
+                        </span>
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>Dual-signature threshold</span>
+                          <span className="font-medium text-foreground">Not configured here</span>
+                        </div>
+                      </div>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Provides standardized merchant checkout sessions, automated catalog synchronization, and cart settlement.
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      The services expose no endpoint to read or change policy thresholds, so none are shown. Limits are set in the orchestrator service configuration.
                     </p>
-                    <div className="pt-2 text-xs space-y-1.5 text-muted-foreground">
-                      <div className="flex justify-between">
-                        <span>Auto-Approve Cart Limit:</span>
-                        <span className="font-mono text-foreground font-semibold">R{ucpAutoApprove}.00</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Webhook Signature Algorithm:</span>
-                        <span className="font-mono text-foreground font-semibold">HMAC-SHA256</span>
-                      </div>
-                    </div>
-                  </div>
+                  </CardContent>
+                </Card>
 
-                  <div className="rounded-lg border border-border p-3.5 space-y-2.5 bg-secondary/20">
-                    <div className="flex items-center justify-between">
-                      <span className="font-semibold text-sm flex items-center gap-1.5">
-                        <ShieldCheck className="h-4 w-4 text-purple-400" />
-                        Agent Payments Protocol (AP2)
-                      </span>
-                      <Badge variant="outline" className="border-purple-500/40 text-purple-400 text-[10px]">
-                        Cryptographic Guard
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      Enforces cryptographic intent mandates and payment authorization checks before agents can commit customer funds.
-                    </p>
-                    <div className="pt-2 text-xs space-y-1.5 text-muted-foreground">
-                      <div className="flex justify-between">
-                        <span>Dual-Signature Threshold:</span>
-                        <span className="font-mono text-foreground font-semibold">R{ap2DualSignThreshold}.00</span>
+                {/* Summary counts only for lists that actually loaded */}
+                <div className="grid gap-4 md:grid-cols-3">
+                  <Card>
+                    <CardContent className="flex items-center justify-between p-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">UCP Sessions</p>
+                        <p className="text-2xl font-semibold"><StatValue loadable={ucpSessions}>{(d) => d.length}</StatValue></p>
                       </div>
-                      <div className="flex justify-between">
-                        <span>Mandate Expiration Window:</span>
-                        <span className="font-mono text-foreground font-semibold">60 Minutes</span>
+                      <LinkIcon className="h-5 w-5 text-cyan-400" />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="flex items-center justify-between p-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Intent Mandates</p>
+                        <p className="text-2xl font-semibold"><StatValue loadable={intentMandates}>{(d) => d.length}</StatValue></p>
                       </div>
-                    </div>
-                  </div>
+                      <ShieldCheck className="h-5 w-5 text-amber-400" />
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardContent className="flex items-center justify-between p-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Payment Mandates</p>
+                        <p className="text-2xl font-semibold"><StatValue loadable={paymentMandates}>{(d) => d.length}</StatValue></p>
+                      </div>
+                      <CircleDollarSign className="h-5 w-5 text-emerald-400" />
+                    </CardContent>
+                  </Card>
                 </div>
-              </CardContent>
-            </Card>
 
-            {/* Protocol summary stats */}
-            <div className="grid gap-4 md:grid-cols-3">
-              <Card>
-                <CardContent className="flex items-center justify-between p-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">UCP Sessions</p>
-                    <p className="text-2xl font-semibold">{ucpSessions.length}</p>
-                  </div>
-                  <LinkIcon className="h-5 w-5 text-cyan-400" />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="flex items-center justify-between p-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Intent Mandates</p>
-                    <p className="text-2xl font-semibold">{intentMandates.length}</p>
-                  </div>
-                  <ShieldCheck className="h-5 w-5 text-amber-400" />
-                </CardContent>
-              </Card>
-              <Card>
-                <CardContent className="flex items-center justify-between p-4">
-                  <div>
-                    <p className="text-sm text-muted-foreground">Payment Mandates</p>
-                    <p className="text-2xl font-semibold">{paymentMandates.length}</p>
-                  </div>
-                  <CircleDollarSign className="h-5 w-5 text-emerald-400" />
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* UCP Checkout Sessions */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base"><LinkIcon className="h-4 w-4 text-cyan-400" /> UCP Checkout Sessions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {ucpSessions.map((session) => (
-                    <div key={session.id} className="rounded-lg border border-border p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium">{session.merchant} — {session.purpose}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {session.line_items.length} item(s) • {session.currency} {session.total.toFixed(2)}
-                          </p>
-                        </div>
-                        <Badge variant="outline" className={
-                          session.status === "completed" ? "border-emerald-500/40 text-emerald-400" :
-                          session.status === "requires_approval" ? "border-amber-500/40 text-amber-400" :
-                          session.status === "cancelled" ? "border-red-500/40 text-red-400" :
-                          "border-border text-muted-foreground"
-                        }>
-                          {session.status}
-                        </Badge>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base"><LinkIcon className="h-4 w-4 text-cyan-400" /> UCP Checkout Sessions</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {ucpSessions.state !== "ready" ? (
+                      <SectionState state={ucpSessions} service="Agent orchestrator" section="protocols" onRetry={() => retrySection("protocols")} />
+                    ) : (
+                      <div className="space-y-2">
+                        {ucpSessions.data.map((session) => (
+                          <div key={session.id} className="rounded-lg border border-border p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium">{session.merchant} — {session.purpose}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {session.line_items.length} item(s) • {session.currency} {session.total.toFixed(2)}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className={
+                                session.status === "completed" ? "border-emerald-500/40 text-emerald-400" :
+                                session.status === "requires_approval" ? "border-amber-500/40 text-amber-400" :
+                                session.status === "cancelled" ? "border-red-500/40 text-red-400" :
+                                "border-border text-muted-foreground"
+                              }>
+                                {session.status}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground font-mono">{session.id}</p>
+                          </div>
+                        ))}
+                        {ucpSessions.data.length === 0 && <p className="text-sm text-muted-foreground">No UCP checkout sessions recorded.</p>}
                       </div>
-                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{session.id}</p>
-                    </div>
-                  ))}
-                  {ucpSessions.length === 0 && <p className="text-sm text-muted-foreground">No UCP checkout sessions recorded.</p>}
-                </div>
-              </CardContent>
-            </Card>
+                    )}
+                  </CardContent>
+                </Card>
 
-            {/* AP2 Intent Mandates */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="h-4 w-4 text-purple-400" /> AP2 Intent Mandates</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {intentMandates.map((mandate) => (
-                    <div key={mandate.id} className="rounded-lg border border-border p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium">{mandate.natural_language_description}</p>
-                          <p className="text-xs text-muted-foreground">
-                            Max: {mandate.currency} {mandate.max_amount.toFixed(2)}
-                            {mandate.merchants.length > 0 && ` • Merchants: ${mandate.merchants.join(", ")}`}
-                          </p>
-                          <p className="text-[10px] text-muted-foreground">Expires: {fmtDate(mandate.expires_at)}</p>
-                        </div>
-                        <StatusBadge active={mandate.signed} label={mandate.signed ? "Signed" : "Pending"} />
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base"><ShieldCheck className="h-4 w-4 text-purple-400" /> AP2 Intent Mandates</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {intentMandates.state !== "ready" ? (
+                      <SectionState state={intentMandates} service="Agent orchestrator" section="protocols" onRetry={() => retrySection("protocols")} />
+                    ) : (
+                      <div className="space-y-2">
+                        {intentMandates.data.map((mandate) => (
+                          <div key={mandate.id} className="rounded-lg border border-border p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium">{mandate.natural_language_description}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Max: {mandate.currency} {mandate.max_amount.toFixed(2)}
+                                  {mandate.merchants.length > 0 && ` • Merchants: ${mandate.merchants.join(", ")}`}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground">Expires: {fmtDate(mandate.expires_at)}</p>
+                              </div>
+                              <StatusBadge active={mandate.signed} label={mandate.signed ? "Signed" : "Pending"} />
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
+                          </div>
+                        ))}
+                        {intentMandates.data.length === 0 && <p className="text-sm text-muted-foreground">No AP2 intent mandates recorded.</p>}
                       </div>
-                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
-                    </div>
-                  ))}
-                  {intentMandates.length === 0 && <p className="text-sm text-muted-foreground">No AP2 intent mandates recorded.</p>}
-                </div>
-              </CardContent>
-            </Card>
+                    )}
+                  </CardContent>
+                </Card>
 
-            {/* AP2 Payment Mandates */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-base"><CircleDollarSign className="h-4 w-4" /> AP2 Payment Mandates</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {paymentMandates.map((mandate) => (
-                    <div key={mandate.id} className="rounded-lg border border-border p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium">{mandate.label}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {mandate.merchant_agent} • {mandate.currency} {mandate.amount.toFixed(2)}
-                          </p>
-                        </div>
-                        <Badge variant="outline" className={
-                          mandate.status === "signed" ? "border-emerald-500/40 text-emerald-400" :
-                          "border-amber-500/40 text-amber-400"
-                        }>
-                          {mandate.status}
-                        </Badge>
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2 text-base"><CircleDollarSign className="h-4 w-4" /> AP2 Payment Mandates</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {paymentMandates.state !== "ready" ? (
+                      <SectionState state={paymentMandates} service="Agent orchestrator" section="protocols" onRetry={() => retrySection("protocols")} />
+                    ) : (
+                      <div className="space-y-2">
+                        {paymentMandates.data.map((mandate) => (
+                          <div key={mandate.id} className="rounded-lg border border-border p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <p className="font-medium">{mandate.label}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {mandate.merchant_agent} • {mandate.currency} {mandate.amount.toFixed(2)}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className={
+                                mandate.status === "signed" ? "border-emerald-500/40 text-emerald-400" :
+                                "border-amber-500/40 text-amber-400"
+                              }>
+                                {mandate.status}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
+                          </div>
+                        ))}
+                        {paymentMandates.data.length === 0 && <p className="text-sm text-muted-foreground">No AP2 payment mandates recorded.</p>}
                       </div>
-                      <p className="mt-1 text-[10px] text-muted-foreground font-mono">{mandate.id}</p>
-                    </div>
-                  ))}
-                  {paymentMandates.length === 0 && <p className="text-sm text-muted-foreground">No AP2 payment mandates recorded.</p>}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-      </Tabs>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+            </TabsContent>
+          </Tabs>
+        </>
+      )}
 
-      {/* ── MODAL: INVITE MEMBER / USER ───────────────────────────────────── */}
-      <Dialog open={inviteModalOpen} onOpenChange={setInviteModalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <UserPlus className="h-5 w-5 text-primary" />
-              Invite Team Member
-            </DialogTitle>
-            <DialogDescription>
-              Grant user credentials and assign tenant permissions
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handleSendInvite} className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="invite-email">Email Address *</Label>
-              <Input
-                id="invite-email"
-                type="email"
-                placeholder="colleague@omnidome.co.za"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="invite-name">Full Name</Label>
-              <Input
-                id="invite-name"
-                placeholder="Sarah Chen"
-                value={inviteName}
-                onChange={(e) => setInviteName(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="invite-tenant">Organization / Tenant *</Label>
-              <select
-                id="invite-tenant"
-                value={inviteTenantId}
-                onChange={(e) => setInviteTenantId(e.target.value)}
-                className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-              >
-                {tenants.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="invite-role">Assigned Platform Role</Label>
-              <select
-                id="invite-role"
-                value={inviteRoleId}
-                onChange={(e) => setInviteRoleId(e.target.value)}
-                className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm"
-              >
-                {AVAILABLE_ROLES.map((r) => (
-                  <option key={r.id} value={r.id}>{r.name} ({r.badge})</option>
-                ))}
-              </select>
-              <p className="text-[11px] text-muted-foreground mt-1">
-                {AVAILABLE_ROLES.find((r) => r.id === inviteRoleId)?.description}
-              </p>
-            </div>
-
-            <DialogFooter className="pt-3">
-              <Button type="button" variant="ghost" onClick={() => setInviteModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={inviteSubmitting} className="gap-1.5">
-                {inviteSubmitting ? "Inviting..." : "Send Invitation"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── MODAL: ROLE ACCESS GRANT JOURNEY ──────────────────────────────── */}
-      <Dialog open={roleGrantModalOpen} onOpenChange={setRoleGrantModalOpen}>
+      {/* ── DIALOG: ROLE ACCESS (real roles from the server) ───────────────── */}
+      <Dialog open={roleGrantOpen} onOpenChange={(o) => !o && !roleSaving && setRoleGrantOpen(false)}>
         <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldCheck className="h-5 w-5 text-cyan-400" />
-              Role Access & Permission Journey
+              Grant role access
             </DialogTitle>
             <DialogDescription>
-              Configure functional role assignments and permissions for{" "}
-              <strong>{roleGrantUser?.name || roleGrantUser?.email}</strong>
+              Roles of your organization for <strong>{roleGrantUser?.name || roleGrantUser?.email}</strong>. The server checks that you may grant each one.
+              For rank-aware role editing use the Team tab.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wider">
-                Select Functional Roles
-              </p>
-              <div className="space-y-2">
-                {AVAILABLE_ROLES.map((role) => {
-                  const isSelected = selectedRoleIds.includes(role.id)
-                  return (
-                    <div
-                      key={role.id}
-                      onClick={() => toggleRoleSelection(role.id)}
-                      className={cn(
-                        "flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-all",
-                        isSelected
-                          ? "border-primary bg-primary/5 shadow-sm"
-                          : "border-border bg-card hover:bg-secondary/20",
-                      )}
-                    >
-                      <div className="mt-0.5 text-primary">
-                        {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-muted-foreground" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-semibold text-sm text-foreground">{role.name}</span>
-                          <Badge variant="outline" className="text-[10px] uppercase font-mono">
-                            {role.badge}
+          <div className="space-y-2 py-2">
+            {roleOptions.state !== "ready" ? (
+              <SectionState
+                state={roleOptions}
+                service="Admin"
+                section="users"
+                onRetry={() => void runInto(setRoleOptions, () => adminApi.listRoles())}
+              />
+            ) : roleOptions.data.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No roles are defined for this organization.</p>
+            ) : (
+              roleOptions.data.map((role) => {
+                const isSelected = selectedRoleIds.includes(role.id)
+                return (
+                  <button
+                    key={role.id}
+                    type="button"
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    onClick={() => toggleRoleSelection(role.id)}
+                    className={cn(
+                      "flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-all",
+                      isSelected ? "border-primary bg-primary/5 shadow-sm" : "border-border bg-card hover:bg-secondary/20",
+                    )}
+                  >
+                    <span className="mt-0.5 text-primary">
+                      {isSelected ? <CheckSquare className="h-4 w-4" /> : <Square className="h-4 w-4 text-muted-foreground" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-semibold text-foreground">{role.name}</span>
+                        {isSystemRole(role) && (
+                          <Badge variant="outline" className="text-[10px] uppercase" title="System roles are immutable">
+                            System
                           </Badge>
-                        </div>
-                        <p className="text-xs text-muted-foreground mt-0.5">{role.description}</p>
-                        <div className="flex flex-wrap gap-1 mt-2">
+                        )}
+                      </span>
+                      {role.description && <span className="mt-0.5 block text-xs text-muted-foreground">{role.description}</span>}
+                      {role.permissions && role.permissions.length > 0 && (
+                        <span className="mt-2 flex flex-wrap gap-1">
                           {role.permissions.map((p) => (
-                            <span key={p} className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">
-                              {p}
-                            </span>
+                            <span key={p} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">{p}</span>
                           ))}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                )
+              })
+            )}
+            {roleErr && (
+              <div role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+                {roleErr}
               </div>
-            </div>
-
-            <div className="rounded-lg border border-border/80 bg-secondary/30 p-3 text-xs space-y-1">
-              <span className="font-medium text-foreground">Summary of Access Rights Granted:</span>
-              <p className="text-muted-foreground">
-                {selectedRoleIds.length === 0
-                  ? "No roles selected. User will have read-only basic tenant view."
-                  : `User will be entitled with ${selectedRoleIds.length} role(s) spanning ${Array.from(new Set(selectedRoleIds.flatMap((r) => AVAILABLE_ROLES.find((ar) => ar.id === r)?.permissions || []))).length} distinct capabilities.`}
-              </p>
-            </div>
+            )}
           </div>
 
           <DialogFooter className="pt-2">
-            <Button type="button" variant="ghost" onClick={() => setRoleGrantModalOpen(false)}>
+            <Button type="button" variant="ghost" onClick={() => setRoleGrantOpen(false)} disabled={roleSaving}>
               Cancel
             </Button>
-            <Button onClick={handleSaveRoleGrant} disabled={roleSaving} className="gap-1.5">
-              {roleSaving ? "Applying..." : "Apply & Grant Access"}
+            <Button onClick={() => void handleSaveRoleGrant()} disabled={roleSaving || selectedRoleIds.length === 0} className="gap-1.5">
+              {roleSaving ? "Applying..." : "Grant selected roles"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* ── MODAL: COMMISSION TIER (ADD / EDIT) ────────────────────────────── */}
-      <Dialog open={commissionModalOpen} onOpenChange={setCommissionModalOpen}>
+      {/* ── DIALOG: COMMISSION TIER (ADD / EDIT) ───────────────────────────── */}
+      <Dialog open={commissionOpen} onOpenChange={(o) => !o && !commissionSaving && setCommissionOpen(false)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CircleDollarSign className="h-5 w-5 text-emerald-400" />
               {editingTier ? "Edit Commission Tier" : "Add Commission Tier"}
             </DialogTitle>
-            <DialogDescription>
-              Configure milestone thresholds and payout percentages
-            </DialogDescription>
+            <DialogDescription>Configure milestone thresholds and payout percentages</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSaveCommissionTier} className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="tier-name">Tier Name *</Label>
-              <Input
-                id="tier-name"
-                placeholder="e.g. Bronze, Silver, Gold, Platinum"
-                value={tierName}
-                onChange={(e) => setTierName(e.target.value)}
-                required
-              />
+              <Input id="tier-name" placeholder="e.g. Bronze, Silver, Gold, Platinum" value={tierName} onChange={(e) => setTierName(e.target.value)} required />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="tier-min">Min Deals *</Label>
-                <Input
-                  id="tier-min"
-                  type="number"
-                  min={0}
-                  value={tierMinDeals}
-                  onChange={(e) => setTierMinDeals(Number(e.target.value))}
-                  required
-                />
+                <Input id="tier-min" type="number" min={0} value={tierMinDeals} onChange={(e) => setTierMinDeals(e.target.value)} required />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="tier-max">Max Deals (optional)</Label>
-                <Input
-                  id="tier-max"
-                  type="number"
-                  placeholder="Uncapped"
-                  value={tierMaxDeals}
-                  onChange={(e) => setTierMaxDeals(e.target.value)}
-                />
+                <Input id="tier-max" type="number" placeholder="Uncapped" value={tierMaxDeals} onChange={(e) => setTierMaxDeals(e.target.value)} />
               </div>
             </div>
 
             <div className="space-y-1.5">
               <Label htmlFor="tier-rate">Commission Rate (%) *</Label>
-              <Input
-                id="tier-rate"
-                placeholder="e.g. 5.0, 10.0"
-                value={tierRate}
-                onChange={(e) => setTierRate(e.target.value)}
-                required
-              />
+              <Input id="tier-rate" inputMode="decimal" placeholder="Enter a rate between 0 and 100" value={tierRate} onChange={(e) => setTierRate(e.target.value)} required />
             </div>
 
             <div className="flex items-center justify-between rounded-lg border border-border p-3">
               <div>
-                <p className="font-medium text-sm">Tier Active</p>
-                <p className="text-xs text-muted-foreground">Active tiers are automatically evaluated during billing</p>
+                <p className="font-medium text-sm" id="tier-active-label">Tier Active</p>
+                <p className="text-xs text-muted-foreground">Inactive tiers are not listed on this page</p>
               </div>
               <button
                 type="button"
+                role="switch"
+                aria-checked={tierActive}
+                aria-labelledby="tier-active-label"
                 onClick={() => setTierActive((p) => !p)}
                 className="text-primary"
               >
@@ -1554,8 +1601,14 @@ export function AdminModule() {
               </button>
             </div>
 
+            {tierErr && (
+              <div role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+                {tierErr}
+              </div>
+            )}
+
             <DialogFooter className="pt-2">
-              <Button type="button" variant="ghost" onClick={() => setCommissionModalOpen(false)}>
+              <Button type="button" variant="ghost" onClick={() => setCommissionOpen(false)} disabled={commissionSaving}>
                 Cancel
               </Button>
               <Button type="submit" disabled={commissionSaving} className="gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white">
@@ -1565,6 +1618,17 @@ export function AdminModule() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteTier}
+        title="Delete commission tier?"
+        description={`Tier "${deleteTier?.tier_name ?? ""}" will be removed. This cannot be undone.`}
+        confirmLabel="Delete tier"
+        busy={deleteBusy}
+        error={deleteErr}
+        onConfirm={() => void handleDeleteCommissionTier()}
+        onClose={() => setDeleteTier(null)}
+      />
     </div>
   )
 }

@@ -5,7 +5,20 @@
  * Proxies through the Next.js API routes to the admin service (port 8013).
  */
 
+import { createTtlCache } from "@/lib/request-cache"
+
 const ADMIN_API = "/api/admin"
+
+/**
+ * Identical GETs in flight (or fetched within 15s) share one request. Every non-GET
+ * call clears it, so a mutation is never followed by a stale read. Failures are never cached.
+ */
+const getCache = createTtlCache(15_000)
+
+/** Drop cached reads (manual Refresh, first mount, tenant switch). */
+export function invalidateAdminCache(): void {
+  getCache.invalidate()
+}
 
 export class BillingUnavailableError extends Error {
   constructor() {
@@ -37,6 +50,11 @@ export function adminErrorMessage(err: unknown): string {
   if (err instanceof AdminApiError) {
     const d = err.detail
     if (typeof d === "string") return d || `Request failed (${err.status})`
+    if (Array.isArray(d)) {
+      // FastAPI 422: [{ loc, msg }]
+      const msgs = d.map((x) => (x && typeof x === "object" && typeof (x as { msg?: unknown }).msg === "string" ? (x as { msg: string }).msg : "")).filter(Boolean)
+      return msgs.length ? msgs.join("; ") : `Request failed (${err.status})`
+    }
     if (d && typeof d === "object") {
       const o = d as Record<string, unknown>
       if (o.error === "seat_limit_reached") {
@@ -65,6 +83,13 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 async function fetchAdmin<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase()
+  if (method === "GET") return getCache.get<T>(`admin:${path}`, () => fetchAdminRaw<T>(path, init))
+  getCache.invalidate()
+  return fetchAdminRaw<T>(path, init)
+}
+
+async function fetchAdminRaw<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(await authHeader()),
@@ -210,6 +235,8 @@ export interface TenantMember {
   email: string
   name?: string | null
   is_active: boolean
+  /** Status code only (the server no longer returns raw sync errors), e.g. "synced" | "pending" | "failed". */
+  supabase_sync_status?: string | null
   is_owner?: boolean
   roles: string[]
   created_at?: string
@@ -219,6 +246,15 @@ export interface CreatedTenant extends Tenant {
   seat_limit?: number | null
   seat_price?: string | null
   owner_invite?: InviteDelivery & { invite_id: string; email: string }
+}
+
+export interface AdminRole {
+  id: string
+  name: string
+  description?: string | null
+  scope?: string | null
+  is_system?: boolean | null
+  permissions?: string[]
 }
 
 export interface Whoami {
@@ -335,14 +371,14 @@ export const adminApi = {
       method: "DELETE",
     }),
 
-  listRoles: () =>
-    fetchAdmin<{ id: string; name: string; description?: string; permissions?: string[] }[]>("/roles"),
+  listRoles: () => fetchAdmin<AdminRole[]>("/roles"),
 
-  inviteUser: (data: { email: string; name?: string; role_id?: string; password?: string; is_active?: boolean }) =>
-    fetchAdmin<AdminUser>("/users", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
+  /** Platform-admin only. Resolves when the server accepted it; a 404 means the endpoint is not deployed. */
+  addPlatformAdmin: (userId: string) =>
+    fetchAdmin<Record<string, unknown>>(`/platform/admins/${encodeURIComponent(userId)}`, { method: "PUT" }),
+
+  removePlatformAdmin: (userId: string) =>
+    fetchAdmin<Record<string, unknown>>(`/platform/admins/${encodeURIComponent(userId)}`, { method: "DELETE" }),
 
   assignUserRole: (userId: string, roleId: string) =>
     fetchAdmin<{ status?: string; user_id: string; role_id: string }>(`/users/${userId}/roles`, {
@@ -356,11 +392,12 @@ export const adminApi = {
     }),
 
   // ── IAM: seats, invites, members ──
-  whoami: async (): Promise<Whoami> => {
-    const res = await fetch("/api/whoami", { cache: "no-store", signal: AbortSignal.timeout(10_000), headers: await authHeader() })
-    if (!res.ok) throw new AdminApiError(res.status, await res.text().catch(() => ""))
-    return res.json()
-  },
+  whoami: (): Promise<Whoami> =>
+    getCache.get<Whoami>("whoami", async () => {
+      const res = await fetch("/api/whoami", { cache: "no-store", signal: AbortSignal.timeout(10_000), headers: await authHeader() })
+      if (!res.ok) throw new AdminApiError(res.status, await res.text().catch(() => ""))
+      return res.json()
+    }),
 
   createTenant: (data: {
     name: string
@@ -403,7 +440,7 @@ export const adminApi = {
     }),
 
   deactivateMember: (tenantId: string, userId: string) =>
-    fetchAdmin<{ changed: boolean }>(`/tenants/${tenantId}/members/${userId}/deactivate`, { method: "POST" }),
+    fetchAdmin<{ changed: boolean; sessions_revoked?: boolean }>(`/tenants/${tenantId}/members/${userId}/deactivate`, { method: "POST" }),
 
   reactivateMember: (tenantId: string, userId: string) =>
     fetchAdmin<{ changed: boolean }>(`/tenants/${tenantId}/members/${userId}/reactivate`, { method: "POST" }),

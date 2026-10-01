@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertCircle, CheckCircle2, Copy, Crown, Loader2, MailPlus, RefreshCw, RotateCcw, Trash2, UserCog, UserMinus, UserPlus, UserCheck } from "lucide-react"
+import { AlertCircle, CheckCircle2, Copy, Crown, Loader2, Lock, MailPlus, RefreshCw, RotateCcw, ShieldPlus, Trash2, UserCog, UserMinus, UserPlus, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -21,6 +21,17 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
+import { NotConnected } from "@/components/ui/not-connected"
+import type { Loadable } from "@/lib/service-state"
+import {
+  deactivateNotice,
+  loadableFromError,
+  readyData,
+  requiredRoleLabel,
+  resolveUserId,
+  statusFromError,
+  syncBadge,
+} from "@/lib/admin-state"
 import {
   ROLE_LABELS,
   BillingUnavailableError,
@@ -29,6 +40,7 @@ import {
   adminApi,
   adminErrorMessage,
   grantableRoles,
+  invalidateAdminCache,
   type CreatedInvite,
   type PlatformSeatRow,
   type ReconcileReport,
@@ -39,6 +51,16 @@ import {
   type TenantMember,
   type Whoami,
 } from "@/lib/admin-api"
+
+const LOADING: Loadable<never> = { state: "loading" }
+
+async function runInto<T>(setter: (l: Loadable<T>) => void, fn: () => Promise<T>): Promise<void> {
+  try {
+    setter({ state: "ready", data: await fn() })
+  } catch (e) {
+    setter(loadableFromError<T>(e, adminErrorMessage))
+  }
+}
 
 const SMTP_NOTE = "Email delivery depends on SMTP being configured; copy this link to send it yourself."
 const NATIVE_SELECT =
@@ -306,21 +328,43 @@ export function TenantSeatControls({ tenant, usage, onChanged }: { tenant: Tenan
 
 // ── Team tab ────────────────────────────────────────────────────────────────
 
-type ConfirmState = { kind: "deactivate" | "reactivate"; member: TenantMember } | null
+function TeamSectionState({ state, service, onRetry }: { state: Loadable<unknown>; service: string; onRetry: () => void }) {
+  if (state.state === "ready") return null
+  return (
+    <div className="space-y-1.5">
+      <NotConnected loadable={state} service={service} onRetry={state.state === "denied" ? undefined : onRetry} />
+      {state.state === "denied" && (
+        <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <Lock className="h-3 w-3" /> Requires the {requiredRoleLabel("team")} role.
+        </p>
+      )}
+    </div>
+  )
+}
 
-export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenants: Tenant[] }) {
+type ConfirmState = { kind: "deactivate" | "reactivate"; member: TenantMember } | null
+type RevokeState = TenantInvite | null
+
+export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami | null; tenants: Tenant[]; focusTenantId?: string | null }) {
   const roles = useMemo(() => identity?.roles ?? [], [identity])
   const isPlatform = roles.includes("platform_admin")
   const isOwner = isPlatform || roles.includes("owner")
   const rank = actorRank(roles)
   const grantable = useMemo(() => grantableRoles(roles), [roles])
 
-  const [pickedTenant, setPickedTenant] = useState("")
+  const [pickedTenant, setPickedTenant] = useState(isPlatform && focusTenantId ? focusTenantId : "")
   const tenantId = pickedTenant || identity?.tenant_id || ""
 
-  const [seats, setSeats] = useState<SeatUsage | null>(null)
-  const [invites, setInvites] = useState<TenantInvite[]>([])
-  const [members, setMembers] = useState<TenantMember[]>([])
+  useEffect(() => {
+    if (isPlatform && focusTenantId) setPickedTenant(focusTenantId)
+  }, [isPlatform, focusTenantId])
+
+  const [seatsState, setSeats] = useState<Loadable<SeatUsage>>(LOADING)
+  const [invitesState, setInvites] = useState<Loadable<TenantInvite[]>>(LOADING)
+  const [membersState, setMembers] = useState<Loadable<TenantMember[]>>(LOADING)
+  const seats = seatsState.state === "ready" ? seatsState.data : null
+  const invites = readyData(invitesState)
+  const members = readyData(membersState)
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -335,6 +379,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   const [roleTarget, setRoleTarget] = useState<TenantMember | null>(null)
   const [roleDraft, setRoleDraft] = useState<string[]>([])
   const [confirm, setConfirm] = useState<ConfirmState>(null)
+  const [revokeTarget, setRevokeTarget] = useState<RevokeState>(null)
   const [transferTarget, setTransferTarget] = useState<TenantMember | null>(null)
   const [typed, setTyped] = useState("")
   const [dialogBusy, setDialogBusy] = useState(false)
@@ -344,18 +389,25 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   const load = useCallback(async () => {
     if (!tenantId) return
     setLoading(true)
-    const [s, i, m] = await Promise.allSettled([adminApi.getSeats(tenantId), adminApi.listInvites(tenantId), adminApi.listMembers(tenantId)])
-    setSeats(s.status === "fulfilled" ? s.value : null)
-    setInvites(i.status === "fulfilled" ? i.value : [])
-    setMembers(m.status === "fulfilled" ? m.value : [])
-    const failed = [s, i, m].find((r) => r.status === "rejected") as PromiseRejectedResult | undefined
-    setErr(failed ? adminErrorMessage(failed.reason) : null)
+    await Promise.all([
+      runInto(setSeats, () => adminApi.getSeats(tenantId)),
+      runInto(setInvites, () => adminApi.listInvites(tenantId)),
+      runInto(setMembers, () => adminApi.listMembers(tenantId)),
+    ])
     setLoading(false)
   }, [tenantId])
+
+  const refresh = () => {
+    invalidateAdminCache()
+    void load()
+  }
 
   useEffect(() => {
     setLinks({})
     setLatest(null)
+    setSeats(LOADING)
+    setInvites(LOADING)
+    setMembers(LOADING)
     void load()
   }, [load])
 
@@ -384,6 +436,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   }
 
   const resend = async (inv: TenantInvite) => {
+    if (rowBusy) return
     setRowBusy(inv.id)
     setErr(null)
     try {
@@ -400,10 +453,13 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   }
 
   const revoke = async (inv: TenantInvite) => {
+    if (rowBusy) return
     setRowBusy(inv.id)
     setErr(null)
+    setDialogErr(null)
     try {
       await adminApi.revokeInvite(inv.id)
+      setRevokeTarget(null)
       setLinks((p) => {
         const { [inv.id]: _drop, ...rest } = p
         return rest
@@ -412,7 +468,8 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
       setNotice(`Invitation to ${inv.email} revoked; the seat is free again.`)
       await load()
     } catch (e) {
-      setErr(adminErrorMessage(e))
+      // e.g. 403 when the invite's role outranks you: shown verbatim, inside the dialog
+      setDialogErr(adminErrorMessage(e))
     } finally {
       setRowBusy(null)
     }
@@ -438,7 +495,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   }
 
   const saveRoles = async () => {
-    if (!roleTarget) return
+    if (!roleTarget || dialogBusy) return
     // Roles we cannot grant but the member already holds must be sent back unchanged.
     const locked = roleTarget.roles.filter((r) => !grantable.includes(r))
     const next = Array.from(new Set([...roleDraft, ...locked]))
@@ -461,13 +518,14 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   }
 
   const runConfirm = async () => {
-    if (!confirm) return
+    if (!confirm || dialogBusy) return
     setDialogBusy(true)
     setDialogErr(null)
     try {
-      if (confirm.kind === "deactivate") await adminApi.deactivateMember(tenantId, confirm.member.id)
+      let extra: string | null = null
+      if (confirm.kind === "deactivate") extra = deactivateNotice(await adminApi.deactivateMember(tenantId, confirm.member.id))
       else await adminApi.reactivateMember(tenantId, confirm.member.id)
-      setNotice(`${confirm.member.email} ${confirm.kind === "deactivate" ? "deactivated; the seat is released" : "reactivated"}.`)
+      setNotice(`${confirm.member.email} ${confirm.kind === "deactivate" ? "deactivated; the seat is released" : "reactivated"}.${extra ? ` ${extra}` : ""}`)
       setConfirm(null)
       await load()
     } catch (e) {
@@ -478,7 +536,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
   }
 
   const runTransfer = async () => {
-    if (!transferTarget) return
+    if (!transferTarget || dialogBusy) return
     setDialogBusy(true)
     setDialogErr(null)
     try {
@@ -515,7 +573,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
               </select>
             </div>
           )}
-          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading} className="gap-1.5">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={loading} className="gap-1.5">
             <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
             Refresh
           </Button>
@@ -536,7 +594,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
             {seats ? (
               <SeatMeter used={seats.seats_used} limit={seats.seat_limit} pending={seats.pending_invites} />
             ) : (
-              <p className="text-sm text-muted-foreground">{loading ? "Loading..." : "Seat usage unavailable."}</p>
+              <TeamSectionState state={seatsState} service="Admin" onRetry={refresh} />
             )}
             {seats && (
               <p className="mt-2 text-xs text-muted-foreground">
@@ -597,7 +655,9 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
           <CardDescription>The server stores only a hash of each link, so a link can be copied only right after it was created or resent.</CardDescription>
         </CardHeader>
         <CardContent>
-          {openInvites.length === 0 ? (
+          {invitesState.state !== "ready" ? (
+            <TeamSectionState state={invitesState} service="Admin" onRetry={refresh} />
+          ) : openInvites.length === 0 ? (
             <p className="text-sm text-muted-foreground">No pending invitations.</p>
           ) : (
             <div className="overflow-x-auto">
@@ -622,7 +682,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
                       <TableCell className="text-xs">{fmt(inv.expires_at)}</TableCell>
                       <TableCell>
                         <div className="flex justify-end gap-1.5">
-                          <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" disabled={rowBusy === inv.id} onClick={() => void resend(inv)}>
+                          <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" disabled={rowBusy !== null} onClick={() => void resend(inv)}>
                             <RotateCcw className="h-3 w-3" /> Resend
                           </Button>
                           <Button
@@ -635,7 +695,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
                           >
                             <Copy className="h-3 w-3" /> Copy link
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-red-400" disabled={rowBusy === inv.id} onClick={() => void revoke(inv)}>
+                          <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-red-400" disabled={rowBusy !== null} onClick={() => { setDialogErr(null); setRevokeTarget(inv) }}>
                             <Trash2 className="h-3 w-3" /> Revoke
                           </Button>
                         </div>
@@ -654,8 +714,10 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
           <CardTitle className="text-base">Members</CardTitle>
         </CardHeader>
         <CardContent>
-          {members.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{loading ? "Loading..." : "No members yet."}</p>
+          {membersState.state !== "ready" ? (
+            <TeamSectionState state={membersState} service="Admin" onRetry={refresh} />
+          ) : members.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No members yet.</p>
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -690,7 +752,22 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline" className={m.is_active ? "border-emerald-500/40 text-emerald-400" : "border-red-500/40 text-red-400"}>{m.is_active ? "active" : "suspended"}</Badge>
+                          <div className="flex flex-wrap gap-1">
+                            <Badge variant="outline" className={m.is_active ? "border-emerald-500/40 text-emerald-400" : "border-red-500/40 text-red-400"}>{m.is_active ? "active" : "suspended"}</Badge>
+                            {(() => {
+                              const sb = syncBadge(m.supabase_sync_status)
+                              if (!sb) return null
+                              return (
+                                <Badge
+                                  variant="outline"
+                                  className={sb.tone === "failed" ? "border-red-500/40 text-red-400" : "border-amber-500/40 text-amber-400"}
+                                  title={sb.tone === "failed" ? "Supabase sync failed. Try saving the roles again, or ask the platform team to run a reconcile." : "Supabase sync is still pending."}
+                                >
+                                  {sb.label}
+                                </Badge>
+                              )
+                            })()}
+                          </div>
                         </TableCell>
                         <TableCell>
                           <div className="flex flex-wrap justify-end gap-1.5">
@@ -722,6 +799,25 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
           )}
         </CardContent>
       </Card>
+
+      {/* Revoke invite: confirm */}
+      <Dialog open={!!revokeTarget} onOpenChange={(o) => !o && rowBusy === null && setRevokeTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Revoke invitation?</DialogTitle>
+            <DialogDescription>
+              {revokeTarget?.email} will no longer be able to use the link and the held seat is freed.
+            </DialogDescription>
+          </DialogHeader>
+          <InlineAlert message={dialogErr} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRevokeTarget(null)} disabled={rowBusy !== null}>Cancel</Button>
+            <Button variant="destructive" onClick={() => revokeTarget && void revoke(revokeTarget)} disabled={rowBusy !== null}>
+              {rowBusy !== null ? "Revoking..." : "Revoke invitation"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Role editor */}
       <Dialog open={!!roleTarget} onOpenChange={(o) => !o && setRoleTarget(null)}>
@@ -764,7 +860,7 @@ export function TeamTab({ identity, tenants }: { identity: Whoami | null; tenant
             <DialogTitle>{confirm?.kind === "deactivate" ? "Deactivate member?" : "Reactivate member?"}</DialogTitle>
             <DialogDescription>
               {confirm?.kind === "deactivate"
-                ? `${confirm?.member.email} will lose access immediately and the seat is released. Their data is kept.`
+                ? `${confirm?.member.email} is blocked from signing in and the seat is released. Their data is kept. Sessions already open end when revoked, or within about an hour (token expiry).`
                 : `${confirm?.member.email} will regain access and take a seat (a free seat is required).`}
             </DialogDescription>
           </DialogHeader>
@@ -1065,6 +1161,8 @@ export function SeatsBillingTab({ tenants }: { tenants: Tenant[] }) {
         </CardContent>
       </Card>
 
+      <PlatformAdminsCard />
+
       <Dialog open={applyOpen} onOpenChange={setApplyOpen}>
         <DialogContent>
           <DialogHeader>
@@ -1081,5 +1179,144 @@ export function SeatsBillingTab({ tenants }: { tenants: Tenant[] }) {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// ── Platform admins (platform_admin only) ───────────────────────────────────
+
+/**
+ * Add / remove platform admins by user id (or by e-mail when the user is in the actor's own tenant).
+ * There is no list endpoint, so nothing is shown that was not just confirmed by the server.
+ * PUT/DELETE /platform/admins/{user_id}; a 404 means the endpoint is not deployed.
+ */
+export function PlatformAdminsCard() {
+  const [ident, setIdent] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [removeOpen, setRemoveOpen] = useState(false)
+  const [typed, setTyped] = useState("")
+  const [target, setTarget] = useState<string | null>(null)
+
+  const resolve = async (): Promise<string | null> => {
+    const direct = resolveUserId(ident, [])
+    if (direct) return direct
+    if (ident.includes("@")) {
+      const users = await adminApi.listUsers()
+      const id = resolveUserId(ident, users)
+      if (id) return id
+      throw new Error("No user with that e-mail is visible to you. Enter the user id instead.")
+    }
+    throw new Error("Enter the user id (UUID) or the e-mail of a user in your own organization.")
+  }
+
+  const begin = async (kind: "add" | "remove") => {
+    setErr(null)
+    setNotice(null)
+    setBusy(true)
+    try {
+      setTarget(await resolve())
+      setTyped("")
+      if (kind === "add") setAddOpen(true)
+      else setRemoveOpen(true)
+    } catch (e) {
+      setErr(adminErrorMessage(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const run = async (kind: "add" | "remove") => {
+    if (!target || busy) return
+    setBusy(true)
+    setErr(null)
+    try {
+      if (kind === "add") await adminApi.addPlatformAdmin(target)
+      else await adminApi.removePlatformAdmin(target)
+      setNotice(kind === "add" ? "Platform admin added." : "Platform admin removed.")
+      setIdent("")
+      setAddOpen(false)
+      setRemoveOpen(false)
+    } catch (e) {
+      if (statusFromError(e) === 404) {
+        setUnavailable(true)
+        setAddOpen(false)
+        setRemoveOpen(false)
+      } else {
+        setErr(adminErrorMessage(e))
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <ShieldPlus className="h-4 w-4 text-cyan-400" /> Platform admins
+        </CardTitle>
+        <CardDescription>Platform admins can manage every tenant. There is no list view; changes are confirmed by the server only.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {unavailable ? (
+          <p role="status" className="text-sm text-muted-foreground">Not available: this deployment of the admin service has no platform-admin endpoint.</p>
+        ) : (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor="pa-ident">User id or e-mail</Label>
+              <Input id="pa-ident" value={ident} onChange={(e) => setIdent(e.target.value)} placeholder="user id (UUID)" autoComplete="off" />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void begin("add")} disabled={busy || !ident.trim()} className="gap-1.5">
+                <UserPlus className="h-3.5 w-3.5" /> Add platform admin
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => void begin("remove")} disabled={busy || !ident.trim()} className="gap-1.5">
+                <UserMinus className="h-3.5 w-3.5" /> Remove platform admin
+              </Button>
+            </div>
+          </>
+        )}
+        <InlineAlert message={err} onDismiss={() => setErr(null)} />
+        <InlineNotice message={notice} onDismiss={() => setNotice(null)} />
+      </CardContent>
+
+      <Dialog open={addOpen} onOpenChange={(o) => !o && !busy && setAddOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Grant platform admin?</DialogTitle>
+            <DialogDescription>
+              User {target} will be able to manage every tenant, seat limit and module on the platform.
+            </DialogDescription>
+          </DialogHeader>
+          <InlineAlert message={err} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddOpen(false)} disabled={busy}>Cancel</Button>
+            <Button onClick={() => void run("add")} disabled={busy}>{busy ? "Working..." : "Grant platform admin"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={removeOpen} onOpenChange={(o) => !o && !busy && setRemoveOpen(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove platform admin?</DialogTitle>
+            <DialogDescription>
+              User {target} loses platform-wide access. Type the user id to confirm.
+            </DialogDescription>
+          </DialogHeader>
+          <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={target ?? ""} aria-label="Type the user id to confirm" autoComplete="off" />
+          <InlineAlert message={err} />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemoveOpen(false)} disabled={busy}>Cancel</Button>
+            <Button variant="destructive" onClick={() => void run("remove")} disabled={busy || typed.trim().toLowerCase() !== (target ?? "").toLowerCase()}>
+              {busy ? "Removing..." : "Remove platform admin"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   )
 }
