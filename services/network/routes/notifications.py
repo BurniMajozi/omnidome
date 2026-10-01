@@ -6,7 +6,9 @@ Provides:
 - Integration triggers for FNO outages, SLA breaches, billing events
 """
 
+import html
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -15,7 +17,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 
+from starlette.concurrency import run_in_threadpool
+
+from services.common import agentmail, suppression
 from services.common.auth import AuthContext, get_auth_context
+from services.common.url_safety import UnsafeUrl, validate_public_url
 from services.common.background_tasks import schedule_background
 from services.network.database import get_session
 from services.network.models import NetworkNotification, NetworkService
@@ -133,10 +139,9 @@ async def dispatch_notification(
             ).scalar_one_or_none()
             if svc:
                 service_customer_id = svc.customer_id
-                # TODO: look up customer contact details from CRM
-                # For now, use placeholder
-                if not recipients:
-                    recipients = ["customer@example.com"]
+        if not recipients:
+            # No CRM contact lookup is wired: never invent a recipient.
+            raise HTTPException(status_code=422, detail="recipients are required (no customer contact lookup is configured)")
 
         notifications = []
         for recipient in recipients:
@@ -293,51 +298,87 @@ async def mark_notification_read(
 # ---------------------------------------------------------------------------
 
 async def _send_notification(notification_id: uuid.UUID):
-    """Background task to send a notification via the appropriate channel."""
-    # In production, this would:
-    # - Email: use SMTP or SendGrid API
-    # - SMS: use Twilio or Clickatell API
-    # - Push: use Firebase Cloud Messaging
-    # - Webhook: POST to the webhook URL
-    # - In-app: store for the user's inbox
+    """Background task: deliver a notification and record what REALLY happened.
 
+    Status is only "sent" when the channel actually delivered it (in_app inbox row, a provider-accepted
+    email, a 2xx webhook). Channels without a provider are recorded as "queued_not_sent" /
+    "skipped_no_provider" with the reason in error_message, never as sent.
+    """
     from services.network.database import get_session as _get_session
-    # get_session() is a synchronous SQLAlchemy Session (see database.py),
-    # not AsyncSession -- this previously used `async with` on it, which
-    # would raise immediately, independent of the BackgroundTasks bug this
-    # was found alongside. Never caught because add_task() never ran it.
     with _get_session() as session:
         notification = session.execute(
             select(NetworkNotification).where(NetworkNotification.id == notification_id)
         ).scalar_one_or_none()
         if not notification:
             return
-
-        try:
-            if notification.channel == "email":
-                # TODO: integrate with email service
-                logger.info(f"Sending email to {notification.recipient}: {notification.title}")
-            elif notification.channel == "sms":
-                # TODO: integrate with SMS gateway
-                logger.info(f"Sending SMS to {notification.recipient}: {notification.title}")
-            elif notification.channel == "push":
-                # TODO: integrate with FCM
-                logger.info(f"Sending push to {notification.recipient}: {notification.title}")
-            elif notification.channel == "webhook":
-                # TODO: POST to webhook URL
-                logger.info(f"POSTing webhook to {notification.recipient}: {notification.title}")
-            elif notification.channel == "in_app":
-                # Already stored, just mark as sent
-                pass
-
-            notification.status = "sent"
-            notification.sent_at = datetime.now(timezone.utc)
-        except Exception as exc:
-            notification.status = "failed"
-            notification.error_message = str(exc)
-            logger.error(f"Failed to send notification {notification_id}: {exc}")
-
+        await deliver_notification(session, notification)
         session.flush()
+
+
+def _webhook_allowed(url: str) -> str:
+    """Return the URL if it is a public https URL (and on NETWORK_WEBHOOK_ALLOWED_HOSTS when set)."""
+    from urllib.parse import urlsplit
+    safe = validate_public_url(url)
+    allow = {h.strip().lower() for h in os.getenv("NETWORK_WEBHOOK_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    if allow and (urlsplit(safe).hostname or "").lower() not in allow:
+        raise UnsafeUrl("Webhook host is not on NETWORK_WEBHOOK_ALLOWED_HOSTS")
+    return safe
+
+
+async def deliver_notification(session, notification, *, email_sender=None, webhook_poster=None) -> None:
+    now = datetime.now(timezone.utc)
+    channel = notification.channel
+
+    def mark(status_, error=None):
+        notification.status = status_
+        notification.error_message = error
+        if status_ == "sent":
+            notification.sent_at = now
+
+    try:
+        if channel == "in_app":
+            mark("sent")  # the stored row IS the inbox entry
+        elif channel == "email":
+            if email_sender is None and not agentmail.is_configured():
+                mark("skipped_no_provider", "no email provider configured; email was not sent")
+                return
+            _, suppressed = suppression.filter_suppressed_sync(
+                session.connection(), notification.tenant_id, [notification.recipient])
+            if suppressed:
+                mark("dismissed", "recipient is on the suppression list; email was not sent")
+                return
+            sender = email_sender or agentmail.send_email
+            await sender(notification.recipient, notification.title,
+                         "<p>%s</p>" % html.escape(notification.message or ""))
+            mark("sent")
+        elif channel == "webhook":
+            try:
+                url = await run_in_threadpool(_webhook_allowed, notification.recipient)
+            except UnsafeUrl as exc:
+                mark("failed", f"webhook URL rejected: {exc}")
+                return
+            poster = webhook_poster or _post_webhook
+            code = await poster(url, {"title": notification.title, "message": notification.message,
+                                      "severity": notification.severity,
+                                      "trigger_type": notification.trigger_type})
+            if 200 <= code < 300:
+                mark("sent")
+            else:
+                mark("failed", f"webhook returned HTTP {code}")
+        elif channel in {"sms", "push"}:
+            mark("queued_not_sent", f"no {channel} provider is integrated; notification was not sent")
+        else:
+            mark("skipped_no_provider", f"unsupported channel {channel!r}; not sent")
+    except Exception as exc:  # noqa: BLE001
+        mark("failed", f"{type(exc).__name__}: delivery failed")
+        logger.error("Failed to send notification %s: %s", notification.id, type(exc).__name__)
+
+
+async def _post_webhook(url: str, payload: dict) -> int:
+    import httpx
+    async with httpx.AsyncClient(timeout=10, follow_redirects=False) as client:
+        resp = await client.post(url, json=payload)
+    return resp.status_code
 
 
 # ---------------------------------------------------------------------------

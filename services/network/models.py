@@ -165,7 +165,10 @@ class RadiusAccount(Base):
     )
 
     username: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Compatibility column: holds ONLY a salted PBKDF2 hash (never the plaintext). The recoverable
+    # secret needed for PAP/CHAP/Cleartext-Password lives Fernet-encrypted in password_enc.
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     framing_protocol: Mapped[str] = mapped_column(String(20), default="PPPoE", nullable=False)
     status: Mapped[str] = mapped_column(RADIUS_ACCOUNT_STATUS, default="active", nullable=False)
 
@@ -185,6 +188,10 @@ class RadiusAccount(Base):
     )
 
     service: Mapped["NetworkService"] = relationship(back_populates="radius_account")
+
+    @property
+    def has_password(self) -> bool:
+        return bool(self.password_enc)
 
     __table_args__ = (
         Index("ix_network_radius_accounts_tenant", "tenant_id"),
@@ -314,7 +321,7 @@ NOTIFICATION_CHANNEL = SAEnum(
 )
 
 NOTIFICATION_STATUS = SAEnum(
-    "pending", "sent", "failed", "read", "dismissed",
+    "pending", "sent", "failed", "read", "dismissed", "queued_not_sent", "skipped_no_provider",
     name="notification_status", create_type=True,
 )
 
@@ -1243,6 +1250,25 @@ class ServiceTrafficUsage(Base):
 # ONT Provisioning Parameters
 # ---------------------------------------------------------------------------
 
+class NasClient(Base):
+    """A NAS/BNG the tenant operates. The RADIUS shared secret (also used for CoA/Disconnect,
+    RFC 5176) is stored Fernet-encrypted and never returned."""
+
+    __tablename__ = "network_nas_clients"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str] = mapped_column(String(45), nullable=False)
+    shared_secret_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    coa_port: Mapped[int] = mapped_column(Integer, default=3799, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        Index("ix_network_nas_tenant_ip", "tenant_id", "ip_address", unique=True),
+    )
+
+
 class ONTProvisioningProfile(Base):
     """ONT/GPON provisioning parameters for device activation."""
 
@@ -1261,9 +1287,15 @@ class ONTProvisioningProfile(Base):
     # ONT serial (vendor-specific format)
     loid: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     # Logical ONT ID (used by some FNOs)
+    # DEPRECATED plaintext column: always NULL now; the secret is in loid_password_enc (Fernet).
     loid_password: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    loid_password_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     onu_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     # ONU ID on the OLT
+
+    @property
+    def has_loid_password(self) -> bool:
+        return bool(self.loid_password_enc)
 
     # VLAN configuration
     internet_vlan_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -1339,7 +1371,9 @@ class WiFiConfigProfile(Base):
 
     # Security
     security_mode: Mapped[str] = mapped_column(WIFI_SECURITY, nullable=False, default="wpa2_wpa3")
+    # DEPRECATED plaintext columns: always NULL now; secrets live in the *_enc columns (Fernet).
     passphrase: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    passphrase_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Band steering
     band_steering_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -1357,6 +1391,7 @@ class WiFiConfigProfile(Base):
     guest_ssid_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     guest_ssid_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     guest_ssid_passphrase: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    guest_ssid_passphrase_enc: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Push status
     push_status: Mapped[str] = mapped_column(String(20), default="pending")
@@ -1369,6 +1404,14 @@ class WiFiConfigProfile(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False,
     )
+
+    @property
+    def has_passphrase(self) -> bool:
+        return bool(self.passphrase_enc)
+
+    @property
+    def has_guest_passphrase(self) -> bool:
+        return bool(self.guest_ssid_passphrase_enc)
 
     __table_args__ = (
         Index("ix_wcp_tenant_service", "tenant_id", "service_id", unique=True),

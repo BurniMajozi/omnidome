@@ -5,6 +5,7 @@ full device sync (fetch all states from HA → upsert to iot_devices),
 health checks, and new device discovery.
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -15,12 +16,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.url_safety import UnsafeUrl
 from services.iot.access import require_tier
+from services.iot.url_policy import validate_ha_url
 from services.iot.database import get_session
 from services.iot.ha_client import (
     HARestClient,
-    decrypt_token,
+    ReconnectRequired,
+    TokenEncryptionUnavailable,
+    describe_ha_error,
     encrypt_token,
+    ha_http_error,
+    token_for_integration,
     ha_entity_to_device_type,
     ha_state_to_device_status,
 )
@@ -146,9 +153,20 @@ async def _get_integration_or_404(
     return integration
 
 
+async def _checked_url(url: str) -> str:
+    """Validate a tenant-supplied HA URL (SSRF policy) -> 422 with a generic message."""
+    try:
+        return await asyncio.to_thread(validate_ha_url, url)
+    except UnsafeUrl as exc:
+        raise HTTPException(status_code=422, detail=f"ha_url rejected: {exc}") from exc
+
+
 def _build_ha_client(integration: IoTIntegration) -> HARestClient:
     """Build an HARestClient from an IoTIntegration (decrypts the token)."""
-    token = decrypt_token(integration.ha_token_encrypted)
+    try:
+        token = token_for_integration(integration)
+    except (TokenEncryptionUnavailable, ReconnectRequired) as exc:
+        raise ha_http_error(exc) from exc
     return HARestClient(integration.ha_url, token)
 
 
@@ -225,6 +243,11 @@ async def register_integration(
     The HA token is encrypted before storage. If `is_primary` is set to True,
     any existing primary integration for this tenant will be demoted.
     """
+    ha_url = await _checked_url(body.ha_url)
+    try:
+        encrypted_token = encrypt_token(body.ha_token)  # 503 when IOT_TOKEN_ENCRYPTION_KEY is not set
+    except TokenEncryptionUnavailable as exc:
+        raise ha_http_error(exc) from exc
     async with get_session() as session:
         # If setting as primary, demote existing primary
         if body.is_primary:
@@ -237,13 +260,10 @@ async def register_integration(
             for existing in existing_primary.scalars().all():
                 existing.is_primary = False
 
-        # Encrypt the token before storage
-        encrypted_token = encrypt_token(body.ha_token)
-
         integration = IoTIntegration(
             tenant_id=ctx.tenant_id,
             name=body.name,
-            ha_url=body.ha_url.rstrip("/"),
+            ha_url=ha_url,
             ha_token_encrypted=encrypted_token,
             status="disconnected",
             is_primary=body.is_primary,
@@ -273,6 +293,13 @@ async def update_integration(
     this tenant will be demoted. If `ha_token` is provided it will be
     encrypted before storage.
     """
+    new_url = await _checked_url(body.ha_url) if body.ha_url else None
+    new_token = None
+    if body.ha_token is not None:
+        try:
+            new_token = encrypt_token(body.ha_token)
+        except TokenEncryptionUnavailable as exc:
+            raise ha_http_error(exc) from exc
     async with get_session() as session:
         integration = await _get_integration_or_404(
             session, integration_id, ctx.tenant_id
@@ -294,11 +321,15 @@ async def update_integration(
 
         # Encrypt token if provided
         if "ha_token" in update_data:
-            update_data["ha_token_encrypted"] = encrypt_token(update_data.pop("ha_token"))
+            update_data.pop("ha_token")
+            update_data["ha_token_encrypted"] = new_token
 
         # Normalize URL if provided
-        if "ha_url" in update_data and update_data["ha_url"]:
-            update_data["ha_url"] = update_data["ha_url"].rstrip("/")
+        if "ha_url" in update_data:
+            if new_url is None:
+                update_data.pop("ha_url")
+            else:
+                update_data["ha_url"] = new_url
 
         for field, value in update_data.items():
             setattr(integration, field, value)
@@ -363,16 +394,14 @@ async def test_connection(
                 latency_ms=latency_ms,
             )
         except Exception as exc:
+            code, message = describe_ha_error(exc)
             integration.status = "error"
-            integration.last_error = str(exc)
+            integration.last_error = code
             await session.flush()
             logger.warning(
-                "Integration %s connection test failed: %s", integration_id, exc
+                "Integration %s connection test failed: %s (%s)", integration_id, code, type(exc).__name__
             )
-            return ConnectionTestResponse(
-                success=False,
-                message=f"Connection failed: {exc}",
-            )
+            return ConnectionTestResponse(success=False, message=message)
         finally:
             await ha_client.aclose()
 
@@ -513,13 +542,13 @@ async def sync_devices(
 
                     devices_synced += 1
                 except Exception as exc:
-                    errors.append(f"Error syncing entity {ha_state.get('entity_id', '?')}: {exc}")
+                    errors.append(f"Error syncing entity {ha_state.get('entity_id', '?')}")
                     logger.exception("Error syncing entity from HA")
 
             # Update integration record
             integration.status = "connected" if not errors else "error"
             integration.last_sync_at = datetime.now(timezone.utc)
-            integration.last_error = "; ".join(errors) if errors else None
+            integration.last_error = "partial_sync_errors" if errors else None
 
             # Try to get HA version
             try:
@@ -554,13 +583,10 @@ async def sync_devices(
             )
         except Exception as exc:
             integration.status = "error"
-            integration.last_error = str(exc)
+            integration.last_error = describe_ha_error(exc)[0]
             await session.flush()
-            logger.error("Integration %s sync failed: %s", integration_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Device sync failed: {exc}",
-            ) from exc
+            logger.error("Integration %s sync failed: %s", integration_id, type(exc).__name__)
+            raise ha_http_error(exc) from exc
         finally:
             await ha_client.aclose()
 
@@ -599,11 +625,11 @@ async def integration_health(
             await session.flush()
         except Exception as exc:
             logger.warning(
-                "Integration %s health check failed: %s", integration_id, exc
+                "Integration %s health check failed: %s", integration_id, type(exc).__name__
             )
             if integration.status == "connected":
                 integration.status = "error"
-                integration.last_error = str(exc)
+                integration.last_error = describe_ha_error(exc)[0]
                 await session.flush()
         finally:
             await ha_client.aclose()
@@ -677,10 +703,7 @@ async def discover_devices(
                 existing_count=len(existing_ids),
             )
         except Exception as exc:
-            logger.error("Integration %s discovery failed: %s", integration_id, exc)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Device discovery failed: {exc}",
-            ) from exc
+            logger.error("Integration %s discovery failed: %s", integration_id, type(exc).__name__)
+            raise ha_http_error(exc) from exc
         finally:
             await ha_client.aclose()

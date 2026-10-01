@@ -88,21 +88,59 @@ def missing_column_ddl(
     return out
 
 
+def rebuild_decision(columns: Iterable[str], row_count: int, dependents: List[str]) -> str:
+    """"skip" (not legacy), "refuse_rows", "refuse_dependents" or "rebuild"."""
+    if not is_legacy_iot_devices(columns):
+        return "skip"
+    if row_count:
+        return "refuse_rows"
+    if dependents:
+        return "refuse_dependents"
+    return "rebuild"
+
+
+def _legacy_dependents(conn) -> List[str]:
+    """Views, RLS policies and (non-internal) triggers on iot_devices. DROP ... CASCADE would
+    silently take views with it and would lose policies/triggers, so their presence blocks the rebuild."""
+    out: List[str] = []
+    out += [f"view:{r[0]}" for r in conn.execute(text("""
+        SELECT DISTINCT c.relname FROM pg_depend d
+          JOIN pg_rewrite r ON r.oid = d.objid
+          JOIN pg_class c ON c.oid = r.ev_class
+         WHERE d.refobjid = 'iot_devices'::regclass AND c.oid <> 'iot_devices'::regclass
+    """)).all()]
+    out += [f"policy:{r[0]}" for r in conn.execute(text(
+        "SELECT polname FROM pg_policy WHERE polrelid = 'iot_devices'::regclass")).all()]
+    out += [f"trigger:{r[0]}" for r in conn.execute(text(
+        "SELECT tgname FROM pg_trigger WHERE tgrelid = 'iot_devices'::regclass AND NOT tgisinternal")).all()]
+    return out
+
+
 def _rebuild_empty_legacy_devices(conn) -> bool:
-    """Drop the legacy `iot_devices` (only while EMPTY — it always was, nothing
-    could write to it) so create_all rebuilds it in the model's shape. Foreign
-    keys other tables had to it are restored afterwards. Returns True if rebuilt."""
+    """Drop the legacy `iot_devices` (only while EMPTY and with no dependents other than foreign
+    keys) so create_all rebuilds it in the model's shape. Foreign keys other tables had to it are
+    restored afterwards. The table is locked ACCESS EXCLUSIVE first, in the same transaction as
+    the emptiness check and the drop, so no row can appear in between. Returns True if rebuilt."""
     insp = inspect(conn)
     if not insp.has_table("iot_devices"):
         return False
     cols = {c["name"] for c in insp.get_columns("iot_devices")}
     if not is_legacy_iot_devices(cols):
         return False
+    conn.execute(text("LOCK TABLE iot_devices IN ACCESS EXCLUSIVE MODE"))
     rows = conn.execute(text("SELECT count(*) FROM iot_devices")).scalar()
-    if rows:
+    dependents = _legacy_dependents(conn) if not rows else []
+    decision = rebuild_decision(cols, rows or 0, dependents)
+    if decision == "refuse_rows":
         logger.error(
             "iot_devices is in the legacy shape and has %s rows; adding missing columns "
             "only — migrate it by hand", rows,
+        )
+        return False
+    if decision == "refuse_dependents":
+        logger.error(
+            "iot_devices is in the legacy shape but has dependents (%s); not dropping it. "
+            "Adding missing columns only — rebuild it by hand", ", ".join(dependents),
         )
         return False
     keep = conn.execute(text("""

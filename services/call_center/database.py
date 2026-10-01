@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import AsyncGenerator, Optional
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, Numeric, JSON
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Index, Integer, String, Text, Numeric, JSON, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -35,6 +35,8 @@ class Agent(Base):
     csat_score: Mapped[float] = mapped_column(Numeric(3, 2), default=0)
     skills: Mapped[Optional[str]] = mapped_column(JSON, default=list)  # ["sales", "support", "billing"]
     max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=1)
+    # Optional link to the platform user who works as this agent (used for websocket ownership checks).
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -72,8 +74,36 @@ class CallSession(Base):
     # Call outcome
     outcome: Mapped[Optional[str]] = mapped_column(String(50))  # RESOLVED, ESCALATED, CALLBACK, SALE, NO_ANSWER, ABANDONED
     notes: Mapped[Optional[str]] = mapped_column(Text)
+    # Recording consent / retention (POPIA). unknown | given | declined | not_required
+    recording_consent: Mapped[str] = mapped_column(String(20), default="unknown", server_default="unknown")
+    consent_recorded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    retention_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Provider/CDR call id; unique per tenant so CDR imports are idempotent.
+    external_call_id: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ux_call_sessions_tenant_external", "tenant_id", "external_call_id", unique=True,
+              postgresql_where=text("external_call_id IS NOT NULL"),
+              sqlite_where=text("external_call_id IS NOT NULL")),
+    )
+
+
+# ── Provider credentials (Fernet-encrypted blob; never returned) ────────
+
+class ProviderCredential(Base):
+    __tablename__ = "call_center_provider_credentials"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)  # deepgram | voicebox | sip | astpp
+    config_enc: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet(JSON of all fields)
+    field_names: Mapped[Optional[str]] = mapped_column(JSON, default=list)  # names only, for display
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (Index("ux_call_provider_cred_tenant", "tenant_id", "provider", unique=True),)
 
 
 # ── Call Queue ──────────────────────────────────────────────────────────
@@ -163,7 +193,27 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+_ALTERS = (
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS recording_consent VARCHAR(20) NOT NULL DEFAULT 'unknown'",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS consent_recorded_at TIMESTAMPTZ",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS retention_until TIMESTAMPTZ",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS external_call_id VARCHAR(100)",
+    "ALTER TABLE call_center_agents ADD COLUMN IF NOT EXISTS user_id UUID",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_call_sessions_tenant_external "
+    "ON call_sessions (tenant_id, external_call_id) WHERE external_call_id IS NOT NULL",
+)
+_LOCK_KEY = 8007_020_001
+
+
 async def init_tables():
+    """create_all (new tables) then idempotent ALTERs for columns added to existing tables, under an
+    advisory lock so concurrent workers do not race."""
     engine = get_async_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        if conn.dialect.name != "postgresql":
+            return
+        await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _LOCK_KEY})
+        for ddl in _ALTERS:
+            await conn.execute(text(ddl))

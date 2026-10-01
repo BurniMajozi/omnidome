@@ -5,21 +5,24 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 import uuid
 
-import jwt
 import httpx
-from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, Depends, HTTPException, status, UploadFile, File, Form, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select, desc, func
+from sqlalchemy import select, desc, func, case
+from starlette.concurrency import run_in_threadpool
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import get_current_tenant_id, get_current_user_id
+from services.common import secretbox
 from services.common.db import run_with_db_retry
+from services.common.ws_auth import authenticate_ws, ws_roles
+from services.call_center import access, policy
 
 from services.call_center.database import (
-    Agent, Script, CallSession, CallQueue, WhisperSession, VoiceAgentDeployment,
-    get_session, init_tables,
+    Agent, Script, CallSession, CallQueue, WhisperSession, VoiceAgentDeployment, ProviderCredential,
+    get_session, init_tables, _get_session_factory,
 )
 from services.call_center.deepgram_service import (
     transcribe_audio,
@@ -31,31 +34,15 @@ from services.call_center.deepgram_service import (
 VoiceboxUnavailable = DeepgramError
 
 
-# WS JWT auth helper — mirrors services.common.auth._decode_jwt
-def _decode_ws_jwt(token: str) -> Dict[str, Any]:
-    verify = os.getenv("AUTH_JWT_VERIFY", "true").lower() in {"1", "true", "yes", "on"}
-    algorithm = os.getenv("AUTH_JWT_ALGORITHM", "HS256")
-    options = {"verify_aud": False}
-    if verify:
-        key = os.getenv("AUTH_JWT_PUBLIC_KEY") or os.getenv("AUTH_JWT_SECRET")
-        if not key:
-            raise ValueError("JWT verification key not configured")
-        try:
-            return jwt.decode(token, key, algorithms=[algorithm], options=options)
-        except jwt.PyJWTError as exc:
-            raise ValueError("Invalid token") from exc
-    # Unverified decode (dev-only, requires AUTH_JWT_VERIFY=false)
-    try:
-        return jwt.decode(token, options={"verify_signature": False})
-    except jwt.PyJWTError as exc:
-        raise ValueError("Invalid token") from exc
-
-
 app = FastAPI(title="OmniDome Call Center Service", version="0.3.0")
 guard = EntitlementGuard(module_id="call_center")
 logger = logging.getLogger("call_center")
 
 configure_production(app)
+
+# Every HTTP route below goes on `router`, which enforces the role tiers (access.py); /health and the
+# websocket stay on `app` (the websocket authenticates itself from the signed identity).
+router = APIRouter(dependencies=[Depends(access.enforce_route_tier)])
 
 
 @app.get("/health", tags=["Health"])
@@ -102,6 +89,7 @@ def _agent_to_dict(agent: Agent) -> dict:
         "status": agent.status, "daily_sales": float(agent.daily_sales),
         "mttr_minutes": float(agent.mttr_minutes), "csat_score": float(agent.csat_score),
         "skills": agent.skills or [], "max_concurrent_calls": agent.max_concurrent_calls,
+        "user_id": str(agent.user_id) if agent.user_id else None,
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -128,7 +116,12 @@ def _session_to_dict(session: CallSession) -> dict:
         "end_time": session.end_time.isoformat() if session.end_time else None,
         "duration_seconds": session.duration_seconds,
         "sentiment_score": float(session.sentiment_score) if session.sentiment_score is not None else None,
-        "recording_url": session.recording_url,
+        # recording download is admin tier: the reference is redacted for everyone else
+        "recording_url": session.recording_url if access.request_is_admin.get() else None,
+        "has_recording": bool(session.recording_url),
+        "recording_consent": session.recording_consent,
+        "consent_recorded_at": session.consent_recorded_at.isoformat() if session.consent_recorded_at else None,
+        "retention_until": session.retention_until.isoformat() if session.retention_until else None,
         "transcript": session.transcript,
         "live_transcript": session.live_transcript,
         "outcome": session.outcome,
@@ -198,9 +191,10 @@ class AgentCreate(BaseModel):
     csat_score: float = 0
     skills: List[str] = []
     max_concurrent_calls: int = 1
+    user_id: Optional[uuid.UUID] = None
 
 
-@app.get("/agents")
+@router.get("/agents")
 async def list_agents(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
@@ -214,7 +208,7 @@ async def list_agents(
     return [_agent_to_dict(a) for a in result.scalars().all()]
 
 
-@app.post("/agents", status_code=status.HTTP_201_CREATED)
+@router.post("/agents", status_code=status.HTTP_201_CREATED)
 async def create_agent(
     agent: AgentCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -227,7 +221,7 @@ async def create_agent(
     return _agent_to_dict(a)
 
 
-@app.get("/agents/{agent_id}")
+@router.get("/agents/{agent_id}")
 async def get_agent(agent_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.tenant_id == tenant_id))
     agent = result.scalar_one_or_none()
@@ -236,7 +230,7 @@ async def get_agent(agent_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_curr
     return _agent_to_dict(agent)
 
 
-@app.put("/agents/{agent_id}")
+@router.put("/agents/{agent_id}")
 async def update_agent(agent_id: uuid.UUID, body: AgentCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.tenant_id == tenant_id))
     agent = result.scalar_one_or_none()
@@ -249,7 +243,7 @@ async def update_agent(agent_id: uuid.UUID, body: AgentCreate, tenant_id: uuid.U
     return _agent_to_dict(agent)
 
 
-@app.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(agent_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(Agent).where(Agent.id == agent_id, Agent.tenant_id == tenant_id))
     agent = result.scalar_one_or_none()
@@ -270,14 +264,14 @@ class ScriptCreate(BaseModel):
     active: bool = True
 
 
-@app.get("/scripts")
+@router.get("/scripts")
 async def list_scripts(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     await _ensure_sample_data(tenant_id, db)
     result = await db.execute(select(Script).where(Script.tenant_id == tenant_id).order_by(Script.created_at))
     return [_script_to_dict(s) for s in result.scalars().all()]
 
 
-@app.post("/scripts", status_code=status.HTTP_201_CREATED)
+@router.post("/scripts", status_code=status.HTTP_201_CREATED)
 async def create_script(script: ScriptCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     s = Script(tenant_id=tenant_id, **script.dict())
     db.add(s)
@@ -286,7 +280,7 @@ async def create_script(script: ScriptCreate, tenant_id: uuid.UUID = Depends(get
     return _script_to_dict(s)
 
 
-@app.delete("/scripts/{script_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/scripts/{script_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_script(script_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(Script).where(Script.id == script_id, Script.tenant_id == tenant_id))
     script = result.scalar_one_or_none()
@@ -309,6 +303,11 @@ class CallSessionCreate(BaseModel):
     sentiment_score: Optional[float] = None
     recording_url: Optional[str] = None
     transcript: Optional[str] = None
+    recording_consent: str = "unknown"  # unknown | given | declined | not_required
+
+
+class ConsentUpdate(BaseModel):
+    consent: str  # given | declined | not_required | unknown
 
 
 class CallSessionEnd(BaseModel):
@@ -322,7 +321,7 @@ class LiveTranscriptUpdate(BaseModel):
     transcript: str
 
 
-@app.get("/sessions")
+@router.get("/sessions")
 async def list_sessions(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
@@ -339,16 +338,94 @@ async def list_sessions(
     return [_session_to_dict(s) for s in result.scalars().all()]
 
 
-@app.post("/sessions", status_code=status.HTTP_201_CREATED)
+async def _customer_exists(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
+    """Customers live in CRM: verify through it (404 -> False). Unreachable CRM -> 503 (fail closed);
+    CALL_VERIFY_CUSTOMER=false skips the check (development only)."""
+    if os.getenv("CALL_VERIFY_CUSTOMER", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return True
+    crm_url = os.getenv("CRM_SERVICE_URL", "http://crm:8001")
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{crm_url}/api/crm/customers/{customer_id}",
+                                    headers={"x-tenant-id": str(tenant_id)})
+    except Exception:
+        raise HTTPException(status_code=503, detail="Cannot verify customer right now")
+    if resp.status_code == 404:
+        return False
+    if resp.status_code == 200:
+        return True
+    raise HTTPException(status_code=503, detail="Cannot verify customer right now")
+
+
+@router.post("/sessions", status_code=status.HTTP_201_CREATED)
 async def create_session(session: CallSessionCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
-    s = CallSession(tenant_id=tenant_id, **session.dict())
+    if session.recording_consent not in policy.CONSENT_VALUES:
+        raise HTTPException(status_code=422, detail=f"recording_consent must be one of {policy.CONSENT_VALUES}")
+    # agent / queue / customer must belong to the caller's tenant (404 otherwise)
+    if not (await db.execute(select(Agent.id).where(Agent.id == session.agent_id, Agent.tenant_id == tenant_id))).first():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if session.queue_id and not (await db.execute(
+            select(CallQueue.id).where(CallQueue.id == session.queue_id, CallQueue.tenant_id == tenant_id))).first():
+        raise HTTPException(status_code=404, detail="Queue not found")
+    if session.customer_id and not await _customer_exists(tenant_id, session.customer_id):
+        raise HTTPException(status_code=404, detail="Customer not found")
+    data = session.dict()
+    try:
+        data["recording_url"] = await run_in_threadpool(policy.validate_recording_ref, session.recording_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if data["recording_url"] and not policy.consent_allows_recording(session.recording_consent):
+        raise HTTPException(status_code=409, detail="A recording cannot be attached without recording consent")
+    s = CallSession(tenant_id=tenant_id, **data)
+    s.retention_until = policy.retention_until(session.start_time)
+    if session.recording_consent != "unknown":
+        s.consent_recorded_at = datetime.now(timezone.utc)
     db.add(s)
     await db.flush()
     await db.refresh(s)
     return _session_to_dict(s)
 
 
-@app.get("/sessions/{session_id}")
+@router.put("/sessions/{session_id}/consent")
+async def set_recording_consent(session_id: uuid.UUID, body: ConsentUpdate,
+                                tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    if body.consent not in policy.CONSENT_VALUES:
+        raise HTTPException(status_code=422, detail=f"consent must be one of {policy.CONSENT_VALUES}")
+    result = await db.execute(select(CallSession).where(CallSession.id == session_id, CallSession.tenant_id == tenant_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Call session not found")
+    session.recording_consent = body.consent
+    session.consent_recorded_at = datetime.now(timezone.utc)
+    if body.consent == "declined":
+        # declined/withdrawn consent: drop what was captured for this session
+        session.recording_url = None
+        session.live_transcript = None
+    await db.flush()
+    return {"id": str(session.id), "recording_consent": session.recording_consent,
+            "consent_recorded_at": session.consent_recorded_at.isoformat()}
+
+
+async def purge_expired_recordings(db, now: Optional[datetime] = None, tenant_id: Optional[uuid.UUID] = None) -> int:
+    """Retention purge (NOT auto-run): clears recording_url, transcript and live_transcript of sessions whose
+    retention_until has passed. Returns the number of sessions purged. Call from an admin job/script."""
+    now = now or datetime.now(timezone.utc)
+    stmt = select(CallSession).where(CallSession.retention_until.is_not(None), CallSession.retention_until < now)
+    if tenant_id is not None:
+        stmt = stmt.where(CallSession.tenant_id == tenant_id)
+    rows = (await db.execute(stmt)).scalars().all()
+    purged = 0
+    for r in rows:
+        if r.recording_url or r.transcript or r.live_transcript:
+            r.recording_url = None
+            r.transcript = None
+            r.live_transcript = None
+            purged += 1
+    await db.flush()
+    return purged
+
+
+@router.get("/sessions/{session_id}")
 async def get_call_session(session_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallSession).where(CallSession.id == session_id, CallSession.tenant_id == tenant_id))
     session = result.scalar_one_or_none()
@@ -357,7 +434,7 @@ async def get_call_session(session_id: uuid.UUID, tenant_id: uuid.UUID = Depends
     return _session_to_dict(session)
 
 
-@app.put("/sessions/{session_id}/end")
+@router.put("/sessions/{session_id}/end")
 async def end_session(session_id: uuid.UUID, payload: CallSessionEnd, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallSession).where(CallSession.id == session_id, CallSession.tenant_id == tenant_id))
     session = result.scalar_one_or_none()
@@ -372,7 +449,7 @@ async def end_session(session_id: uuid.UUID, payload: CallSessionEnd, tenant_id:
     return _session_to_dict(session)
 
 
-@app.put("/sessions/{session_id}/live-transcript")
+@router.put("/sessions/{session_id}/live-transcript")
 async def update_live_transcript(
     session_id: uuid.UUID,
     payload: LiveTranscriptUpdate,
@@ -389,7 +466,7 @@ async def update_live_transcript(
     return {"id": str(session.id), "live_transcript": session.live_transcript}
 
 
-@app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_session(session_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallSession).where(CallSession.id == session_id, CallSession.tenant_id == tenant_id))
     session = result.scalar_one_or_none()
@@ -413,7 +490,7 @@ class QueueCreate(BaseModel):
     required_skills: List[str] = []
 
 
-@app.get("/queues")
+@router.get("/queues")
 async def list_queues(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
@@ -430,7 +507,7 @@ async def list_queues(
     return [_queue_to_dict(q) for q in result.scalars().all()]
 
 
-@app.post("/queues", status_code=status.HTTP_201_CREATED)
+@router.post("/queues", status_code=status.HTTP_201_CREATED)
 async def create_queue(queue: QueueCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     q = CallQueue(tenant_id=tenant_id, **queue.dict())
     db.add(q)
@@ -439,7 +516,7 @@ async def create_queue(queue: QueueCreate, tenant_id: uuid.UUID = Depends(get_cu
     return _queue_to_dict(q)
 
 
-@app.get("/queues/{queue_id}")
+@router.get("/queues/{queue_id}")
 async def get_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallQueue).where(CallQueue.id == queue_id, CallQueue.tenant_id == tenant_id))
     q = result.scalar_one_or_none()
@@ -448,7 +525,7 @@ async def get_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_curr
     return _queue_to_dict(q)
 
 
-@app.put("/queues/{queue_id}")
+@router.put("/queues/{queue_id}")
 async def update_queue(queue_id: uuid.UUID, body: QueueCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallQueue).where(CallQueue.id == queue_id, CallQueue.tenant_id == tenant_id))
     q = result.scalar_one_or_none()
@@ -461,7 +538,7 @@ async def update_queue(queue_id: uuid.UUID, body: QueueCreate, tenant_id: uuid.U
     return _queue_to_dict(q)
 
 
-@app.delete("/queues/{queue_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/queues/{queue_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     result = await db.execute(select(CallQueue).where(CallQueue.id == queue_id, CallQueue.tenant_id == tenant_id))
     q = result.scalar_one_or_none()
@@ -471,7 +548,7 @@ async def delete_queue(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_c
     await db.flush()
 
 
-@app.get("/queues/{queue_id}/stats")
+@router.get("/queues/{queue_id}/stats")
 async def get_queue_stats(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     """Real-time queue statistics."""
     result = await db.execute(select(CallQueue).where(CallQueue.id == queue_id, CallQueue.tenant_id == tenant_id))
@@ -521,7 +598,7 @@ async def get_queue_stats(queue_id: uuid.UUID, tenant_id: uuid.UUID = Depends(ge
     }
 
 
-@app.get("/queues/dashboard/summary")
+@router.get("/queues/dashboard/summary")
 async def get_queues_dashboard(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     """Summary of all queues for dashboard display."""
     await _ensure_sample_data(tenant_id, db)
@@ -547,8 +624,21 @@ async def get_queues_dashboard(tenant_id: uuid.UUID = Depends(get_current_tenant
 # WHISPER AI — WebSocket for real-time streaming STT
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Active WebSocket connections: {session_id: {agent_id, websocket}}
-whisper_connections: Dict[str, Dict[str, Any]] = {}
+# Active WebSocket connections, keyed by (tenant_id, call_session_id) -> {"agents": {agent_key: websocket}}.
+# In-process state: the service must run with a single worker.
+whisper_connections: Dict[tuple, Dict[str, Any]] = {}
+
+
+async def _load_session_for_ws(tenant_id: uuid.UUID, session_id: uuid.UUID):
+    """Return (CallSession | None, Agent | None) for this tenant only."""
+    async with _get_session_factory()() as db:
+        sess = (await db.execute(select(CallSession).where(
+            CallSession.id == session_id, CallSession.tenant_id == tenant_id))).scalar_one_or_none()
+        agent = None
+        if sess is not None:
+            agent = (await db.execute(select(Agent).where(
+                Agent.id == sess.agent_id, Agent.tenant_id == tenant_id))).scalar_one_or_none()
+        return sess, agent
 
 
 @app.websocket("/ws/whisper/{call_session_id}")
@@ -562,41 +652,49 @@ async def whisper_websocket(
     Client sends audio chunks as binary messages.
     Server responds with JSON: {"transcript": "...", "is_final": false, "confidence": 0.95}
 
-    Query params:
-    - token: JWT bearer token (required) — validated via AUTH_JWT_VERIFY/AUTH_JWT_SECRET
-    - language: str (default "en")
+    Auth: signed identity headers only (AUTH_MODE=signed); the tenant NEVER comes from the URL or a
+    token in the query string. Close codes: 4001 unauthenticated, 4003 forbidden (not your tenant/session,
+    no recording consent), 4004 unknown session.
+    Query params: language (default "en").
     """
-    # Authenticate before accept: extract JWT from query param
-    token = websocket.query_params.get("token", "")
-    if not token:
-        await websocket.close(code=4001, reason="Missing JWT token")
-        return
-
     try:
-        payload = _decode_ws_jwt(token)
-    except ValueError as e:
-        await websocket.close(code=4001, reason=str(e))
+        tenant_id, user_id = authenticate_ws(websocket.headers, websocket.url.path, websocket.query_params.get("token"))
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid or missing identity")
+        return
+    try:
+        session_uuid = uuid.UUID(call_session_id)
+    except ValueError:
+        await websocket.close(code=4004, reason="Unknown session")
         return
 
-    user_id = payload.get("sub") or payload.get("user_id")
-    tenant_raw = payload.get("tenant_id") or payload.get("org_id")
-    if not user_id or not tenant_raw:
-        await websocket.close(code=4001, reason="Invalid token: missing sub/user_id or tenant_id/org_id")
+    roles = ws_roles(websocket.headers)
+    is_admin = (not access.roles_enforced()) or bool(roles & access.ADMIN_ROLES)
+    sess, agent = await _load_session_for_ws(tenant_id, session_uuid)
+    if sess is None:
+        await websocket.close(code=4004, reason="Unknown session")  # also hides other tenants' sessions
+        return
+    if not policy.whisper_authorize(
+        tenant_id=tenant_id, user_id=user_id, is_admin=is_admin,
+        session_tenant_id=sess.tenant_id, session_agent_id=sess.agent_id,
+        agent_user_id=agent.user_id if agent else None,
+    ):
+        await websocket.close(code=4003, reason="Not allowed on this call session")
+        return
+    if not policy.consent_allows_recording(sess.recording_consent):
+        await websocket.close(code=4003, reason="Recording consent required")
         return
 
-    tenant_id = str(tenant_raw)
-    # agent_id is optional in token; can also be passed as query param for routing
-    agent_id = websocket.query_params.get("agent_id", user_id)
-    language = websocket.query_params.get("language", "en")
+    agent_id = str(user_id)
+    tenant_str = str(tenant_id)
+    language = websocket.query_params.get("language", "en")[:10]
 
     await websocket.accept()
 
-    session_key = call_session_id
-    if session_key not in whisper_connections:
-        whisper_connections[session_key] = {"agents": {}}
-    whisper_connections[session_key]["agents"][agent_id] = websocket
+    session_key = policy.connection_key(tenant_id, session_uuid)
+    whisper_connections.setdefault(session_key, {"agents": {}})["agents"][agent_id] = websocket
 
-    logger.info(f"Whisper WS connected: session={call_session_id}, agent={agent_id}")
+    logger.info("Whisper WS connected: tenant=%s session=%s", tenant_str, call_session_id)
 
     audio_buffer = bytearray()
 
@@ -604,7 +702,10 @@ async def whisper_websocket(
         while True:
             data = await websocket.receive()
 
-            if "bytes" in data:
+            if data.get("type") == "websocket.disconnect":
+                break
+
+            if data.get("bytes") is not None:
                 # Audio chunk received
                 audio_buffer.extend(data["bytes"])
 
@@ -616,40 +717,38 @@ async def whisper_websocket(
                     try:
                         result = await transcribe_audio(
                             audio_bytes=audio_chunk,
-                            tenant_id=tenant_id,
+                            tenant_id=tenant_str,
                             language=language,
-                            user_id=agent_id or tenant_id,
+                            user_id=agent_id,
                         )
                         transcript = result.get("transcript", "").strip()
                         confidence = result.get("confidence", 0)
 
                         if transcript:
-                            response = {
+                            await websocket.send_json({
                                 "type": "transcript",
                                 "transcript": transcript,
                                 "is_final": False,
                                 "confidence": confidence,
                                 "language": language,
-                            }
-                            await websocket.send_json(response)
+                            })
                     except Exception as e:
-                        logger.error(f"Whisper STT error: {e}")
+                        logger.error("Whisper STT error: %s", type(e).__name__)
                         await websocket.send_json({"type": "error", "message": "Transcription failed"})
-            elif "text" in data:
+            elif data.get("text") is not None:
                 # Control message (JSON)
                 try:
                     msg = json.loads(data["text"])
                     action = msg.get("action")
 
                     if action == "finalize":
-                        # Process remaining buffer
                         if audio_buffer:
                             try:
                                 result = await transcribe_audio(
                                     audio_bytes=bytes(audio_buffer),
-                                    tenant_id=tenant_id,
+                                    tenant_id=tenant_str,
                                     language=language,
-                                    user_id=agent_id or tenant_id,
+                                    user_id=agent_id,
                                 )
                                 transcript = result.get("transcript", "").strip()
                                 if transcript:
@@ -660,26 +759,26 @@ async def whisper_websocket(
                                         "confidence": result.get("confidence", 0),
                                     })
                             except Exception as e:
-                                logger.error(f"Whisper finalize error: {e}")
+                                logger.error("Whisper finalize error: %s", type(e).__name__)
                         await websocket.send_json({"type": "ended"})
 
                     elif action == "ping":
                         await websocket.send_json({"type": "pong"})
 
                 except json.JSONDecodeError:
-                    # Silently ignore invalid JSON control messages
                     pass
 
     except WebSocketDisconnect:
-        logger.info(f"Whisper WS disconnected: session={call_session_id}, agent={agent_id}")
+        logger.info("Whisper WS disconnected: session=%s", call_session_id)
     finally:
-        if session_key in whisper_connections and agent_id in whisper_connections[session_key]["agents"]:
-            del whisper_connections[session_key]["agents"][agent_id]
-        if session_key in whisper_connections and not whisper_connections[session_key]["agents"]:
-            del whisper_connections[session_key]
+        entry = whisper_connections.get(session_key)
+        if entry is not None:
+            entry["agents"].pop(agent_id, None)
+            if not entry["agents"]:
+                whisper_connections.pop(session_key, None)
 
 
-@app.post("/whisper/sessions", status_code=status.HTTP_201_CREATED)
+@router.post("/whisper/sessions", status_code=status.HTTP_201_CREATED)
 async def create_whisper_session(
     call_session_id: uuid.UUID,
     agent_id: uuid.UUID,
@@ -687,7 +786,15 @@ async def create_whisper_session(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
-    """Create a Whisper AI session linked to a call session."""
+    """Create a Whisper AI session linked to a call session (both must belong to the caller's tenant)."""
+    call = (await db.execute(select(CallSession).where(
+        CallSession.id == call_session_id, CallSession.tenant_id == tenant_id))).scalar_one_or_none()
+    if call is None:
+        raise HTTPException(status_code=404, detail="Call session not found")
+    if not (await db.execute(select(Agent.id).where(Agent.id == agent_id, Agent.tenant_id == tenant_id))).first():
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if not policy.consent_allows_recording(call.recording_consent):
+        raise HTTPException(status_code=409, detail="Recording consent is required before live transcription")
     ws = WhisperSession(
         tenant_id=tenant_id,
         call_session_id=call_session_id,
@@ -701,11 +808,12 @@ async def create_whisper_session(
     return {
         "id": str(ws.id), "call_session_id": str(call_session_id),
         "agent_id": str(agent_id), "language": language, "status": "ACTIVE",
-        "ws_url": f"/ws/whisper/{call_session_id}?tenant_id={tenant_id}&agent_id={agent_id}&language={language}",
+        # identity comes from the signed headers, never from the URL
+        "ws_url": f"/ws/whisper/{call_session_id}?language={language}",
     }
 
 
-@app.put("/whisper/sessions/{whisper_id}/stop")
+@router.put("/whisper/sessions/{whisper_id}/stop")
 async def stop_whisper_session(
     whisper_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -727,7 +835,7 @@ async def stop_whisper_session(
 # 360° CUSTOMER VIEW  (new — aggregates CRM, Billing, Support)
 # ═══════════════════════════════════════════════════════════════════════════
 
-@app.get("/customer-360/{customer_id}")
+@router.get("/customer-360/{customer_id}")
 async def get_customer_360(
     customer_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -872,7 +980,7 @@ async def get_customer_360(
 # ANALYTICS  (existing)
 # ═══════════════════════════════════════════════════════════════════════════
 
-@app.get("/analytics/sentiment")
+@router.get("/analytics/sentiment")
 async def get_realtime_sentiment(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
     await _ensure_sample_data(tenant_id, db)
     result = await db.execute(
@@ -932,7 +1040,7 @@ def _deployment_to_dict(d: VoiceAgentDeployment) -> dict:
     }
 
 
-@app.get("/voice-agents")
+@router.get("/voice-agents")
 async def list_voice_agents(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
@@ -946,7 +1054,7 @@ async def list_voice_agents(
     return [_deployment_to_dict(d) for d in result.scalars().all()]
 
 
-@app.post("/voice-agents/deploy", status_code=status.HTTP_201_CREATED)
+@router.post("/voice-agents/deploy", status_code=status.HTTP_201_CREATED)
 async def deploy_voice_agent(
     body: VoiceAgentDeployRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1011,7 +1119,7 @@ async def deploy_voice_agent(
     return _deployment_to_dict(deployment)
 
 
-@app.post("/voice-agents/{deployment_id}/stop")
+@router.post("/voice-agents/{deployment_id}/stop")
 async def stop_voice_agent(
     deployment_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -1047,52 +1155,183 @@ async def stop_voice_agent(
     return _deployment_to_dict(deployment)
 
 
-@app.post("/reports/import")
+@router.post("/reports/import")
 async def import_external_report(
     file: UploadFile = File(...),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    db=Depends(get_session),
 ):
-    content = await file.read()
-    lines = [line for line in content.decode("utf-8", errors="ignore").splitlines() if line.strip()]
-    record_count = max(0, len(lines) - 1) if len(lines) > 1 else len(lines)
+    """Import a CDR CSV (admin tier). Required columns: external_call_id, agent_extension, start_time;
+    optional: direction (INBOUND|OUTBOUND), end_time, duration_seconds, outcome, customer_id. Times are ISO-8601.
+    Rows are validated one by one; valid rows are persisted as call sessions (idempotent on
+    (tenant, external_call_id): re-importing the same file inserts nothing twice). Size cap: CALL_IMPORT_MAX_MB
+    (default 10). The response lists per-row errors (first 50)."""
+    cap = policy.max_import_bytes()
+    chunks, size = [], 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > cap:
+            raise HTTPException(status_code=413, detail=f"File exceeds the {cap // (1024 * 1024)} MB import limit")
+        chunks.append(chunk)
+    try:
+        text_content = b"".join(chunks).decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded CSV")
+
+    agents = (await db.execute(select(Agent).where(Agent.tenant_id == tenant_id))).scalars().all()
+    by_ext = {a.extension: a.id for a in agents}
+    parsed = policy.parse_cdr_csv(text_content, by_ext)
+    if parsed["header_error"]:
+        raise HTTPException(status_code=422, detail=parsed["header_error"])
+
+    rows = parsed["rows"]
+    existing: set = set()
+    ids = [r["external_call_id"] for r in rows]
+    for i in range(0, len(ids), 500):
+        found = await db.execute(select(CallSession.external_call_id).where(
+            CallSession.tenant_id == tenant_id, CallSession.external_call_id.in_(ids[i:i + 500])))
+        existing.update(x for (x,) in found.all())
+    inserted = duplicates = 0
+    for r in rows:
+        if r["external_call_id"] in existing:
+            duplicates += 1
+            continue
+        db.add(CallSession(
+            tenant_id=tenant_id, agent_id=r["agent_id"], customer_id=r["customer_id"], direction=r["direction"],
+            start_time=r["start_time"], end_time=r["end_time"], duration_seconds=r["duration_seconds"],
+            outcome=r["outcome"], external_call_id=r["external_call_id"], recording_consent="unknown",
+            retention_until=policy.retention_until(r["start_time"]),
+            notes="[CDR import]",
+        ))
+        inserted += 1
+    await db.flush()
+    errors = parsed["errors"]
+    if inserted == 0 and errors and not duplicates:
+        result_status = "FAILED"
+    elif errors:
+        result_status = "PARTIAL"
+    else:
+        result_status = "SUCCESS"
     return {
-        "status": "SUCCESS",
-        "processed_records": record_count,
-        "anomalies_detected": 0,
+        "status": result_status,
         "filename": file.filename,
-        "message": f"Report '{file.filename}' processed ({record_count} records).",
+        "rows_total": parsed["total"],
+        "processed_records": inserted,
+        "duplicates_skipped": duplicates,
+        "rejected_rows": len(errors),
+        "anomalies_detected": parsed["anomalies"],
+        "errors": errors[:50],
+        "message": f"{inserted} record(s) imported, {duplicates} duplicate(s) skipped, {len(errors)} rejected.",
     }
 
 
-@app.get("/reports/intelligence")
+@router.get("/reports/intelligence")
 async def get_hub_intelligence(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
+    days: int = Query(30, ge=1, le=365),
 ):
-    stmt = select(CallSession).where(CallSession.tenant_id == tenant_id)
-    result = await db.execute(stmt)
-    sessions = result.scalars().all()
-    if not sessions:
-        return {
-            "resolution_rate": 0.0,
-            "avg_talk_time_seconds": 0,
-            "closed_queries": 0,
-            "peak_volume_period": "None",
-            "health_status": "IDLE",
-        }
-    total = len(sessions)
-    durations = [s.duration_seconds for s in sessions if s.duration_seconds]
-    avg_duration = round(sum(durations) / len(durations)) if durations else 0
-    resolved = sum(1 for s in sessions if (s.outcome and s.outcome.upper() in ("RESOLVED", "COMPLETED")) or s.end_time is not None)
-    res_rate = round((resolved / total) * 100, 1)
-    status_label = "OPTIMAL" if res_rate >= 80 else "NEEDS_ATTENTION" if res_rate >= 50 else "CRITICAL"
+    """Call KPIs for the last `days` days (default 30), computed with SQL aggregation (nothing is loaded
+    into memory). Resolution counts only sessions with an explicit RESOLVED/COMPLETED outcome, over
+    finished sessions; with no data the rates are null."""
+    return await compute_intelligence(db, tenant_id, datetime.now(timezone.utc) - timedelta(days=days), days)
+
+
+async def compute_intelligence(db, tenant_id: uuid.UUID, since: datetime, days: int = 30) -> dict:
+    window = (CallSession.tenant_id == tenant_id, CallSession.start_time >= since)
+    resolved_expr = func.sum(case((func.upper(CallSession.outcome).in_(policy.RESOLVED_OUTCOMES), 1), else_=0))
+    finished_expr = func.sum(case((CallSession.end_time.is_not(None), 1), else_=0))
+    total, finished, resolved, avg_talk = (await db.execute(
+        select(func.count(CallSession.id), finished_expr, resolved_expr,
+               func.avg(case((CallSession.duration_seconds > 0, CallSession.duration_seconds), else_=None)))
+        .where(*window)
+    )).one()
+    total, finished, resolved = int(total or 0), int(finished or 0), int(resolved or 0)
+    if total == 0:
+        return {"window_days": days, "total_sessions": 0, "resolution_rate": None, "avg_talk_time_seconds": None,
+                "closed_queries": 0, "peak_volume_period": None, "health_status": policy.health_label(None)}
+    hour = func.extract("hour", CallSession.start_time)
+    peak = (await db.execute(
+        select(hour.label("h"), func.count(CallSession.id).label("n")).where(*window)
+        .group_by(hour).order_by(func.count(CallSession.id).desc(), hour).limit(1)
+    )).first()
+    peak_period = None
+    if peak is not None and peak[0] is not None:
+        h = int(peak[0])
+        peak_period = f"{h:02d}:00-{(h + 1) % 24:02d}:00 UTC"
+    rate = round(resolved / finished * 100, 1) if finished else None
     return {
-        "resolution_rate": res_rate,
-        "avg_talk_time_seconds": avg_duration,
+        "window_days": days,
+        "total_sessions": total,
+        "resolution_rate": rate,
+        "avg_talk_time_seconds": round(float(avg_talk)) if avg_talk is not None else None,
         "closed_queries": resolved,
-        "peak_volume_period": "Business Hours (08:00 - 17:00)",
-        "health_status": status_label,
+        "peak_volume_period": peak_period,
+        "health_status": policy.health_label(rate),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROVIDER CREDENTIALS  (admin tier; Fernet-encrypted at rest, never returned)
+# ═══════════════════════════════════════════════════════════════════════════
+
+PROVIDERS = ("deepgram", "voicebox", "sip", "astpp")
+
+
+class ProviderCredentialBody(BaseModel):
+    # free-form string fields, e.g. {"api_key": "..."} or {"host": "...", "username": "...", "password": "..."}
+    fields: Dict[str, str]
+
+
+def _credential_view(row: ProviderCredential) -> dict:
+    return {"provider": row.provider, "configured": True, "fields": sorted(row.field_names or []),
+            "secret": "••••", "updated_at": row.updated_at.isoformat() if row.updated_at else None}
+
+
+@router.get("/provider-credentials")
+async def list_provider_credentials(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    rows = (await db.execute(select(ProviderCredential).where(ProviderCredential.tenant_id == tenant_id))).scalars().all()
+    return [_credential_view(r) for r in rows]
+
+
+@router.put("/provider-credentials/{provider}")
+async def put_provider_credentials(provider: str, body: ProviderCredentialBody,
+                                   tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    if provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail="Unknown provider")
+    if not body.fields or len(body.fields) > 20 or any(len(k) > 50 or len(v) > 2000 for k, v in body.fields.items()):
+        raise HTTPException(status_code=422, detail="fields must have 1-20 entries (names <= 50, values <= 2000 chars)")
+    try:
+        blob = secretbox.encrypt(json.dumps(body.fields))
+    except secretbox.SecretsUnavailable:
+        logger.error("SECRETS_ENCRYPTION_KEY unavailable: refusing to store provider credentials")
+        raise HTTPException(status_code=503, detail="Secret storage is not configured")
+    row = (await db.execute(select(ProviderCredential).where(
+        ProviderCredential.tenant_id == tenant_id, ProviderCredential.provider == provider))).scalar_one_or_none()
+    if row is None:
+        row = ProviderCredential(tenant_id=tenant_id, provider=provider, config_enc=blob, field_names=sorted(body.fields))
+        db.add(row)
+    else:
+        row.config_enc = blob
+        row.field_names = sorted(body.fields)
+        row.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    await db.refresh(row)
+    return _credential_view(row)
+
+
+@router.delete("/provider-credentials/{provider}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider_credentials(provider: str, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                      db=Depends(get_session)):
+    row = (await db.execute(select(ProviderCredential).where(
+        ProviderCredential.tenant_id == tenant_id, ProviderCredential.provider == provider))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Credentials not found")
+    await db.delete(row)
+    await db.flush()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1121,13 +1360,13 @@ class AudioIntelligenceResponse(BaseModel):
     metadata: dict = {}
 
 
-@app.get("/ai/voices")
+@router.get("/ai/voices")
 async def get_ai_voices():
     """Return available Deepgram Aura voices."""
     return {"voices": list_voices()}
 
 
-@app.post("/ai/speech-to-text")
+@router.post("/ai/speech-to-text")
 async def speech_to_text(
     file: UploadFile = File(...),
     language: str = Form("en"),
@@ -1152,7 +1391,7 @@ async def speech_to_text(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/text-to-speech")
+@router.post("/ai/text-to-speech")
 async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await synthesize_speech(
@@ -1173,7 +1412,7 @@ async def text_to_speech(request: TTSRequest, tenant_id: uuid.UUID = Depends(get
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/audio-intelligence")
+@router.post("/ai/audio-intelligence")
 async def audio_intelligence(file: UploadFile = File(...), language: str = Form("en"), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
@@ -1186,7 +1425,7 @@ async def audio_intelligence(file: UploadFile = File(...), language: str = Form(
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/summarize")
+@router.post("/ai/summarize")
 async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
@@ -1198,7 +1437,7 @@ async def summarize_call(file: UploadFile = File(...), tenant_id: uuid.UUID = De
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/sentiment")
+@router.post("/ai/sentiment")
 async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
@@ -1210,7 +1449,7 @@ async def sentiment_analysis(file: UploadFile = File(...), tenant_id: uuid.UUID 
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/intents")
+@router.post("/ai/intents")
 async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
@@ -1222,7 +1461,7 @@ async def intent_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = 
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/ai/topics")
+@router.post("/ai/topics")
 async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = Depends(get_current_tenant_id), user_id: uuid.UUID = Depends(get_current_user_id)):
     try:
         audio_bytes = await file.read()
@@ -1234,6 +1473,10 @@ async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = D
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# All HTTP routes are registered above; include the gated router last.
+app.include_router(router)
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8007)
+    uvicorn.run(app, host="0.0.0.0", port=8007, workers=1)

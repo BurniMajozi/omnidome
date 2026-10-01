@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -17,13 +18,26 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id
+from services.common.db import run_with_db_retry
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+from services.support import finance_bridge
+from services.support.access import require, require_job_access, require_tier
 from services.support.database import Ticket, TicketReply, get_session, init_tables
 
 logger = logging.getLogger("support.main")
-app = FastAPI(title="CoreConnect Support Service", version="0.2.0")
 guard = EntitlementGuard(module_id="support")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    guard.ensure_startup()
+    # Retry while Postgres (or its DNS) comes up instead of crash-looping the worker.
+    await run_with_db_retry(init_tables, logger=logger)
+    yield
+
+
+app = FastAPI(title="CoreConnect Support Service", version="0.3.0", lifespan=lifespan)
 
 configure_production(app)
 
@@ -31,11 +45,6 @@ configure_production(app)
 @app.get("/health", tags=["Health"])
 async def health():
     return {"status": "ok", "service": "support"}
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    guard.ensure_startup()
 
 
 @app.middleware("http")
@@ -48,7 +57,7 @@ async def entitlement_middleware(request, call_next):
 CRM_URL = os.getenv("CRM_SERVICE_URL", "http://crm:8001")
 
 
-async def _enrich_ticket_with_customer(ticket_dict: dict, tenant_id: uuid.UUID) -> dict:
+async def _enrich_ticket_with_customer(ticket_dict: dict, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None) -> dict:
     """Fetch customer name from CRM and add to ticket dict. Non-blocking."""
     import httpx
     try:
@@ -57,7 +66,7 @@ async def _enrich_ticket_with_customer(ticket_dict: dict, tenant_id: uuid.UUID) 
             async with httpx.AsyncClient(timeout=3) as client:
                 resp = await client.get(
                     f"{CRM_URL}/customers/{cid}",
-                    headers={"X-Tenant-ID": str(tenant_id)},
+                    headers=finance_bridge.signed_headers(tenant_id, user_id, "GET", f"/customers/{cid}"),
                 )
                 if resp.status_code == 200:
                     customer = resp.json()
@@ -67,6 +76,28 @@ async def _enrich_ticket_with_customer(ticket_dict: dict, tenant_id: uuid.UUID) 
     except Exception:
         pass  # Non-blocking: tickets still work without customer enrichment
     return ticket_dict
+
+TICKET_STATUSES = {"OPEN", "IN_PROGRESS", "ESCALATED", "ON_HOLD", "PENDING", "RESOLVED", "CLOSED"}
+
+
+async def _verify_customer(tenant_id: uuid.UUID, user_id: Optional[uuid.UUID], customer_id: uuid.UUID) -> None:
+    """The customer must exist in the caller's tenant (CRM is tenant-scoped). 422 if unknown,
+    503 if it cannot be checked. SUPPORT_VERIFY_CUSTOMER=false disables (local development only)."""
+    if os.getenv("SUPPORT_VERIFY_CUSTOMER", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(
+                f"{CRM_URL}/customers/{customer_id}",
+                headers=finance_bridge.signed_headers(tenant_id, user_id, "GET", f"/customers/{customer_id}"),
+            )
+    except Exception:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Could not verify the customer; try again")
+    if resp.status_code == 404:
+        raise HTTPException(status_code=422, detail="Unknown customer for this tenant")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=503, detail="Could not verify the customer; try again")
+
 
 class TicketCreate(BaseModel):
     customer_id: uuid.UUID
@@ -90,6 +121,8 @@ class ResolveTicket(BaseModel):
     fcr: bool = False
     parts_used: List[Dict[str, Any]] = Field(default_factory=list)
     speed_test: Optional[Dict[str, Any]] = None
+    # Technician-recorded time on the job; costed at SUPPORT_LABOUR_RATE_PER_HOUR for the finance expense.
+    labour_minutes: Optional[int] = Field(None, ge=0, le=24 * 60)
 
 
 class TicketResponse(BaseModel):
@@ -140,10 +173,12 @@ async def root():
 @app.post("/tickets", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
 async def create_ticket(
     ticket: TicketCreate,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(require_tier("manager")),
     db=Depends(get_session),
 ):
-    """Create a new support ticket"""
+    """Create a new support ticket (manager tier; the customer must belong to the tenant)"""
+    tenant_id = auth.tenant_id
+    await _verify_customer(tenant_id, auth.user_id, ticket.customer_id)
     t = Ticket(
         tenant_id=tenant_id,
         customer_id=ticket.customer_id,
@@ -220,11 +255,16 @@ async def get_ticket(
 async def update_ticket(
     ticket_id: uuid.UUID,
     payload: TicketStatusUpdate,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(require_tier("technician")),
     db=Depends(get_session),
 ):
-    """Update ticket status"""
+    """Update ticket status (technicians: their own / unassigned jobs; managers: any)"""
     from sqlalchemy import select
+
+    tenant_id = auth.tenant_id
+    new_status = (payload.status or "").strip().upper()
+    if new_status not in TICKET_STATUSES:
+        raise HTTPException(status_code=422, detail=f"status must be one of {sorted(TICKET_STATUSES)}")
 
     result = await db.execute(
         select(Ticket).where(
@@ -236,7 +276,8 @@ async def update_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    ticket.status = payload.status
+    await require_job_access(auth, db, ticket.assigned_to)
+    ticket.status = new_status
     await db.flush()
     td = _ticket_to_dict(ticket)
     await _notify_ticket_update(str(tenant_id), td)
@@ -246,11 +287,13 @@ async def update_ticket(
 @app.delete("/tickets/{ticket_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_ticket(
     ticket_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(require_tier("admin")),
     db=Depends(get_session),
 ):
-    """Delete a ticket"""
+    """Delete a ticket (admin tier)"""
     from sqlalchemy import select
+
+    tenant_id = auth.tenant_id
 
     result = await db.execute(
         select(Ticket).where(
@@ -269,11 +312,13 @@ async def delete_ticket(
 @app.post("/tickets/{ticket_id}/escalate-fno")
 async def escalate_to_fno(
     ticket_id: uuid.UUID,
-    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    auth: AuthContext = Depends(require_tier("manager")),
     db=Depends(get_session),
 ):
-    """Trigger browser automation to log a ticket on the FNO portal"""
+    """Trigger browser automation to log a ticket on the FNO portal (manager tier)"""
     from sqlalchemy import select
+
+    tenant_id = auth.tenant_id
 
     result = await db.execute(
         select(Ticket).where(
@@ -304,7 +349,7 @@ async def escalate_to_fno(
 @app.post("/tickets/{ticket_id}/accept")
 async def accept_ticket(
     ticket_id: uuid.UUID,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_tier("technician")),
     db=Depends(get_session),
 ):
     """Accept a job (technician claims it)"""
@@ -320,6 +365,7 @@ async def accept_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
+    await require_job_access(auth, db, ticket.assigned_to)
     ticket.status = "IN_PROGRESS"
     ticket.assigned_to = auth.user_id
     await db.flush()
@@ -331,7 +377,7 @@ async def accept_ticket(
 @app.post("/tickets/{ticket_id}/start")
 async def start_ticket(
     ticket_id: uuid.UUID,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_tier("technician")),
     db=Depends(get_session),
 ):
     """Start working on a job"""
@@ -347,6 +393,7 @@ async def start_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
+    await require_job_access(auth, db, ticket.assigned_to)
     ticket.status = "IN_PROGRESS"
     ticket.assigned_to = auth.user_id
     await db.flush()
@@ -359,7 +406,7 @@ async def start_ticket(
 async def resolve_ticket(
     ticket_id: uuid.UUID,
     payload: Optional[ResolveTicket] = None,
-    auth: AuthContext = Depends(get_auth_context),
+    auth: AuthContext = Depends(require_tier("technician")),
     db=Depends(get_session),
 ):
     """Mark ticket as resolved — DB-persisted"""
@@ -375,6 +422,7 @@ async def resolve_ticket(
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
+    await require_job_access(auth, db, ticket.assigned_to)
     fcr = payload.fcr if payload else False
     resolution_notes = payload.resolution_notes if payload else ""
     parts_used = payload.parts_used if payload else []
@@ -390,29 +438,21 @@ async def resolve_ticket(
     td = _ticket_to_dict(ticket)
     await _notify_ticket_update(str(auth.tenant_id), td)
 
-    # Finance bridge: track support cost on resolve
-    FINANCE_URL = os.getenv("FINANCE_SERVICE_URL", "http://finance:8015")
-    try:
-        parts_cost = sum(
-            float(p.get("unit_cost", 0)) * int(p.get("quantity", 1))
-            for p in parts_used
+    # Finance bridge: book the job's REAL recorded cost (parts + recorded labour), else nothing.
+    finance_status, finance_error = None, None
+    if ticket.finance_status != "posted":
+        entry = finance_bridge.build_entry(
+            ticket.id, ticket.subject, ticket.resolved_at.date(), parts_used,
+            payload.labour_minutes if payload else None,
         )
-        labor_cost = 150.0  # Standard callout fee
-        total_cost = labor_cost + parts_cost
-
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(
-                f"{FINANCE_URL}/records",
-                json={
-                    "record_type": "EXPENSE",
-                    "description": f"Support ticket {str(ticket_id)[:8]} - {ticket.subject}",
-                    "amount": total_cost,
-                    "period": ticket.resolved_at.strftime("%Y-%m"),
-                },
-                headers={"X-Tenant-Id": str(auth.tenant_id)},
-            )
-    except Exception as exc:
-        logger.warning("Finance expense bridge failed for ticket %s: %s", ticket_id, exc)
+        if entry is not None:
+            finance_status, finance_error = await finance_bridge.post_entry(auth.tenant_id, auth.user_id, entry)
+            ticket.finance_status, ticket.finance_error = finance_status, finance_error
+            if finance_status == "failed":
+                logger.warning("Finance expense for ticket %s not booked: %s", ticket_id, finance_error)
+            await db.flush()
+    else:
+        finance_status = "posted"
 
     return {
         "id": str(ticket_id),
@@ -422,6 +462,7 @@ async def resolve_ticket(
         "resolution_notes": resolution_notes,
         "parts_used_count": len(parts_used),
         "speed_test_recorded": speed_test is not None,
+        "finance": {"status": finance_status or "not_applicable", "error": finance_error},
     }
 
 
@@ -520,22 +561,24 @@ async def broadcast_alert(
     message: str,
     fno_id: Optional[uuid.UUID] = None,
     nas_id: Optional[int] = None,
+    auth: AuthContext = Depends(require_tier("admin")),
 ):
-    """Notify specific customers of an outage based on their network path"""
-    if nas_id:
-        logging.info(f"TARGETED BROADCAST: {title} sent to customers on NAS Hardware #{nas_id}")
-    elif fno_id:
-        logging.info(f"FNO BROADCAST: {title} sent to customers on FNO Portal {fno_id}")
-    else:
-        logging.info(f"GENERAL BROADCAST: {title} sent to all active subscribers")
-
-    return {"status": "SENT", "recipients_count": "CALCULATED_DYNAMICALLY"}
+    """Outage broadcast. Not implemented: recipients would have to be resolved from the network
+    service's customer/NAS data and delivered through the communication service, neither of which
+    is wired up here. Answers 501 rather than pretending to have sent anything."""
+    logger.info("broadcast requested by %s for tenant %s but is not implemented", auth.user_id, auth.tenant_id)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Network broadcasts are not implemented: no recipients are resolved and nothing is sent",
+    )
 
 
 # ── SSE Stream for Technician Job Dispatch ──────────────────────────────
 
-# In-memory store of active SSE connections per tenant
-# In production, use Redis pub/sub for multi-instance support
+# In-memory store of active SSE connections per tenant: ONE bounded queue PER CONNECTION.
+# Process-local, so this service must run a single uvicorn worker (docker-compose.local.yml sets
+# --workers 1; the Dockerfile default of 2 would split pushed jobs between two processes).
+# For several workers/instances replace this with Postgres LISTEN/NOTIFY or Redis pub/sub.
 _active_streams: Dict[str, List[asyncio.Queue]] = {}
 
 
@@ -546,7 +589,7 @@ async def _notify_new_ticket(tenant_id: str, ticket_dict: dict) -> None:
         try:
             q.put_nowait({"event": "new_ticket", "data": ticket_dict})
         except asyncio.QueueFull:
-            pass
+            pass  # slow consumer: it re-syncs from initial_state on reconnect
 
 
 async def _notify_ticket_update(tenant_id: str, ticket_dict: dict) -> None:

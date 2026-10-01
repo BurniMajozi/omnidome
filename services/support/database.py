@@ -41,6 +41,10 @@ class Ticket(Base):
     )
     serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
+    # Outcome of booking the job's recorded cost in finance (None = nothing was due / not attempted)
+    finance_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    finance_error: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+
 
 class TicketReply(Base):
     __tablename__ = "ticket_replies"
@@ -78,7 +82,29 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+_SCHEMA_LOCK_KEY = 0x5_0_8_008
+
+# create_all cannot be used: tickets.product_id references inventory_products (another service's
+# table, created by config/master_schema.sql), so metadata alone raises NoReferencedTableError.
+ADDITIVE_COLUMNS = (
+    ("tickets", "finance_status", "VARCHAR(20)"),
+    ("tickets", "finance_error", "VARCHAR(500)"),
+)
+
+
 async def init_tables():
+    """Add the columns this service introduced to the master-schema `tickets` table (idempotent,
+    serialised across workers by a transaction advisory lock). Tables themselves come from
+    config/master_schema.sql."""
+    from sqlalchemy import text
+
     engine = get_async_engine()
+    if engine.dialect.name != "postgresql":
+        return
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
+        for table, column, ddl in ADDITIVE_COLUMNS:
+            exists = (await conn.execute(text("SELECT to_regclass(:t)"), {"t": table})).scalar()
+            if exists is None:
+                continue
+            await conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS "{column}" {ddl}'))

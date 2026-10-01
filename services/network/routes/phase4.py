@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from services.common import secretbox
 from services.common.auth import AuthContext, get_auth_context
 from services.common.background_tasks import schedule_background
 from services.network.database import get_session
@@ -267,11 +268,23 @@ class ONTProvisionCreate(BaseModel):
     tr069_acs_url: Optional[str] = None
 
 
+def _enc(value: Optional[str]) -> Optional[str]:
+    """Encrypt a secret (None stays None). Fails closed with 503 when no key is configured."""
+    if value is None or value == "":
+        return None
+    try:
+        return secretbox.encrypt(value)
+    except secretbox.SecretsUnavailable:
+        logger.error("SECRETS_ENCRYPTION_KEY unavailable: refusing to store a credential")
+        raise HTTPException(status_code=503, detail="Secret storage is not configured")
+
+
 class ONTProvisionRead(BaseModel):
     id: uuid.UUID
     service_id: uuid.UUID
     gpon_serial_number: Optional[str]
     loid: Optional[str]
+    has_loid_password: bool = False
     internet_vlan_id: Optional[int]
     provisioning_status: str
     provisioned_at: Optional[datetime]
@@ -291,7 +304,8 @@ async def create_ont_provisioning(
             service_id=body.service_id,
             gpon_serial_number=body.gpon_serial_number,
             loid=body.loid,
-            loid_password=body.loid_password,
+            loid_password=None,  # deprecated plaintext column is never written
+            loid_password_enc=_enc(body.loid_password),
             onu_id=body.onu_id,
             internet_vlan_id=body.internet_vlan_id,
             voice_vlan_id=body.voice_vlan_id,
@@ -399,6 +413,8 @@ class WiFiConfigRead(BaseModel):
     ssid_24ghz: Optional[str]
     ssid_5ghz: Optional[str]
     security_mode: str
+    has_passphrase: bool = False
+    has_guest_passphrase: bool = False
     push_status: str
     last_pushed_at: Optional[datetime]
 
@@ -419,7 +435,8 @@ async def create_wifi_config(
             ssid_5ghz=body.ssid_5ghz,
             ssid_6ghz=body.ssid_6ghz,
             security_mode=body.security_mode,
-            passphrase=body.passphrase,
+            passphrase=None,  # deprecated plaintext column is never written
+            passphrase_enc=_enc(body.passphrase),
             band_steering_enabled=body.band_steering_enabled,
             preferred_band=body.preferred_band,
             channel_24ghz=body.channel_24ghz,
@@ -429,7 +446,8 @@ async def create_wifi_config(
             hidden_ssid=body.hidden_ssid,
             guest_ssid_enabled=body.guest_ssid_enabled,
             guest_ssid_name=body.guest_ssid_name,
-            guest_ssid_passphrase=body.guest_ssid_passphrase,
+            guest_ssid_passphrase=None,
+            guest_ssid_passphrase_enc=_enc(body.guest_ssid_passphrase),
         )
         session.add(wifi)
         session.flush()

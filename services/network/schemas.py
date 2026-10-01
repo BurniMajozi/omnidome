@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +153,40 @@ class RadiusAccountRead(BaseModel):
     mikrotik_rate_limit: Optional[str]
     nas_ip_address: Optional[str]
     nas_port_id: Optional[str]
+    # Secrets are never returned: only whether one is set (shown masked).
+    has_password: bool = False
+    password: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _mask(self):
+        self.password = "••••" if self.has_password else None
+        return self
+
+
+class NasClientCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    ip_address: str
+    shared_secret: str = Field(min_length=8, max_length=128)
+    coa_port: int = Field(default=3799, ge=1, le=65535)
+
+    @field_validator("ip_address")
+    @classmethod
+    def _ip(cls, v: str) -> str:
+        import ipaddress
+        return str(ipaddress.ip_address(v.strip()))
+
+
+class NasClientRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    ip_address: str
+    coa_port: int
+    shared_secret: str = "••••"
+    created_at: datetime
 
 
 class RadiusSessionInfo(BaseModel):

@@ -11,12 +11,18 @@ import random
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.common.auth import AuthContext, get_auth_context
-from services.network.database import init_tables
+from services.common.db import run_with_db_retry
+from services.network.access import enforce_route_tier
+from services.network.database import init_tables, get_session
+from services.network.models import NetworkService, RadiusAccount
+from services.network.secrets_migration import run_secrets_migration
 
 # Route modules
 from services.network.routes.radius import router as radius_router
@@ -52,10 +58,17 @@ configure_production(app)
 
 @app.on_event("startup")
 async def startup() -> None:
+    # NOTE: this service keeps in-process state and must run with a SINGLE worker (--workers 1).
     guard.ensure_startup()
-    if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
-        logger.info("Auto-creating network tables …")
-        init_tables()
+
+    async def _init() -> None:
+        if os.getenv("AUTO_CREATE_TABLES", "false").lower() == "true":
+            logger.info("Auto-creating network tables …")
+            await run_in_threadpool(init_tables)
+        # idempotent locked ALTERs (+ encrypt legacy plaintext secrets when SECRETS_ENCRYPTION_KEY is set)
+        await run_in_threadpool(run_secrets_migration)
+
+    await run_with_db_retry(_init, logger=logger)
 
 
 @app.middleware("http")
@@ -67,15 +80,15 @@ async def entitlement_middleware(request, call_next):
 # Register routers
 # ---------------------------------------------------------------------------
 
-app.include_router(services_router)
-app.include_router(radius_router)
-app.include_router(fno_router)
-app.include_router(coverage_router)
-app.include_router(performance_router)
-app.include_router(notifications_router)
-app.include_router(devices_router)
-app.include_router(topology_router)
-app.include_router(phase4_router)
+app.include_router(services_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(radius_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(fno_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(coverage_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(performance_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(notifications_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(devices_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(topology_router, dependencies=[Depends(enforce_route_tier)])
+app.include_router(phase4_router, dependencies=[Depends(enforce_route_tier)])
 
 
 # ---------------------------------------------------------------------------
@@ -93,9 +106,10 @@ async def health():
 async def run_speed_test(
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Run a speed test from the gateway (simulated for demo)"""
-    # In production: run actual speed test via iperf3 or similar
+    """Run a speed test from the gateway. SIMULATED: no iperf3 backend is wired, values are random and
+    flagged as such so no client mistakes them for a measurement."""
     return {
+        "simulated": True,
         "download_mbps": round(random.uniform(20, 100), 1),
         "upload_mbps": round(random.uniform(10, 50), 1),
         "latency_ms": round(random.uniform(5, 30), 1),
@@ -111,16 +125,25 @@ async def lookup_radius_account(
     contact_id: Optional[str] = None,
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Look up RADIUS account by contact_id (simulated for demo)"""
-    # In production: query RadiusAccount joined with NetworkService on contact_id
-    if contact_id:
-        return {
-            "username": f"user_{contact_id[:8]}",
-            "status": "ACTIVE",
-            "profile_name": "FTTH-100M",
-            "static_ip": None,
-        }
-    return []
+    """Real lookup: the customer's RADIUS accounts (secrets are never returned)."""
+    if not contact_id:
+        return []
+    try:
+        import uuid as _uuid
+        customer = _uuid.UUID(contact_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="contact_id must be a UUID")
+
+    def _query():
+        with get_session() as session:
+            rows = session.execute(
+                select(RadiusAccount).join(NetworkService, NetworkService.id == RadiusAccount.service_id).where(
+                    RadiusAccount.tenant_id == auth.tenant_id, NetworkService.customer_id == customer)
+            ).scalars().all()
+            return [{"username": r.username, "status": r.status, "profile_name": r.profile_name,
+                     "has_password": r.has_password} for r in rows]
+
+    return await run_in_threadpool(_query)
 
 
 # ---------------------------------------------------------------------------
@@ -129,4 +152,4 @@ async def lookup_radius_account(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8005)
+    uvicorn.run(app, host="0.0.0.0", port=8005, workers=1)

@@ -10,11 +10,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, func
+from starlette.concurrency import run_in_threadpool
 
+from services.common import secretbox
 from services.common.auth import AuthContext, get_auth_context
+from services.network import radius_coa
+from services.network.access import require_tier
 from services.network.database import get_session
-from services.network.models import RadiusAccount, NetworkService
+from services.network.models import RadiusAccount, NetworkService, NasClient
 from services.network.schemas import (
+    NasClientCreate,
+    NasClientRead,
     PaginatedResponse,
     RadiusAccountCreate,
     RadiusAccountRead,
@@ -24,6 +30,53 @@ from services.network.schemas import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/radius", tags=["RADIUS"])
+
+
+def _encrypt_or_503(value: str) -> str:
+    """Fail closed: without SECRETS_ENCRYPTION_KEY no credential is stored."""
+    try:
+        return secretbox.encrypt(value)
+    except secretbox.SecretsUnavailable:
+        logger.error("SECRETS_ENCRYPTION_KEY unavailable: refusing to store a RADIUS credential")
+        raise HTTPException(status_code=503, detail="Secret storage is not configured")
+
+
+# ---------------------------------------------------------------------------
+# NAS clients (shared secret encrypted, never returned) -- admin tier (enforced in main.py)
+# ---------------------------------------------------------------------------
+
+@router.post("/nas", response_model=NasClientRead, status_code=status.HTTP_201_CREATED)
+async def create_nas(payload: NasClientCreate, auth: AuthContext = Depends(get_auth_context)):
+    enc = _encrypt_or_503(payload.shared_secret)
+    with get_session() as session:
+        dup = session.execute(select(NasClient).where(
+            NasClient.tenant_id == auth.tenant_id, NasClient.ip_address == payload.ip_address)).scalar_one_or_none()
+        if dup:
+            raise HTTPException(status_code=409, detail="A NAS with this address already exists")
+        nas = NasClient(tenant_id=auth.tenant_id, name=payload.name, ip_address=payload.ip_address,
+                        shared_secret_enc=enc, coa_port=payload.coa_port)
+        session.add(nas)
+        session.flush()
+        session.refresh(nas)
+        return NasClientRead.model_validate(nas)
+
+
+@router.get("/nas", response_model=list[NasClientRead])
+async def list_nas(auth: AuthContext = Depends(get_auth_context)):
+    with get_session() as session:
+        rows = session.execute(select(NasClient).where(NasClient.tenant_id == auth.tenant_id)
+                               .order_by(NasClient.created_at)).scalars().all()
+        return [NasClientRead.model_validate(r) for r in rows]
+
+
+@router.delete("/nas/{nas_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_nas(nas_id: uuid.UUID, auth: AuthContext = Depends(get_auth_context)):
+    with get_session() as session:
+        nas = session.execute(select(NasClient).where(
+            NasClient.id == nas_id, NasClient.tenant_id == auth.tenant_id)).scalar_one_or_none()
+        if not nas:
+            raise HTTPException(status_code=404, detail="NAS not found")
+        session.delete(nas)
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +123,8 @@ async def create_radius_account(
             tenant_id=auth.tenant_id,
             service_id=payload.service_id,
             username=payload.username,
-            password_hash=payload.password,  # In production: hash with bcrypt / NT-Hash
+            password_hash=secretbox.hash_password(payload.password),  # salted hash, never plaintext
+            password_enc=_encrypt_or_503(payload.password),           # Fernet; RADIUS needs the cleartext
             framing_protocol=payload.framing_protocol,
             profile_name=payload.profile_name,
             mikrotik_rate_limit=payload.mikrotik_rate_limit,
@@ -168,7 +222,9 @@ async def update_radius_account(
 
         updates = payload.model_dump(exclude_unset=True)
         if "password" in updates:
-            updates["password_hash"] = updates.pop("password")
+            new_pw = updates.pop("password")
+            updates["password_enc"] = _encrypt_or_503(new_pw)
+            updates["password_hash"] = secretbox.hash_password(new_pw)
 
         for field, value in updates.items():
             setattr(account, field, value)
@@ -188,11 +244,8 @@ async def disconnect_radius_session(
     account_id: uuid.UUID,
     auth: AuthContext = Depends(get_auth_context),
 ):
-    """Send a RADIUS Disconnect-Request (Packet of Disconnect) for active sessions.
-
-    In production this would send a CoA/PoD packet to the NAS via a RADIUS
-    client library (e.g. pyrad).  Currently returns a stub response.
-    """
+    """Send a real RFC 5176 Disconnect-Request to the account's registered NAS (UDP 3799, NAS shared
+    secret). Reports ACK / NAK / TIMEOUT honestly; never claims a disconnect without a verified ACK."""
     with get_session() as session:
         account = session.execute(
             select(RadiusAccount).where(
@@ -202,19 +255,31 @@ async def disconnect_radius_session(
         ).scalar_one_or_none()
         if not account:
             raise HTTPException(status_code=404, detail="RADIUS account not found")
+        if not account.nas_ip_address:
+            raise HTTPException(status_code=409, detail="Account has no NAS address; cannot send a Disconnect-Request")
+        nas = session.execute(select(NasClient).where(
+            NasClient.tenant_id == auth.tenant_id, NasClient.ip_address == account.nas_ip_address)
+        ).scalar_one_or_none()
+        if not nas:
+            raise HTTPException(status_code=409, detail="NAS is not registered for this tenant (POST /radius/nas first)")
+        try:
+            secret = secretbox.decrypt(nas.shared_secret_enc)
+        except secretbox.SecretsUnavailable:
+            raise HTTPException(status_code=503, detail="Secret storage is not configured")
+        username, host, port = account.username, nas.ip_address, nas.coa_port
 
-        logger.info(
-            "Sending PoD for %s to NAS %s",
-            account.username,
-            account.nas_ip_address or "unknown",
-        )
-        # TODO: integrate pyrad to send actual PoD
-        return {
-            "username": account.username,
-            "nas_ip_address": account.nas_ip_address,
-            "status": "DISCONNECT_SENT",
-            "message": "Packet of Disconnect sent to NAS",
-        }
+    result = await run_in_threadpool(
+        radius_coa.send_disconnect, host, port, secret.encode(), username=username)
+    logger.info("Disconnect-Request for %s to NAS %s: %s", username, host, result.outcome)
+    body = {"username": username, "nas_ip_address": host, "result": result.outcome,
+            "error_cause": result.error_cause}
+    if result.outcome == "ACK":
+        return {**body, "status": "DISCONNECTED", "message": "NAS acknowledged the Disconnect-Request"}
+    if result.outcome == "NAK":
+        raise HTTPException(status_code=409, detail={**body, "message": "NAS refused the Disconnect-Request (NAK)"})
+    if result.outcome == "TIMEOUT":
+        raise HTTPException(status_code=504, detail={**body, "message": "No reply from the NAS (timeout); session state unknown"})
+    raise HTTPException(status_code=502, detail={**body, "message": "Invalid or unauthentic reply from the NAS"})
 
 
 # ---------------------------------------------------------------------------
@@ -229,22 +294,8 @@ async def get_active_sessions(
     """Query radacct for live RADIUS sessions.
 
     In production this would query the FreeRADIUS radacct table or a
-    session cache.  Currently returns illustrative stub data.
+    session cache.  Not wired yet: returns an empty list (no invented data).
     """
-    # TODO: query radacct table directly via raw SQL or dedicated view
-    logger.info("Querying active RADIUS sessions for tenant %s", auth.tenant_id)
-    sessions: list[dict] = []
-    if username:
-        sessions.append(
-            {
-                "username": username,
-                "nas_ip_address": "154.22.8.5",
-                "framed_ip_address": "100.64.1.12",
-                "session_id": "sess-001",
-                "uptime_seconds": 51720,
-                "input_octets": 4_523_000,
-                "output_octets": 12_500_000,
-                "calling_station_id": "AA:BB:CC:DD:EE:FF",
-            }
-        )
-    return [RadiusSessionInfo(**s) for s in sessions]
+    # No radacct source is wired to this service yet: report no sessions rather than invent one.
+    logger.info("RADIUS session query for tenant %s: no accounting source configured", auth.tenant_id)
+    return []

@@ -36,10 +36,18 @@ services:
     restart: "no"
   network:
     restart: "no"
+    # In-process state: single worker only.
+    command: sh -c "uvicorn services.network.main:app --host 0.0.0.0 --port 8005 --workers 1"
   iot:
     restart: "no"
   call_center:
     restart: "no"
+    # In-process websocket registry: single worker only.
+    command: sh -c "uvicorn services.call_center.main:app --host 0.0.0.0 --port 8007 --workers 1"
+  support:
+    restart: "no"
+    # SSE job dispatch (_active_streams) is in-process: with --workers 2 half the technicians miss pushed jobs.
+    command: sh -c "uvicorn services.support.main:app --host 0.0.0.0 --port 8008 --workers 1"
   retention:
     restart: "no"
   compliance:
