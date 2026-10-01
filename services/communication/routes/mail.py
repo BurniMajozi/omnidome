@@ -15,7 +15,7 @@ from typing import Any, List, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
@@ -60,8 +60,7 @@ class MailboxRead(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class InboundEmailPayload(BaseModel):
@@ -90,8 +89,7 @@ class AgentEmailRead(BaseModel):
     message_id: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Authorization ───────────────────────────────────────────────────────────

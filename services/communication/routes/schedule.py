@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from services.common.auth import AuthContext, get_auth_context
+from services.communication.access import get_visible_channel, has_tier, validate_refs, validate_tenant_users, visible_clause
 from services.communication.database import get_session
 from services.communication.models import ScheduleEvent
 from services.communication.schemas import (
@@ -19,6 +20,13 @@ from services.communication.schemas import (
 router = APIRouter(prefix="/schedule", tags=["Schedule"])
 
 
+def _validate_times(start: datetime, end: datetime) -> None:
+    if start.tzinfo is None or end.tzinfo is None:
+        raise HTTPException(status_code=422, detail="start_time and end_time must include a timezone")
+    if end <= start:
+        raise HTTPException(status_code=422, detail="end_time must be after start_time")
+
+
 # ---------------------------------------------------------------------------
 # POST /schedule — Create a schedule event
 # ---------------------------------------------------------------------------
@@ -28,17 +36,22 @@ async def create_event(
     body: ScheduleEventCreate,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    from services.communication.routes.ws import _check_channel_access
-
-    has_access = await _check_channel_access(ctx.tenant_id, body.channel_id, ctx.user_id)
-    if not has_access:
-        raise HTTPException(status_code=403, detail="Channel not accessible")
+    _validate_times(body.start_time, body.end_time)
 
     async with get_session() as session:
+        # access check, validation and write share one session/transaction
+        await validate_refs(session, ctx, body.channel_id, body.source_message_id)
+        owner_id = ctx.user_id
+        if body.user_id and body.user_id != ctx.user_id:
+            if not await has_tier(ctx, session, "admin"):
+                raise HTTPException(status_code=403, detail="Only admins can schedule events for another user")
+            if await validate_tenant_users(session, ctx.tenant_id, [body.user_id]):
+                raise HTTPException(status_code=422, detail="User does not belong to this tenant")
+            owner_id = body.user_id
         event = ScheduleEvent(
             tenant_id=ctx.tenant_id,
             channel_id=body.channel_id,
-            user_id=body.user_id or ctx.user_id,
+            user_id=owner_id,
             title=body.title,
             type=body.type,
             start_time=body.start_time,
@@ -74,9 +87,12 @@ async def list_events(
     from sqlalchemy import select, func
 
     async with get_session() as session:
-        stmt = select(ScheduleEvent).where(ScheduleEvent.tenant_id == ctx.tenant_id)
+        from services.communication.models import Channel
+
+        vis = select(Channel.id).where(await visible_clause(session, ctx))
+        stmt = select(ScheduleEvent).where(ScheduleEvent.tenant_id == ctx.tenant_id, ScheduleEvent.channel_id.in_(vis))
         count_stmt = select(func.count(ScheduleEvent.id)).where(
-            ScheduleEvent.tenant_id == ctx.tenant_id
+            ScheduleEvent.tenant_id == ctx.tenant_id, ScheduleEvent.channel_id.in_(vis)
         )
 
         if channel_id:
@@ -132,6 +148,7 @@ async def get_event(
         event = result.scalar_one_or_none()
         if not event:
             raise HTTPException(status_code=404, detail="Schedule event not found")
+        await get_visible_channel(session, ctx, event.channel_id)
         return event
 
 
@@ -155,8 +172,12 @@ async def update_event(
         event = result.scalar_one_or_none()
         if not event:
             raise HTTPException(status_code=404, detail="Schedule event not found")
+        await get_visible_channel(session, ctx, event.channel_id)
 
         update_data = body.model_dump(exclude_unset=True)
+        if "channel_id" in update_data and update_data["channel_id"] != event.channel_id:
+            await validate_refs(session, ctx, update_data["channel_id"])
+        _validate_times(update_data.get("start_time", event.start_time), update_data.get("end_time", event.end_time))
         for field, value in update_data.items():
             setattr(event, field, value)
         await session.flush()
@@ -183,4 +204,5 @@ async def delete_event(
         event = result.scalar_one_or_none()
         if not event:
             raise HTTPException(status_code=404, detail="Schedule event not found")
+        await get_visible_channel(session, ctx, event.channel_id)
         await session.delete(event)

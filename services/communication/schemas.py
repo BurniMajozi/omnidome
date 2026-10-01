@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -54,8 +54,10 @@ class ChannelPreferenceUpdate(BaseModel):
 # ── Messages ──────────────────────────────────────────────────────────────
 
 class MessageCreate(BaseModel):
-    content: str = Field(..., min_length=1, max_length=5000)
+    # hard schema cap; the effective limit is env MESSAGE_MAX_CHARS (default 8000), enforced in the route
+    content: str = Field(..., min_length=1, max_length=20000)
     thread_parent_id: Optional[uuid.UUID] = None
+    client_msg_id: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.:\-]+$")
 
 
 class MessageRead(BaseModel):
@@ -77,7 +79,7 @@ class MessagePinUpdate(BaseModel):
 
 
 class MessageUpdate(BaseModel):
-    content: str = Field(..., min_length=1, max_length=5000)
+    content: str = Field(..., min_length=1, max_length=20000)
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────
@@ -145,7 +147,8 @@ class ApprovalRead(BaseModel):
 
 
 class ApprovalDecision(BaseModel):
-    status: str  # "approved" or "rejected"
+    # approved/rejected need a manager (not the requester); cancelled is the requester withdrawing it
+    status: Literal["approved", "rejected", "cancelled"]
 
 
 # ── Escalations ──────────────────────────────────────────────────────────
@@ -261,6 +264,13 @@ class PaginatedResponse(BaseModel):
     page: int
     page_size: int
     pages: int
+
+
+class MessagePage(PaginatedResponse):
+    """Message history page. items are ascending (oldest first) within the page; the page itself is the
+    NEWEST one unless a `before` cursor / later `page` asks for older ones."""
+    next_before: Optional[str] = None  # pass as ?before= to get the next-older page
+    has_more: bool = False
 
 
 # ── Schedule Events ────────────────────────────────────────────────────────

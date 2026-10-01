@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
+from services.communication.access import get_visible_channel
 from services.communication.models import Channel, CommunicationSession, Event
 from services.communication.schemas import (
     CommunicationSessionCreate,
@@ -69,11 +70,7 @@ async def create_session(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
-        ch_stmt = select(Channel).where(Channel.id == body.channel_id, Channel.tenant_id == ctx.tenant_id)
-        ch_result = await session.execute(ch_stmt)
-        channel = ch_result.scalar_one_or_none()
-        if not channel:
-            raise HTTPException(status_code=404, detail="Channel not found")
+        channel = await get_visible_channel(session, ctx, body.channel_id)
 
         event = Event(
             tenant_id=ctx.tenant_id,

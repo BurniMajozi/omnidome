@@ -42,6 +42,9 @@ async def startup() -> None:
         from services.communication.database import init_tables
         await init_tables()
         logger.info("Communication tables ensured")
+    else:
+        from services.communication.database import ensure_message_schema
+        await ensure_message_schema()  # idempotent; adds messages.client_msg_id + history indexes
     from services.communication.routes.mail import start_mail_workers
     start_mail_workers()
 

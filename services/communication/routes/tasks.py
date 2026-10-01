@@ -8,7 +8,8 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
-from services.communication.models import Task
+from services.communication.access import get_visible_channel, validate_refs, validate_tenant_users, visible_clause
+from services.communication.models import Channel, Task
 from services.communication.schemas import (
     PaginatedResponse,
     TaskCreate,
@@ -25,6 +26,9 @@ async def create_task(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
+        await validate_refs(session, ctx, body.channel_id, body.message_id)
+        if body.assignee_id and await validate_tenant_users(session, ctx.tenant_id, [body.assignee_id]):
+            raise HTTPException(status_code=422, detail="Assignee does not belong to this tenant")
         task = Task(
             tenant_id=ctx.tenant_id,
             channel_id=body.channel_id,
@@ -52,9 +56,10 @@ async def list_tasks(
     assignee: Optional[uuid.UUID] = Query(None),
 ):
     async with session_scope() as session:
-        stmt = select(Task).where(Task.tenant_id == ctx.tenant_id)
+        vis = select(Channel.id).where(await visible_clause(session, ctx))
+        stmt = select(Task).where(Task.tenant_id == ctx.tenant_id, Task.channel_id.in_(vis))
         count_stmt = select(func.count(Task.id)).where(
-            Task.tenant_id == ctx.tenant_id
+            Task.tenant_id == ctx.tenant_id, Task.channel_id.in_(vis)
         )
 
         if channel_id:
@@ -101,6 +106,7 @@ async def get_task(
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        await get_visible_channel(session, ctx, task.channel_id)
         return task
 
 
@@ -118,6 +124,7 @@ async def update_task(
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        await get_visible_channel(session, ctx, task.channel_id)
 
         update_data = body.model_dump(exclude_unset=True)
         for field, value in update_data.items():
@@ -140,6 +147,7 @@ async def delete_task(
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        await get_visible_channel(session, ctx, task.channel_id)
         await session.delete(task)
 
 
@@ -157,6 +165,7 @@ async def update_task_status(
         task = result.scalar_one_or_none()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        await get_visible_channel(session, ctx, task.channel_id)
 
         if body.status is not None:
             task.status = body.status

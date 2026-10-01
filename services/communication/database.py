@@ -17,6 +17,37 @@ async def init_tables() -> None:
         await conn.run_sync(Base.metadata.create_all)
         await _repoint_schedule_task_fk(conn)
         await _ensure_mailbox_email_unique(conn)
+    await ensure_message_schema()
+
+
+_MESSAGE_SCHEMA_LOCK_KEY = 74_210_004
+MESSAGE_SCHEMA_STATEMENTS = (
+    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_msg_id VARCHAR(64)",
+    "CREATE INDEX IF NOT EXISTS ix_messages_channel_created_id ON messages (channel_id, created_at, id)",
+    "CREATE INDEX IF NOT EXISTS ix_messages_tenant_channel ON messages (tenant_id, channel_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_messages_channel_client_msg ON messages (channel_id, client_msg_id) "
+    "WHERE client_msg_id IS NOT NULL",
+)
+
+
+async def ensure_message_schema() -> None:
+    """Idempotent upgrade for tables that predate create_all(): idempotency column + history indexes.
+    Never fails startup."""
+    import logging
+    from sqlalchemy import text
+
+    log = logging.getLogger("communication.database")
+    try:
+        async with get_async_engine().begin() as conn:
+            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _MESSAGE_SCHEMA_LOCK_KEY})
+            for stmt in MESSAGE_SCHEMA_STATEMENTS:
+                try:
+                    async with conn.begin_nested():
+                        await conn.execute(text(stmt))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("message schema upgrade step failed (%s): %s", stmt[:60], exc)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Could not apply message schema upgrades: %s", exc)
 
 
 async def _repoint_schedule_task_fk(conn) -> None:
@@ -75,4 +106,4 @@ async def _ensure_mailbox_email_unique(conn) -> None:
 
 
 # Re-export for route convenience
-__all__ = ["session_scope", "get_session", "init_tables", "Base"]
+__all__ = ["session_scope", "get_session", "init_tables", "ensure_message_schema", "Base"]

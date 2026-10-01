@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, DateTime, ForeignKey, Index, String, Text, func,
+    Boolean, DateTime, ForeignKey, Index, String, Text, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -86,11 +86,16 @@ class Message(Base):
         UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    client_msg_id: Mapped[str] = mapped_column(String(64), nullable=True)  # idempotency key (per channel)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index("ix_messages_channel", "channel_id", "created_at"),
+        Index("ix_messages_channel_created_id", "channel_id", "created_at", "id"),
+        Index("ix_messages_tenant_channel", "tenant_id", "channel_id"),
+        Index("uq_messages_channel_client_msg", "channel_id", "client_msg_id", unique=True,
+              postgresql_where=text("client_msg_id IS NOT NULL")),
         Index("ix_messages_thread", "thread_parent_id"),
     )
 

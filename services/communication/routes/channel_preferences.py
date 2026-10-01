@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
+from services.communication.access import get_visible_channel
 from services.communication.models import Channel, ChannelPreference
 from services.communication.schemas import ChannelPreferenceRead, ChannelPreferenceUpdate
 
@@ -16,6 +17,7 @@ router = APIRouter(prefix="/channels/{channel_id}/preferences", tags=["Channel P
 @router.get("", response_model=ChannelPreferenceRead)
 async def get_preferences(channel_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as session:
+        await get_visible_channel(session, ctx, channel_id)
         stmt = select(ChannelPreference).where(
             ChannelPreference.channel_id == channel_id,
             ChannelPreference.tenant_id == ctx.tenant_id,
@@ -41,11 +43,7 @@ async def update_preferences(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
-        ch_stmt = select(Channel).where(Channel.id == channel_id, Channel.tenant_id == ctx.tenant_id)
-        ch_result = await session.execute(ch_stmt)
-        channel = ch_result.scalar_one_or_none()
-        if not channel:
-            raise HTTPException(status_code=404, detail="Channel not found")
+        channel = await get_visible_channel(session, ctx, channel_id)
 
         stmt = select(ChannelPreference).where(
             ChannelPreference.channel_id == channel_id,

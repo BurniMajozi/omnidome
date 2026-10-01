@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
+from services.communication.access import validate_refs
 from services.communication.models import Event
 from services.communication.schemas import (
     EventCreate,
@@ -24,6 +25,7 @@ async def create_event(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     async with session_scope() as session:
+        await validate_refs(session, ctx, body.channel_id)
         event = Event(
             tenant_id=ctx.tenant_id,
             channel_id=body.channel_id,

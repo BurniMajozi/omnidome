@@ -16,33 +16,22 @@ import uuid
 from typing import Mapping, Optional, Tuple
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
-from sqlalchemy import select
 
 from services.common import internal_auth
 from services.common.auth import decode_token_payload, AuthContext
 from services.common.db import session_scope
-from services.communication.models import Channel
-from services.communication.realtime import connect, handle_connection
+from services.communication.access import user_channel_access
+from services.communication.realtime import (
+    check_origin, connect, handle_connection, max_connections_per_user, user_connection_count,
+)
 
 router = APIRouter(tags=["Real-time WebSocket"])
 
 
 async def _check_channel_access(tenant_id: uuid.UUID, channel_id: uuid.UUID, user_id: uuid.UUID) -> bool:
-    """Check if user has access to channel (RBAC-based visibility)."""
+    """Public channel -> any tenant member; private -> creator, ChannelMember, or admin tier."""
     async with session_scope() as session:
-        stmt = select(Channel).where(
-            Channel.id == channel_id,
-            Channel.tenant_id == tenant_id
-        )
-        result = await session.execute(stmt)
-        channel = result.scalar_one_or_none()
-        if not channel:
-            return False
-        # Public channel (not private) or user is creator -> allow
-        if not channel.is_private or channel.created_by == user_id:
-            return True
-        # TODO: extend with explicit channel membership table if needed
-        return False
+        return await user_channel_access(tenant_id, user_id, channel_id, session)
 
 
 def authenticate_ws(
@@ -76,6 +65,10 @@ async def websocket_endpoint(
     channel_id: uuid.UUID = Query(...),
     token: Optional[str] = Query(None),
 ):
+    if not check_origin(websocket):
+        await websocket.close(code=4003, reason="Origin not allowed")
+        return
+
     # Validate the token before accepting the connection
     try:
         tenant_id, user_id = authenticate_ws(websocket.headers, websocket.url.path, token)
@@ -86,6 +79,10 @@ async def websocket_endpoint(
     # Check channel access via RBAC/visibility rules
     if not await _check_channel_access(tenant_id, channel_id, user_id):
         await websocket.close(code=4003, reason="Channel access denied")
+        return
+
+    if user_connection_count(str(tenant_id), str(user_id)) >= max_connections_per_user():
+        await websocket.close(code=4429, reason="Too many connections")
         return
 
     # Register and drive the connection
