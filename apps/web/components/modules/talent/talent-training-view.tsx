@@ -1,133 +1,99 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
+import { NoDataYet } from "@/components/ui/not-connected"
+import { GraduationCap, Plus, CheckCircle2, X } from "lucide-react"
 import {
-  GraduationCap,
-  Plus,
-  BookOpen,
-  Award,
-  Sparkles,
-  CheckCircle2,
-  Clock,
-  Users,
-  Search,
-  Check,
-  X,
-  FileCheck,
-  TrendingUp,
-} from "lucide-react"
-import type { Employee, TrainingCourse, TrainingEnrollment } from "@/lib/hr-api"
+  createTrainingCourse,
+  enrollEmployee,
+  type Employee,
+  type TrainingCourse,
+  type TrainingEnrollment,
+} from "@/lib/hr-api"
+import { formatHrError } from "@/lib/talent-derive"
 import { getEmployeeAvatar } from "./pim-directory-view"
 
 interface TalentTrainingViewProps {
   employees: Employee[]
   courses: TrainingCourse[]
   enrollments: TrainingEnrollment[]
-  loading: boolean
-  error: string | null
+  /** Set when enrolments could not be loaded (e.g. "Not permitted: ..."); courses can still be real. */
+  enrollmentsNote?: string | null
   onRefresh: () => void
 }
 
-const DEFAULT_ISP_COURSES: TrainingCourse[] = [
-  {
-    id: "CRS-001",
-    title: "FOA Certified Fiber Optics Technician (CFOT)",
-    category: "Field Operations",
-    duration_hours: 40,
-    mandatory: true,
-    description: "Core fusion splicing, cleaving, loss testing, and OTDR trace interpretation.",
-    passing_score: 80,
-  },
-  {
-    id: "CRS-002",
-    title: "MikroTik Certified Network Associate (MTCNA)",
-    category: "Network & Core",
-    duration_hours: 32,
-    mandatory: true,
-    description: "RouterOS configuration, static & dynamic routing, firewall filter rules, and QoS queues.",
-    passing_score: 75,
-  },
-  {
-    id: "CRS-003",
-    title: "OHS Act Field Safety & Working at Heights",
-    category: "Compliance",
-    duration_hours: 16,
-    mandatory: true,
-    description: "Mandatory South African occupational health, pole climbing, and fall-arrest equipment.",
-    passing_score: 85,
-  },
-  {
-    id: "CRS-004",
-    title: "Cisco CCNA Service Provider Peering & BGP",
-    category: "Network & Core",
-    duration_hours: 48,
-    mandatory: false,
-    description: "Multi-protocol BGP, internet exchange peering, and transit failover.",
-    passing_score: 80,
-  },
-  {
-    id: "CRS-005",
-    title: "RICA & POPIA Regulatory Subscriber Verification",
-    category: "Compliance",
-    duration_hours: 8,
-    mandatory: true,
-    description: "Statutory SIM and FTTH identity verification procedures to avoid operator penalties.",
-    passing_score: 90,
-  },
-]
-
-export function TalentTrainingView({
-  employees,
-  courses: initialCourses,
-  enrollments: initialEnrollments,
-  loading,
-  error,
-  onRefresh,
-}: TalentTrainingViewProps) {
+export function TalentTrainingView({ employees, courses, enrollments, enrollmentsNote, onRefresh }: TalentTrainingViewProps) {
   const [activeTab, setActiveTab] = useState<"courses" | "enrollments" | "bursaries">("courses")
   const [toastMessage, setToastMessage] = useState<string | null>(null)
-
-  // Safe fallback guarantees - NEVER CRASH!
-  const courses = Array.isArray(initialCourses) && initialCourses.length > 0
-    ? initialCourses
-    : DEFAULT_ISP_COURSES
-
-  const [localCourses, setLocalCourses] = useState<TrainingCourse[]>(courses)
   const [newCourseOpen, setNewCourseOpen] = useState(false)
-  const [enrollModalOpen, setEnrollModalOpen] = useState(false)
+  const [enrollCourse, setEnrollCourse] = useState<TrainingCourse | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
 
-  // Form states
+  // New course form
   const [courseTitle, setCourseTitle] = useState("")
   const [courseCategory, setCourseCategory] = useState("Field Operations")
-  const [courseDuration, setCourseDuration] = useState("24")
-  const [courseMandatory, setCourseMandatory] = useState(true)
+  const [courseDuration, setCourseDuration] = useState("")
+  const [courseMandatory, setCourseMandatory] = useState(false)
 
-  const handleCreateCourse = (e: React.FormEvent) => {
-    e.preventDefault()
-    const newC: TrainingCourse = {
-      id: `CRS-${String(localCourses.length + 1).padStart(3, "0")}`,
-      title: courseTitle,
-      category: courseCategory,
-      duration_hours: Number(courseDuration),
-      mandatory: courseMandatory,
-      description: "Custom ISP qualification track.",
-      passing_score: 80,
-    }
-    setLocalCourses((prev) => [...prev, newC])
-    setToastMessage(`Course "${newC.title}" created successfully!`)
+  // Enrol form
+  const [enrollEmpId, setEnrollEmpId] = useState("")
+
+  const empById = useMemo(() => new Map(employees.map((e, i) => [e.id, { emp: e, idx: i }])), [employees])
+  const courseById = useMemo(() => new Map(courses.map((c) => [c.id, c])), [courses])
+
+  const toast = (msg: string) => {
+    setToastMessage(msg)
     setTimeout(() => setToastMessage(null), 3000)
-    setNewCourseOpen(false)
-    setCourseTitle("")
+  }
+
+  const handleCreateCourse = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setFormError(null)
+    try {
+      await createTrainingCourse({
+        title: courseTitle.trim(),
+        category: courseCategory,
+        duration_hours: courseDuration.trim() === "" ? undefined : Number(courseDuration),
+        mandatory: courseMandatory,
+      })
+      toast(`Course "${courseTitle.trim()}" created`)
+      setNewCourseOpen(false)
+      setCourseTitle("")
+      setCourseDuration("")
+      onRefresh()
+    } catch (err) {
+      setFormError(formatHrError(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleEnroll = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!enrollCourse || !enrollEmpId) return
+    setBusy(true)
+    setFormError(null)
+    try {
+      await enrollEmployee({ employee_id: enrollEmpId, course_id: enrollCourse.id })
+      toast(`Enrolled in "${enrollCourse.title}"`)
+      setEnrollCourse(null)
+      setEnrollEmpId("")
+      onRefresh()
+    } catch (err) {
+      setFormError(formatHrError(err))
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
     <div className="space-y-6">
-      {/* Toast Notification */}
       {toastMessage && (
         <div className="fixed top-4 right-4 z-50 flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-950/90 px-4 py-3 text-sm text-emerald-200 shadow-xl backdrop-blur">
           <CheckCircle2 className="h-5 w-5 text-emerald-400 shrink-0" />
@@ -143,38 +109,31 @@ export function TalentTrainingView({
               <GraduationCap className="h-6 w-6" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-bold text-foreground">Training, Certifications & Skills (LMS)</h2>
-                <Badge variant="outline" className="border-primary/40 text-primary bg-primary/10 text-[10px] font-semibold">
-                  SETA / WSP Aligned
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Fiber splicing certifications, MikroTik & Cisco routing tracks, OHS safety compliance, and tertiary bursaries.
-              </p>
+              <h2 className="text-xl font-bold text-foreground">Training, Certifications & Skills (LMS)</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">Courses and employee enrolments from the HR service.</p>
             </div>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button
-              size="sm"
-              variant="default"
-              className="gap-1.5 text-xs font-semibold"
-              onClick={() => setNewCourseOpen(true)}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              New Training Course
-            </Button>
-          </div>
+          <Button
+            size="sm"
+            variant="default"
+            className="gap-1.5 text-xs font-semibold"
+            onClick={() => {
+              setFormError(null)
+              setNewCourseOpen(true)
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New Training Course
+          </Button>
         </div>
       </div>
 
       {/* Sub-Tab Navigation */}
       <div className="flex items-center gap-1.5 border-b border-border pb-2 text-xs">
         {[
-          { id: "courses", label: `Curriculum & Courses (${localCourses.length})` },
-          { id: "enrollments", label: "Employee Progress & Certifications" },
-          { id: "bursaries", label: "Corporate Bursary Program (4 Active)" },
+          { id: "courses", label: `Curriculum & Courses (${courses.length})` },
+          { id: "enrollments", label: `Employee Progress (${enrollments.length})` },
+          { id: "bursaries", label: "Corporate Bursary Program" },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -192,158 +151,123 @@ export function TalentTrainingView({
       </div>
 
       {/* ── TAB 1: Courses ────────────────────────────────────────────── */}
-      {activeTab === "courses" && (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {localCourses.map((c) => (
-            <Card key={c.id} className="border-border flex flex-col justify-between">
-              <CardHeader className="pb-3 border-b border-border/60">
-                <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <Badge variant="outline" className="text-[10px] mb-1.5 border-border">
-                      {c.category}
-                    </Badge>
-                    <CardTitle className="text-sm font-semibold line-clamp-1">{c.title}</CardTitle>
+      {activeTab === "courses" &&
+        (courses.length === 0 ? (
+          <NoDataYet message="No training courses defined yet. Use New Training Course to add one." />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {courses.map((c) => (
+              <Card key={c.id} className="border-border flex flex-col justify-between">
+                <CardHeader className="pb-3 border-b border-border/60">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <Badge variant="outline" className="text-[10px] mb-1.5 border-border">
+                        {c.category}
+                      </Badge>
+                      <CardTitle className="text-sm font-semibold line-clamp-1">{c.title}</CardTitle>
+                    </div>
+                    {c.mandatory && (
+                      <Badge variant="outline" className="border-red-500/40 text-red-400 text-[10px]">
+                        Mandatory
+                      </Badge>
+                    )}
                   </div>
-                  {c.mandatory && (
-                    <Badge variant="outline" className="border-red-500/40 text-red-400 text-[10px]">
-                      Mandatory
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent className="p-4 space-y-3 text-xs">
-                <p className="text-muted-foreground line-clamp-2">{c.description}</p>
-                <div className="flex items-center justify-between border-t border-border/50 pt-2 text-muted-foreground">
-                  <span>Duration: <strong className="text-foreground">{c.duration_hours} Hours</strong></span>
-                  <span>Pass Mark: <strong className="text-emerald-400">{c.passing_score || 80}%</strong></span>
-                </div>
-                <Button size="sm" variant="outline" className="w-full text-xs">
-                  View Syllabus & Enroll
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+                </CardHeader>
+                <CardContent className="p-4 space-y-3 text-xs">
+                  {c.description && <p className="text-muted-foreground line-clamp-2">{c.description}</p>}
+                  <div className="flex items-center justify-between border-t border-border/50 pt-2 text-muted-foreground">
+                    <span>Duration: <strong className="text-foreground">{c.duration_hours != null ? `${c.duration_hours} Hours` : "—"}</strong></span>
+                    <span>Pass Mark: <strong className="text-foreground">{c.passing_score != null ? `${c.passing_score}%` : "—"}</strong></span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full text-xs"
+                    disabled={employees.length === 0}
+                    onClick={() => {
+                      setFormError(null)
+                      setEnrollEmpId("")
+                      setEnrollCourse(c)
+                    }}
+                  >
+                    Enrol employee
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        ))}
 
       {/* ── TAB 2: Enrollments & Progress ─────────────────────────────── */}
       {activeTab === "enrollments" && (
         <Card className="border-border">
           <CardHeader className="pb-3 border-b border-border/60">
             <CardTitle className="text-base">Employee Certification Status</CardTitle>
-            <CardDescription className="text-xs">
-              Live tracking of ongoing modules, exam scores, and statutory refresher dates.
-            </CardDescription>
+            <CardDescription className="text-xs">Enrolments, progress and exam scores as recorded in the HR service.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border bg-muted/20 text-left text-muted-foreground">
-                    <th className="py-2.5 px-4 font-medium">Technician</th>
-                    <th className="py-2.5 px-4 font-medium">Course Title</th>
-                    <th className="py-2.5 px-4 font-medium">Progress</th>
-                    <th className="py-2.5 px-4 font-medium">Exam Score</th>
-                    <th className="py-2.5 px-4 font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/60">
-                  {employees.slice(0, 10).map((emp, idx) => {
-                    const progress = 75 + ((idx * 7) % 25)
-                    const score = 84 + ((idx * 3) % 15)
-                    const isCompleted = progress === 100
-                    return (
-                      <tr key={emp.id} className="hover:bg-muted/30">
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <img
-                              src={getEmployeeAvatar(emp.full_name, idx)}
-                              alt=""
-                              className="h-6 w-6 rounded-full object-cover"
-                            />
-                            <span className="font-semibold text-foreground">{emp.full_name}</span>
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 font-medium text-foreground">
-                          {idx % 2 === 0 ? "FOA Certified Fiber Optics Splicer" : "MikroTik MTCNA Network Associate"}
-                        </td>
-                        <td className="py-3 px-4">
-                          <div className="flex items-center gap-2">
-                            <div className="h-2 w-28 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className="h-full bg-primary rounded-full transition-all"
-                                style={{ width: `${progress}%` }}
-                              />
+            {enrollmentsNote && (
+              <p className="m-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-400" role="status">
+                Enrolments could not be loaded. {enrollmentsNote}
+              </p>
+            )}
+            {!enrollmentsNote && enrollments.length === 0 ? (
+              <div className="p-4">
+                <NoDataYet message="No enrolments yet." />
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/20 text-left text-muted-foreground">
+                      <th className="py-2.5 px-4 font-medium">Employee</th>
+                      <th className="py-2.5 px-4 font-medium">Course Title</th>
+                      <th className="py-2.5 px-4 font-medium">Progress</th>
+                      <th className="py-2.5 px-4 font-medium">Exam Score</th>
+                      <th className="py-2.5 px-4 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/60">
+                    {enrollments.map((en) => {
+                      const hit = empById.get(en.employee_id)
+                      const course = courseById.get(en.course_id)
+                      const progress = Math.max(0, Math.min(100, Number(en.progress_pct) || 0))
+                      return (
+                        <tr key={en.id} className="hover:bg-muted/30">
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              {hit && <img src={getEmployeeAvatar(hit.emp.full_name, hit.idx)} alt="" className="h-6 w-6 rounded-full object-cover" />}
+                              <span className="font-semibold text-foreground">{hit?.emp.full_name ?? "Unknown employee"}</span>
                             </div>
-                            <span className="font-mono text-muted-foreground">{progress}%</span>
-                          </div>
-                        </td>
-                        <td className="py-3 px-4 font-mono font-semibold text-emerald-400">
-                          {score}%
-                        </td>
-                        <td className="py-3 px-4">
-                          <Badge
-                            variant="outline"
-                            className={
-                              isCompleted
-                                ? "border-emerald-500/40 text-emerald-400"
-                                : "border-primary/40 text-primary"
-                            }
-                          >
-                            {isCompleted ? "Certified" : "In Progress"}
-                          </Badge>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          </td>
+                          <td className="py-3 px-4 font-medium text-foreground">{course?.title ?? "Unknown course"}</td>
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2">
+                              <div className="h-2 w-28 rounded-full bg-muted overflow-hidden">
+                                <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${progress}%` }} />
+                              </div>
+                              <span className="font-mono text-muted-foreground">{progress}%</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 font-mono font-semibold text-foreground">{en.score != null ? `${en.score}%` : "—"}</td>
+                          <td className="py-3 px-4">
+                            <Badge variant="outline" className="border-primary/40 text-primary">
+                              {en.status}
+                            </Badge>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
 
       {/* ── TAB 3: Bursaries ─────────────────────────────────────────── */}
-      {activeTab === "bursaries" && (
-        <div className="space-y-4 text-xs">
-          <div className="grid gap-4 sm:grid-cols-2">
-            {[
-              { name: "Sipho Mthembu", qualification: "BSc Computer Science", institution: "UNISA", year: "Year 2", fundZAR: 65000, passRate: "92%" },
-              { name: "Nomsa Dlamini", qualification: "BTech Telecommunication Eng.", institution: "TUT", year: "Year 3", fundZAR: 72000, passRate: "96%" },
-              { name: "Lerato Molefe", qualification: "Diploma Network Engineering", institution: "Wits Digital", year: "Year 1", fundZAR: 48000, passRate: "88%" },
-              { name: "David Botha", qualification: "Advanced Optical Telecoms", institution: "UJ", year: "Year 2", fundZAR: 55000, passRate: "91%" },
-            ].map((b) => (
-              <Card key={b.name} className="border-border">
-                <CardHeader className="pb-3 border-b border-border/60">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-sm font-semibold">{b.name}</CardTitle>
-                      <CardDescription className="text-xs">{b.qualification} • {b.institution}</CardDescription>
-                    </div>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                      Active Bursary
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-4 space-y-2 text-muted-foreground">
-                  <div className="flex justify-between">
-                    <span>Academic Standing:</span>
-                    <strong className="text-foreground">{b.year}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Cumulative Pass Rate:</span>
-                    <strong className="text-emerald-400 font-mono">{b.passRate}</strong>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Annual Bursary Sponsorship:</span>
-                    <strong className="text-foreground font-mono">R {b.fundZAR.toLocaleString()} ZAR</strong>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      )}
+      {activeTab === "bursaries" && <NoDataYet message="No bursary records are tracked yet." />}
 
       {/* ── NEW COURSE MODAL ─────────────────────────────────────────── */}
       {newCourseOpen && (
@@ -351,8 +275,8 @@ export function TalentTrainingView({
           <Card className="w-full max-w-md border-border shadow-xl">
             <CardHeader className="flex flex-row items-center justify-between border-b border-border pb-3">
               <div>
-                <CardTitle className="text-base font-bold">New Course Accreditation</CardTitle>
-                <CardDescription className="text-xs">Add an official ISP training track.</CardDescription>
+                <CardTitle className="text-base font-bold">New Training Course</CardTitle>
+                <CardDescription className="text-xs">Saved to the HR service.</CardDescription>
               </div>
               <button type="button" onClick={() => setNewCourseOpen(false)} className="rounded p-1 text-muted-foreground hover:bg-muted">
                 <X className="h-4 w-4" />
@@ -360,15 +284,10 @@ export function TalentTrainingView({
             </CardHeader>
             <form onSubmit={handleCreateCourse}>
               <CardContent className="space-y-4 pt-4 text-xs">
+                {formError && <p className="rounded border border-red-400/20 bg-red-400/10 p-2 text-red-400" role="alert">{formError}</p>}
                 <div className="space-y-1">
                   <label className="font-medium text-foreground">Course Title *</label>
-                  <Input
-                    required
-                    placeholder="e.g. Optical Line Terminal (OLT) Commissioning"
-                    value={courseTitle}
-                    onChange={(e) => setCourseTitle(e.target.value)}
-                    className="h-8 text-xs"
-                  />
+                  <Input required placeholder="Course title" value={courseTitle} onChange={(e) => setCourseTitle(e.target.value)} className="h-8 text-xs" />
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1">
@@ -386,12 +305,7 @@ export function TalentTrainingView({
                   </div>
                   <div className="space-y-1">
                     <label className="font-medium text-foreground">Duration (Hours)</label>
-                    <Input
-                      type="number"
-                      value={courseDuration}
-                      onChange={(e) => setCourseDuration(e.target.value)}
-                      className="h-8 text-xs font-mono"
-                    />
+                    <Input type="number" min={0} value={courseDuration} onChange={(e) => setCourseDuration(e.target.value)} className="h-8 text-xs font-mono" />
                   </div>
                 </div>
                 <div className="flex items-center gap-2 pt-1">
@@ -411,8 +325,50 @@ export function TalentTrainingView({
                 <Button type="button" variant="ghost" size="sm" onClick={() => setNewCourseOpen(false)}>
                   Cancel
                 </Button>
-                <Button type="submit" size="sm" variant="default">
-                  Create Course
+                <Button type="submit" size="sm" variant="default" disabled={busy || !courseTitle.trim()}>
+                  {busy ? "Creating…" : "Create Course"}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* ── ENROL MODAL ─────────────────────────────────────────────── */}
+      {enrollCourse && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm">
+          <Card className="w-full max-w-md border-border shadow-xl">
+            <CardHeader className="flex flex-row items-center justify-between border-b border-border pb-3">
+              <div>
+                <CardTitle className="text-base font-bold">Enrol employee</CardTitle>
+                <CardDescription className="text-xs">{enrollCourse.title}</CardDescription>
+              </div>
+              <button type="button" onClick={() => setEnrollCourse(null)} className="rounded p-1 text-muted-foreground hover:bg-muted">
+                <X className="h-4 w-4" />
+              </button>
+            </CardHeader>
+            <form onSubmit={handleEnroll}>
+              <CardContent className="space-y-4 pt-4 text-xs">
+                {formError && <p className="rounded border border-red-400/20 bg-red-400/10 p-2 text-red-400" role="alert">{formError}</p>}
+                <select
+                  value={enrollEmpId}
+                  onChange={(e) => setEnrollEmpId(e.target.value)}
+                  className="w-full h-8 rounded-md border border-border bg-background px-3 text-xs text-foreground"
+                >
+                  <option value="">Select an employee…</option>
+                  {employees.map((emp) => (
+                    <option key={emp.id} value={emp.id}>
+                      {emp.full_name}
+                    </option>
+                  ))}
+                </select>
+              </CardContent>
+              <div className="flex items-center justify-end gap-2 border-t border-border p-4 bg-muted/10">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setEnrollCourse(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" variant="default" disabled={busy || !enrollEmpId}>
+                  {busy ? "Enrolling…" : "Enrol"}
                 </Button>
               </div>
             </form>

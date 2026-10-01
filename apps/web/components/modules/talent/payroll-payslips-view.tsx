@@ -29,18 +29,26 @@ import {
 } from "lucide-react"
 import {
   listPayslips,
+  listPayrollRuns,
+  createPayrollRun,
   calculateSalaryPreview,
   postPayrollRunToFinance,
+  loadableFromError,
   type PayslipRecord,
+  type PayrollRun,
   type SalaryPreviewResult,
   type DepartmentCostAllocation,
 } from "@/lib/hr-api"
+import { fmtZar } from "@/lib/format"
+import { fmtMoneyOrDash, formatHrError, isUnverifiedTablesError, parseHrError } from "@/lib/talent-derive"
+import { NotConnected } from "@/components/ui/not-connected"
+import type { Loadable } from "@/lib/service-state"
 import { PayslipModal } from "./payslip-modal"
 
 interface PayrollPayslipsViewProps {
   deptCostAllocation: DepartmentCostAllocation | null
-  deptCostLoading: boolean
-  kpiTotal: number
+  deptCostLoadable?: Loadable<DepartmentCostAllocation>
+  isHrAdmin: boolean
 }
 
 interface CustomEarningItem {
@@ -57,23 +65,26 @@ interface CustomDeductionItem {
   statutory: boolean
 }
 
-export function PayrollPayslipsView({
-  deptCostAllocation,
-  deptCostLoading,
-  kpiTotal,
-}: PayrollPayslipsViewProps) {
+export function PayrollPayslipsView({ deptCostAllocation, deptCostLoadable, isHrAdmin }: PayrollPayslipsViewProps) {
   const [activeTab, setActiveTab] = useState<"designer" | "payslips" | "calculator" | "fpa">("designer")
 
   // Payslips state
   const [payslips, setPayslips] = useState<PayslipRecord[]>([])
   const [loadingSlips, setLoadingSlips] = useState(true)
+  const [slipsLoad, setSlipsLoad] = useState<Loadable<null>>({ state: "loading" })
+  const [runs, setRuns] = useState<PayrollRun[]>([])
+  const [newPeriod, setNewPeriod] = useState("")
+  const [creatingRun, setCreatingRun] = useState(false)
+  const [runMessage, setRunMessage] = useState<string | null>(null)
+  const [tablesUnverified, setTablesUnverified] = useState<string | null>(null)
+  const [calcError, setCalcError] = useState<string | null>(null)
   const [selectedPayslip, setSelectedPayslip] = useState<PayslipRecord | null>(null)
   const [searchEmp, setSearchEmp] = useState("")
 
   // Calculator state
-  const [calcGross, setCalcGross] = useState<number>(45000)
-  const [calcAllowances, setCalcAllowances] = useState<number>(3500)
-  const [calcMedAid, setCalcMedAid] = useState<number>(2)
+  const [calcGross, setCalcGross] = useState<number>(0)
+  const [calcAllowances, setCalcAllowances] = useState<number>(0)
+  const [calcMedAid, setCalcMedAid] = useState<number>(0)
   const [calcResult, setCalcResult] = useState<SalaryPreviewResult | null>(null)
   const [isCalculating, setIsCalculating] = useState(false)
 
@@ -82,56 +93,47 @@ export function PayrollPayslipsView({
   const [financePostMsg, setFinancePostMsg] = useState<string | null>(null)
 
   // ── Payslip Designer & Editor State ────────────────────────────────
-  const [designerCompanyName, setDesignerCompanyName] = useState("OmniDome Telecoms (Pty) Ltd")
-  const [designerTaxNumber, setDesignerTaxNumber] = useState("9842109482")
-  const [designerUifNumber, setDesignerUifNumber] = useState("U-9842194/8")
-  const [designerEmpName, setDesignerEmpName] = useState("Sipho Mthembu")
-  const [designerJobTitle, setDesignerJobTitle] = useState("NOC Tier-1 Monitoring Tech")
-  const [designerEmpCode, setDesignerEmpCode] = useState("ISP-006")
-  const [designerPayPeriod, setDesignerPayPeriod] = useState("September 2026")
-  const [designerPayDate, setDesignerPayDate] = useState("2026-09-25")
+  // Blank layout designer: nothing here is real data until you type it.
+  const [designerCompanyName, setDesignerCompanyName] = useState("")
+  const [designerTaxNumber, setDesignerTaxNumber] = useState("")
+  const [designerUifNumber, setDesignerUifNumber] = useState("")
+  const [designerEmpName, setDesignerEmpName] = useState("")
+  const [designerJobTitle, setDesignerJobTitle] = useState("")
+  const [designerEmpCode, setDesignerEmpCode] = useState("")
+  const [designerPayPeriod, setDesignerPayPeriod] = useState("")
+  const [designerPayDate, setDesignerPayDate] = useState("")
 
   // Dynamic Earnings
-  const [earningsItems, setEarningsItems] = useState<CustomEarningItem[]>([
-    { id: "1", label: "Basic Monthly Salary", amount: 35000, taxable: true },
-    { id: "2", label: "Fiber Standby Allowance", amount: 3200, taxable: true },
-    { id: "3", label: "Night Shift Differential", amount: 2400, taxable: true },
-    { id: "4", label: "Cellular & APN Data Allowance", amount: 850, taxable: false },
-  ])
-
-  // Dynamic Deductions
-  const [deductionItems, setDeductionItems] = useState<CustomDeductionItem[]>([
-    { id: "1", label: "PAYE Income Tax (SARS)", amount: 6842, statutory: true },
-    { id: "2", label: "UIF Employee Contribution (1%)", amount: 177.12, statutory: true },
-    { id: "3", label: "Provident Fund (Sanlam 7.5%)", amount: 2625, statutory: false },
-    { id: "4", label: "Discovery Health Medical Aid", amount: 3100, statutory: false },
-  ])
+  const [earningsItems, setEarningsItems] = useState<CustomEarningItem[]>([])
+  const [deductionItems, setDeductionItems] = useState<CustomDeductionItem[]>([])
 
   const totalGrossEarnings = earningsItems.reduce((acc, curr) => acc + curr.amount, 0)
   const totalDeductions = deductionItems.reduce((acc, curr) => acc + curr.amount, 0)
   const netTakeHomePay = totalGrossEarnings - totalDeductions
 
-  // Load Payslips
+  // Load payslips and runs (a 403 is shown as "Not permitted", never as an empty archive)
   const loadPayslips = async () => {
     setLoadingSlips(true)
     try {
-      const data = await listPayslips()
+      const [data, runList] = await Promise.all([listPayslips(), listPayrollRuns().catch(() => null)])
       setPayslips(data)
+      setRuns(runList?.items ?? [])
+      setSlipsLoad({ state: "ready", data: null })
     } catch (err: unknown) {
-      console.error("Failed to load payslips:", err)
+      setSlipsLoad(loadableFromError(err))
     } finally {
       setLoadingSlips(false)
     }
   }
 
   useEffect(() => {
-    loadPayslips()
-    handleCalculatePreview()
+    void loadPayslips()
   }, [])
 
-  // Calculate live preview
+  // Calculate live preview (only when asked: never on mount, never with invented inputs)
   const handleCalculatePreview = async () => {
     setIsCalculating(true)
+    setCalcError(null)
     try {
       const res = await calculateSalaryPreview({
         gross_salary: calcGross,
@@ -140,29 +142,48 @@ export function PayrollPayslipsView({
       })
       setCalcResult(res)
     } catch (err: unknown) {
-      console.error("Preview failed:", err)
+      setCalcError(formatHrError(err))
     } finally {
       setIsCalculating(false)
     }
   }
 
-  // Handle post to finance
+  const latestRun = runs[0] ?? null
+
+  // Post the latest REAL run to the ledger (totals come from the run, never from headcount x a guess)
   const handlePostToFinance = async () => {
+    if (!latestRun) return
     setIsPostingFinance(true)
     setFinancePostMsg(null)
     try {
-      const runId = `RUN-${new Date().toISOString().slice(0, 10)}`
       const res = await postPayrollRunToFinance({
-        payroll_run_id: runId,
-        run_name: `Monthly Payroll - ${runId}`,
-        total_gross_zar: kpiTotal * 16000,
+        payroll_run_id: latestRun.id,
+        run_name: `Payroll ${latestRun.period}`,
         currency: "ZAR",
       })
-      setFinancePostMsg(`Successfully posted batch to General Ledger! Journal Entry Ref: ${res.journal_entry_id || res.reference || "GL-2026-SEP"}`)
+      setFinancePostMsg(`Posted to the General Ledger. Journal Entry Ref: ${res.journal_entry_id || res.reference || "—"}`)
+      void loadPayslips()
     } catch (err: unknown) {
-      setFinancePostMsg(err instanceof Error ? err.message : "Failed to post to Finance service")
+      setFinancePostMsg(formatHrError(err))
     } finally {
       setIsPostingFinance(false)
+    }
+  }
+
+  // Create a payroll run; 503 "PAYE tables not verified" is surfaced as an amber banner
+  const handleCreateRun = async () => {
+    setCreatingRun(true)
+    setRunMessage(null)
+    setTablesUnverified(null)
+    try {
+      const run = await createPayrollRun(newPeriod)
+      setRunMessage(`Payroll run for ${run.period} created.`)
+      void loadPayslips()
+    } catch (err) {
+      if (isUnverifiedTablesError(err)) setTablesUnverified(parseHrError(err).message)
+      else setRunMessage(formatHrError(err))
+    } finally {
+      setCreatingRun(false)
     }
   }
 
@@ -170,7 +191,7 @@ export function PayrollPayslipsView({
   const handleAddEarning = () => {
     setEarningsItems((prev) => [
       ...prev,
-      { id: String(Date.now()), label: "New Allowance", amount: 1000, taxable: true },
+      { id: String(Date.now()), label: "New earning", amount: 0, taxable: true },
     ])
   }
 
@@ -178,12 +199,33 @@ export function PayrollPayslipsView({
   const handleAddDeduction = () => {
     setDeductionItems((prev) => [
       ...prev,
-      { id: String(Date.now()), label: "Voluntary Deduction", amount: 500, statutory: false },
+      { id: String(Date.now()), label: "New deduction", amount: 0, statutory: false },
     ])
   }
 
   return (
     <div className="space-y-6">
+      {tablesUnverified && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-400" role="alert">
+          PAYE tables for the current tax year are not verified: {tablesUnverified}
+        </div>
+      )}
+      {isHrAdmin && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/60 p-3 text-xs">
+          <span className="font-semibold text-foreground">New payroll run</span>
+          <Input
+            placeholder="YYYY-MM"
+            value={newPeriod}
+            onChange={(e) => setNewPeriod(e.target.value)}
+            className="h-8 w-32 text-xs font-mono"
+          />
+          <Button size="sm" onClick={handleCreateRun} disabled={creatingRun || !/^\d{4}-\d{2}$/.test(newPeriod)} className="text-xs">
+            {creatingRun ? "Creating…" : "Create run"}
+          </Button>
+          {runMessage && <span className="text-muted-foreground">{runMessage}</span>}
+        </div>
+      )}
+
       {/* Tab Navigation */}
       <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2 text-xs">
         {[
@@ -385,18 +427,11 @@ export function PayrollPayslipsView({
                       size="sm"
                       variant="outline"
                       className="h-7 text-xs gap-1"
-                      onClick={() => alert("Printing BCEA-compliant payslip...")}
+                      onClick={() => window.print()}
                     >
                       <Printer className="h-3.5 w-3.5" /> Print
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="h-7 text-xs gap-1"
-                      onClick={() => alert("Downloading PDF payslip...")}
-                    >
-                      <Download className="h-3.5 w-3.5" /> Download PDF
-                    </Button>
+
                   </div>
                 </CardHeader>
 
@@ -405,8 +440,7 @@ export function PayrollPayslipsView({
                   <div className="flex items-start justify-between border-b border-border pb-4">
                     <div>
                       <h2 className="text-base font-bold text-foreground">{designerCompanyName}</h2>
-                      <p className="text-muted-foreground text-[11px]">102 Rivonia Road, Sandton, Johannesburg, 2196</p>
-                      <p className="text-muted-foreground text-[11px]">SARS Tax Ref: <span className="font-mono text-foreground">{designerTaxNumber}</span> | UIF: <span className="font-mono text-foreground">{designerUifNumber}</span></p>
+                                            <p className="text-muted-foreground text-[11px]">SARS Tax Ref: <span className="font-mono text-foreground">{designerTaxNumber}</span> | UIF: <span className="font-mono text-foreground">{designerUifNumber}</span></p>
                     </div>
                     <div className="text-right">
                       <Badge variant="outline" className="border-primary/40 text-primary font-bold text-xs uppercase px-2 py-0.5">
@@ -449,13 +483,13 @@ export function PayrollPayslipsView({
                         {earningsItems.map((item) => (
                           <div key={item.id} className="flex justify-between text-muted-foreground text-xs">
                             <span className="truncate pr-2">{item.label}</span>
-                            <span className="font-mono text-foreground">R {item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <span className="font-mono text-foreground">{fmtMoneyOrDash(item.amount)}</span>
                           </div>
                         ))}
                       </div>
                       <div className="flex justify-between border-t border-border pt-2 font-bold text-foreground text-xs">
                         <span>Total Gross Earnings:</span>
-                        <span className="font-mono text-emerald-400">R {totalGrossEarnings.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono text-emerald-400">{fmtMoneyOrDash(totalGrossEarnings)}</span>
                       </div>
                     </div>
 
@@ -469,13 +503,13 @@ export function PayrollPayslipsView({
                         {deductionItems.map((item) => (
                           <div key={item.id} className="flex justify-between text-muted-foreground text-xs">
                             <span className="truncate pr-2">{item.label}</span>
-                            <span className="font-mono text-foreground">R {item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                            <span className="font-mono text-foreground">{fmtMoneyOrDash(item.amount)}</span>
                           </div>
                         ))}
                       </div>
                       <div className="flex justify-between border-t border-border pt-2 font-bold text-foreground text-xs">
                         <span>Total Deductions:</span>
-                        <span className="font-mono text-red-400">R {totalDeductions.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                        <span className="font-mono text-red-400">{fmtMoneyOrDash(totalDeductions)}</span>
                       </div>
                     </div>
                   </div>
@@ -486,11 +520,11 @@ export function PayrollPayslipsView({
                       <span className="text-[11px] font-semibold uppercase tracking-wider text-primary">
                         Net Take-Home Pay (Disbursed via EFT)
                       </span>
-                      <p className="text-xs text-muted-foreground mt-0.5">Credited to Standard Bank Account ending in •••• 472</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Layout preview only; amounts are whatever you type above.</p>
                     </div>
                     <div className="text-right">
                       <span className="text-2xl font-bold font-mono text-foreground">
-                        R {netTakeHomePay.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        {fmtMoneyOrDash(netTakeHomePay)}
                       </span>
                     </div>
                   </div>
@@ -539,8 +573,10 @@ export function PayrollPayslipsView({
                   <tbody className="divide-y divide-border/60">
                     {loadingSlips ? (
                       <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">Loading payslips…</td></tr>
+                    ) : slipsLoad.state !== "ready" ? (
+                      <tr><td colSpan={7} className="p-4"><NotConnected loadable={slipsLoad} service="Payslips" onRetry={() => void loadPayslips()} /></td></tr>
                     ) : payslips.length === 0 ? (
-                      <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No historical payslips found. Generate a batch below.</td></tr>
+                      <tr><td colSpan={7} className="py-8 text-center text-muted-foreground">No payslips yet. Create a payroll run to generate them.</td></tr>
                     ) : (
                       payslips
                         .filter((p) => p.employee_name.toLowerCase().includes(searchEmp.toLowerCase()))
@@ -548,9 +584,9 @@ export function PayrollPayslipsView({
                           <tr key={p.id} className="hover:bg-muted/30">
                             <td className="py-3 px-4 font-semibold text-foreground">{p.employee_name}</td>
                             <td className="py-3 px-4 text-muted-foreground">{p.department}</td>
-                            <td className="py-3 px-4 font-mono">R {p.basic_salary.toLocaleString()}</td>
-                            <td className="py-3 px-4 font-mono text-red-400">R {p.tax.toLocaleString()}</td>
-                            <td className="py-3 px-4 font-mono font-bold text-emerald-400">R {p.net.toLocaleString()}</td>
+                            <td className="py-3 px-4 font-mono">{fmtMoneyOrDash(p.basic_salary)}</td>
+                            <td className="py-3 px-4 font-mono text-red-400">{fmtMoneyOrDash(p.tax)}</td>
+                            <td className="py-3 px-4 font-mono font-bold text-emerald-400">{fmtMoneyOrDash(p.net)}</td>
                             <td className="py-3 px-4">
                               <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
                                 {p.payout_status}
@@ -586,7 +622,7 @@ export function PayrollPayslipsView({
                 <Calculator className="h-4 w-4 text-primary" /> SARS Statutory PAYE & Net Calculator
               </CardTitle>
               <CardDescription className="text-xs">
-                Computes 2026/2027 progressive tax brackets, Section 6A medical tax credits, and statutory UIF/SDL caps.
+                Server-side PAYE, medical tax credit and UIF/SDL estimate for the inputs you enter.
               </CardDescription>
             </CardHeader>
             <CardContent className="p-4 space-y-4">
@@ -622,6 +658,7 @@ export function PayrollPayslipsView({
                 />
               </div>
 
+              {calcError && <p className="text-xs text-red-400" role="alert">{calcError}</p>}
               <Button
                 size="sm"
                 variant="default"
@@ -641,33 +678,38 @@ export function PayrollPayslipsView({
                   <ShieldCheck className="h-4 w-4 text-emerald-400" /> SARS Statutory Tax Breakdown
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Tax year 2026/2027 statutory deductions under South African Revenue Service tables.
+                  Tax year {calcResult.tax_year ?? "—"}, table version {calcResult.tax_table_version ?? "—"}.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-4 space-y-2 text-muted-foreground">
+                {calcResult.rates_verified === false && (
+                  <p className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-amber-400" role="alert">
+                    PAYE tables for tax year {calcResult.tax_year ?? "?"} are not verified.
+                  </p>
+                )}
                 <div className="flex justify-between py-1 border-b border-border/40">
                   <span>Gross Monthly Remuneration:</span>
-                  <span className="font-semibold text-foreground font-mono">R {calcResult.gross_salary.toLocaleString()}</span>
+                  <span className="font-semibold text-foreground font-mono">{fmtMoneyOrDash(calcResult.gross_salary)}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-border/40">
                   <span>PAYE Income Tax:</span>
-                  <span className="font-semibold text-red-400 font-mono">R {calcResult.monthly_paye_tax.toLocaleString()}</span>
+                  <span className="font-semibold text-red-400 font-mono">{fmtMoneyOrDash(calcResult.monthly_paye_tax)}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-border/40">
                   <span>Medical Scheme Tax Credit (Section 6A):</span>
-                  <span className="font-semibold text-emerald-400 font-mono">- R {calcResult.medical_tax_credit.toLocaleString()}</span>
+                  <span className="font-semibold text-emerald-400 font-mono">- {fmtMoneyOrDash(calcResult.medical_tax_credit)}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-border/40">
-                  <span>UIF Employee Contribution (1% max R177.12):</span>
-                  <span className="font-semibold text-foreground font-mono">R {calcResult.uif_employee_contribution.toFixed(2)}</span>
+                  <span>UIF Employee Contribution:</span>
+                  <span className="font-semibold text-foreground font-mono">{fmtMoneyOrDash(calcResult.uif_employee_contribution)}</span>
                 </div>
                 <div className="flex justify-between py-1 border-b border-border/40">
-                  <span>SDL Employer Contribution (1%):</span>
-                  <span className="font-semibold text-foreground font-mono">R {calcResult.sdl_employer_contribution.toFixed(2)}</span>
+                  <span>SDL Employer Contribution:</span>
+                  <span className="font-semibold text-foreground font-mono">{fmtMoneyOrDash(calcResult.sdl_employer_contribution)}</span>
                 </div>
                 <div className="flex justify-between py-2 border-t border-border font-bold text-foreground text-sm">
                   <span>Net Estimated Take-Home Pay:</span>
-                  <span className="font-mono text-emerald-400 text-base">R {calcResult.net_take_home_pay.toLocaleString()}</span>
+                  <span className="font-mono text-emerald-400 text-base">{fmtMoneyOrDash(calcResult.net_take_home_pay)}</span>
                 </div>
               </CardContent>
             </Card>
@@ -692,7 +734,8 @@ export function PayrollPayslipsView({
                 <Button
                   size="sm"
                   variant="default"
-                  disabled={isPostingFinance}
+                  disabled={isPostingFinance || !latestRun || !isHrAdmin}
+                  title={!isHrAdmin ? "HR admin only" : !latestRun ? "No payroll run to post" : undefined}
                   onClick={handlePostToFinance}
                   className="gap-1.5 text-xs"
                 >
@@ -708,29 +751,39 @@ export function PayrollPayslipsView({
                 </div>
               )}
 
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
-                  <span className="text-muted-foreground">Total Salary Liability</span>
-                  <p className="text-lg font-bold text-foreground">
-                    R {(deptCostAllocation?.total_monthly_payroll_zar ?? 685000).toLocaleString()} ZAR
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Includes allowances & night pay</p>
+              {!latestRun ? (
+                <p className="rounded-lg border border-dashed border-border p-4 text-center text-muted-foreground">
+                  No payroll run exists yet. Figures appear once a run has been created.
+                </p>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
+                    <span className="text-muted-foreground">Gross payroll (run {latestRun.period})</span>
+                    <p className="text-lg font-bold text-foreground">{fmtMoneyOrDash(latestRun.total_gross)}</p>
+                    <p className="text-[10px] text-muted-foreground">{latestRun.employee_count} employees, status {latestRun.status}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
+                    <span className="text-muted-foreground">Total deductions</span>
+                    <p className="text-lg font-bold text-red-400">{fmtMoneyOrDash(latestRun.total_deductions)}</p>
+                    <p className="text-[10px] text-muted-foreground">as recorded on the run</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
+                    <span className="text-muted-foreground">Net payable</span>
+                    <p className="text-lg font-bold text-emerald-400">{fmtMoneyOrDash(latestRun.total_net)}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {latestRun.tax_year ? `Tax year ${latestRun.tax_year}` : "tax year not recorded"}
+                    </p>
+                  </div>
                 </div>
-                <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
-                  <span className="text-muted-foreground">Total SARS PAYE & UIF Due</span>
-                  <p className="text-lg font-bold text-red-400">
-                    R {(deptCostAllocation ? Math.round(deptCostAllocation.total_monthly_payroll_zar * 0.22) : 142300).toLocaleString()} ZAR
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Payable via EMP201 return</p>
-                </div>
-                <div className="rounded-lg border border-border bg-background/50 p-3 space-y-1">
-                  <span className="text-muted-foreground">EFT Bank Disbursement Batch</span>
-                  <p className="text-lg font-bold text-emerald-400">
-                    R {(deptCostAllocation ? Math.round(deptCostAllocation.total_monthly_payroll_zar * 0.78) : 542700).toLocaleString()} ZAR
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Ready for bank release</p>
-                </div>
-              </div>
+              )}
+              {deptCostAllocation && (
+                <p className="text-[11px] text-muted-foreground">
+                  Monthly payroll cost across departments: <strong className="text-foreground">{fmtZar(deptCostAllocation.total_monthly_payroll_zar)}</strong>
+                </p>
+              )}
+              {deptCostLoadable && deptCostLoadable.state === "denied" && (
+                <p className="text-[11px] text-amber-400">Department cost allocation: Not permitted.</p>
+              )}
             </CardContent>
           </Card>
         </div>

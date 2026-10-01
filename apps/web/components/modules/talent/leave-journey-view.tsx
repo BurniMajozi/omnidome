@@ -170,23 +170,35 @@ export function LeaveJourneyView({
     })
   }, [localRequests, employees, search, statusFilter])
 
-  // Accrued Leave Liability Calculations (ZAR)
+  // Annual leave taken this year, from real APPROVED requests (working days, Mon-Fri).
+  // ZAR provision needs a real daily rate per employee, which no source provides: shown as "Not connected".
+  const ANNUAL_ENTITLEMENT_DAYS = 21 // BCEA s20 statutory minimum (21 consecutive days / 15 working days basis not assumed)
   const leaveLiabilityData = useMemo(() => {
-    return employees.map((emp) => {
-      const dailyRateZAR = 1250 // Average daily wage for ISP telecom staff
-      const accruedDays = 15 // Standard accrued
-      const liabilityZAR = accruedDays * dailyRateZAR
-      return {
-        emp,
-        accruedDays,
-        liabilityZAR,
+    const year = new Date().getFullYear()
+    const workingDays = (start: string, end: string) => {
+      const s0 = new Date(start)
+      const e0 = new Date(end)
+      if (Number.isNaN(s0.getTime()) || Number.isNaN(e0.getTime()) || e0 < s0) return 0
+      let n = 0
+      for (const d = new Date(s0); d <= e0; d.setDate(d.getDate() + 1)) {
+        const wd = d.getDay()
+        if (wd !== 0 && wd !== 6) n += 1
       }
+      return n
+    }
+    return employees.map((emp) => {
+      const takenDays = localRequests
+        .filter(
+          (r) =>
+            r.employee_id === emp.id &&
+            /annual/i.test(r.leave_type) &&
+            /^approved$/i.test(r.status) &&
+            new Date(r.start_date).getFullYear() === year,
+        )
+        .reduce((acc, r) => acc + workingDays(r.start_date, r.end_date), 0)
+      return { emp, takenDays, remainingDays: Math.max(0, ANNUAL_ENTITLEMENT_DAYS - takenDays) }
     })
-  }, [employees])
-
-  const totalLiabilityZAR = useMemo(() => {
-    return leaveLiabilityData.reduce((acc, curr) => acc + curr.liabilityZAR, 0)
-  }, [leaveLiabilityData])
+  }, [employees, localRequests])
 
   return (
     <div className="space-y-6">
@@ -281,7 +293,7 @@ export function LeaveJourneyView({
               : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
           }`}
         >
-          Staff Leave Balances & Accrued Liabilities (R {totalLiabilityZAR.toLocaleString()})
+          Staff Leave Balances
         </button>
         <button
           type="button"
@@ -467,7 +479,7 @@ export function LeaveJourneyView({
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground">Total Financial Provision</p>
-                  <p className="text-lg font-bold text-foreground">R {totalLiabilityZAR.toLocaleString()} ZAR</p>
+                  <p className="text-sm font-medium text-muted-foreground">Not connected (no daily-rate source)</p>
                 </div>
               </div>
             </CardHeader>
@@ -480,7 +492,7 @@ export function LeaveJourneyView({
                       <th className="py-2.5 px-4 font-medium">Department</th>
                       <th className="py-2.5 px-4 font-medium">Annual Quota</th>
                       <th className="py-2.5 px-4 font-medium">Days Taken</th>
-                      <th className="py-2.5 px-4 font-medium">Accrued Balance</th>
+                      <th className="py-2.5 px-4 font-medium">Remaining Balance</th>
                       <th className="py-2.5 px-4 font-medium text-right">ZAR Provision</th>
                     </tr>
                   </thead>
@@ -498,11 +510,11 @@ export function LeaveJourneyView({
                           </div>
                         </td>
                         <td className="py-2.5 px-4 text-muted-foreground">{row.emp.department}</td>
-                        <td className="py-2.5 px-4 text-foreground">21 Days</td>
-                        <td className="py-2.5 px-4 text-muted-foreground">6 Days</td>
-                        <td className="py-2.5 px-4 font-semibold text-emerald-400">{row.accruedDays} Days</td>
+                        <td className="py-2.5 px-4 text-foreground">{ANNUAL_ENTITLEMENT_DAYS} Days</td>
+                        <td className="py-2.5 px-4 text-muted-foreground">{row.takenDays} Days</td>
+                        <td className="py-2.5 px-4 font-semibold text-emerald-400">{row.remainingDays} Days</td>
                         <td className="py-2.5 px-4 text-right font-mono font-semibold text-foreground">
-                          R {row.liabilityZAR.toLocaleString()}
+                          —
                         </td>
                       </tr>
                     ))}

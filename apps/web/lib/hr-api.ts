@@ -7,9 +7,28 @@
  */
 
 import { getSessionSafe } from "@/lib/supabase/client"
+import { createTtlCache } from "@/lib/request-cache"
+import { mapLimit, parseHrError, readPerformanceSummary, readableErrorBody, type PerformanceSummaryRow } from "@/lib/talent-derive"
+import { loadableFromStatus, type Loadable } from "@/lib/service-state"
 
 const API_BASE = "/svc/hr"
 const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+const DEFAULT_TIMEOUT_MS = 15_000
+
+/**
+ * Error from the HR service. `message` keeps the legacy "HR API error <status>: <body>"
+ * shape (older call sites parse it); `status` and `detail` are the structured form.
+ */
+export class HrApiError extends Error {
+  status: number
+  detail: string
+  constructor(status: number, body: string) {
+    super(`HR API error ${status}: ${body}`)
+    this.name = "HrApiError"
+    this.status = status
+    this.detail = readableErrorBody(body, status)
+  }
+}
 
 async function getTenantId(): Promise<string> {
   const { data } = await getSessionSafe()
@@ -24,14 +43,57 @@ async function fetchHR<T>(path: string, init?: RequestInit): Promise<T> {
   const tenantId = await getTenantId()
   const res = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
+    signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     headers: { "x-tenant-id": tenantId, "Content-Type": "application/json" },
     ...init,
   })
+  const isWrite = !!init?.method && init.method.toUpperCase() !== "GET"
+  if (isWrite) invalidateHr() // whatever the outcome, cached reads may now be stale
   if (!res.ok) {
     const body = await res.text().catch(() => "")
-    throw new Error(`HR API error ${res.status}: ${body}`)
+    throw new HrApiError(res.status, body)
   }
+  if (res.status === 204) return undefined as T
   return res.json()
+}
+
+/** Any error from this client (or a network failure) -> Loadable, for the shared <NotConnected> ("Not permitted", "Service not running", ...). */
+export function loadableFromError(err: unknown): Loadable<never> {
+  const { status, message } = parseHrError(err)
+  return loadableFromStatus<never>(status, undefined, message) as Loadable<never>
+}
+
+// ── Shared request cache ────────────────────────────────────────────────
+// One Talent page load used to fire the same GET many times (employees x8,
+// kpis/company x6, live-actuals x5, per-employee performance x20). Reads go
+// through a per-identity cache: concurrent callers share one in-flight request
+// and a fresh result is reused for the TTL. Failures are never cached.
+
+const sharedCache = createTtlCache(30_000)
+const liveActualsCache = createTtlCache(60_000)
+let lastIdentity = "anon"
+
+async function identityKey(): Promise<string> {
+  try {
+    const { data } = await getSessionSafe()
+    lastIdentity = data.session?.user?.id ?? "anon"
+  } catch {
+    /* keep the last known identity */
+  }
+  return lastIdentity
+}
+
+async function cachedGet<T>(key: string, loader: () => Promise<T>, fresh = false, cache = sharedCache): Promise<T> {
+  const id = await identityKey()
+  const k = `${id}|${key}`
+  if (fresh) cache.invalidate(k)
+  return cache.get(k, loader)
+}
+
+/** Any write may change what the reads return: drop every cached read (cheap; they refetch on demand). */
+function invalidateHr(): void {
+  sharedCache.invalidate()
+  liveActualsCache.invalidate()
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -336,6 +398,27 @@ export interface PayslipRecord {
   paystack_transfer_code?: string
   paystack_reference?: string
   payout_message?: string
+  /** Tax year and table version the PAYE was computed with (added by the HR backend). */
+  tax_year?: string | null
+  tax_table_version?: string | null
+  /** false = the PAYE tables for this tax year are not verified. */
+  rates_verified?: boolean | null
+  created_at: string
+}
+
+export interface PayrollRun {
+  id: string
+  period: string
+  status: string
+  currency?: string
+  employee_count: number
+  total_gross: number
+  total_deductions: number
+  total_net: number
+  finance_entry_id?: string | null
+  tax_year?: string | null
+  tax_table_version?: string | null
+  rates_verified?: boolean | null
   created_at: string
 }
 
@@ -355,16 +438,19 @@ export interface SalaryPreviewResult {
   total_company_contributions: number
   net_take_home_pay: number
   statutory_compliance: string
+  tax_year?: string | null
+  tax_table_version?: string | null
+  rates_verified?: boolean | null
 }
 
 // ── API methods ──────────────────────────────────────────────────────
 
 // Employees
-export const listEmployees = (params?: { department?: string; status?: string }) => {
+export const listEmployees = (params?: { department?: string; status?: string }, opts?: { fresh?: boolean }) => {
   const q = new URLSearchParams()
   if (params?.department) q.set("department", params.department)
   if (params?.status) q.set("status", params.status)
-  return fetchHR<Employee[]>(`/employees?${q}`)
+  return cachedGet(`employees?${q}`, () => fetchHR<Employee[]>(`/employees?${q}`), opts?.fresh)
 }
 
 export const createEmployee = (data: EmployeeCreate) =>
@@ -393,8 +479,8 @@ export const linkEmployeeToAgent = (empId: string, agentId: string) =>
   })
 
 // Leave
-export const listLeaveRequests = (empId: string) =>
-  fetchHR<LeaveRequest[]>(`/employees/${empId}/leave`)
+export const listLeaveRequests = (empId: string, opts?: { fresh?: boolean }) =>
+  cachedGet(`leave:${empId}`, () => fetchHR<LeaveRequest[]>(`/employees/${empId}/leave`), opts?.fresh)
 
 export const createLeaveRequest = (empId: string, data: LeaveRequestCreate) =>
   fetchHR<LeaveRequest>(`/employees/${empId}/leave`, {
@@ -413,8 +499,65 @@ export const declineLeave = (leaveId: string) =>
   })
 
 // Performance
-export const getEmployeePerformance = (empId: string) =>
-  fetchHR<PerformanceReview[]>(`/employees/${empId}/performance`)
+export const getEmployeePerformance = (empId: string, opts?: { fresh?: boolean }) =>
+  cachedGet(`performance:${empId}`, () => fetchHR<PerformanceReview[]>(`/employees/${empId}/performance`), opts?.fresh)
+
+export type { PerformanceSummaryRow } from "@/lib/talent-derive"
+
+const bulkPerformanceSummary = (fresh?: boolean) =>
+  cachedGet(
+    "performance-summary-bulk",
+    async (): Promise<PerformanceSummaryRow[] | null> => {
+      try {
+        return readPerformanceSummary(await fetchHR<unknown>("/employees/performance/summary"))
+      } catch (err) {
+        if (err instanceof HrApiError && (err.status === 401 || err.status === 403)) throw err
+        return null // 404/405/5xx: the bulk endpoint is not available
+      }
+    },
+    fresh,
+  )
+
+/**
+ * Performance summary for every employee in ONE request
+ * (GET /employees/performance/summary -> [{employee_id, overall_score, status, fiscal_year, composite}]).
+ * When the bulk endpoint is unavailable: `bulkOnly` returns null (header tiles
+ * show "Not connected" rather than fan out); otherwise it falls back to the
+ * per-employee sheets with concurrency 4 through the same cache. A 403 is
+ * rethrown so the caller can show "Not permitted".
+ */
+export const getPerformanceSummary = async (
+  employeeIds: ReadonlyArray<string>,
+  opts?: { fresh?: boolean; bulkOnly?: boolean },
+): Promise<PerformanceSummaryRow[] | null> => {
+  const bulk = await bulkPerformanceSummary(opts?.fresh)
+  if (bulk) return bulk
+  if (opts?.bulkOnly) return null
+  return cachedGet(
+    "performance-summary-fallback",
+    async () => {
+      if (employeeIds.length === 0) return []
+      const out = await mapLimit(
+        employeeIds,
+        4,
+        async (id): Promise<PerformanceSummaryRow | null> => {
+          const sheet = await getEmployeeKPISheet(id)
+          if (sheet.is_template) return null
+          return {
+            employee_id: id,
+            overall_score: typeof sheet.overall_score === "number" ? sheet.overall_score : null,
+            status: sheet.status ?? null,
+            fiscal_year: sheet.fiscal_year ?? null,
+            composite: sheet.composite ?? null,
+          }
+        },
+        () => null,
+      )
+      return out.filter((r): r is PerformanceSummaryRow => r !== null)
+    },
+    opts?.fresh,
+  )
+}
 
 export const createPerformanceReview = (empId: string, data: PerformanceReviewCreate) =>
   fetchHR<PerformanceReview>(`/employees/${empId}/performance`, {
@@ -455,10 +598,10 @@ export const getDemandForecast = (days?: number) => {
 }
 
 // Training
-export const listTrainingCourses = (params?: { category?: string }) => {
+export const listTrainingCourses = (params?: { category?: string }, opts?: { fresh?: boolean }) => {
   const q = new URLSearchParams()
   if (params?.category) q.set("category", params.category)
-  return fetchHR<TrainingCourse[]>(`/training/courses?${q}`)
+  return cachedGet(`training-courses?${q}`, () => fetchHR<TrainingCourse[]>(`/training/courses?${q}`), opts?.fresh)
 }
 
 export const createTrainingCourse = (data: TrainingCourseCreate) =>
@@ -479,8 +622,8 @@ export const updateTrainingProgress = (enrollmentId: string, progress_pct: numbe
     body: JSON.stringify({ progress_pct, score }),
   })
 
-export const getEmployeeTraining = (empId: string) =>
-  fetchHR<TrainingEnrollment[]>(`/employees/${empId}/training`)
+export const getEmployeeTraining = (empId: string, opts?: { fresh?: boolean }) =>
+  cachedGet(`training:${empId}`, () => fetchHR<TrainingEnrollment[]>(`/employees/${empId}/training`), opts?.fresh)
 
 // Benefits
 export const listBenefits = (params?: { employee_id?: string; benefit_type?: string }) => {
@@ -500,11 +643,11 @@ export const getEmployeeBenefits = (empId: string) =>
   fetchHR<Benefit[]>(`/employees/${empId}/benefits`)
 
 // Disciplinary
-export const listDisciplinary = (params?: { employee_id?: string; status?: string }) => {
+export const listDisciplinary = (params?: { employee_id?: string; status?: string }, opts?: { fresh?: boolean }) => {
   const q = new URLSearchParams()
   if (params?.employee_id) q.set("employee_id", params.employee_id)
   if (params?.status) q.set("status", params.status)
-  return fetchHR<DisciplinaryAction[]>(`/disciplinary?${q}`)
+  return cachedGet(`disciplinary?${q}`, () => fetchHR<DisciplinaryAction[]>(`/disciplinary?${q}`), opts?.fresh)
 }
 
 export const createDisciplinary = (data: DisciplinaryCreate) =>
@@ -520,10 +663,10 @@ export const resolveDisciplinary = (actionId: string, outcome: string, reviewed_
   })
 
 // Exits
-export const listExits = (params?: { status?: string }) => {
+export const listExits = (params?: { status?: string }, opts?: { fresh?: boolean }) => {
   const q = new URLSearchParams()
   if (params?.status) q.set("status", params.status)
-  return fetchHR<ExitRecord[]>(`/exits?${q}`)
+  return cachedGet(`exits?${q}`, () => fetchHR<ExitRecord[]>(`/exits?${q}`), opts?.fresh)
 }
 
 export const createExit = (data: ExitCreate) =>
@@ -582,8 +725,16 @@ export const getOnboardingProgress = (empId: string) =>
   fetchHR<{ total: number; completed: number; progress_pct: number }>(`/onboarding/${empId}/progress`)
 
 // Analytics
-export const getAttritionRisk = () =>
-  fetchHR<unknown>("/analytics/attrition-risk")
+export interface AttritionRiskOverview {
+  total_employees: number
+  high_risk_count: number
+  medium_risk_count: number
+  low_risk_count: number
+  recommendations?: string[]
+}
+
+export const getAttritionRisk = (opts?: { fresh?: boolean }) =>
+  cachedGet("attrition-risk", () => fetchHR<AttritionRiskOverview>("/analytics/attrition-risk"), opts?.fresh)
 
 export const getHeadcountAnalytics = () =>
   fetchHR<unknown>("/analytics/headcount")
@@ -730,10 +881,10 @@ export const postPayrollRunToFinance = (data?: {
   })
 
 export const getDepartmentCostAllocation = () =>
-  fetchHR<DepartmentCostAllocation>("/cross-service/finance/department-cost-allocation")
+  cachedGet("dept-cost-allocation", () => fetchHR<DepartmentCostAllocation>("/cross-service/finance/department-cost-allocation"))
 
 export const getStaffComplianceAudit = () =>
-  fetchHR<StaffComplianceSummary>("/cross-service/compliance/audit")
+  cachedGet("compliance-audit", () => fetchHR<StaffComplianceSummary>("/cross-service/compliance/audit"))
 
 export const getOrchestratorWellnessInsights = () =>
   fetchHR<OrchestratorWellnessAlert[]>("/cross-service/orchestrator/wellness")
@@ -850,6 +1001,20 @@ export const listPayslips = (params?: { run_id?: string; employee_id?: string })
   return fetchHR<PayslipRecord[]>(`/payroll/payslips?${q}`)
 }
 
+/** All payroll runs (totals are the backend's, e.g. paid payroll YTD is never summed client-side). */
+export const listPayrollRuns = () =>
+  fetchHR<{ items: PayrollRun[]; total: number }>("/payroll/runs")
+
+/**
+ * Create a payroll run for a period (YYYY-MM). 503 means the PAYE tables for the
+ * tax year are not verified: callers show the amber banner (see isUnverifiedTablesError).
+ */
+export const createPayrollRun = (period: string) =>
+  fetchHR<PayrollRun & { skipped_employees_without_profile?: string[] }>("/payroll/runs", {
+    method: "POST",
+    body: JSON.stringify({ period }),
+  })
+
 export const getPayslip = (payslipId: string) =>
   fetchHR<PayslipRecord>(`/payroll/payslips/${payslipId}`)
 
@@ -936,18 +1101,20 @@ export interface IndividualKPIItem {
 export interface CompanyKPIConfig {
   id: string
   fiscal_year: string
+  /** True when any of the sales/cost/profit budgets is 0: no index can be computed. */
+  company_missing?: boolean
   sales_budget_zar: number
   sales_actual_zar: number
-  sales_achievement_pct: number
+  sales_achievement_pct: number | null
   cost_budget_zar: number
   cost_actual_zar: number
-  cost_efficiency_pct: number
+  cost_efficiency_pct: number | null
   profit_budget_zar: number
   profit_actual_zar: number
-  profit_achievement_pct: number
-  company_shared_score_pct: number
-  /** Backend-computed corporate attainment index (preferred over any local formula) */
-  corporate_attainment_index?: number
+  profit_achievement_pct: number | null
+  company_shared_score_pct: number | null
+  /** Backend-computed corporate attainment index (null = no targets set; preferred over any local formula) */
+  corporate_attainment_index?: number | null
   values_weight_pct: number
   values_description: string
   level_weights: {
@@ -980,6 +1147,10 @@ export interface EmployeeKPISheet {
   status: "DRAFT" | "SUBMITTED" | "APPROVED" | "CALIBRATED" | string
   kpis: IndividualKPIItem[]
   overall_score?: number | null
+  /** Where overall_score came from (server-defined, shown as-is). */
+  score_basis?: string | null
+  /** Not persisted yet: no invented KPIs and no score; Save Draft creates the sheet. */
+  is_template?: boolean
   reviewer_notes?: string | null
   company_benchmarks?: Partial<CompanyKPIConfig>
   /** Manager ratings (1-5) for the 4 strategic values; keys in VALUE_KEYS. */
@@ -991,7 +1162,7 @@ export interface EmployeeKPISheet {
     individual_score: number
     values_rated: boolean
     company_missing: boolean
-  }
+  } | null
   approved_by?: string | null
   approved_at?: string | null
   reject_reason?: string | null
@@ -1029,8 +1200,8 @@ export interface AISmartCriteriaResult {
   }
 }
 
-export const getCompanyKPIConfig = () =>
-  fetchHR<CompanyKPIConfig>("/kpis/company")
+export const getCompanyKPIConfig = (opts?: { fresh?: boolean }) =>
+  cachedGet("kpis-company", () => fetchHR<CompanyKPIConfig>("/kpis/company"), opts?.fresh)
 
 export const updateCompanyKPIConfig = (data: Partial<CompanyKPIConfig>) =>
   fetchHR<CompanyKPIConfig>("/kpis/company", {
@@ -1050,8 +1221,8 @@ export const cascadeSharedKPIs = (fiscalYear: string = "FY 2026/2027") =>
     body: JSON.stringify({ fiscal_year: fiscalYear }),
   })
 
-export const getEmployeeKPISheet = (empId: string) =>
-  fetchHR<EmployeeKPISheet>(`/employees/${empId}/kpi-sheet`)
+export const getEmployeeKPISheet = (empId: string, opts?: { fresh?: boolean }) =>
+  cachedGet(`kpi-sheet:${empId}`, () => fetchHR<EmployeeKPISheet>(`/employees/${empId}/kpi-sheet`), opts?.fresh)
 
 export const updateEmployeeKPISheet = (empId: string, data: Partial<EmployeeKPISheet>) =>
   fetchHR<{
@@ -1095,8 +1266,30 @@ export const generateAISmartCriteria = (data: {
     body: JSON.stringify(data),
   })
 
-export const getKpisLiveActuals = () =>
-  fetchHR<LiveActualsResponse>("/kpis/live-actuals")
+/** Live actuals hit sales+billing (8s timeout server-side): one request per 60s, shared by every caller. */
+export const getKpisLiveActuals = (opts?: { fresh?: boolean }) =>
+  cachedGet("kpis-live-actuals", () => fetchHR<LiveActualsResponse>("/kpis/live-actuals"), opts?.fresh, liveActualsCache)
+
+// ── Who am I (roles) ────────────────────────────────────────────────────
+
+export interface Whoami {
+  user_id: string
+  tenant_id: string
+  roles: string[]
+}
+
+/** Roles resolved by the edge gate (/api/whoami). null when it cannot be read (UI then hides admin-only controls). */
+export const getWhoami = (): Promise<Whoami | null> =>
+  cachedGet("whoami", async () => {
+    try {
+      const res = await fetch("/api/whoami", { cache: "no-store", signal: AbortSignal.timeout(10_000) })
+      if (!res.ok) return null
+      const j = (await res.json()) as Partial<Whoami>
+      return { user_id: j.user_id ?? "", tenant_id: j.tenant_id ?? "", roles: Array.isArray(j.roles) ? j.roles : [] }
+    } catch {
+      return null
+    }
+  })
 
 
 

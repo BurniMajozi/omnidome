@@ -43,6 +43,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { NoDataYet } from "@/components/ui/not-connected"
 import {
   createEmployee,
   type Employee,
@@ -259,15 +260,15 @@ export function PimDirectoryView({
       const payload: EmployeeCreate = {
         employee_id: code,
         full_name: formName.trim(),
-        job_title: formJobTitle.trim() || "Telecom Specialist",
+        job_title: formJobTitle.trim(),
         department: formDept,
         hire_date: formHireDate,
-        email: formEmail.trim() || `${formName.toLowerCase().replace(/\s+/g, ".")}@omnidome.co.za`,
-        phone: formPhone.trim() || "+27 11 884 1000",
+        email: formEmail.trim() || undefined,
+        phone: formPhone.trim() || undefined,
         manager_id: formManagerId || undefined,
         status: "ACTIVE",
-        id_number: formIdNumber.trim() || "8904125082083",
-        tax_number: formTaxNumber.trim() || "9842109482",
+        id_number: formIdNumber.trim() || undefined,
+        tax_number: formTaxNumber.trim() || undefined,
       }
 
       await createEmployee(payload)
@@ -604,195 +605,47 @@ export function PimDirectoryView({
               ))}
             </div>
 
-            {/* TAB CONTENT: Overview */}
+            {/* TAB CONTENT: Overview (real fields only; redacted fields show a dash) */}
             {profileTab === "overview" && (
               <div className="space-y-4 text-xs">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
                     <span className="text-muted-foreground">Contact Email</span>
-                    <p className="font-semibold text-foreground text-sm">{selectedEmp.email || "N/A"}</p>
+                    <p className="font-semibold text-foreground text-sm">{selectedEmp.email || "—"}</p>
                   </div>
                   <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
                     <span className="text-muted-foreground">Contact Phone</span>
-                    <p className="font-semibold text-foreground text-sm">{selectedEmp.phone || "+27 (011) 884-1000"}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
-                    <span className="text-muted-foreground">Gender & Demographics</span>
-                    <p className="font-semibold text-foreground text-sm">Female • 31 Years</p>
+                    <p className="font-semibold text-foreground text-sm">{selectedEmp.phone || "—"}</p>
                   </div>
                   <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
                     <span className="text-muted-foreground">Employment Status</span>
-                    <p className="font-semibold text-emerald-400 text-sm">Permanent / Full-Time</p>
+                    <p className="font-semibold text-foreground text-sm">{selectedEmp.status || "—"}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
+                    <span className="text-muted-foreground">Hire Date</span>
+                    <p className="font-semibold text-foreground text-sm">{selectedEmp.hire_date || "—"}</p>
                   </div>
                 </div>
 
-                {/* Statutory & RSA Compliance */}
                 <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <Shield className="h-4 w-4 text-cyan-400" /> Statutory & Regulatory Compliance
-                    </span>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                      Compliant
-                    </Badge>
-                  </div>
-                  <div className="grid gap-2 sm:grid-cols-2 text-muted-foreground">
-                    <div>RSA ID Number: <span className="text-foreground font-mono">890412 5082 083</span></div>
-                    <div>SARS Tax Number: <span className="text-foreground font-mono">9842109482</span></div>
-                    <div>COID / Compensation Fund: <span className="text-foreground">Registered</span></div>
-                    <div>UIF Reference: <span className="text-foreground font-mono">U-9842194</span></div>
-                  </div>
-                </div>
-
-                {/* Statutory BCEA Leave Entitlement Summary */}
-                <div className="rounded-lg border border-border bg-background/40 p-4 space-y-2">
                   <span className="font-semibold text-foreground flex items-center gap-1.5">
-                    <Calendar className="h-4 w-4 text-primary" /> Statutory BCEA Leave Entitlements
+                    <Shield className="h-4 w-4 text-cyan-400" /> Identity & Tax (as returned by the HR service; masked for non-admins)
                   </span>
-                  <div className="grid grid-cols-3 gap-2 pt-1 text-center">
-                    <div className="rounded border border-border/60 bg-muted/30 p-2">
-                      <p className="text-[11px] text-muted-foreground">Annual Leave</p>
-                      <p className="text-sm font-bold text-foreground">16 / 21 Days</p>
-                    </div>
-                    <div className="rounded border border-border/60 bg-muted/30 p-2">
-                      <p className="text-[11px] text-muted-foreground">Sick Leave (3-yr)</p>
-                      <p className="text-sm font-bold text-foreground">28 / 30 Days</p>
-                    </div>
-                    <div className="rounded border border-border/60 bg-muted/30 p-2">
-                      <p className="text-[11px] text-muted-foreground">Family Resp.</p>
-                      <p className="text-sm font-bold text-foreground">3 / 3 Days</p>
-                    </div>
+                  <div className="grid gap-2 sm:grid-cols-2 text-muted-foreground">
+                    <div>ID Number: <span className="text-foreground font-mono">{selectedEmp.id_number || "—"}</span></div>
+                    <div>Tax Number: <span className="text-foreground font-mono">{selectedEmp.tax_number || "—"}</span></div>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* TAB CONTENT: KPIs */}
             {profileTab === "kpis" && (
-              <div className="space-y-4 text-xs">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
-                    <span className="text-muted-foreground">SLA Compliance Rate</span>
-                    <p className="font-bold text-lg text-emerald-400">97.4%</p>
-                    <p className="text-[11px] text-muted-foreground">Target: 95.0%</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
-                    <span className="text-muted-foreground">First-Time-Fix (FTF) Rate</span>
-                    <p className="font-bold text-lg text-primary">92.1%</p>
-                    <p className="text-[11px] text-muted-foreground">Field / NOC installations</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
-                    <span className="text-muted-foreground">Subscriber CSAT Rating</span>
-                    <p className="font-bold text-lg text-amber-400">4.8 / 5.0</p>
-                    <p className="text-[11px] text-muted-foreground">Based on 86 verified reviews</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1">
-                    <span className="text-muted-foreground">Tickets & Tasks Closed</span>
-                    <p className="font-bold text-lg text-foreground">142 Tasks</p>
-                    <p className="text-[11px] text-muted-foreground">Zero repeat escalations</p>
-                  </div>
-                </div>
-              </div>
+              <NoDataYet message="KPI scores live in Performance & Objectives. No per-employee operational metrics (SLA, FTF, CSAT) are connected here." />
             )}
-
-            {/* TAB CONTENT: Kudos & Culture */}
-            {profileTab === "kudos" && (
-              <div className="space-y-3 text-xs">
-                <div className="rounded-lg border border-border bg-background/40 p-3.5 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <Sparkles className="h-4 w-4 text-amber-400" /> Customer Hero of the Month (Q2)
-                    </span>
-                    <Badge variant="outline" className="border-amber-500/40 text-amber-400">#NetworkHero</Badge>
-                  </div>
-                  <p className="text-muted-foreground">
-                    "Identified an upstream BGP routing loop during peak Friday traffic and rerouted core transit in under 4 minutes."
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">Awarded by: Johan Pretorius (NOC Team Lead)</p>
-                </div>
-
-                <div className="rounded-lg border border-border bg-background/40 p-3.5 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <Award className="h-4 w-4 text-cyan-400" /> Perfect Attendance & Night Shift Champion
-                    </span>
-                    <Badge variant="outline" className="border-cyan-500/40 text-cyan-400">#Dedication</Badge>
-                  </div>
-                  <p className="text-muted-foreground">
-                    "Maintained flawless 100% SLA uptime coverage over 6 consecutive weekend standby cycles."
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">Awarded by: Thabo Nkosi (CTO)</p>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: Disciplinary Log */}
-            {profileTab === "disciplinary" && (
-              <div className="space-y-4 text-xs">
-                <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                      <CheckCircle2 className="h-4 w-4" /> Conduct Standing: Exemplary
-                    </span>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">
-                      0 Active Warnings
-                    </Badge>
-                  </div>
-                  <p className="text-muted-foreground">
-                    No active warnings, formal inquiries, or disciplinary proceedings logged on record. Fully compliant with BCEA and company code of conduct.
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: Training & Skills */}
-            {profileTab === "training" && (
-              <div className="space-y-3 text-xs">
-                <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground">FOA Certified Fiber Optics Splicer (CFOT)</span>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">Certified</Badge>
-                  </div>
-                  <p className="text-muted-foreground">Fiber Optics Association • Completed score: 96%</p>
-                </div>
-
-                <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground">MikroTik Certified Network Associate (MTCNA)</span>
-                    <Badge variant="outline" className="border-cyan-500/40 text-cyan-400">Active</Badge>
-                  </div>
-                  <p className="text-muted-foreground">Advanced routing, firewalling, and queue management.</p>
-                </div>
-
-                <div className="rounded-lg border border-border bg-background/40 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground">OHS Act Working at Heights & Safety Protocol</span>
-                    <Badge variant="outline" className="border-emerald-500/40 text-emerald-400">Passed</Badge>
-                  </div>
-                  <p className="text-muted-foreground">Mandatory ISP field hazard certification.</p>
-                </div>
-              </div>
-            )}
-
-            {/* TAB CONTENT: Succession Plan */}
-            {profileTab === "succession" && (
-              <div className="space-y-4 text-xs">
-                <div className="rounded-lg border border-border bg-background/40 p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <TrendingUp className="h-4 w-4 text-primary" /> Career Mobility & Succession Readiness
-                    </span>
-                    <Badge variant="outline" className="border-primary/40 text-primary">High Potential (HiPo)</Badge>
-                  </div>
-                  <div className="space-y-2 text-muted-foreground">
-                    <div>Target Future Role: <span className="text-foreground font-semibold">Lead Infrastructure Architect</span></div>
-                    <div>Succession Timeline: <span className="text-foreground">Ready within 12 - 18 months</span></div>
-                    <div>Executive Sponsor: <span className="text-foreground font-semibold">Thabo Nkosi (CTO)</span></div>
-                    <div>Development Milestone: <span className="text-foreground">Cisco CCNP Enterprise Peering & Automation Track</span></div>
-                  </div>
-                </div>
-              </div>
-            )}
+            {profileTab === "kudos" && <NoDataYet message="No recognition records are connected for this employee." />}
+            {profileTab === "disciplinary" && <NoDataYet message="Open Disciplinary & Grievances for this employee's real records." />}
+            {profileTab === "training" && <NoDataYet message="Open Training & Development for this employee's real enrolments." />}
+            {profileTab === "succession" && <NoDataYet message="No succession plan is recorded for this employee." />}
           </div>
         </div>
       )}

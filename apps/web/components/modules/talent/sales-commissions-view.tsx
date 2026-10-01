@@ -1,5 +1,7 @@
 "use client"
 
+import { fmtZar } from "@/lib/format"
+
 import React, { useState, useEffect } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -259,7 +261,7 @@ export function SalesCommissionsView({
         amount_zar: amount,
       })
       setClaimSuccessMsg(
-        `Successfully transferred R ${amount.toLocaleString()} commission bonus to next payroll run (Bonus #${res.bonus_id?.slice(0, 8)}).`
+        `Successfully transferred ${fmtZar(amount)} commission bonus to next payroll run (Bonus #${res.bonus_id?.slice(0, 8)}).`
       )
       onRefreshSales()
       loadLedger()
@@ -311,7 +313,7 @@ export function SalesCommissionsView({
             <Coins className="h-4 w-4 text-yellow-400" />
           </div>
           <p className="text-2xl font-bold text-yellow-400 mt-2">
-            {salesLoading ? "…" : `R ${(salesOverview?.total_commissions_pending_zar ?? 0).toLocaleString()}`}
+            {salesLoading ? "…" : `${fmtZar((salesOverview?.total_commissions_pending_zar ?? 0))}`}
           </p>
           <span className="text-xs text-muted-foreground">ready for payroll route</span>
         </div>
@@ -439,7 +441,7 @@ export function SalesCommissionsView({
                             {rule.rate_percent.toFixed(1)}%
                           </td>
                           <td className="py-3 px-3 text-right text-muted-foreground">
-                            {rule.min_threshold_zar > 0 ? `R ${rule.min_threshold_zar.toLocaleString()}` : "No minimum"}
+                            {rule.min_threshold_zar > 0 ? `${fmtZar(rule.min_threshold_zar)}` : "No minimum"}
                           </td>
                           <td className="py-3 px-3 text-center">
                             <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 bg-emerald-500/10 text-xs">
@@ -530,7 +532,7 @@ export function SalesCommissionsView({
                               </Badge>
                             </td>
                             <td className="py-3 px-3 text-right font-bold text-amber-400">
-                              R {item.amount_zar.toLocaleString()}
+                              {fmtZar(item.amount_zar)}
                             </td>
                             <td className="py-3 px-3 text-center">
                               <Badge
@@ -630,13 +632,13 @@ export function SalesCommissionsView({
                             <span className="text-muted-foreground text-xs"> / {rep.deals_count}</span>
                           </td>
                           <td className="py-3 px-3 text-right text-muted-foreground">
-                            R {rep.pipeline_zar.toLocaleString()}
+                            {fmtZar(rep.pipeline_zar)}
                           </td>
                           <td className="py-3 px-3 text-right font-semibold text-emerald-400">
-                            R {rep.deals_won_zar.toLocaleString()}
+                            {fmtZar(rep.deals_won_zar)}
                           </td>
                           <td className="py-3 px-3 text-right font-bold text-amber-400">
-                            R {rep.pending_commission_zar.toLocaleString()}
+                            {fmtZar(rep.pending_commission_zar)}
                           </td>
                           <td className="py-3 px-3 text-right">
                             <Button
@@ -849,7 +851,7 @@ export function SalesCommissionsView({
               <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3">
                 <p className="text-xs text-muted-foreground">Calculated Commission to be Earned:</p>
                 <p className="text-lg font-bold text-amber-400 mt-0.5">
-                  R {(((claimDealAmount || 0) * (claimRate || 0)) / 100).toLocaleString()}
+                  {fmtZar((((claimDealAmount || 0) * (claimRate || 0)) / 100))}
                 </p>
               </div>
 

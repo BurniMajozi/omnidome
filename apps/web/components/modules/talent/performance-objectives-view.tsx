@@ -70,7 +70,11 @@ import {
   type ValueKey,
   generateAISmartCriteria,
   getKpisLiveActuals,
+  getPerformanceSummary,
+  getWhoami,
+  loadableFromError,
   listEmployees,
+  type PerformanceSummaryRow,
   type Employee,
   type CompanyKPIConfig,
   type EmployeeKPISheet,
@@ -79,6 +83,20 @@ import {
   type LiveActualsResponse,
   type LiveActualsMetric,
 } from "@/lib/hr-api"
+import { fmtZar } from "@/lib/format"
+import {
+  clampLevel,
+  companyIndexTile,
+  estimateComposite,
+  formatHrError,
+  hasHrAdminRole,
+  hrErrorStatus,
+  levelScorePct,
+  pickHeadline,
+  pointsFromComposite,
+} from "@/lib/talent-derive"
+import { NotConnected } from "@/components/ui/not-connected"
+import type { Loadable } from "@/lib/service-state"
 
 interface PerformanceObjectivesViewProps {
   employees?: Employee[]
@@ -99,7 +117,9 @@ const INITIAL_COMPANY_CONFIG: CompanyKPIConfig = {
   profit_budget_zar: 0,
   profit_actual_zar: 0,
   profit_achievement_pct: 0,
-  company_shared_score_pct: 0,
+  company_shared_score_pct: null,
+  corporate_attainment_index: null,
+  company_missing: true,
   values_weight_pct: 10.0,
   values_description: "Ubuntu & Customer Empathy, Operational Excellence & Speed, Staff Wellness (BCEA), POPIA & Ethical Governance",
   level_weights: {
@@ -121,7 +141,7 @@ type LevelKey = keyof SmartCriteria
 const LEVEL_KEYS: LevelKey[] = ["level_1", "level_2", "level_3", "level_4", "level_5"]
 const KPI_CATEGORIES: string[] = ["Cost Optimization", "Revenue Growth", "Operational Excellence", "Customer Success"]
 
-const fmtZAR = (val: number) => `R ${Number(val || 0).toLocaleString("en-ZA")}`
+const fmtZAR = (val: number) => fmtZar(Number(val))
 
 const makeKpiId = () => `kpi-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`
 
@@ -180,25 +200,12 @@ const VALUE_DEFS: { key: ValueKey; label: string }[] = [
   { key: "popia_ethical_governance", label: "POPIA & Ethical Governance" },
 ]
 
-/** Score % for a KPI at its achieved level (level 3 = 100% of target). */
-const kpiLevelScore = (k: IndividualKPIItem) => ((k.current_level || 3) / 3) * 100
+/** Score % for a KPI at its achieved level (level 3 = 100% of target; level is always clamped to 1-5). */
+const kpiLevelScore = (k: IndividualKPIItem) => levelScorePct(k.current_level ?? 3)
 
-/** Turn an "HR API error 422: {...}" error into a human-readable message. */
+/** Server text for inline messages (403 => "Not permitted: ...", 422 => "Rejected by the server: ..."). */
 function describeApiError(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err)
-  const m = raw.match(/^HR API error (\d+):\s*([\s\S]*)$/)
-  if (!m) return raw
-  const [, status, body] = m
-  try {
-    const j = JSON.parse(body)
-    const d = j?.detail ?? j?.message
-    if (typeof d === "string") return d
-    if (Array.isArray(d)) return d.map((x) => x?.msg ?? JSON.stringify(x)).join("; ")
-    if (d && typeof d === "object") return d.message ?? JSON.stringify(d)
-  } catch {
-    // body is not JSON
-  }
-  return body ? body.slice(0, 300) : `HTTP ${status}`
+  return formatHrError(err)
 }
 
 // ── Preset ISP KPIs for 1-click drafting ─────────────────────────────
@@ -258,6 +265,10 @@ interface CircularKPIGaugeProps {
   trendPct?: number
   isCostEfficiency?: boolean
   unavailable?: boolean
+  /** Centre text when there is no figure (default "Not connected"). */
+  unavailableLabel?: string
+  /** Overrides the "Actual ..." caption (e.g. "Paid payroll YTD"). */
+  actualLabel?: string
 }
 
 function CircularKPIGauge({
@@ -272,6 +283,8 @@ function CircularKPIGauge({
   trendPct,
   isCostEfficiency = false,
   unavailable = false,
+  unavailableLabel = "Not connected",
+  actualLabel,
 }: CircularKPIGaugeProps) {
   // 240-degree arc gauge
   // Radius = 52, center = (65, 65)
@@ -401,7 +414,7 @@ function CircularKPIGauge({
             {/* Center Gauge Reading */}
             <div className="absolute inset-0 flex flex-col items-center justify-center pt-5">
               {unavailable ? (
-                <span className="text-sm font-bold tracking-tight text-muted-foreground">Not connected</span>
+                <span className="text-sm font-bold tracking-tight text-muted-foreground text-center px-2">{unavailableLabel}</span>
               ) : (
                 <div className="flex items-baseline gap-0.5">
                   <span className="text-2xl font-black tracking-tight text-foreground font-mono">
@@ -448,10 +461,10 @@ function CircularKPIGauge({
         <div className="mt-2.5 pt-2 border-t border-border/40 grid grid-cols-2 gap-2 text-xs">
           <div>
             <span className="text-[10px] text-muted-foreground block">
-              {isCostEfficiency ? "Actual Spend:" : "Actual Achieved:"}
+              {actualLabel ?? (isCostEfficiency ? "Actual Spend:" : "Actual Achieved:")}
             </span>
             <span className="font-bold text-foreground font-mono truncate block text-[11px]">
-              {unavailable ? "Not connected" : actualFormatted}
+              {unavailable ? unavailableLabel : actualFormatted}
             </span>
           </div>
           <div className="text-right">
@@ -483,6 +496,20 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
   // Fallback internal employees list if parent passes empty
   const [internalEmployees, setInternalEmployees] = useState<Employee[]>(employees)
   const [loadingInternalEmps, setLoadingInternalEmps] = useState(false)
+
+  // Roles from /api/whoami: HR-admin-only actions (cascade, company config, approvals) are disabled otherwise
+  const [roles, setRoles] = useState<string[] | null>(null)
+  const isHrAdmin = hasHrAdminRole(roles)
+  const ADMIN_ONLY_TIP = "HR admin only"
+
+  // Company config load outcome (so a 403/outage is shown honestly instead of as zeros)
+  const [configLoad, setConfigLoad] = useState<Loadable<null>>({ state: "loading" })
+
+  // Bulk performance summary (one request for all employees)
+  const [perfSummary, setPerfSummary] = useState<Loadable<PerformanceSummaryRow[]>>({ state: "loading" })
+
+  // Sheet could not be shown (403 / outage) rather than "blank draft"
+  const [sheetDenied, setSheetDenied] = useState<Loadable<null> | null>(null)
 
   // Company Configuration State
   const [companyConfig, setCompanyConfig] = useState<CompanyKPIConfig>(INITIAL_COMPANY_CONFIG)
@@ -560,12 +587,22 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
     return () => { cancelled = true }
   }, [employees])
 
+  // Who am I (cached once per page visit)
+  useEffect(() => {
+    let cancelled = false
+    void getWhoami().then((w) => {
+      if (!cancelled) setRoles(w?.roles ?? [])
+    })
+    return () => { cancelled = true }
+  }, [])
+
   // Sync Live Actuals Ground Truth from tables. Reads config through a ref so its identity is stable.
-  const handleSyncLiveActuals = useCallback(async () => {
+  // `manual` (the Sync button) bypasses the 60s cache; the initial load shares the cached request.
+  const handleSyncLiveActuals = useCallback(async (manual = false) => {
     setSyncingActuals(true)
     setSyncMessage(null)
     try {
-      const res = await getKpisLiveActuals()
+      const res = await getKpisLiveActuals({ fresh: manual })
       setLiveActuals(res)
       setLastSyncedAt(new Date().toLocaleTimeString())
 
@@ -577,33 +614,39 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
       // Prefer the backend-computed attainment index: refetch the config it recomputed
       let fresh: CompanyKPIConfig | null = null
       try {
-        fresh = await getCompanyKPIConfig()
+        fresh = await getCompanyKPIConfig({ fresh: manual })
       } catch {
         fresh = null
       }
 
+      if (fresh) setConfigLoad({ state: "ready", data: null })
       const cur = companyConfigRef.current
       const salesVal = salesLive ? Number(res.sources.sales.current_value) || 0 : cur.sales_actual_zar
       const costVal = costLive ? Number(res.sources.cost.current_value) || 0 : cur.cost_actual_zar
       const profitVal = profitLive ? Number(res.sources.profit.current_value) || 0 : cur.profit_actual_zar
 
-      // Local fallback formula (only used when the backend does not return the values)
+      // Per-gauge ratios are plain actual/budget arithmetic on real figures (fallback only; the server's win).
+      // The company INDEX is never computed here: it comes from the server or is "Set company targets".
       const salesAch = Number(cur.sales_budget_zar) > 0 ? (salesVal / Number(cur.sales_budget_zar)) * 100 : 0
       const costEff = Number(costVal) > 0 && Number(cur.cost_budget_zar) > 0 ? (Number(cur.cost_budget_zar) / costVal) * 100 : 0
       const profitAch = Number(cur.profit_budget_zar) > 0 ? (profitVal / Number(cur.profit_budget_zar)) * 100 : 0
-      const localScore = Math.round(((salesAch * 0.45) + (costEff * 0.35) + (profitAch * 0.20)) * 100) / 100
       const round2 = (n: number) => Math.round(n * 100) / 100
 
       setCompanyConfig((prev) => ({
         ...prev,
+        ...(fresh
+          ? {
+              company_missing: fresh.company_missing,
+              corporate_attainment_index: fresh.corporate_attainment_index ?? null,
+              company_shared_score_pct: fresh.company_shared_score_pct ?? null,
+            }
+          : {}),
         sales_actual_zar: salesVal,
         sales_achievement_pct: fresh?.sales_achievement_pct ?? round2(salesAch),
         cost_actual_zar: costVal,
         cost_efficiency_pct: fresh?.cost_efficiency_pct ?? round2(costEff),
         profit_actual_zar: profitVal,
         profit_achievement_pct: fresh?.profit_achievement_pct ?? round2(profitAch),
-        company_shared_score_pct: fresh?.company_shared_score_pct ?? localScore,
-        corporate_attainment_index: fresh?.corporate_attainment_index ?? prev.corporate_attainment_index,
       }))
 
       const missing = [
@@ -630,17 +673,19 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
     async function loadData() {
       setLoadingConfig(true)
       try {
-        const cfg = await getCompanyKPIConfig().catch(() => INITIAL_COMPANY_CONFIG)
+        const cfg = await getCompanyKPIConfig()
         if (!cancelled && cfg) {
           setCompanyConfig(cfg)
           companyConfigRef.current = cfg
+          setConfigLoad({ state: "ready", data: null })
         }
       } catch (err) {
-        console.warn("Using fallback company KPI config:", err)
+        console.warn("Company KPI config not available:", err)
+        if (!cancelled) setConfigLoad(loadableFromError(err))
       } finally {
         if (!cancelled) setLoadingConfig(false)
       }
-      if (!cancelled) await handleSyncLiveActuals()
+      if (!cancelled) await handleSyncLiveActuals(false)
     }
     void loadData()
     return () => { cancelled = true }
@@ -658,6 +703,26 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
     }
   }, [activeStaffList, selectedEmpId])
 
+  // One bulk request for every employee's score (falls back to per-employee sheets, 4 at a time)
+  const staffIdsKey = activeStaffList.map((e) => e.id).join(",")
+  useEffect(() => {
+    if (!staffIdsKey) return
+    let cancelled = false
+    void getPerformanceSummary(staffIdsKey.split(","))
+      .then((rows) => {
+        if (!cancelled) setPerfSummary(rows ? { state: "ready", data: rows } : { state: "unreachable", status: null })
+      })
+      .catch((err) => {
+        if (!cancelled) setPerfSummary(loadableFromError(err))
+      })
+    return () => { cancelled = true }
+  }, [staffIdsKey])
+  const scoreByEmployee = useMemo(() => {
+    const m = new Map<string, PerformanceSummaryRow>()
+    if (perfSummary.state === "ready") for (const r of perfSummary.data) m.set(r.employee_id, r)
+    return m
+  }, [perfSummary])
+
   // Load selected employee's KPI sheet. Depends on the selected employee ONLY so that
   // config / roster refreshes never wipe unsaved edits.
   useEffect(() => {
@@ -672,17 +737,23 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
     setSheetError(null)
     setSheetLoadWarning(null)
     setSheetSaveMessage(null)
+    setSheetDenied(null)
     editVersionRef.current += 1
     async function loadSheet() {
       setLoadingSheet(true)
       try {
         const sheet = await getEmployeeKPISheet(selectedEmpId)
         if (!cancelled && sheet) {
-          setEmpSheet(normalizeSheet(sheet))
+          // A template is not persisted: no invented KPIs and no score until Save Draft creates it.
+          const base = sheet.is_template ? { ...sheet, kpis: [], overall_score: null, composite: null } : sheet
+          setEmpSheet(normalizeSheet(base))
         }
       } catch (err) {
-        console.warn("Could not load KPI sheet, starting a blank draft:", err)
-        if (!cancelled) {
+        console.warn("Could not load KPI sheet:", err)
+        const st = hrErrorStatus(err)
+        if (!cancelled && (st === 401 || st === 403)) {
+          setSheetDenied(loadableFromError(err))
+        } else if (!cancelled) {
           const cfg = companyConfigRef.current
           const currentEmp = staffRef.current.find((e) => e.id === selectedEmpId)
           const jobLower = (currentEmp?.job_title || "").toLowerCase()
@@ -711,6 +782,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
             status: "DRAFT",
             kpis: [],
             overall_score: null,
+            is_template: true,
           })
         }
       } finally {
@@ -787,13 +859,16 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
   const costUnavailable = Number(companyConfig.cost_budget_zar) <= 0 || isSourceUnavailable("cost", companyConfig.cost_source_mode)
   const profitUnavailable = Number(companyConfig.profit_budget_zar) <= 0 || isSourceUnavailable("profit", companyConfig.profit_source_mode)
 
-  // Company attainment index: backend value preferred, local formula (set during sync) only as fallback
-  const companyIndex: number | null =
-    companyConfig.corporate_attainment_index ??
-    (salesUnavailable || costUnavailable || profitUnavailable ? null : Number(companyConfig.company_shared_score_pct))
+  // Company attainment index: only the server's value. Null / company_missing / a 0 budget => "Set company targets".
+  const indexTile = companyIndexTile(companyConfig)
+  const companyIndex: number | null = indexTile.kind === "value" && !(salesUnavailable || costUnavailable || profitUnavailable) ? indexTile.value : null
 
   // Save Company Config
   const handleSaveCompanyConfig = async () => {
+    if (!isHrAdmin) {
+      setCascadeMessage(`${ADMIN_ONLY_TIP}: your role cannot change company targets.`)
+      return
+    }
     setSavingConfig(true)
     setCascadeMessage(null)
     try {
@@ -809,6 +884,10 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
 
   // Cascade to All Employees
   const handleCascadeToAll = async () => {
+    if (!isHrAdmin) {
+      setCascadeMessage(`${ADMIN_ONLY_TIP}: your role cannot cascade company KPIs.`)
+      return
+    }
     setCascading(true)
     setCascadeMessage(null)
     try {
@@ -1004,11 +1083,32 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
               status: res?.status || status,
               total_weight_pct: res?.total_weight_pct ?? calculatedTotalWeight,
               overall_score: res?.overall_score ?? prev.overall_score,
+              is_template: false,
             }
           : prev
       )
       // Only clear dirty if nothing was edited while the request was in flight
-      if (editVersionRef.current === versionAtSave) setSheetDirty(false)
+      if (editVersionRef.current === versionAtSave) {
+        setSheetDirty(false)
+        // Pull the server's composite / score_basis so the headline is the server's number
+        void getEmployeeKPISheet(empIdAtSave, { fresh: true })
+          .then((fresh) => {
+            if (selectedEmpIdRef.current !== empIdAtSave || editVersionRef.current !== versionAtSave) return
+            setEmpSheet((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    composite: fresh.composite ?? null,
+                    overall_score: fresh.overall_score ?? prev.overall_score,
+                    score_basis: fresh.score_basis ?? prev.score_basis,
+                    permissions: fresh.permissions ?? prev.permissions,
+                    is_template: false,
+                  }
+                : prev,
+            )
+          })
+          .catch(() => undefined)
+      }
       setSheetSaveMessage(
         `KPI Sheet for ${empSheet.employee_name || "Employee"} saved as ${res?.status || status}. Total Weight: ${calculatedTotalWeight}%`
       )
@@ -1112,31 +1212,69 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
     setAiFeedback("AI changes undone.")
   }
 
-  // Composite score preview (achieved level 3 = 100% of target)
+  // Approvals: HR admins (whoami roles) or whoever the server says may approve this sheet. The server still enforces.
+  const canApprove = isHrAdmin || empSheet?.permissions?.can_approve === true
+  const canReopen = isHrAdmin || empSheet?.permissions?.can_reopen === true
+
+  // Composite headline: the server's `composite.total` whenever the sheet has no unsaved edits;
+  // the client formula is only a labelled ESTIMATE (while editing). A template sheet has no score.
   const compositeBreakdown = useMemo(() => {
-    if (!empSheet) return { total: 0, companyPts: 0, valuesPts: 0, indivPts: 0, companyMissing: false, valuesRated: false, valuesScore: null as number | null }
-    const sharedWeight = Number(empSheet.company_shared_weight_pct) || 0
-    const valuesWeight = Number(empSheet.values_weight_pct) || 0
-    const companyMissing = companyIndex === null
-    const companyPts = ((companyIndex ?? 0) * sharedWeight) / 100
-    // Values: average 1-5 rating mapped with the same level->points rule as KPI levels (level 3 = 100%)
+    const none = {
+      total: null as number | null,
+      basis: "none" as "server" | "estimate" | "none",
+      sharedPts: null as number | null,
+      valuesPts: null as number | null,
+      indivPts: 0,
+      companyMissing: companyIndex === null,
+      valuesRated: false,
+      valuesScore: null as number | null,
+    }
+    if (!empSheet) return none
+    const weights = {
+      shared: Number(empSheet.company_shared_weight_pct) || 0,
+      values: Number(empSheet.values_weight_pct) || 0,
+      individual: individualWeightsSum,
+    }
     const ratings = empSheet.values_ratings || {}
-    const valuesRated = VALUE_DEFS.every((v) => typeof ratings[v.key] === "number")
-    const valuesScore = valuesRated
-      ? ((VALUE_DEFS.reduce((a, v) => a + (ratings[v.key] as number), 0) / VALUE_DEFS.length) / 3) * 100
-      : null
-    const valuesPts = ((valuesScore ?? 0) * valuesWeight) / 100
-    let indivPts = 0
-    empSheet.kpis.forEach((k) => {
-      indivPts += (kpiLevelScore(k) * (Number(k.weight_pct) || 0)) / 100
+    const rated = VALUE_DEFS.every((v) => typeof ratings[v.key] === "number")
+    const est = estimateComposite({
+      companyIndex,
+      valuesRatings: rated ? VALUE_DEFS.map((v) => ratings[v.key] as number) : null,
+      kpis: empSheet.kpis,
+      weights,
     })
-    const localTotal = Math.round((companyPts + valuesPts + indivPts) * 10) / 10
-    // Prefer the backend composite when the sheet has no unsaved edits; otherwise use the local calculation
-    const backend = !sheetDirty ? empSheet.composite : undefined
-    const total = backend && typeof backend.total === "number" ? backend.total : localTotal
-    return { total, companyPts, valuesPts, indivPts, companyMissing, valuesRated, valuesScore }
-  }, [empSheet, companyIndex, sheetDirty])
-  const compositeScore = compositeBreakdown.total
+    const head = pickHeadline({
+      composite: empSheet.composite,
+      sheetDirty,
+      localEstimate: empSheet.kpis.length === 0 && empSheet.is_template ? null : est.total,
+      isTemplate: empSheet.is_template,
+    })
+    if (head.basis === "server" && empSheet.composite) {
+      const srv = pointsFromComposite(empSheet.composite, weights)
+      if (srv) {
+        return {
+          total: head.value,
+          basis: head.basis,
+          sharedPts: srv.sharedPts,
+          valuesPts: srv.valuesPts,
+          indivPts: srv.indivPts,
+          companyMissing: srv.companyMissing,
+          valuesRated: srv.valuesRated,
+          valuesScore: srv.valuesScore,
+        }
+      }
+    }
+    return {
+      total: head.value,
+      basis: head.basis,
+      sharedPts: est.sharedPts,
+      valuesPts: est.valuesPts,
+      indivPts: est.indivPts,
+      companyMissing: est.companyMissing,
+      valuesRated: est.valuesRated,
+      valuesScore: est.valuesScore,
+    }
+  }, [empSheet, companyIndex, sheetDirty, individualWeightsSum])
 
   // Analytics Chart Data: Budget vs Actuals
   const financialBudgetChartData = useMemo(() => {
@@ -1193,7 +1331,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
           <Button
             size="sm"
             variant="outline"
-            onClick={handleSyncLiveActuals}
+            onClick={() => void handleSyncLiveActuals(true)}
             disabled={syncingActuals}
             className="text-xs h-8 border-primary/40 text-primary hover:bg-primary/10 flex items-center gap-1.5 shadow-sm"
           >
@@ -1251,13 +1389,17 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
         </div>
       )}
 
+      {configLoad.state !== "ready" && configLoad.state !== "loading" && (
+        <NotConnected loadable={configLoad} service="Company KPI targets" onRetry={() => void handleSyncLiveActuals(true)} />
+      )}
+
       {/* ── 4 Benchmark Speedometer Radial Dials (Visual Anchor) ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Dial 1: Sales vs Budget */}
         <CircularKPIGauge
           title="Sales vs Budget"
           sublabel="of Quota Target"
-          valuePct={companyConfig.sales_achievement_pct}
+          valuePct={companyConfig.sales_achievement_pct ?? 0}
           unavailable={salesUnavailable}
           actualFormatted={fmtZAR(companyConfig.sales_actual_zar)}
           budgetFormatted={fmtZAR(companyConfig.sales_budget_zar)}
@@ -1270,13 +1412,14 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
         <CircularKPIGauge
           title="Operating Cost Ceiling"
           sublabel="Cost Efficiency"
-          valuePct={companyConfig.cost_efficiency_pct}
+          valuePct={companyConfig.cost_efficiency_pct ?? 0}
           unavailable={costUnavailable}
           actualFormatted={fmtZAR(companyConfig.cost_actual_zar)}
           budgetFormatted={fmtZAR(companyConfig.cost_budget_zar)}
           colorTheme="blue"
           sourceMode={companyConfig.cost_source_mode || "LIVE_TABLE"}
-          sourceLabel="hr.payslips & General Ledger Burden"
+          sourceLabel="hr.payslips (paid payroll YTD)"
+          actualLabel="Paid payroll YTD:"
           isCostEfficiency={true}
         />
 
@@ -1284,7 +1427,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
         <CircularKPIGauge
           title="Net Profit Target"
           sublabel="EBITDA Margin"
-          valuePct={companyConfig.profit_achievement_pct}
+          valuePct={companyConfig.profit_achievement_pct ?? 0}
           unavailable={profitUnavailable}
           actualFormatted={fmtZAR(companyConfig.profit_actual_zar)}
           budgetFormatted={fmtZAR(companyConfig.profit_budget_zar)}
@@ -1299,6 +1442,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
           sublabel="Cascaded Score"
           valuePct={companyIndex ?? 0}
           unavailable={companyIndex === null}
+          unavailableLabel="Set company targets"
           actualFormatted={`Values: ${companyConfig.values_weight_pct}% Fixed`}
           budgetFormatted="Target: 100%"
           colorTheme="amber"
@@ -1324,6 +1468,11 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                   <Badge variant="outline" className="text-[10px]">
                     {activeStaffList.length} Loaded
                   </Badge>
+                  {perfSummary.state === "denied" && (
+                    <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400">
+                      Scores: Not permitted
+                    </Badge>
+                  )}
                 </CardTitle>
                 <div className="relative mt-2">
                   <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
@@ -1374,6 +1523,12 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                           <p className="text-[10px] text-muted-foreground/80 truncate">
                             {emp.department}
                           </p>
+                          {scoreByEmployee.get(emp.id)?.overall_score != null && (
+                            <p className="text-[10px] text-primary font-mono">
+                              Score {Number(scoreByEmployee.get(emp.id)?.overall_score).toFixed(1)}%
+                              {scoreByEmployee.get(emp.id)?.status ? ` · ${scoreByEmployee.get(emp.id)?.status}` : ""}
+                            </p>
+                          )}
                         </div>
                         <ChevronRight className={`h-4 w-4 shrink-0 transition-transform ${isSelected ? "text-primary translate-x-0.5" : "text-muted-foreground/40"}`} />
                       </button>
@@ -1442,14 +1597,15 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                           <span className="text-muted-foreground flex items-center gap-1.5">
                             <Clock className="h-3.5 w-3.5 text-amber-400" />
                             Submitted and awaiting approval.
-                            {!empSheet.permissions?.can_approve && " Only a manager or HR user (other than the sheet owner) can approve."}
+                            {!canApprove && " HR admin only: only a manager or HR user (other than the sheet owner) can approve."}
                           </span>
-                          {empSheet.permissions?.can_approve && (
+                          {(
                             <div className="flex items-center gap-2">
                               <Button
                                 size="sm"
                                 onClick={() => void runWorkflow("approve")}
-                                disabled={workflowBusy}
+                                disabled={workflowBusy || !canApprove}
+                                title={!canApprove ? ADMIN_ONLY_TIP : undefined}
                                 className="text-xs h-8 bg-emerald-600 text-white font-semibold hover:bg-emerald-600/90"
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
@@ -1459,7 +1615,8 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                                 size="sm"
                                 variant="outline"
                                 onClick={() => setRejectOpen((o) => !o)}
-                                disabled={workflowBusy}
+                                disabled={workflowBusy || !canApprove}
+                                title={!canApprove ? ADMIN_ONLY_TIP : undefined}
                                 className="text-xs h-8"
                               >
                                 Request changes
@@ -1467,7 +1624,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                             </div>
                           )}
                         </div>
-                        {rejectOpen && empSheet.permissions?.can_approve && (
+                        {rejectOpen && canApprove && (
                           <div className="space-y-2">
                             <Textarea
                               value={rejectReasonText}
@@ -1495,12 +1652,13 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                           Approved and locked
                           {empSheet.approved_at ? ` on ${new Date(empSheet.approved_at).toLocaleDateString("en-ZA")}` : ""}. Editing is disabled.
                         </span>
-                        {empSheet.permissions?.can_reopen && (
+                        {(
                           <Button
                             size="sm"
                             variant="outline"
                             onClick={() => void runWorkflow("reopen")}
-                            disabled={workflowBusy}
+                            disabled={workflowBusy || !canReopen}
+                            title={!canReopen ? ADMIN_ONLY_TIP : undefined}
                             className="text-xs h-8"
                           >
                             Reopen
@@ -1523,6 +1681,11 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                           <Badge variant="outline" className="border-primary/40 text-primary bg-primary/10">
                             {empSheet.status}
                           </Badge>
+                          {empSheet.is_template && (
+                            <Badge variant="outline" className="border-amber-500/40 text-amber-400 bg-amber-500/10 text-[10px]">
+                              Not saved yet
+                            </Badge>
+                          )}
                           {sheetDirty && (
                             <Badge variant="outline" className="border-amber-500/40 text-amber-400 bg-amber-500/10 text-[10px]">
                               Unsaved changes
@@ -1548,7 +1711,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                                   : "text-muted-foreground hover:text-foreground"
                               }`}
                             >
-                              {lvl === "EXECUTIVE" ? "Exec (60%)" : lvl === "DIRECTOR" ? "Dir (40%)" : lvl === "MANAGER" ? "Mgr (30%)" : "Staff (20%)"}
+                              {`${lvl === "EXECUTIVE" ? "Exec" : lvl === "DIRECTOR" ? "Dir" : lvl === "MANAGER" ? "Mgr" : "Staff"} (${companyConfig.level_weights[lvl]}%)`}
                             </button>
                           ))}
                         </div>
@@ -1720,7 +1883,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                         {empSheet.kpis.map((kpi, idx) => {
                           const isSelected = selectedKpiId === kpi.id
                           const criteria = kpi.smart_criteria ?? makeBlankCriteria()
-                          const achieved = kpi.current_level || 3
+                          const achieved = clampLevel(kpi.current_level ?? 3)
                           const isCustomCategory = !KPI_CATEGORIES.includes(kpi.category)
                           const contribution = Math.round(((kpiLevelScore(kpi) * (Number(kpi.weight_pct) || 0)) / 100) * 10) / 10
                           return (
@@ -1845,7 +2008,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                                       <button
                                         key={lvl}
                                         type="button"
-                                        onClick={() => updateKpi(kpi.id, { current_level: lvl, score: Math.round((lvl / 3) * 100) })}
+                                        onClick={() => updateKpi(kpi.id, { current_level: clampLevel(lvl), score: Math.round((clampLevel(lvl) / 3) * 100) })}
                                         className={`flex-1 py-1 rounded text-[11px] font-semibold transition-all ${
                                           achieved === lvl
                                             ? "bg-primary text-primary-foreground shadow-sm"
@@ -2064,23 +2227,33 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                       </div>
                     </div>
 
-                    {/* Composite score preview */}
+                    {/* Composite score */}
                     <div className="p-3 rounded-lg border border-border/80 bg-background/60 text-[11px] space-y-1">
                       <div className="flex items-center justify-between">
-                        <span className="font-semibold text-foreground">Composite score preview (achieved levels)</span>
-                        <span className="font-mono text-sm font-bold text-primary">{compositeScore}%</span>
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-muted-foreground">
-                        <span>
-                          Shared company: <b className="text-foreground">{compositeBreakdown.companyMissing ? "Not connected" : `${compositeBreakdown.companyPts.toFixed(1)} pts`}</b>
+                        <span className="font-semibold text-foreground">
+                          Composite score
+                          {compositeBreakdown.basis === "estimate" ? " (estimate: unsaved edits)" : compositeBreakdown.basis === "server" ? " (server)" : ""}
+                          {compositeBreakdown.basis === "server" && empSheet.score_basis ? ` · ${empSheet.score_basis}` : ""}
                         </span>
-                        <span>Values: <b className="text-foreground">{compositeBreakdown.valuesRated ? `${compositeBreakdown.valuesPts.toFixed(1)} pts` : "Values not yet rated"}</b></span>
-                        <span>Individual KPIs: <b className="text-foreground">{compositeBreakdown.indivPts.toFixed(1)} pts</b></span>
+                        <span className="font-mono text-sm font-bold text-primary">
+                          {compositeBreakdown.total === null ? (empSheet.is_template ? "Not saved yet" : "—") : `${compositeBreakdown.total}%`}
+                        </span>
                       </div>
+                      {compositeBreakdown.total !== null && (
+                        <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-muted-foreground">
+                          <span>
+                            Shared company: <b className="text-foreground">{compositeBreakdown.companyMissing || compositeBreakdown.sharedPts === null ? "Set company targets" : `${compositeBreakdown.sharedPts.toFixed(1)} pts`}</b>
+                          </span>
+                          <span>Values: <b className="text-foreground">{compositeBreakdown.valuesRated && compositeBreakdown.valuesPts !== null ? `${compositeBreakdown.valuesPts.toFixed(1)} pts` : "Values not yet rated"}</b></span>
+                          <span>Individual KPIs: <b className="text-foreground">{compositeBreakdown.indivPts.toFixed(1)} pts</b></span>
+                        </div>
+                      )}
                       <p className="text-[10px] text-muted-foreground/80">
                         Level 3 = 100% of target.
-                        {!compositeBreakdown.valuesRated ? " Values count as 0 pts until all four values are rated." : ""}
-                        {compositeBreakdown.companyMissing ? " Shared company score counts as 0 until sales/cost/profit sources are connected." : ""}
+                        {empSheet.is_template ? " Nothing is saved for this employee yet: Save Draft to create the sheet." : ""}
+                        {compositeBreakdown.basis === "estimate" ? " Save the sheet to see the server's score." : ""}
+                        {compositeBreakdown.total !== null && !compositeBreakdown.valuesRated ? " Values count as 0 pts until all four values are rated." : ""}
+                        {compositeBreakdown.total !== null && compositeBreakdown.companyMissing ? " Shared company score counts as 0 until company targets are set." : ""}
                       </p>
                     </div>
 
@@ -2143,6 +2316,8 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                 </Card>
                 </fieldset>
               </>
+            ) : sheetDenied ? (
+              <NotConnected loadable={sheetDenied} service="this employee's KPI sheet" />
             ) : null}
           </div>
         </div>
@@ -2168,7 +2343,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
               <Button
                 size="sm"
                 variant="outline"
-                onClick={handleSyncLiveActuals}
+                onClick={() => void handleSyncLiveActuals(true)}
                 disabled={syncingActuals}
                 className="text-xs h-8 border-primary/40 text-primary hover:bg-primary/10 flex items-center gap-1.5 shrink-0"
               >
@@ -2191,7 +2366,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-foreground">Sales Revenue KPI</label>
                       <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px]">
-                        {companyConfig.sales_achievement_pct}% Target
+                        {companyConfig.sales_achievement_pct ?? 0}% Target
                       </Badge>
                     </div>
 
@@ -2234,7 +2409,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-foreground">Operating Cost Ceiling</label>
                       <Badge variant="outline" className="border-blue-500/40 text-blue-400 text-[10px]">
-                        {companyConfig.cost_efficiency_pct}% Efficient
+                        {companyConfig.cost_efficiency_pct ?? 0}% Efficient
                       </Badge>
                     </div>
 
@@ -2277,7 +2452,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-bold text-foreground">Net EBITDA / Profit</label>
                       <Badge variant="outline" className="border-purple-500/40 text-purple-400 text-[10px]">
-                        {companyConfig.profit_achievement_pct}% Target
+                        {companyConfig.profit_achievement_pct ?? 0}% Target
                       </Badge>
                     </div>
 
@@ -2452,7 +2627,8 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                     size="sm"
                     variant="outline"
                     onClick={handleSaveCompanyConfig}
-                    disabled={savingConfig}
+                    disabled={savingConfig || !isHrAdmin}
+                    title={!isHrAdmin ? ADMIN_ONLY_TIP : undefined}
                     className="text-xs h-8"
                   >
                     <Save className="h-3.5 w-3.5 mr-1" />
@@ -2461,7 +2637,8 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                   <Button
                     size="sm"
                     onClick={handleCascadeToAll}
-                    disabled={cascading}
+                    disabled={cascading || !isHrAdmin}
+                    title={!isHrAdmin ? ADMIN_ONLY_TIP : undefined}
                     className="text-xs h-8 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 mr-1 ${cascading ? "animate-spin" : ""}`} />
@@ -2500,7 +2677,7 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
                       <YAxis tick={{ fill: "#888", fontSize: 11 }} />
                       <Tooltip
                         contentStyle={{ backgroundColor: "#1e1e1e", borderColor: "#333", borderRadius: 8, fontSize: 11 }}
-                        formatter={(val: number) => [`R ${(val * 1000).toLocaleString("en-ZA")}`, ""]}
+                        formatter={(val: number) => [fmtZar(val * 1000), ""]}
                       />
                       <Legend />
                       <Bar dataKey="Budget" fill="#3b82f6" name="Target Budget" radius={[4, 4, 0, 0]} />
@@ -2525,11 +2702,14 @@ export function PerformanceObjectivesView({ employees = EMPTY_EMPLOYEES, onRefre
               <CardContent className="p-4 pt-0">
                 <div className="space-y-3">
                   {[
-                    { level: "Executive / C-Suite", weight: companyConfig.level_weights.EXECUTIVE, desc: "CEO, CFO, CTO, COO", target: "60% Corporate + 10% Values + 30% Individual" },
-                    { level: "Directors & VPs", weight: companyConfig.level_weights.DIRECTOR, desc: "Head of Sales, Head of Engineering", target: "40% Corporate + 10% Values + 50% Individual" },
-                    { level: "Managers & Team Leads", weight: companyConfig.level_weights.MANAGER, desc: "NOC Lead, Service Manager, Sales Lead", target: "30% Corporate + 10% Values + 60% Individual" },
-                    { level: "Operational Staff", weight: companyConfig.level_weights.STAFF, desc: "Technicians, Support Agents, Specialists", target: "20% Corporate + 10% Values + 70% Individual" },
-                  ].map((row, i) => (
+                    { level: "Executive / C-Suite", weight: companyConfig.level_weights.EXECUTIVE, desc: "Executive positions" },
+                    { level: "Directors & VPs", weight: companyConfig.level_weights.DIRECTOR, desc: "Director positions" },
+                    { level: "Managers & Team Leads", weight: companyConfig.level_weights.MANAGER, desc: "Manager positions" },
+                    { level: "Operational Staff", weight: companyConfig.level_weights.STAFF, desc: "Staff positions" },
+                  ].map((r) => ({
+                    ...r,
+                    target: `${r.weight}% Corporate + ${companyConfig.values_weight_pct}% Values + ${Math.max(0, Math.round((100 - r.weight - companyConfig.values_weight_pct) * 10) / 10)}% Individual`,
+                  })).map((row, i) => (
                     <div key={i} className="p-3 rounded-lg border border-border bg-background flex items-center justify-between text-xs">
                       <div>
                         <p className="font-semibold text-foreground">{row.level}</p>

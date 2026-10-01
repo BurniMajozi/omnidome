@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react"
+import React, { useMemo, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -52,6 +52,7 @@ import {
   Wand2,
 } from "lucide-react"
 import type { Employee } from "@/lib/hr-api"
+import { yearsOfService } from "@/lib/talent-derive"
 import { getEmployeeAvatar } from "./pim-directory-view"
 
 interface TalentCultureViewProps {
@@ -203,40 +204,40 @@ export function TalentCultureView({ employees }: TalentCultureViewProps) {
       pillar: "Infrastructure Reliability",
       title: "Radical Core Redundancy & Uptime",
       targetMetric: "99.995% Network Availability across all Metro POPs",
-      currentProgress: "99.98% Active SLA",
-      progressPercent: 99.8,
+      currentProgress: "Not tracked yet",
+      progressPercent: 0,
       cascadedDirective: "NOC Telemetry & SupportBot trigger automated BGP route flapping dampening and instant failover to Teraco/NAPAfrica transit.",
-      status: "On Track",
+      status: "Accelerating",
     },
     {
       id: "OKR-2",
       pillar: "Network Expansion",
       title: "Metro & Township Fiber Penetration",
       targetMetric: "120,000 Live FTTH/B premises connected",
-      currentProgress: "94,200 Connected (78.5%)",
-      progressPercent: 78.5,
+      currentProgress: "Not tracked yet",
+      progressPercent: 0,
       cascadedDirective: "ProvisionBot streamlines RICA identity verification & same-week field installation dispatch within 72 hours.",
-      status: "On Track",
+      status: "Accelerating",
     },
     {
       id: "OKR-3",
       pillar: "Subscriber Experience",
       title: "Unrivaled Customer Trust & NPS",
       targetMetric: "Net Promoter Score 75+ & First Contact Resolution > 88%",
-      currentProgress: "NPS 72 (+3 pts needed) | 87.4% FCR",
-      progressPercent: 88,
+      currentProgress: "Not tracked yet",
+      progressPercent: 0,
       cascadedDirective: "DomeBot & ChurnGuard detect subscriber sentiment degradation early and issue proactive credits or bandwidth boosts.",
-      status: "Near Target",
+      status: "Accelerating",
     },
     {
       id: "OKR-4",
       pillar: "High-Performance Culture",
       title: "Sustainable Team Growth & Retention",
       targetMetric: "Voluntary turnover < 4% & Employee pulse sentiment > 90%",
-      currentProgress: "3.8% Turnover | 91% Sentiment Index",
-      progressPercent: 92,
+      currentProgress: "Not tracked yet",
+      progressPercent: 0,
       cascadedDirective: "StaffBot monitors shift fatigue, prompts peer kudos distribution, and tracks mandatory FOA/MikroTik certifications.",
-      status: "On Track",
+      status: "Accelerating",
     },
   ])
 
@@ -407,119 +408,34 @@ export function TalentCultureView({ employees }: TalentCultureViewProps) {
   const [editVision, setEditVision] = useState(companyVision)
 
   // Kudos State
-  const [kudosList, setKudosList] = useState<PeerKudo[]>([
-    {
-      id: "1",
-      fromName: "Thabo Nkosi (CTO)",
-      toName: "Lerato Molefe",
-      badge: "#NetworkHero",
-      message: "Unbelievable diagnostic work during the late night Rosebank OLT power fluctuation. Kept all enterprise uplinks green, upholding our 99.995% uptime objective.",
-      date: "Yesterday",
-      likes: 8,
-    },
-    {
-      id: "2",
-      fromName: "Willem Botha (Head of Field)",
-      toName: "Musa Sithole",
-      badge: "#FiberChampion",
-      message: "Spliced 144 cores in a record 3.5 hours for the Waterfall Estate expansion with zero dB splice loss. Embodiment of 'Velocity with Precision'.",
-      date: "2 days ago",
-      likes: 12,
-    },
-    {
-      id: "3",
-      fromName: "Zanele Khumalo (Support)",
-      toName: "Mandla Sithole",
-      badge: "#CustomerObsessed",
-      message: "Walked an elderly subscriber through their Wi-Fi 6 router setup with extreme patience. Received a glowing 5-star Google review for OmniDome!",
-      date: "3 days ago",
-      likes: 6,
-    },
-    {
-      id: "4",
-      fromName: "Pieter van Wyk (CEO)",
-      toName: "Johan Pretorius",
-      badge: "#SafetyFirst",
-      message: "Safely halted cherry-picker operations during the heavy highveld lightning storm in Midrand. Zero incidents, safety code strictly upheld.",
-      date: "4 days ago",
-      likes: 15,
-    },
-  ])
+  const [kudosList, setKudosList] = useState<PeerKudo[]>([]) // no seeded recognition: only kudos given in this session (not persisted)
 
   // Long Service State
-  const [milestones] = useState<LongServiceMilestone[]>([
-    {
-      employeeName: "Pieter van Wyk",
-      jobTitle: "Chief Executive Officer",
-      department: "Executive",
-      hireDate: "2019-02-14",
-      yearsOfService: 7,
-      tier: "5-Year Silver",
-      award: "R 25,000 Travel Voucher + Silver Plaque",
-    },
-    {
-      employeeName: "Ayesha Patel",
-      jobTitle: "HR & Payroll Specialist",
-      department: "Human Resources",
-      hireDate: "2020-09-01",
-      yearsOfService: 6,
-      tier: "5-Year Silver",
-      award: "R 25,000 Travel Voucher + Silver Plaque",
-    },
-    {
-      employeeName: "Johan Pretorius",
-      jobTitle: "NOC Team Lead",
-      department: "Network Operations",
-      hireDate: "2021-11-20",
-      yearsOfService: 5,
-      tier: "5-Year Silver",
-      award: "R 25,000 Travel Voucher + Silver Plaque",
-    },
-    {
-      employeeName: "Thabo Nkosi",
-      jobTitle: "Chief Technology Officer",
-      department: "Executive",
-      hireDate: "2022-05-16",
-      yearsOfService: 4,
-      tier: "3-Year Bronze",
-      award: "R 10,000 Tech Allowance + Bronze Plaque",
-    },
-  ])
+  // Long service: computed from REAL hire dates (3+ completed years)
+  const milestones = useMemo<LongServiceMilestone[]>(() => {
+    const out: LongServiceMilestone[] = []
+    for (const e of employees) {
+      const years = yearsOfService(e.hire_date, new Date())
+      if (years === null || years < 3) continue
+      out.push({
+        employeeName: e.full_name,
+        jobTitle: e.job_title,
+        department: e.department,
+        hireDate: e.hire_date,
+        yearsOfService: years,
+        tier: years >= 10 ? "10-Year Gold Sovereign" : years >= 5 ? "5-Year Silver" : "3-Year Bronze",
+        award: "Long-service recognition due",
+      })
+    }
+    return out.sort((a, b) => b.yearsOfService - a.yearsOfService)
+  }, [employees])
 
   // Pulse Surveys State
-  const [surveys, setSurveys] = useState<PulseSurvey[]>([
-    {
-      id: "SRV-001",
-      title: "Q3 Strategic Alignment & Equipment Dipstick Survey",
-      department: "Field Operations",
-      questionsCount: 8,
-      responseRate: "94%",
-      status: "Active",
-      createdDate: "2026-09-15",
-    },
-    {
-      id: "SRV-002",
-      title: "NOC 24/7 Shift Standby & Fatigue Index Survey",
-      department: "Network Operations",
-      questionsCount: 6,
-      responseRate: "88%",
-      status: "Active",
-      createdDate: "2026-09-18",
-    },
-    {
-      id: "SRV-003",
-      title: "Core Values Pulse: 'Are We Customer Obsessed?'",
-      department: "All Departments",
-      questionsCount: 5,
-      responseRate: "91%",
-      status: "Active",
-      createdDate: "2026-09-22",
-    },
-  ])
+  const [surveys, setSurveys] = useState<PulseSurvey[]>([]) // no seeded survey results
 
   // Modals state
   const [kudosModalOpen, setKudosModalOpen] = useState(false)
-  const [selectedRecipient, setSelectedRecipient] = useState(employees[0]?.full_name || "Musa Sithole")
+  const [selectedRecipient, setSelectedRecipient] = useState(employees[0]?.full_name || "")
   const [kudosBadge, setKudosBadge] = useState<PeerBadge>("#NetworkHero")
   const [kudosText, setKudosText] = useState("")
 

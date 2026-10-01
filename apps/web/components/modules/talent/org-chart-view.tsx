@@ -1,5 +1,7 @@
 "use client"
 
+import { fmtZar } from "@/lib/format"
+
 import React, { useState, useMemo, useRef, useEffect, useCallback } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -637,7 +639,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     setLocalStaff((prev) =>
       prev.map((emp) => (emp.id === editingDoaEmp.id ? { ...emp, financial_limit: newDoaLimit } : emp))
     )
-    setToastMessage(`Updated Financial Spend Authority for ${editingDoaEmp.full_name} to R ${newDoaLimit.toLocaleString()}`)
+    setToastMessage(`Updated Financial Spend Authority for ${editingDoaEmp.full_name} to ${fmtZar(newDoaLimit)}`)
     setTimeout(() => setToastMessage(null), 3000)
     setEditDoaModalOpen(false)
     setEditingDoaEmp(null)
@@ -807,7 +809,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
                 className="font-bold text-emerald-400 hover:underline flex items-center gap-1"
                 title="Edit Financial Authority Limit"
               >
-                R {finLimit.toLocaleString()}
+                {fmtZar(finLimit)}
                 <Edit3 className="h-2.5 w-2.5 text-muted-foreground" />
               </button>
             </div>
@@ -1249,7 +1251,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
                   <div className="flex items-center justify-between">
                     <label className="font-semibold text-foreground">Financial Delegation Authority (ZAR)</label>
                     <span className="font-mono text-emerald-400 font-bold text-xs">
-                      R {newStaffFinancialLimit.toLocaleString()}
+                      {fmtZar(newStaffFinancialLimit)}
                     </span>
                   </div>
                   <select
@@ -1402,7 +1404,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
                             <td className="py-1 px-2 text-muted-foreground">{r.title}</td>
                             <td className="py-1 px-2 text-muted-foreground">{r.department}</td>
                             <td className="py-1 px-2 text-primary font-medium">{r.reportingToName || "— CEO / Root —"}</td>
-                            <td className="py-1 px-2 text-emerald-400 font-mono">R {r.financialLimit.toLocaleString()}</td>
+                            <td className="py-1 px-2 text-emerald-400 font-mono">{fmtZar(r.financialLimit)}</td>
                             <td className="py-1 px-2">
                               {r.isAgent ? (
                                 <Badge variant="outline" className="text-[8px] border-violet-500 text-violet-300 py-0">
@@ -1497,7 +1499,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
                           <span className="text-[10px] text-muted-foreground font-normal">({rec.proposedAgent.title})</span>
                         </div>
                         <p className="text-[10px] text-muted-foreground">
-                          Reports to: <span className="text-foreground font-semibold">{rec.proposedAgent.managerName}</span> • DoA Limit: R {rec.proposedAgent.financialLimit.toLocaleString()}
+                          Reports to: <span className="text-foreground font-semibold">{rec.proposedAgent.managerName}</span> • DoA Limit: {fmtZar(rec.proposedAgent.financialLimit)}
                         </p>
                       </div>
 

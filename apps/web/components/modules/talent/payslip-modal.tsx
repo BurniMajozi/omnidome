@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { X, Printer, ShieldCheck, Building2, CheckCircle2, Download } from "lucide-react"
 import { type PayslipRecord } from "@/lib/hr-api"
+import { fmtMoneyCents } from "@/lib/talent-derive"
 
 interface PayslipModalProps {
   payslip: PayslipRecord | null
@@ -19,9 +20,11 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
   }
 
   // Format currency ZAR
-  const zar = (val?: number) => {
-    return `R ${(val || 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-  }
+  // Omitted/redacted amounts show a dash, never "R 0"
+  const zar = (val?: number | null) => fmtMoneyCents(val)
+  const num = (v?: number | null) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+  const period = payslip.created_at ? String(payslip.created_at).slice(0, 7) : "—"
+  const payDate = payslip.created_at ? String(payslip.created_at).slice(0, 10) : "—"
 
   const isPaid = payslip.payout_status === "PAID"
 
@@ -52,13 +55,16 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
             <div>
               <div className="flex items-center gap-2">
                 <Building2 className="h-6 w-6 text-sky-400" />
-                <h1 className="text-xl font-bold tracking-tight text-foreground">OmniDome Networks (Pty) Ltd</h1>
+                <h1 className="text-xl font-bold tracking-tight text-foreground">Payslip</h1>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">High-Speed Fiber Infrastructure & Armed Security Services</p>
               <div className="mt-2 text-[11px] text-muted-foreground space-y-0.5">
-                <p>Registration No: 2024/098712/07 | VAT No: 4890281729</p>
-                <p>SARS PAYE Ref: 7920194821 | UIF Ref: U19827364 | SDL Ref: L98230192</p>
-                <p>Rosebank Link, 187 Oxford Rd, Johannesburg, 2196</p>
+                <p>
+                  Tax year: <span className="text-foreground">{payslip.tax_year ?? "—"}</span> | PAYE table version:{" "}
+                  <span className="text-foreground">{payslip.tax_table_version ?? "—"}</span>
+                </p>
+                {payslip.rates_verified === false && (
+                  <p className="text-amber-400">PAYE tables for tax year {payslip.tax_year ?? "?"} are not verified.</p>
+                )}
               </div>
             </div>
 
@@ -67,8 +73,8 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
                 <Badge variant="outline" className="text-xs font-semibold uppercase tracking-wider bg-muted/40">
                   Confidential Payslip
                 </Badge>
-                <p className="text-sm font-bold text-foreground mt-2">Pay Period: September 2026</p>
-                <p className="text-xs text-muted-foreground">Pay Date: 2026-09-25</p>
+                <p className="text-sm font-bold text-foreground mt-2">Pay Period: {period}</p>
+                <p className="text-xs text-muted-foreground">Generated: {payDate}</p>
               </div>
 
               <div className="mt-2">
@@ -94,7 +100,7 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
             </div>
             <div>
               <span className="text-muted-foreground block text-[11px]">Staff Code / ID</span>
-              <span className="font-medium text-foreground">{payslip.employee_code || "STF-EMP"}</span>
+              <span className="font-medium text-foreground">{payslip.employee_code || "—"}</span>
             </div>
             <div>
               <span className="text-muted-foreground block text-[11px]">Job Title</span>
@@ -107,20 +113,20 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
 
             <div>
               <span className="text-muted-foreground block text-[11px]">SA ID / Passport</span>
-              <span className="font-medium text-foreground">{payslip.id_number || "8504125089087"}</span>
+              <span className="font-medium text-foreground">{payslip.id_number || "—"}</span>
             </div>
             <div>
               <span className="text-muted-foreground block text-[11px]">Income Tax Ref (SARS)</span>
-              <span className="font-medium text-foreground">{payslip.tax_number || "9823410582"}</span>
+              <span className="font-medium text-foreground">{payslip.tax_number || "—"}</span>
             </div>
             <div>
               <span className="text-muted-foreground block text-[11px]">Bank Name & Branch</span>
-              <span className="font-medium text-foreground">FNB / RMB (632005)</span>
+              <span className="font-medium text-foreground">{payslip.bank_code || "—"}</span>
             </div>
             <div>
               <span className="text-muted-foreground block text-[11px]">Account Number</span>
               <span className="font-medium text-foreground">
-                ••••••••{payslip.account_number ? payslip.account_number.slice(-4) : "4892"}
+                {payslip.account_number ? `••••${String(payslip.account_number).slice(-4)}` : "—"}
               </span>
             </div>
           </div>
@@ -138,13 +144,13 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
                   <span>Basic Monthly Salary</span>
                   <span className="font-medium text-foreground">{zar(payslip.basic_salary)}</span>
                 </div>
-                {payslip.commission > 0 && (
+                {num(payslip.commission) > 0 && (
                   <div className="flex justify-between text-muted-foreground">
                     <span>Attributed Sales Commission</span>
                     <span className="font-medium text-amber-400">{zar(payslip.commission)}</span>
                   </div>
                 )}
-                {payslip.allowances > 0 && (
+                {num(payslip.allowances) > 0 && (
                   <div className="flex justify-between text-muted-foreground">
                     <span>Travel / Field Technical Allowance</span>
                     <span className="font-medium text-foreground">{zar(payslip.allowances)}</span>
@@ -171,11 +177,10 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
                 <div className="flex justify-between text-muted-foreground">
                   <div>
                     <span>UIF Employee Contribution</span>
-                    <span className="text-[10px] text-muted-foreground block">(1% capped at R177.12 statutory ceiling)</span>
                   </div>
                   <span className="font-medium text-foreground">{zar(payslip.uif)}</span>
                 </div>
-                {payslip.other_deductions > 0 && (
+                {num(payslip.other_deductions) > 0 && (
                   <div className="flex justify-between text-muted-foreground">
                     <span>Medical Aid / Pension Scheme</span>
                     <span className="font-medium text-foreground">{zar(payslip.other_deductions)}</span>
@@ -185,7 +190,7 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
               <div className="border-t border-border pt-2 flex justify-between font-bold text-foreground">
                 <span>TOTAL DEDUCTIONS</span>
                 <span className="text-red-400">
-                  {zar(payslip.tax + payslip.uif + payslip.other_deductions)}
+                  {zar(num(payslip.tax) + num(payslip.uif) + num(payslip.other_deductions))}
                 </span>
               </div>
             </div>
@@ -196,17 +201,17 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
             <div>
               <span className="font-semibold text-foreground block">Employer Statutory Levies & Contributions (Non-deductible):</span>
               <span className="text-muted-foreground text-[11px]">
-                Paid directly to SARS by OmniDome Networks under South African labor statutes.
+                Paid directly to SARS by the employer under South African labor statutes (amounts as recorded on the payslip).
               </span>
             </div>
             <div className="flex gap-4 text-xs font-medium">
               <div>
-                <span className="text-muted-foreground">UIF Employer (1%): </span>
-                <span className="text-foreground">{zar(payslip.uif_employer || payslip.uif)}</span>
+                <span className="text-muted-foreground">UIF Employer: </span>
+                <span className="text-foreground">{zar(payslip.uif_employer)}</span>
               </div>
               <div>
-                <span className="text-muted-foreground">SDL Levy (1%): </span>
-                <span className="text-foreground">{zar(payslip.sdl || Math.round(payslip.gross * 0.01))}</span>
+                <span className="text-muted-foreground">SDL Levy: </span>
+                <span className="text-foreground">{zar(payslip.sdl)}</span>
               </div>
             </div>
           </div>
@@ -218,7 +223,7 @@ export function PayslipModal({ payslip, onClose }: PayslipModalProps) {
                 Net Take-Home Pay (Bank Credit)
               </span>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Calculated strictly under SARS 2024/2025/2026 progressive brackets with annual primary rebate.
+                PAYE computed with tax year {payslip.tax_year ?? "—"} tables (version {payslip.tax_table_version ?? "—"}).
               </p>
             </div>
             <div className="text-right">
