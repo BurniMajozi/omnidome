@@ -2,7 +2,7 @@ import { devFallbackAllowed } from "@/lib/dev-identity"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextResponse } from "next/server"
 import {
-  num, isOpen, deriveActivities, deriveRecommendations, sastMonthRange, summarizeDeals, parseDealSummary, wonByMonth, parseTotalCount,
+  num, isOpen, deriveActivities, deriveRecommendations, sastMonthRange, SALES_TZ, summarizeDeals, parseDealSummary, wonByMonth, parseTotalCount,
   type DealRow, type DealSummary,
 } from "@/lib/sales-derive"
 
@@ -120,7 +120,7 @@ export async function GET(request: Request) {
   // Prefer the SQL summary; fall back to the rows with the same semantics.
   const [allSummary, monthSummary] = await Promise.all([
     fetchSummary("/deals/summary", headers),
-    fetchSummary(`/deals/summary?status=WON&closed_from=${range.closed_from}&closed_to=${range.closed_to}`, headers),
+    fetchSummary(`/deals/summary?status=WON&closed_from=${range.closed_from}&closed_to=${range.closed_to}&tz=${encodeURIComponent(SALES_TZ)}`, headers),
   ])
   const fromRows = summarizeDeals(deals, range)
   const usingSummary = allSummary !== null && monthSummary !== null

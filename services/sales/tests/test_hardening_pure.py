@@ -215,6 +215,31 @@ def test_chunking_keeps_every_statement_under_asyncpg_parameter_cap():
 
 # ── H2: dates and summary ───────────────────────────────────────────────────
 
+def test_tz_day_buckets_sast_vs_utc():
+    """A deal closed 2026-09-30T22:30Z is 1 Oct 00:30 SAST: October for Africa/Johannesburg, September for UTC."""
+    instant = datetime(2026, 9, 30, 22, 30)
+    sast = main._resolve_tz("Africa/Johannesburg")
+    oct_start, oct_end = main._day_start(date(2026, 10, 1), sast), main._next_day_start(date(2026, 10, 31), sast)
+    sep_start, sep_end = main._day_start(date(2026, 9, 1), sast), main._next_day_start(date(2026, 9, 30), sast)
+    assert oct_start == datetime(2026, 9, 30, 22, 0) and sep_end == oct_start
+    assert oct_start <= instant < oct_end and not (sep_start <= instant < sep_end)
+    assert main._resolve_tz(None) is None and main._resolve_tz("UTC") is None
+    u_oct = (main._day_start(date(2026, 10, 1)), main._next_day_start(date(2026, 10, 31)))
+    u_sep = (main._day_start(date(2026, 9, 1)), main._next_day_start(date(2026, 9, 30)))
+    assert not (u_oct[0] <= instant < u_oct[1]) and (u_sep[0] <= instant < u_sep[1])
+    conds = main._deal_conditions(TENANT, closed_from=date(2026, 10, 1), zone=sast)
+    params = [v for c in conds for v in c.compile(dialect=postgresql.dialect()).params.values() if isinstance(v, datetime)]
+    assert params == [datetime(2026, 9, 30, 22, 0)]
+
+
+def test_unknown_tz_is_rejected_with_422():
+    import pytest
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as e:
+        main._resolve_tz("Bogus/Zone")
+    assert e.value.status_code == 422
+
+
 def test_end_date_includes_the_whole_end_day():
     assert main._next_day_start(date(2026, 9, 30)) == datetime(2026, 10, 1, 0, 0)
     conds = main._deal_conditions(TENANT, end_date=date(2026, 9, 30), closed_to=date(2026, 9, 30),

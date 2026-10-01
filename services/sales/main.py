@@ -27,7 +27,8 @@ import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time, timedelta, timezone
+from datetime import date, datetime, tzinfo, time as dt_time, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional
 
@@ -729,14 +730,33 @@ def deserialize_items(items: Optional[List[Dict[str, Any]]]) -> Optional[List[Qu
 # DB helpers
 # ---------------------------------------------------------------------------
 
-def _day_start(d: date) -> datetime:
-    return datetime.combine(d, dt_time.min)
+def _resolve_tz(tz: Optional[str]) -> Optional[tzinfo]:
+    """IANA zone for day-bucketing date filters. None/'UTC' keeps the historic UTC-day
+    behaviour; an unknown name is a client error (422)."""
+    if tz is None or tz.strip() == "" or tz.strip().upper() == "UTC":
+        return None
+    try:
+        return ZoneInfo(tz.strip())
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise HTTPException(status_code=422, detail=f"Unknown timezone: {tz}")
 
 
-def _next_day_start(d: date) -> datetime:
+def _local_midnight_utc(d: date, zone: Optional[tzinfo]) -> datetime:
+    """Midnight of calendar day `d` in `zone`, as a naive UTC instant (the DB stores naive UTC)."""
+    naive = datetime.combine(d, dt_time.min)
+    if zone is None:
+        return naive
+    return naive.replace(tzinfo=zone).astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _day_start(d: date, zone: Optional[tzinfo] = None) -> datetime:
+    return _local_midnight_utc(d, zone)
+
+
+def _next_day_start(d: date, zone: Optional[tzinfo] = None) -> datetime:
     """Exclusive upper bound for an inclusive end DATE: compare `< next_day_start(end)`,
     so rows stamped during the end day (after midnight) are included."""
-    return datetime.combine(d + timedelta(days=1), dt_time.min)
+    return _local_midnight_utc(d + timedelta(days=1), zone)
 
 
 async def _ensure_default_pipeline(db: AsyncSession, tenant_id: uuid.UUID) -> uuid.UUID:
@@ -1376,6 +1396,7 @@ async def create_deal(
 def _deal_conditions(
     tenant_id: uuid.UUID, *, stage_id=None, stage=None, agent_id=None, status_filter=None,
     start_date=None, end_date=None, closed_from=None, closed_to=None, min_value=None, max_value=None,
+    zone: Optional[tzinfo] = None,
 ) -> list:
     """WHERE conditions shared by GET /deals and GET /deals/summary. Date filters are
     inclusive DATES: an end date means the whole end day (< end + 1 day)."""
@@ -1393,9 +1414,9 @@ def _deal_conditions(
     if end_date:
         conds.append(Deal.created_at < _next_day_start(end_date))
     if closed_from:
-        conds.append(Deal.closed_at >= _day_start(closed_from))
+        conds.append(Deal.closed_at >= _day_start(closed_from, zone))
     if closed_to:
-        conds.append(Deal.closed_at < _next_day_start(closed_to))
+        conds.append(Deal.closed_at < _next_day_start(closed_to, zone))
     if min_value is not None:
         conds.append(Deal.value_zar >= min_value)
     if max_value is not None:
@@ -1414,6 +1435,7 @@ async def list_deals(
     end_date: Optional[date] = None,
     closed_from: Optional[date] = None,
     closed_to: Optional[date] = None,
+    tz: Optional[str] = Query(default=None, description="IANA zone for closed_from/closed_to day boundaries (default UTC)"),
     min_value: Optional[Decimal] = None,
     max_value: Optional[Decimal] = None,
     limit: int = Query(500, ge=1, le=1000),
@@ -1428,7 +1450,7 @@ async def list_deals(
     conds = _deal_conditions(
         tenant_id, stage_id=stage_id, stage=stage, agent_id=agent_id, status_filter=status_filter,
         start_date=start_date, end_date=end_date, closed_from=closed_from, closed_to=closed_to,
-        min_value=min_value, max_value=max_value)
+        min_value=min_value, max_value=max_value, zone=_resolve_tz(tz))
     q = (
         select(Deal, DealStage.name.label("stage_name"), Lead)
         .outerjoin(DealStage, DealStage.id == Deal.stage_id)
@@ -1489,6 +1511,7 @@ async def deals_summary(
     end_date: Optional[date] = None,
     closed_from: Optional[date] = None,
     closed_to: Optional[date] = None,
+    tz: Optional[str] = Query(default=None, description="IANA zone for closed_from/closed_to day boundaries (default UTC)"),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1497,7 +1520,7 @@ async def deals_summary(
     ?status=WON&closed_from=2026-09-01&closed_to=2026-09-30."""
     conds = _deal_conditions(
         tenant_id, stage_id=stage_id, stage=stage, agent_id=agent_id, status_filter=status_filter,
-        start_date=start_date, end_date=end_date, closed_from=closed_from, closed_to=closed_to)
+        start_date=start_date, end_date=end_date, closed_from=closed_from, closed_to=closed_to, zone=_resolve_tz(tz))
     row = (await db.execute(_deal_summary_query(conds))).one()
     return DealSummary(
         count=row.count, total_value_zar=_money(row.total_value),
@@ -1972,18 +1995,20 @@ def _commission_report_query(tenant_id: uuid.UUID, start: datetime, end_exclusiv
 async def commission_report(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    tz: Optional[str] = Query(default=None, description="IANA zone for day boundaries (default UTC)"),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_db),
     _auth: AuthContext = Depends(access.require_tier("manager")),
 ):
-    today = date.today()
+    zone = _resolve_tz(tz)
+    today = datetime.now(zone or timezone.utc).date()
     if not start_date:
         start_date = date(today.year, today.month, 1)
     if not end_date:
         next_month = start_date + timedelta(days=32)
         end_date = date(next_month.year, next_month.month, 1) - timedelta(days=1)
 
-    result = await db.execute(_commission_report_query(tenant_id, _day_start(start_date), _next_day_start(end_date)))
+    result = await db.execute(_commission_report_query(tenant_id, _day_start(start_date, zone), _next_day_start(end_date, zone)))
     return [
         CommissionReportEntry(
             agent_id=row.agent_id, total_amount_zar=Decimal(str(row.total_amount or 0)),

@@ -30,6 +30,8 @@ export interface DealSummary {
   lost_value_zar: number
 }
 
+/** IANA zone sent as `tz` to the sales service so its day buckets match sastDate()/sastMonthRange(). */
+export const SALES_TZ = "Africa/Johannesburg"
 const SAST_OFFSET_MS = 2 * 60 * 60 * 1000 // South Africa Standard Time, no DST
 
 export function num(v: unknown): number {

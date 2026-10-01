@@ -4,7 +4,7 @@ import assert from "node:assert/strict"
 import {
   parseTs, sastDate, sastMonthRange, summarizeDeals, parseDealSummary, wonByMonth, deriveActivities,
   deriveRecommendations, truncationNote, parseTotalCount, boardTotals, closingTarget, funnelKey, funnelTier,
-  clampPct, aggregateFunnel, sumStageMap, tierConversion, pipelineValueFigure, visibleChannels,
+  clampPct, SALES_TZ, aggregateFunnel, sumStageMap, tierConversion, pipelineValueFigure, visibleChannels,
 } from "./sales-derive.ts"
 
 const NOW = new Date("2026-09-30T10:00:00Z")
@@ -159,4 +159,13 @@ test("tier cohort is the entry stage cohort, not a sum; stage maps are case-inse
   assert.equal(sumStageMap({ NEW: 2, Contacted: 3, Qualified: 4 }, "top"), 5)
   assert.equal(sumStageMap({ QUALIFIED: 4 }, "mid"), 4)
   assert.equal(sumStageMap(undefined, "mid"), 0)
+})
+
+test("fallback summing buckets days in SAST, matching the backend tz=Africa/Johannesburg rule", () => {
+  assert.equal(SALES_TZ, "Africa/Johannesburg")
+  const d = [{ id: "x", name: "X", status: "WON", value_zar: 100, closed_at: "2026-09-30T22:30:00Z" }] // 1 Oct 00:30 SAST
+  const oct = summarizeDeals(d, { closed_from: "2026-10-01", closed_to: "2026-10-31" })
+  const sep = summarizeDeals(d, { closed_from: "2026-09-01", closed_to: "2026-09-30" })
+  assert.equal(oct.monthWon.count, 1)
+  assert.equal(sep.monthWon.count, 0)
 })
