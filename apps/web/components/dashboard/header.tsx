@@ -38,6 +38,9 @@ export function Header({ title, onMenuToggle }: HeaderProps) {
         <div className="relative hidden md:block">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            id="header-search-input"
+            name="search"
+            aria-label="Search anything"
             placeholder="Search anything..."
             className="h-10 w-64 bg-secondary/50 border-border pl-9 text-sm focus:border-primary/50 transition-all"
           />

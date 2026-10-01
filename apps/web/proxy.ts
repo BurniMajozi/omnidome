@@ -107,7 +107,7 @@ async function lookupAdmin(email: string): Promise<AdminLookupResult> {
     const res = await fetch(`${ADMIN_SERVICE_URL}/internal/users/by-email?email=${encodeURIComponent(email)}`, {
       headers: { "x-internal-key": INTERNAL_SERVICE_KEY },
       cache: "no-store",
-      signal: AbortSignal.timeout(1500),
+      signal: AbortSignal.timeout(3500),
     })
     let body: unknown
     try {
@@ -132,11 +132,22 @@ async function verify(token: string): Promise<Verified | "unavailable" | null> {
   if (hit && now - hit.at <= POSITIVE_TTL_MS) return hit.value
   if (!supabase) return null
 
-  const { data, error } = await supabase.auth.getUser(token)
-  if (error || !data.user) {
-    cache.delete(token)
-    return null
+  let data: { user: any } | null = null
+  try {
+    const res = await supabase.auth.getUser(token)
+    if (res.error || !res.data.user) {
+      cache.delete(token)
+      return null
+    }
+    data = res.data
+  } catch (err) {
+    // If Supabase network/DNS is transiently failing, reuse a recent stale identity if within window
+    if (hit && typeof hit.value === "object" && now - hit.at <= STALE_ON_ERROR_MS) {
+      return hit.value
+    }
+    return "unavailable"
   }
+
   const user = data.user
   // Identity is keyed on the email: an unconfirmed sign-up must not inherit a provisioned user's tenant.
   if (!user.email_confirmed_at && !user.confirmed_at) return null
