@@ -24,6 +24,7 @@ from services.billing.models import (
     FNO_CANCELLATION_STATUS, FNO_CANCELLATION_METHOD,
 )
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 
 logger = logging.getLogger("billing.cancellations")
 
@@ -143,7 +144,7 @@ def _calculate_etf(
 
 # ── POST /cancellations/initiate ─────────────────────────────────────────
 
-@router.post("/initiate", response_model=CancelInitiateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/initiate", response_model=CancelInitiateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("clerk"))])
 async def initiate_cancellation(
     body: CancelInitiateRequest,
     ctx: AuthContext = Depends(get_auth_context),
@@ -196,7 +197,7 @@ async def initiate_cancellation(
 
 # ── POST /cancellations/{id}/calculate-etf ───────────────────────────────
 
-@router.post("/{cancel_id}/calculate-etf", response_model=ETFCalculationResponse)
+@router.post("/{cancel_id}/calculate-etf", response_model=ETFCalculationResponse, dependencies=[Depends(require_tier("clerk"))])
 async def calculate_termination_fee(
     cancel_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -275,7 +276,7 @@ async def calculate_termination_fee(
 
 # ── POST /cancellations/{id}/accept-retention ────────────────────────────
 
-@router.post("/{cancel_id}/accept-retention")
+@router.post("/{cancel_id}/accept-retention", dependencies=[Depends(require_tier("clerk"))])
 async def accept_retention_offer(
     cancel_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -306,7 +307,7 @@ async def accept_retention_offer(
 
 # ── POST /cancellations/{id}/proceed ─────────────────────────────────────
 
-@router.post("/{cancel_id}/proceed")
+@router.post("/{cancel_id}/proceed", dependencies=[Depends(require_tier("admin"))])
 async def proceed_with_cancellation(
     cancel_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -351,6 +352,10 @@ async def proceed_with_cancellation(
             session.add(inv)
             session.flush()
             tf.invoice_id = inv.id
+            # Issued invoice: queue its ledger entry (delivered by the outbox retry/worker) and dun it.
+            from services.billing import invoicing
+            invoicing.enqueue_issue(session, inv)
+            invoicing.schedule_dunning(session, inv)
 
         return {
             "status": "cancellation_proceeding",
@@ -361,7 +366,7 @@ async def proceed_with_cancellation(
 
 # ── POST /cancellations/{cancel_id}/router-return ────────────────────────
 
-@router.post("/{cancel_id}/router-return")
+@router.post("/{cancel_id}/router-return", dependencies=[Depends(require_tier("clerk"))])
 async def book_router_return(
     cancel_id: uuid.UUID,
     body: RouterReturnBookRequest,
@@ -406,7 +411,7 @@ async def book_router_return(
 
 # ── POST /cancellations/router-returns/{id}/inspect ──────────────────────
 
-@router.post("/router-returns/{return_id}/inspect")
+@router.post("/router-returns/{return_id}/inspect", dependencies=[Depends(require_tier("admin"))])
 async def inspect_router_return(
     return_id: uuid.UUID,
     body: RouterReturnInspectRequest,
@@ -455,7 +460,7 @@ async def inspect_router_return(
 
 # ── POST /cancellations/{cancel_id}/fno-cancellation ─────────────────────
 
-@router.post("/{cancel_id}/fno-cancellation")
+@router.post("/{cancel_id}/fno-cancellation", dependencies=[Depends(require_tier("admin"))])
 async def submit_fno_cancellation(
     cancel_id: uuid.UUID,
     body: FNOCancelSubmitRequest,
@@ -523,7 +528,7 @@ async def submit_fno_cancellation(
 
 # ── GET /cancellations/{cancel_id}/status ─────────────────────────────────
 
-@router.get("/{cancel_id}/status")
+@router.get("/{cancel_id}/status", dependencies=[Depends(require_tier("reader"))])
 async def get_cancellation_status(
     cancel_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),

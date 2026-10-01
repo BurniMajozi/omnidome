@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 from services.billing.database import compute_vat, get_session, next_invoice_number
 from services.billing.models import (
     BillingAccount,
@@ -42,7 +43,7 @@ DEFAULT_DUE_DAYS = 30
 # POST /transfers — Initiate a transfer
 # ---------------------------------------------------------------------------
 
-@router.post("", response_model=SubscriptionTransferRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SubscriptionTransferRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("clerk"))])
 async def create_transfer(
     body: SubscriptionTransferCreate,
     ctx: AuthContext = Depends(get_auth_context),
@@ -179,7 +180,7 @@ async def create_transfer(
 # POST /transfers/{id}/approve — Approve and execute transfer
 # ---------------------------------------------------------------------------
 
-@router.post("/{transfer_id}/approve", response_model=SubscriptionTransferRead)
+@router.post("/{transfer_id}/approve", response_model=SubscriptionTransferRead, dependencies=[Depends(require_tier("admin"))])
 async def approve_transfer(
     transfer_id: uuid.UUID,
     body: TransferApprovalRequest,
@@ -315,7 +316,7 @@ async def approve_transfer(
 # GET /transfers/{id} — Get transfer detail
 # ---------------------------------------------------------------------------
 
-@router.get("/{transfer_id}", response_model=SubscriptionTransferRead)
+@router.get("/{transfer_id}", response_model=SubscriptionTransferRead, dependencies=[Depends(require_tier("reader"))])
 async def get_transfer(
     transfer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -337,7 +338,7 @@ async def get_transfer(
 # GET /transfers — List transfers
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[SubscriptionTransferRead])
+@router.get("", response_model=list[SubscriptionTransferRead], dependencies=[Depends(require_tier("reader"))])
 async def list_transfers(
     ctx: AuthContext = Depends(get_auth_context),
     subscription_id: Optional[uuid.UUID] = Query(None),

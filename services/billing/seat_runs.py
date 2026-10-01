@@ -27,7 +27,7 @@ import httpx
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
-from services.billing import seat_billing as sb
+from services.billing import calc, seat_billing as sb
 from services.billing.database import compute_vat, get_session, next_invoice_number
 from services.billing.models import BillingPlan, Invoice, SeatBillingRun, SeatProrationCharge
 
@@ -122,6 +122,14 @@ def _maybe_autocharge(invoice: Invoice) -> bool:
     return False
 
 
+def _issue(session, invoice: Invoice) -> None:
+    """Seat invoices are created already issued: post them to the ledger (billing.seat_invoice,
+    queued in this transaction; callers deliver after commit) and schedule dunning."""
+    from services.billing import invoicing
+    invoicing.enqueue_issue(session, invoice, source="billing.seat_invoice")
+    invoicing.schedule_dunning(session, invoice)
+
+
 def reconcile_tenant(
     session,
     tenant_id: uuid.UUID,
@@ -138,7 +146,7 @@ def reconcile_tenant(
             SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start
         )
     ).scalar_one_or_none()
-    if existing is not None:
+    if existing is not None and (existing.status != "skipped" or existing.invoice_id is not None):
         return existing, False
 
     unit = sb.money(unit_price) if unit_price is not None else resolve_unit_price(session, tenant_id)
@@ -151,23 +159,33 @@ def reconcile_tenant(
     ).scalars().all()
     lines = sb.build_cycle_invoice_lines(peak, unit, period_start, period_end, charges)
 
-    # Claim the (tenant, period) slot FIRST. The unique index makes a concurrent run wait for us
-    # and then fail, so only the winner ever creates an invoice; a loser never flushes one.
-    run = SeatBillingRun(
-        tenant_id=tenant_id, period_start=period_start, period_end=period_end,
-        peak_seats=peak, unit_price=unit, amount=sb.lines_total(lines), status="pending",
-    )
-    try:
-        with session.begin_nested():
-            session.add(run)
-            session.flush()
-    except IntegrityError:  # concurrent worker won the race; its run stands
-        won = session.execute(
-            select(SeatBillingRun).where(
-                SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start
-            )
-        ).scalar_one()
-        return won, False
+    if existing is not None:
+        # A 'skipped' run (no price was set then) must not claim the period forever: re-run it
+        # once a price exists and there is something to bill. Lock the row so two re-runs serialise.
+        if not lines:
+            return existing, False
+        run = session.execute(select(SeatBillingRun).where(SeatBillingRun.id == existing.id).with_for_update()).scalar_one()
+        if run.status != "skipped" or run.invoice_id is not None:
+            return run, False
+        run.peak_seats, run.unit_price, run.amount = peak, unit, sb.lines_total(lines)
+    else:
+        # Claim the (tenant, period) slot FIRST. The unique index makes a concurrent run wait for us
+        # and then fail, so only the winner ever creates an invoice; a loser never flushes one.
+        run = SeatBillingRun(
+            tenant_id=tenant_id, period_start=period_start, period_end=period_end,
+            peak_seats=peak, unit_price=unit, amount=sb.lines_total(lines), status="pending",
+        )
+        try:
+            with session.begin_nested():
+                session.add(run)
+                session.flush()
+        except IntegrityError:  # concurrent worker won the race; its run stands
+            won = session.execute(
+                select(SeatBillingRun).where(
+                    SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start
+                )
+            ).scalar_one()
+            return won, False
 
     run.status = "skipped"
     if lines:
@@ -180,7 +198,7 @@ def reconcile_tenant(
             subtotal_zar=subtotal,
             vat_zar=compute_vat(subtotal),
             total_zar=subtotal + compute_vat(subtotal),
-            due_date=(today or date.today()) + timedelta(days=DEFAULT_DUE_DAYS),
+            due_date=(today or calc.today_sast()) + timedelta(days=DEFAULT_DUE_DAYS),
             billing_period_start=period_start,
             billing_period_end=period_end,
             line_items=[l.as_dict() for l in lines],
@@ -190,6 +208,7 @@ def reconcile_tenant(
         session.flush()
         run.invoice_id = invoice.id
         run.status = "invoiced"
+        _issue(session, invoice)
         _maybe_autocharge(invoice)
     session.flush()
     return run, True
@@ -255,6 +274,7 @@ def record_proration_charge(
         session.flush()
         charge.invoice_id = invoice.id
         session.flush()
+        _issue(session, invoice)
         _maybe_autocharge(invoice)
     return charge, invoice
 
@@ -267,15 +287,44 @@ def record_proration_charge(
 # worker runs a pass.
 # ---------------------------------------------------------------------------
 
-async def run_reconcile_pass(today: Optional[date] = None) -> list[dict]:
-    period_start, period_end = sb.previous_month_period(today or date.today())
+def completed_periods(today: date, months_back: int) -> list[tuple[date, date]]:
+    """The last `months_back`+1 completed calendar months relative to `today` (a SAST date), oldest first."""
+    out = []
+    cur = today
+    for _ in range(months_back + 1):
+        period = sb.previous_month_period(cur)
+        out.append(period)
+        cur = period[0]  # first day of that month -> its previous month next
+    return list(reversed(out))
+
+
+def _period_billed(tenant_id: uuid.UUID, period_start: date) -> bool:
+    with get_session() as session:
+        run = session.execute(select(SeatBillingRun).where(
+            SeatBillingRun.tenant_id == tenant_id, SeatBillingRun.period_start == period_start)).scalar_one_or_none()
+        return run is not None and not (run.status == "skipped" and run.invoice_id is None and
+                                        resolve_unit_price(session, tenant_id) > 0)
+
+
+async def run_reconcile_pass(today: Optional[date] = None, months_back: int = 0) -> list[dict]:
+    """Reconcile the month just ended (and, with months_back, earlier completed months that were
+    never billed: catch-up after downtime). `today` is a SAST date."""
+    from services.billing import finance_posting as fp
+
+    today = today or calc.today_sast()
+    periods = completed_periods(today, months_back)
     results: list[dict] = []
     for tenant_id in await fetch_seat_tenants():
         try:
+            todo = [p for p in periods if not _period_billed(tenant_id, p[0])]
+            if not todo:
+                continue
             snapshot = await fetch_seat_snapshot(tenant_id)
-            with get_session() as session:  # own session per tenant
-                run, created = reconcile_tenant(session, tenant_id, period_start, period_end, snapshot, today=today)
-                results.append({**run_to_dict(run), "created": created})
+            for period_start, period_end in todo:
+                with get_session() as session:  # own session per tenant+period
+                    run, created = reconcile_tenant(session, tenant_id, period_start, period_end, snapshot, today=today)
+                    results.append({**run_to_dict(run), "created": created})
+            await fp.deliver(tenant_id, limit=20)   # after commit; failures stay in the outbox
         except Exception:
             logger.exception("seat reconcile failed for tenant %s", tenant_id)
     return results
@@ -297,15 +346,23 @@ def _try_worker_lock() -> bool:
     return bool(got)
 
 
+def catchup_months() -> int:
+    try:
+        return max(0, min(12, int(os.getenv("BILLING_SEAT_CATCHUP_MONTHS", "2"))))
+    except ValueError:
+        return 2
+
+
 async def worker_loop(interval_seconds: int = 6 * 3600) -> None:
-    """Every few hours: on the 1st-3rd of a month reconcile the month just ended."""
+    """Every few hours: bill the month just ended and any earlier completed month still unbilled
+    (idempotent per tenant+period, so running on every pass is cheap and catches up after downtime)."""
     logger.info("seat billing worker started (interval %ss)", interval_seconds)
     while True:
         try:
-            today = datetime.now(timezone.utc).date()
-            if today.day <= 3 and _try_worker_lock():
-                out = await run_reconcile_pass(today)
-                logger.info("seat billing pass: %d tenants", len(out))
+            today = calc.today_sast()
+            if _try_worker_lock():
+                out = await run_reconcile_pass(today, months_back=catchup_months())
+                logger.info("seat billing pass: %d runs", len(out))
         except asyncio.CancelledError:
             raise
         except Exception:

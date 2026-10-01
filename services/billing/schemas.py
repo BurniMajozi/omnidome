@@ -17,8 +17,8 @@ VAT_RATE = Decimal("0.15")  # South African VAT = 15%
 
 class LineItem(BaseModel):
     description: str
-    quantity: int = 1
-    unit_price_zar: Decimal = Field(..., ge=0)
+    quantity: int = Field(1, gt=0, le=100000)
+    unit_price_zar: Decimal = Field(..., ge=0, max_digits=12, decimal_places=4)
     total_zar: Optional[Decimal] = None
 
     def compute_total(self) -> Decimal:
@@ -60,6 +60,11 @@ class InvoiceRead(BaseModel):
     updated_at: datetime
 
 
+class GeneratedInvoice(InvoiceRead):
+    """Invoice returned by /invoices/generate: created=False when it already existed for the period."""
+    created: bool = True
+
+
 class InvoiceSendRequest(BaseModel):
     channel: str = Field("email", pattern="^(email|sms|both)$")
 
@@ -79,7 +84,8 @@ class PaymentCreate(BaseModel):
     invoice_id: uuid.UUID
     amount_zar: Decimal = Field(..., gt=0)
     method: str
-    reference: Optional[str] = None
+    reference: Optional[str] = Field(None, max_length=200)
+    idempotency_key: Optional[str] = Field(None, min_length=1, max_length=128)
 
     @field_validator("method")
     @classmethod
@@ -107,8 +113,9 @@ class PaymentRead(BaseModel):
 
 class PaystackInitializeRequest(BaseModel):
     invoice_id: uuid.UUID
-    email: str
-    amount_zar: Optional[Decimal] = Field(None, description="Defaults to outstanding balance")
+    email: Optional[str] = Field(None, description="Ignored: the customer's email is read from their record")
+    amount_zar: Optional[Decimal] = Field(None, gt=0, max_digits=12, decimal_places=2,
+                                          description="Defaults to outstanding balance; may not exceed it")
     callback_url: Optional[str] = None
 
 
@@ -176,16 +183,20 @@ class RevenueReportItem(BaseModel):
 
 
 class AgingBucket(BaseModel):
-    bucket: str  # "current", "30_days", "60_days", "90_days_plus"
+    # New distinct buckets: current, 1_30, 31_60, 61_90, 90_plus. Legacy keys (30_days, 60_days,
+    # 90_days_plus = ">60") are kept additively with legacy=True: do not sum legacy and new rows together.
+    bucket: str
     count: int
     total_zar: Decimal
+    legacy: bool = False
 
 
 class CollectionsReportItem(BaseModel):
     period: str
     total_overdue_zar: Decimal
     total_collected_zar: Decimal
-    collection_rate: Decimal
+    collection_rate: Optional[Decimal] = None  # percent 0..100; null when nothing was invoiced in the period
+    total_invoiced_zar: Decimal = Decimal("0.00")
     suspensions: int
     arrangements: int
 

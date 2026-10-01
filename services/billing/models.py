@@ -36,7 +36,7 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 
 INVOICE_STATUS = SAEnum(
-    "draft", "sent", "paid", "partially_paid", "overdue", "voided",
+    "draft", "sent", "paid", "partially_paid", "overdue", "voided", "credit_issued",
     name="invoice_status", create_type=True,
 )
 
@@ -131,6 +131,11 @@ class Invoice(Base):
         Index("ix_invoices_subscription", "subscription_id"),
         Index("ix_invoices_billing_account", "billing_account_id"),
         Index("ix_invoices_property", "property_id"),
+        # One invoice per subscription billing period (credit notes excluded). Created by
+        # database.apply_hardening only when no duplicates exist yet.
+        Index("uq_invoices_sub_period", "subscription_id", "billing_period_start", unique=True,
+              postgresql_where=text("subscription_id IS NOT NULL AND credit_note_of IS NULL "
+                                    "AND billing_period_start IS NOT NULL")),
     )
 
 
@@ -291,12 +296,15 @@ class Payment(Base):
     paystack_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(PAYMENT_STATUS, nullable=False, default="pending")
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB, nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     invoice: Mapped["Invoice"] = relationship(back_populates="payments")
 
     __table_args__ = (
         Index("ix_payments_tenant_customer", "tenant_id", "customer_id"),
+        Index("uq_payments_tenant_idem", "tenant_id", "idempotency_key", unique=True,
+              postgresql_where=text("idempotency_key IS NOT NULL")),
     )
 
 
@@ -319,9 +327,17 @@ class DunningAction(Base):
     scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    step: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     invoice: Mapped["Invoice"] = relationship(back_populates="dunning_actions")
+
+    __table_args__ = (
+        Index("uq_dunning_invoice_action_step", "invoice_id", "action_type", "step", unique=True),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -934,4 +950,82 @@ class SeatProrationCharge(Base):
         Index("ix_seat_proration_tenant_period", "tenant_id", "period_start"),
         Index("uq_seat_proration_tenant_idem", "tenant_id", "idempotency_key", unique=True,
               postgresql_where=text("idempotency_key IS NOT NULL")),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Money-safety tables (outbox, webhook dedupe, initializations, unallocated credits)
+# ---------------------------------------------------------------------------
+
+class BillingFinanceOutbox(Base):
+    """Journal entries owed to the finance service; written in the same transaction as the
+    business change and delivered after commit (retried until finance accepts them)."""
+    __tablename__ = "billing_finance_outbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")  # pending|sent|failed
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "source", "source_id", name="uq_billing_outbox_source"),
+    )
+
+
+class BillingWebhookEvent(Base):
+    """Processed provider webhook events (dedupe key is unique)."""
+    __tablename__ = "billing_webhook_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="paystack")
+    event_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("provider", "event_key", name="uq_billing_webhook_event"),
+    )
+
+
+class PaystackInitialization(Base):
+    """One row per Paystack checkout we started; the webhook cross-checks amount against it."""
+    __tablename__ = "billing_paystack_initializations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    reference: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ZAR")
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|completed
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CustomerCredit(Base):
+    """Money held for a customer that is not allocated to an invoice: a payment that cannot be
+    applied, an overpayment, or the refund owed after a credit note on a paid invoice."""
+    __tablename__ = "billing_customer_credits"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    amount_zar: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)  # unallocated_payment|overpayment|refund_required
+    reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="open")  # open|applied|refunded
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("uq_customer_credit_ref", "tenant_id", "kind", "reference", unique=True,
+              postgresql_where=text("reference IS NOT NULL")),
     )

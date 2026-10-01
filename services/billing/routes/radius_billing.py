@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models import Subscription, SubscriptionUsage
 from services.common.middleware import configure_production
@@ -20,7 +21,7 @@ logger = logging.getLogger("billing.radius_billing")
 router = APIRouter(prefix="/billing-radius", tags=["RADIUS Billing Sync"])
 
 
-@router.post("/sync-usage", status_code=status.HTTP_201_CREATED)
+@router.post("/sync-usage", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def sync_radius_usage(
     ctx: AuthContext = Depends(get_auth_context),
     subscription_id: Optional[uuid.UUID] = Query(None),

@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models import BillingAccount, Invoice, Subscription
 from services.billing.schemas import BillingAccountCreate, BillingAccountRead
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/billing-accounts", tags=["Billing Accounts"])
 # POST /billing-accounts — Create
 # ---------------------------------------------------------------------------
 
-@router.post("", response_model=BillingAccountRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BillingAccountRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_billing_account(
     body: BillingAccountCreate,
     ctx: AuthContext = Depends(get_auth_context),
@@ -86,7 +87,7 @@ async def create_billing_account(
 # GET /billing-accounts/{id} — Detail
 # ---------------------------------------------------------------------------
 
-@router.get("/{account_id}", response_model=BillingAccountRead)
+@router.get("/{account_id}", response_model=BillingAccountRead, dependencies=[Depends(require_tier("reader"))])
 async def get_billing_account(
     account_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -109,7 +110,7 @@ async def get_billing_account(
 # GET /billing-accounts — List
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[BillingAccountRead])
+@router.get("", response_model=list[BillingAccountRead], dependencies=[Depends(require_tier("reader"))])
 async def list_billing_accounts(
     ctx: AuthContext = Depends(get_auth_context),
     customer_id: Optional[uuid.UUID] = Query(None),
@@ -138,7 +139,7 @@ async def list_billing_accounts(
 # GET /billing-accounts/{id}/subscriptions — List subscriptions for account
 # ---------------------------------------------------------------------------
 
-@router.get("/{account_id}/subscriptions", response_model=list[uuid.UUID])
+@router.get("/{account_id}/subscriptions", response_model=list[uuid.UUID], dependencies=[Depends(require_tier("reader"))])
 async def list_account_subscriptions(
     account_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -158,7 +159,7 @@ async def list_account_subscriptions(
 # GET /billing-accounts/{id}/invoices — List invoices for account
 # ---------------------------------------------------------------------------
 
-@router.get("/{account_id}/invoices")
+@router.get("/{account_id}/invoices", dependencies=[Depends(require_tier("reader"))])
 async def list_account_invoices(
     account_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -195,7 +196,7 @@ async def list_account_invoices(
 # POST /billing-accounts/{id}/close — Close account
 # ---------------------------------------------------------------------------
 
-@router.post("/{account_id}/close", response_model=BillingAccountRead)
+@router.post("/{account_id}/close", response_model=BillingAccountRead, dependencies=[Depends(require_tier("admin"))])
 async def close_billing_account(
     account_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),

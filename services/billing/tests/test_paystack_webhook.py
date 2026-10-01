@@ -58,7 +58,7 @@ def invoice(client):
 
 def charge(tenant, inv, reference="ref-1", kobo=11500) -> bytes:
     return json.dumps({"event": "charge.success", "data": {
-        "reference": reference, "amount": kobo,
+        "reference": reference, "amount": kobo, "currency": "ZAR", "id": reference,
         "metadata": {"invoice_id": inv["id"], "tenant_id": str(tenant)}}}).encode()
 
 

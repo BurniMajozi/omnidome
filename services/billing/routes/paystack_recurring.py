@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models import BillingPlan, Subscription
 
@@ -90,7 +91,7 @@ class DisableSubscriptionRequest(BaseModel):
 # POST /payments/paystack/plans/{plan_id}/sync  — mirror a BillingPlan to Paystack
 # ---------------------------------------------------------------------------
 
-@router.post("/plans/{plan_id}/sync")
+@router.post("/plans/{plan_id}/sync", dependencies=[Depends(require_tier("admin"))])
 async def sync_plan_to_paystack(
     plan_id: uuid.UUID,
     body: PaystackPlanSync,
@@ -139,7 +140,7 @@ async def sync_plan_to_paystack(
 # POST /payments/paystack/subscriptions  — subscribe a customer to a plan
 # ---------------------------------------------------------------------------
 
-@router.post("/subscriptions")
+@router.post("/subscriptions", dependencies=[Depends(require_tier("admin"))])
 async def create_subscription(
     body: PaystackSubscribeRequest,
     ctx: AuthContext = Depends(get_auth_context),
@@ -188,7 +189,7 @@ async def create_subscription(
 # GET /payments/paystack/subscriptions/{code}  — fetch status
 # ---------------------------------------------------------------------------
 
-@router.get("/subscriptions/{code}")
+@router.get("/subscriptions/{code}", dependencies=[Depends(require_tier("reader"))])
 async def get_subscription(code: str, ctx: AuthContext = Depends(get_auth_context)):
     if not _secret():
         return {"subscription_code": code, "status": "active", "mock": True}
@@ -208,7 +209,7 @@ async def get_subscription(code: str, ctx: AuthContext = Depends(get_auth_contex
 # POST /payments/paystack/subscriptions/{code}/disable
 # ---------------------------------------------------------------------------
 
-@router.post("/subscriptions/{code}/disable")
+@router.post("/subscriptions/{code}/disable", dependencies=[Depends(require_tier("admin"))])
 async def disable_subscription(
     code: str,
     body: DisableSubscriptionRequest,

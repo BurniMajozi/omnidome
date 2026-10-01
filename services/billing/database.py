@@ -60,8 +60,9 @@ def init_tables() -> None:
         reconcile_legacy_tables(engine)
         Base.metadata.create_all(bind=engine)
         with engine.begin() as conn:
-            for statement in _RESTORED_COLUMNS + _SEAT_BILLING_COLUMNS:
+            for statement in _RESTORED_COLUMNS + _SEAT_BILLING_COLUMNS + _HARDENING_COLUMNS:
                 conn.execute(text(statement))
+        apply_hardening(engine)
     finally:
         if lock_conn is not None:
             try:
@@ -82,6 +83,49 @@ _SEAT_BILLING_COLUMNS = [
     "ALTER TABLE seat_proration_charges ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_seat_proration_tenant_idem ON seat_proration_charges (tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL",
 ]
+
+
+# Money-safety columns on tables that may predate them (create_all never ALTERs).
+_HARDENING_COLUMNS = [
+    "ALTER TABLE payments ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(128)",
+    "ALTER TABLE dunning_actions ADD COLUMN IF NOT EXISTS step INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE dunning_actions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE dunning_actions ADD COLUMN IF NOT EXISTS last_error TEXT",
+    "ALTER TABLE dunning_actions ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ",
+]
+
+# Unique indexes that could fail on data written before the guard existed: each is created only
+# when no duplicate rows exist (otherwise it is skipped and logged; the application-level
+# create-or-get logic still prevents new duplicates).
+_UNIQUE_INDEXES = [
+    ("uq_payments_tenant_idem", "payments", "tenant_id, idempotency_key", "idempotency_key IS NOT NULL"),
+    ("uq_invoices_sub_period", "invoices", "subscription_id, billing_period_start",
+     "subscription_id IS NOT NULL AND credit_note_of IS NULL AND billing_period_start IS NOT NULL"),
+    ("uq_dunning_invoice_action_step", "dunning_actions", "invoice_id, action_type, step", None),
+]
+
+
+def apply_hardening(engine) -> None:
+    """Idempotent, dedupe-safe unique indexes + the credit_issued enum value (Postgres only).
+    Runs inside init_tables, i.e. under its pg_advisory_lock."""
+    if engine.dialect.name != "postgresql":
+        return
+    # ALTER TYPE ... ADD VALUE must not run inside a transaction block on older Postgres.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+        try:
+            conn.execute(text("ALTER TYPE invoice_status ADD VALUE IF NOT EXISTS 'credit_issued'"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("could not add invoice_status 'credit_issued': %s", exc)
+    with engine.begin() as conn:
+        for name, table, cols, where in _UNIQUE_INDEXES:
+            wh = f" WHERE {where}" if where else ""
+            dups = conn.execute(text(
+                f"SELECT count(*) FROM (SELECT 1 FROM {table}{wh} GROUP BY {cols} HAVING count(*) > 1) d"
+            )).scalar()
+            if dups:
+                logger.error("not creating unique index %s: %s duplicate groups already in %s", name, dups, table)
+                continue
+            conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({cols}){wh}"))
 
 
 # Columns that went missing from billing-shaped tables and came back

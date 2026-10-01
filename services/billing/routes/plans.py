@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models import BillingPlan, Bundle, BundleItem, Subscription
 
@@ -53,7 +54,7 @@ def _plan_stats(session, tenant_id: uuid.UUID) -> dict:
     return {row[0]: {"subscribers": row[1], "mrr": float(row[2] or 0)} for row in rows}
 
 
-@router.get("/plans")
+@router.get("/plans", dependencies=[Depends(require_tier("reader"))])
 async def list_plans(ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         plans = session.execute(
@@ -72,7 +73,7 @@ async def list_plans(ctx: AuthContext = Depends(get_auth_context)):
         ]
 
 
-@router.post("/plans", status_code=status.HTTP_201_CREATED)
+@router.post("/plans", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_plan(body: PlanCreate, ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         plan = BillingPlan(tenant_id=ctx.tenant_id, **body.model_dump())
@@ -87,7 +88,7 @@ async def create_plan(body: PlanCreate, ctx: AuthContext = Depends(get_auth_cont
         }
 
 
-@router.get("/bundles")
+@router.get("/bundles", dependencies=[Depends(require_tier("reader"))])
 async def list_bundles(ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         bundles = session.execute(
@@ -108,7 +109,7 @@ async def list_bundles(ctx: AuthContext = Depends(get_auth_context)):
         return result
 
 
-@router.post("/bundles", status_code=status.HTTP_201_CREATED)
+@router.post("/bundles", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_bundle(body: BundleCreate, ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         bundle = Bundle(tenant_id=ctx.tenant_id, name=body.name, discount_pct=body.discount_pct)

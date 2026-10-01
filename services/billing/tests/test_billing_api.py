@@ -93,7 +93,7 @@ def test_usage_is_billed_once_and_the_period_advances(client, tenant):
     assert r.status_code == 201, r.text
     first = generate(client, tenant)[0]
     assert D(first["subtotal_zar"]) == D("150.00") and len(first["line_items"]) == 2
-    second = generate(client, tenant)[0]
+    second = generate(client, tenant, billing_date=first["billing_period_end"])[0]
     assert D(second["subtotal_zar"]) == D("100.00")                     # usage not billed twice
     assert second["billing_period_start"] == first["billing_period_end"]
 
@@ -108,8 +108,11 @@ def test_segment_pricing_overrides_the_base_price(client, tenant):
     assert D(generate(client, tenant)[0]["subtotal_zar"]) == D("899.00")
 
 
-def test_each_invoice_gets_the_dunning_schedule(client, tenant):
+def test_each_issued_invoice_gets_the_dunning_schedule(client, tenant):
     inv = invoice_for(client, tenant)
+    with testdb.sync_engine().connect() as conn:       # drafts are never dunned
+        assert conn.execute(text("SELECT count(*) FROM dunning_actions WHERE invoice_id = :i"), {"i": inv["id"]}).scalar() == 0
+    assert client.post(f"/invoices/{inv['id']}/send", json={}, headers=testdb.headers(tenant)).status_code == 200
     with testdb.sync_engine().connect() as conn:
         steps = conn.execute(text("SELECT action_type FROM dunning_actions WHERE invoice_id = :i ORDER BY scheduled_at"),
                              {"i": inv["id"]}).scalars().all()
@@ -175,6 +178,7 @@ def test_concurrent_payments_cannot_overpay_an_invoice(client, tenant, monkeypat
 def test_full_credit_note_voids_the_invoice(client, tenant):
     inv = invoice_for(client, tenant, price="100.00")
     h = testdb.headers(tenant)
+    client.post(f"/invoices/{inv['id']}/send", json={}, headers=h)
     cn = client.post(f"/invoices/{inv['id']}/credit-note", json={"reason": "outage"}, headers=h).json()
     assert D(cn["total_zar"]) == D("-115.00") and cn["number"].startswith("CN-")
     assert client.get(f"/invoices/{inv['id']}", headers=h).json()["status"] == "voided"
@@ -185,12 +189,13 @@ def test_full_credit_note_voids_the_invoice(client, tenant):
 def test_partial_credit_notes_cannot_add_up_to_more_than_the_invoice(client, tenant):
     inv = invoice_for(client, tenant, price="100.00")                   # total 115.00
     h = testdb.headers(tenant)
+    client.post(f"/invoices/{inv['id']}/send", json={}, headers=h)
     part = {"reason": "partial", "line_items": [{"description": "credit", "quantity": 1,
                                                  "unit_price_zar": "60.00", "total_zar": "60.00"}]}
     first = client.post(f"/invoices/{inv['id']}/credit-note", json=part, headers=h)
     assert first.status_code == 201 and D(first.json()["total_zar"]) == D("-69.00")
     second = client.post(f"/invoices/{inv['id']}/credit-note", json=part, headers=h)
-    assert second.status_code == 400                                     # would credit 138.00 of 115.00
+    assert second.status_code == 409                                     # would credit 138.00 of 115.00
 
 
 # ── Subscriptions ───────────────────────────────────────────────────────────

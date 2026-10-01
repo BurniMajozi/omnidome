@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from services.billing import seat_billing as sb
+from services.billing import calc, finance_posting as fp, seat_billing as sb
 from services.billing import seat_runs
 from services.billing.database import get_session
 from services.billing.models import SeatBillingRun
@@ -64,7 +64,7 @@ def _require_operator(request: Request, ctx: AuthContext) -> None:
 
 def _period(value: Optional[str]) -> tuple[date, date]:
     try:
-        return sb.parse_period(value) if value else sb.previous_month_period(date.today())
+        return sb.parse_period(value) if value else sb.previous_month_period(calc.today_sast())
     except Exception:
         raise HTTPException(status_code=422, detail="period must be YYYY-MM")
 
@@ -106,12 +106,15 @@ async def reconcile(body: ReconcileRequest, request: Request, ctx: AuthContext =
             with get_session() as session:
                 run, created = seat_runs.reconcile_tenant(session, tid, period_start, period_end, snap, unit)
                 out.append({**seat_runs.run_to_dict(run), "created": created})
+            await fp.deliver(tid, limit=20)
         return {"runs": out}
 
     snap = await _snapshot(body.tenant_id, body.seat_snapshot)
     with get_session() as session:
         run, created = seat_runs.reconcile_tenant(session, body.tenant_id, period_start, period_end, snap, unit)
-        return {**seat_runs.run_to_dict(run), "created": created}
+        result = {**seat_runs.run_to_dict(run), "created": created}
+    await fp.deliver(body.tenant_id, limit=20)
+    return result
 
 
 @router.get("/runs")
@@ -154,7 +157,7 @@ async def proration_preview(body: ProrationRequest, request: Request, ctx: AuthC
     """What adding seats today would cost pro rata (ex VAT). Writes nothing."""
     _require_billing_reader(request, ctx)
     tenant_id = _proration_target(body, request, ctx)
-    on = body.on or date.today()
+    on = body.on or calc.today_sast()
     period_start, period_end = sb.month_period(on.year, on.month)
     with get_session() as session:
         unit = sb.money(body.unit_price) if body.unit_price is not None else seat_runs.resolve_unit_price(session, tenant_id)
@@ -181,15 +184,17 @@ async def prorate_charge(
     returns the original charge instead of billing twice."""
     _require_operator(request, ctx)
     tenant_id = _proration_target(body, request, ctx)
-    on = body.on or date.today()
+    on = body.on or calc.today_sast()
     period_start, period_end = sb.month_period(on.year, on.month)
     with get_session() as session:
         unit = sb.money(body.unit_price) if body.unit_price is not None else seat_runs.resolve_unit_price(session, tenant_id)
         charge, invoice = seat_runs.record_proration_charge(
             session, tenant_id, body.added_seats, unit, period_start, period_end, on,
             idempotency_key=idempotency_key or body.idempotency_key)
-        return {
+        result = {
             "charge_id": str(charge.id), "amount_ex_vat": str(charge.amount),
             "invoice_id": str(invoice.id) if invoice else None,
             "invoice_number": invoice.number if invoice else None,
         }
+    await fp.deliver(tenant_id, limit=20)
+    return result

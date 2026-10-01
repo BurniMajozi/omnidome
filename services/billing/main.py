@@ -25,6 +25,7 @@ from services.billing.routes.billing_accounts import router as billing_accounts_
 from services.billing.routes.subscription_transfers import router as transfers_router
 from services.billing.routes.plans import router as plans_router
 from services.billing.routes.seats import router as seats_router
+from services.billing.routes.finance_outbox import PUBLIC_PATHS as OUTBOX_PUBLIC_PATHS, router as outbox_router
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -42,7 +43,7 @@ app = FastAPI(
 # Paystack webhook is public (no auth required)
 guard = EntitlementGuard(
     module_id="billing",
-    public_paths={"/payments/paystack/webhook"},
+    public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS,  # the latter authorize themselves (internal key / admin)
 )
 
 configure_production(app)
@@ -59,6 +60,10 @@ async def startup() -> None:
     if seat_runs.worker_enabled():
         import asyncio
         app.state.seat_worker = asyncio.create_task(seat_runs.worker_loop())
+    from services.billing import finance_posting
+    if finance_posting.worker_enabled():  # BILLING_OUTBOX_WORKER_ENABLED, default off
+        import asyncio
+        app.state.outbox_worker = asyncio.create_task(finance_posting.worker_loop())
 
 
 @app.middleware("http")
@@ -91,21 +96,10 @@ app.include_router(billing_accounts_router)
 app.include_router(transfers_router)
 app.include_router(plans_router)
 app.include_router(seats_router)
+app.include_router(outbox_router)
 
 
 app.include_router(radius_billing_router)
-
-
-# ---------------------------------------------------------------------------
-# Dunning cron endpoint (call from external scheduler)
-# ---------------------------------------------------------------------------
-
-@app.post("/dunning/process", tags=["Dunning"])
-async def run_dunning():
-    """Process all pending dunning actions.  Call this from a cron/scheduler."""
-    from services.billing.routes.collections import process_pending_dunning
-    count = process_pending_dunning()
-    return {"processed": count}
 
 
 # ---------------------------------------------------------------------------

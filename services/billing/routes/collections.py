@@ -1,18 +1,21 @@
-"""Collections & Dunning routes — overdue queue, arrangements, suspend/reinstate."""
+"""Collections & Dunning routes - overdue queue, arrangements, suspend/reinstate.
+
+The dunning runner itself lives in services/billing/dunning.py.
+"""
 
 import logging
-import os
 import uuid
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-import asyncio
-from services.common.http_client import service_post
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import and_, func
+from sqlalchemy import func
 
 from services.common.auth import AuthContext, get_auth_context
+from services.common.http_client import service_post
+from services.billing import finance_posting as fp
+from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models import DunningAction, Invoice, PaymentArrangement
 from services.billing.schemas import (
@@ -20,7 +23,6 @@ from services.billing.schemas import (
     ArrangementRead,
     CollectionsQueueItem,
     DunningActionRead,
-    PaginatedResponse,
 )
 
 logger = logging.getLogger("billing.collections")
@@ -28,12 +30,12 @@ logger = logging.getLogger("billing.collections")
 router = APIRouter(tags=["Collections"])
 
 
-
 # ---------------------------------------------------------------------------
-# GET /collections/queue — List overdue accounts
+# GET /collections/queue - List overdue accounts
 # ---------------------------------------------------------------------------
 
-@router.get("/collections/queue", response_model=list[CollectionsQueueItem])
+@router.get("/collections/queue", response_model=list[CollectionsQueueItem],
+            dependencies=[Depends(require_tier("reader"))])
 def collections_queue(
     ctx: AuthContext = Depends(get_auth_context),
     min_days: int = Query(1, ge=0),
@@ -86,13 +88,14 @@ def collections_queue(
 
 
 # ---------------------------------------------------------------------------
-# POST /collections/{customer_id}/arrange — Set up payment arrangement
+# POST /collections/{customer_id}/arrange - Set up payment arrangement
 # ---------------------------------------------------------------------------
 
 @router.post(
     "/collections/{customer_id}/arrange",
     response_model=ArrangementRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_tier("admin"))],
 )
 def create_arrangement(
     customer_id: uuid.UUID,
@@ -130,15 +133,17 @@ def create_arrangement(
 
 
 # ---------------------------------------------------------------------------
-# POST /collections/{customer_id}/suspend — Manual suspend
+# POST /collections/{customer_id}/suspend - Manual suspend
 # ---------------------------------------------------------------------------
 
-@router.post("/collections/{customer_id}/suspend")
+@router.post("/collections/{customer_id}/suspend", dependencies=[Depends(require_tier("admin"))])
 async def manual_suspend(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    await _suspend_customer(ctx.tenant_id, customer_id)
+    if not await suspend_customer(ctx.tenant_id, customer_id):
+        # Never report 'suspended' when the network call failed.
+        raise HTTPException(status_code=502, detail="The network service did not confirm the suspension")
 
     # Mark overdue invoices
     with get_session() as session:
@@ -157,23 +162,25 @@ async def manual_suspend(
 
 
 # ---------------------------------------------------------------------------
-# POST /collections/{customer_id}/reinstate — Reinstate after payment
+# POST /collections/{customer_id}/reinstate - Reinstate after payment
 # ---------------------------------------------------------------------------
 
-@router.post("/collections/{customer_id}/reinstate")
+@router.post("/collections/{customer_id}/reinstate", dependencies=[Depends(require_tier("admin"))])
 async def reinstate_customer(
     customer_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    await _reinstate_customer(ctx.tenant_id, customer_id)
+    if not await _reinstate_customer(ctx.tenant_id, customer_id):
+        raise HTTPException(status_code=502, detail="The network service did not confirm the reinstatement")
     return {"status": "reinstated", "customer_id": str(customer_id)}
 
 
 # ---------------------------------------------------------------------------
-# GET /collections/dunning — List dunning actions
+# GET /collections/dunning - List dunning actions
 # ---------------------------------------------------------------------------
 
-@router.get("/collections/dunning", response_model=list[DunningActionRead])
+@router.get("/collections/dunning", response_model=list[DunningActionRead],
+            dependencies=[Depends(require_tier("reader"))])
 def list_dunning_actions(
     ctx: AuthContext = Depends(get_auth_context),
     customer_id: Optional[uuid.UUID] = Query(None),
@@ -194,94 +201,27 @@ def list_dunning_actions(
 
 
 # ---------------------------------------------------------------------------
-# Network service integration helpers
+# Network service integration helpers (return True only on a confirmed success)
 # ---------------------------------------------------------------------------
 
-async def _suspend_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
-    """Call network service to suspend all services for a customer."""
+async def _network_call(path: str, tenant_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
     try:
         await service_post(
-            "network",
-            "/services/suspend-by-customer",
-            json={"customer_id": str(customer_id)},
-            tenant_id=tenant_id,
-            user_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
-            timeout=5.0,
+            "network", path, json={"customer_id": str(customer_id)},
+            tenant_id=tenant_id, user_id=uuid.UUID(fp.service_user_id()), timeout=5.0,
         )
-        logger.info("Suspend request for customer %s: OK", customer_id)
-    except Exception as exc:
-        logger.error("Suspend call failed for customer %s: %s", customer_id, exc)
+        logger.info("%s for customer %s: OK", path, customer_id)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.error("%s failed for customer %s: %s", path, customer_id, exc)
+        return False
 
 
-async def _reinstate_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> None:
-    """Call network service to reinstate all services for a customer."""
-    try:
-        await service_post(
-            "network",
-            "/services/reinstate-by-customer",
-            json={"customer_id": str(customer_id)},
-            tenant_id=tenant_id,
-            user_id=uuid.UUID("00000000-0000-0000-0000-000000000000"),
-            timeout=5.0,
-        )
-        logger.info("Reinstate request for customer %s: OK", customer_id)
-    except Exception as exc:
-        logger.error("Reinstate call failed for customer %s: %s", customer_id, exc)
+async def suspend_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
+    """Ask the network service to suspend all services for a customer."""
+    return await _network_call("/services/suspend-by-customer", tenant_id, customer_id)
 
 
-# ---------------------------------------------------------------------------
-# Dunning processor (called by scheduler / background task)
-# ---------------------------------------------------------------------------
-
-def process_pending_dunning() -> int:
-    """Execute all pending dunning actions whose scheduled_at has passed.
-
-    Returns the number of actions executed.  In production this would be
-    triggered by a cron job or background scheduler (e.g. APScheduler).
-    """
-    executed = 0
-    now = datetime.utcnow()
-
-    with get_session() as session:
-        pending = (
-            session.query(DunningAction)
-            .filter(
-                DunningAction.executed_at.is_(None),
-                DunningAction.scheduled_at <= now,
-            )
-            .order_by(DunningAction.scheduled_at.asc())
-            .all()
-        )
-
-        for action in pending:
-            try:
-                if action.action_type == "sms_reminder":
-                    logger.info("SMS reminder for invoice %s", action.invoice_id)
-                    action.result = "sms_sent"
-
-                elif action.action_type == "email_warning":
-                    logger.info("Email warning for invoice %s", action.invoice_id)
-                    action.result = "email_sent"
-
-                elif action.action_type == "auto_suspend":
-                    # Check if invoice is still unpaid
-                    inv = session.query(Invoice).filter(Invoice.id == action.invoice_id).first()
-                    if inv and inv.status not in ("paid", "voided"):
-                        asyncio.run(_suspend_customer(action.tenant_id, action.customer_id))
-                        inv.status = "overdue"
-                        action.result = "suspended"
-                    else:
-                        action.result = "skipped_paid"
-
-                elif action.action_type == "send_to_collections":
-                    logger.info("Sending customer %s to collections", action.customer_id)
-                    action.result = "sent_to_collections"
-
-                action.executed_at = now
-                executed += 1
-            except Exception as exc:
-                logger.error("Dunning action %s failed: %s", action.id, exc)
-                action.result = f"error: {exc}"
-                action.executed_at = now
-
-    return executed
+async def _reinstate_customer(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> bool:
+    """Ask the network service to reinstate all services for a customer."""
+    return await _network_call("/services/reinstate-by-customer", tenant_id, customer_id)

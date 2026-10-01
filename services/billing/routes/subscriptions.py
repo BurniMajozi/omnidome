@@ -10,10 +10,12 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.billing import calc, invoicing
+from services.billing.access import require_tier
 from services.billing.database import compute_vat, get_session, next_invoice_number
 from services.billing.models import Invoice, Subscription, SubscriptionUsage
 from services.billing.schemas import (
@@ -38,7 +40,7 @@ DEFAULT_DUE_DAYS = 30
 # POST /subscriptions — Create a new subscription
 # ---------------------------------------------------------------------------
 
-@router.post("", response_model=SubscriptionRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=SubscriptionRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_subscription(
     body: CreateSubscriptionRequest,
     ctx: AuthContext = Depends(get_auth_context),
@@ -81,7 +83,7 @@ async def create_subscription(
 # POST /subscriptions/prorated — Create with prorated first month
 # ---------------------------------------------------------------------------
 
-@router.post("/prorated", response_model=ProrationResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/prorated", response_model=ProrationResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_prorated_subscription(
     body: ProratedSubscriptionRequest,
     ctx: AuthContext = Depends(get_auth_context),
@@ -168,7 +170,7 @@ async def create_prorated_subscription(
 # GET /subscriptions/{id} — Get subscription detail
 # ---------------------------------------------------------------------------
 
-@router.get("/{subscription_id}", response_model=SubscriptionRead)
+@router.get("/{subscription_id}", response_model=SubscriptionRead, dependencies=[Depends(require_tier("reader"))])
 async def get_subscription(
     subscription_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -190,7 +192,7 @@ async def get_subscription(
 # POST /subscriptions/{id}/cancel — Soft-cancel
 # ---------------------------------------------------------------------------
 
-@router.post("/{subscription_id}/cancel", response_model=SubscriptionRead)
+@router.post("/{subscription_id}/cancel", response_model=SubscriptionRead, dependencies=[Depends(require_tier("admin"))])
 async def cancel_subscription(
     subscription_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -226,7 +228,7 @@ async def cancel_subscription(
 # POST /subscriptions/{id}/reactivate — Reactivate
 # ---------------------------------------------------------------------------
 
-@router.post("/{subscription_id}/reactivate", response_model=SubscriptionRead)
+@router.post("/{subscription_id}/reactivate", response_model=SubscriptionRead, dependencies=[Depends(require_tier("admin"))])
 async def reactivate_subscription(
     subscription_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -258,7 +260,7 @@ async def reactivate_subscription(
 # POST /subscriptions/{id}/usage — Record usage
 # ---------------------------------------------------------------------------
 
-@router.post("/{subscription_id}/usage", response_model=SubscriptionUsageRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{subscription_id}/usage", response_model=SubscriptionUsageRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def record_usage(
     subscription_id: uuid.UUID,
     body: RecordUsageRequest,
@@ -299,7 +301,7 @@ async def record_usage(
 # GET /subscriptions/{id}/invoice-preview — Preview next invoice
 # ---------------------------------------------------------------------------
 
-@router.get("/{subscription_id}/invoice-preview", response_model=InvoicePreviewResponse)
+@router.get("/{subscription_id}/invoice-preview", response_model=InvoicePreviewResponse, dependencies=[Depends(require_tier("reader"))])
 async def preview_invoice(
     subscription_id: uuid.UUID,
     ctx: AuthContext = Depends(get_auth_context),
@@ -323,24 +325,24 @@ async def preview_invoice(
 # POST /subscriptions/{id}/generate-invoice — Generate actual invoice
 # ---------------------------------------------------------------------------
 
-@router.post("/{subscription_id}/generate-invoice", response_model=InvoiceRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{subscription_id}/generate-invoice", response_model=InvoiceRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def generate_invoice(
     subscription_id: uuid.UUID,
+    response: Response,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Generate an actual invoice from the subscription.
+    """Create-or-get the invoice for the subscription's current period (idempotent: a second call
+    returns the existing invoice with 200 and does not advance the period again).
 
-    Skips if the subscription is still in its trial period.
-    Rolls up any unbilled usage into the invoice.
+    Skips if the subscription is still in its trial period. Rolls up unbilled usage.
     """
     with get_session() as session:
-        result = session.execute(
+        sub = session.execute(
             select(Subscription).where(
                 Subscription.id == subscription_id,
                 Subscription.tenant_id == ctx.tenant_id,
-            )
-        )
-        sub = result.scalar_one_or_none()
+            ).with_for_update()
+        ).scalar_one_or_none()
         if not sub:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
@@ -356,50 +358,17 @@ async def generate_invoice(
                 detail=f"Cannot generate invoice for a {sub.status} subscription",
             )
 
-        preview = await _build_invoice_preview(session, sub)
-
-        number = next_invoice_number(session, ctx.tenant_id)
-        inv = Invoice(
-            tenant_id=ctx.tenant_id,
-            customer_id=sub.customer_id,
-            billing_account_id=sub.billing_account_id,
-            property_id=sub.property_id,
-            subscription_id=sub.id,
-            number=number,
-            status="draft",
-            subtotal_zar=preview.subtotal_zar,
-            vat_zar=preview.vat_zar,
-            total_zar=preview.total_zar,
-            due_date=date.today() + timedelta(days=DEFAULT_DUE_DAYS),
-            billing_period_start=preview.billing_period_start,
-            billing_period_end=preview.billing_period_end,
-            line_items=preview.line_items,
-        )
-        session.add(inv)
-        session.flush()
+        today = calc.today_sast()
+        inv, created = invoicing.bill_period(session, sub, today)
+        if inv is None:
+            covering = invoicing.covering_invoices(session, ctx.tenant_id, [sub.id], today)
+            if not covering:
+                raise HTTPException(status_code=409, detail="The next period is not due yet")
+            inv, created = covering[0], False
+        if not created:
+            response.status_code = status.HTTP_200_OK
         session.refresh(inv)
-
-        # Mark usage as billed
-        unbilled_result = session.execute(
-            select(SubscriptionUsage).where(
-                SubscriptionUsage.subscription_id == sub.id,
-                SubscriptionUsage.billed_invoice_id.is_(None),
-            )
-        )
-        for u in unbilled_result.scalars().all():
-            u.billed_invoice_id = inv.id
-
-        # Advance billing period
-        sub.current_period_start = preview.billing_period_end
-        sub.current_period_end = _add_interval(preview.billing_period_end, sub.billing_interval)
-
-        session.flush()
-        session.refresh(inv)
-
-        logger.info(
-            "Generated invoice %s for subscription %s: R%s",
-            inv.number, sub.id, inv.total_zar,
-        )
+        logger.info("Invoice %s for subscription %s: R%s (created=%s)", inv.number, sub.id, inv.total_zar, created)
         return InvoiceRead.model_validate(inv)
 
 
@@ -407,7 +376,7 @@ async def generate_invoice(
 # GET /subscriptions — List subscriptions
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[SubscriptionRead])
+@router.get("", response_model=list[SubscriptionRead], dependencies=[Depends(require_tier("reader"))])
 async def list_subscriptions(
     ctx: AuthContext = Depends(get_auth_context),
     customer_id: Optional[uuid.UUID] = Query(None),
@@ -434,15 +403,9 @@ async def list_subscriptions(
 # ---------------------------------------------------------------------------
 
 
-def _add_interval(start: date, interval: str) -> date:
-    """Return *start* plus the given billing interval."""
-    months = {"monthly": 1, "quarterly": 3, "semi_annual": 6, "annual": 12}.get(interval, 1)
-    month = start.month + months
-    year = start.year + (month - 1) // 12
-    month = (month - 1) % 12 + 1
-    max_day = monthrange(year, month)[1]
-    day = min(start.day, max_day)
-    return date(year, month, day)
+def _add_interval(start: date, interval: str, anchor_day: Optional[int] = None) -> date:
+    """Return *start* plus the billing interval (see calc.add_interval for the anchor-day rule)."""
+    return calc.add_interval(start, interval, anchor_day)
 
 
 async def _build_invoice_preview(session, sub: Subscription) -> InvoicePreviewResponse:
@@ -467,7 +430,7 @@ async def _build_invoice_preview(session, sub: Subscription) -> InvoicePreviewRe
     total = subtotal + vat
 
     period_start = sub.current_period_start or sub.billing_anchor
-    period_end = sub.current_period_end or _add_interval(period_start, sub.billing_interval)
+    period_end = sub.current_period_end or _add_interval(period_start, sub.billing_interval, invoicing.anchor_day(sub))
 
     line_items = [{
         "description": f"Subscription — {sub.plan}" + (f" ({segment})" if segment else ""),
