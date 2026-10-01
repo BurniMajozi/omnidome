@@ -7,7 +7,7 @@ Port: 8002. Entrypoint: services.sales.main:app (Dockerfile CMD).
 Merged 2026-09-12 from main.py (raw-SQL, production) + main_async.py (ORM):
 - ORM throughout (AsyncSession via services.sales.database.get_db)
 - contact auto-create on create_deal (FK deals_contact_id_fkey — commit 5d215915)
-- finance GL bridge on close-won (POST {FINANCE_URL}/journal-entries, verified live)
+- finance GL bridge on close-won: commission accrual only (revenue is booked from billing invoices)
 - lifecycle close-won bridge (POST {LIFECYCLE_URL}/lifecycle/from-sale, verified live)
 - lifecycle close-lost bridge (POST {LIFECYCLE_URL}/lifecycle/transition?tenant_id=, verified live)
 - quote -> deal uses FULL contract value (monthly*term + once-off), links quote.deal_id
@@ -1106,41 +1106,76 @@ async def _notify_lifecycle_lost(deal: Deal, tenant_id: uuid.UUID, reason: str) 
         logger.warning("Lifecycle bridge failed for lost deal %s: %s", deal.id, exc)
 
 
-async def _notify_finance_won(deal: Deal, tenant_id: uuid.UUID, now: datetime) -> None:
-    """POST /journal-entries — verified live contract (double-entry, balanced)."""
-    if not FINANCE_URL:
-        return
+COMMISSION_FINANCE_SOURCE = "sales.commission"
+
+
+def _finance_headers(tenant_id: uuid.UUID, user_id: Optional[uuid.UUID]) -> dict:
+    """Identity headers the httpx transport patch (internal_auth) signs, plus the shared
+    internal key finance requires for auto_post."""
+    headers = {"X-Tenant-Id": str(tenant_id), "X-User-Id": str(user_id or tenant_id)}
+    key = os.getenv("INTERNAL_SERVICE_KEY", "")
+    if key:
+        headers["X-Internal-Key"] = key
+    return headers
+
+
+async def _post_commission_to_finance(
+    tenant_id: uuid.UUID, commission_id: uuid.UUID, deal_id: uuid.UUID, agent_id: uuid.UUID,
+    amount: Decimal, when: datetime,
+) -> bool:
+    """Accrue a commission in the GL: Dr 6050 Commission Expense / Cr 2110 Commission Payable,
+    posted by finance (auto_post), idempotent on (sales.commission, commission id).
+
+    Revenue is NOT posted here: it is booked from billing invoices only, so a won deal's value
+    must never also hit 4000 (that double-booked revenue). Returns True only on a 2xx from
+    finance (a repeat answers 200 'duplicate'); anything else is logged and returns False
+    (the caller then records a durable failure event; the close itself still succeeds)."""
+    if not FINANCE_URL or amount <= 0:
+        return bool(FINANCE_URL)
+    amt = str(amount.quantize(Decimal("0.01")))
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(
+            resp = await client.post(
                 f"{FINANCE_URL}/journal-entries",
                 json={
-                    "entry_date": now.strftime("%Y-%m-%d"),
-                    "reference": f"DEAL-{str(deal.id)[:8]}",
-                    "description": f"Won deal - {deal.contact_id}",
-                    "source": "SALES",
-                    "source_id": str(deal.id),
+                    "date": when.strftime("%Y-%m-%d"),
+                    "description": f"Commission accrual - deal {str(deal_id)[:8]}",
+                    "source": COMMISSION_FINANCE_SOURCE,
+                    "source_id": str(commission_id),
+                    "auto_post": True,
                     "lines": [
-                        {
-                            "account_code": "1100",
-                            "account_name": "Accounts Receivable",
-                            "description": f"AR - Customer {str(deal.contact_id)[:8]}",
-                            "debit": float(deal.value_zar or 0),
-                            "credit": 0,
-                        },
-                        {
-                            "account_code": "4000",
-                            "account_name": "Revenue - FTTH Subscriptions",
-                            "description": f"Revenue - Deal {str(deal.id)[:8]}",
-                            "debit": 0,
-                            "credit": float(deal.value_zar or 0),
-                        },
+                        {"account_code": "6050", "debit": amt, "credit": "0",
+                         "description": f"Commission - deal {str(deal_id)[:8]}"},
+                        {"account_code": "2110", "debit": "0", "credit": amt,
+                         "description": f"Commission payable - agent {str(agent_id)[:8]}"},
                     ],
                 },
-                headers={"X-Tenant-Id": str(tenant_id)},
+                headers=_finance_headers(tenant_id, agent_id),
             )
-    except Exception as exc:
-        logger.warning("Finance journal bridge failed for won deal %s: %s", deal.id, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Finance commission post failed for commission %s: %s", commission_id, exc)
+        return False
+    if not 200 <= resp.status_code < 300:
+        logger.warning("Finance rejected commission %s: HTTP %s", commission_id, resp.status_code)
+        return False
+    return True
+
+
+async def _record_finance_failure(tenant_id: uuid.UUID, payload: dict) -> None:
+    """Durable retry marker: a failed commission post is written to the event-bus outbox
+    (type sales.commission.finance_post_failed, same payload finance needs) in its own
+    transaction, so it is never silently dropped. Re-posting is safe: finance dedupes on
+    (sales.commission, commission id)."""
+    try:
+        from services.common import event_bus
+        async with get_session() as session:
+            await event_bus.publish(
+                session, tenant_id, "sales.commission.finance_post_failed", payload,
+                source="sales", subject=("commission", payload["commission_id"]),
+                idempotency_key=f"commission_finance_failed:{payload['commission_id']}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Could not record finance failure for commission %s: %s", payload.get("commission_id"), exc)
 
 
 def _actor(ctx: Optional[AuthContext]) -> Actor:
@@ -1203,6 +1238,7 @@ async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None
     await db.flush()  # the commission tier counts this deal as won
 
     # Commission per agent tier, one per deal.
+    new_commission = None
     if deal.agent_id:
         already = (await db.execute(
             select(Commission.id).where(Commission.deal_id == deal.id, Commission.status != "CLAWBACK").limit(1)
@@ -1210,11 +1246,13 @@ async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None
         if not already:
             rate = await _commission_rate(db, tenant_id, deal.agent_id)
             amount = ((deal.value_zar or Decimal("0")) * rate / Decimal("100")).quantize(Decimal("0.01"))
+            commission_id = uuid.uuid4()
             db.add(Commission(
-                id=uuid.uuid4(), tenant_id=tenant_id, deal_id=deal.id,
+                id=commission_id, tenant_id=tenant_id, deal_id=deal.id,
                 agent_id=deal.agent_id, amount_zar=amount, rate_percent=rate,
                 status="PENDING", created_at=now, updated_at=now,
             ))
+            new_commission = (commission_id, deal.id, deal.agent_id, amount)
     await db.flush()
 
     # Bridges: queued for after the commit, non-blocking, never fail the sale.
@@ -1239,7 +1277,12 @@ async def _close_won(db: AsyncSession, tenant_id: uuid.UUID, deal: Deal) -> None
 
     async def _bridges() -> None:
         await _notify_lifecycle_won(deal, tenant_id)
-        await _notify_finance_won(deal, tenant_id, now)
+        if new_commission:  # accrual only; revenue comes from billing invoices
+            cid, did, aid, amt = new_commission
+            if not await _post_commission_to_finance(tenant_id, cid, did, aid, amt, now):
+                await _record_finance_failure(tenant_id, {
+                    "commission_id": str(cid), "deal_id": str(did), "agent_id": str(aid),
+                    "amount_zar": str(amt), "date": now.strftime("%Y-%m-%d")})
         schedule_background(_dispatch_provisioning_bg(payload))
 
     after_commit(db, _bridges)

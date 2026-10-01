@@ -11,8 +11,11 @@ import uuid
 from datetime import datetime
 from typing import AsyncGenerator, Optional
 
+import logging
+
 from sqlalchemy import (
-    Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Numeric, select,
+    Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, Numeric, UniqueConstraint,
+    select, text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -28,6 +31,14 @@ class Base(DeclarativeBase):
 # ── Journal Entry (double-entry GL) ─────────────────────────────────────
 
 class JournalEntry(Base, SoftDeleteMixin):
+    __table_args__ = (
+        # One entry per (tenant, source, source_id): makes system posting idempotent.
+        Index(
+            "uq_journal_entries_source", "tenant_id", "source", "source_id", unique=True,
+            postgresql_where=text("source IS NOT NULL AND source_id IS NOT NULL AND deleted_at IS NULL"),
+            sqlite_where=text("source IS NOT NULL AND source_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
+    )
     """Header for a double-entry journal booking.
 
     Each journal entry has one or more JournalEntryLine rows.
@@ -97,6 +108,31 @@ class JournalEntryLine(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=datetime.utcnow,
     )
+
+
+class FinanceAccount(Base):
+    """Per-tenant chart of accounts (structural default accounts are added on first use)."""
+    __tablename__ = "finance_accounts"
+    __table_args__ = (UniqueConstraint("tenant_id", "code", name="uq_finance_accounts_tenant_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    code: Mapped[str] = mapped_column(String(10), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
+class FinancePeriod(Base):
+    """Accounting period lock. A period with no row is open."""
+    __tablename__ = "finance_periods"
+    __table_args__ = (UniqueConstraint("tenant_id", "period", name="uq_finance_periods_tenant_period"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="open")  # open | closed
+    closed_by: Mapped[Optional[str]] = mapped_column(String(64))
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
 # ── Document numbering ───────────────────────────────────────────────────
@@ -294,10 +330,36 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+logger = logging.getLogger("finance.db")
+_SCHEMA_LOCK_KEY = 0x0F1A4CE  # serialises startup DDL across workers
+
+_UNIQUE_SOURCE_DUPES_SQL = (
+    "SELECT count(*) FROM (SELECT 1 FROM journal_entries WHERE source IS NOT NULL AND source_id IS NOT NULL "
+    "AND deleted_at IS NULL GROUP BY tenant_id, source, source_id HAVING count(*) > 1) d"
+)
+_UNIQUE_SOURCE_INDEX_SQL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_journal_entries_source ON journal_entries (tenant_id, source, source_id) "
+    "WHERE source IS NOT NULL AND source_id IS NOT NULL AND deleted_at IS NULL"
+)
+
+
 async def init_tables():
+    """create_all never ALTERs: new tables come from it, the unique (tenant, source, source_id)
+    index on the existing journal_entries table is added here under an advisory lock. Existing
+    duplicates are never deleted: the index is skipped with a warning (the API still dedupes)."""
     engine = get_async_engine()
     async with engine.begin() as conn:
+        is_pg = conn.dialect.name == "postgresql"
+        if is_pg:
+            await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
         await conn.run_sync(Base.metadata.create_all)
+        if is_pg:
+            dupes = (await conn.execute(text(_UNIQUE_SOURCE_DUPES_SQL))).scalar() or 0
+            if dupes:
+                logger.warning("journal_entries has %s duplicated (tenant, source, source_id) keys; "
+                               "unique index NOT created until they are resolved by hand", dupes)
+            else:
+                await conn.execute(text(_UNIQUE_SOURCE_INDEX_SQL))
 
 
 async def next_journal_reference(db: AsyncSession, tenant_id: uuid.UUID) -> str:
