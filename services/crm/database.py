@@ -60,7 +60,7 @@ def ensure_cross_service_tables() -> None:
     log = logging.getLogger("crm.database")
     try:
         from services.common.db import get_engine as _get_sync_engine
-        from services.retention.batch_churn import RetentionPrediction
+        from services.crm.models import RetentionPrediction
 
         RetentionPrediction.__table__.create(bind=_get_sync_engine(), checkfirst=True)
     except Exception as exc:

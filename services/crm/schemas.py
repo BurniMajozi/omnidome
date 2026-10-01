@@ -6,7 +6,30 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
+from services.crm.normalize import normalize_status
+
+# Fields a client may never set through a create/update body: they belong to the server
+# (tenant scoping, ownership, audit timestamps, lifecycle / conversion state).
+PROTECTED_FIELDS = frozenset({
+    "id", "tenant_id", "owner_id", "created_at", "updated_at", "account_number", "rica_verified",
+    "converted_customer_id", "converted_at", "lifecycle_stage", "current_stage", "lifecycle",
+    "phone_normalized", "company_id",
+})
+
+
+class _NoMassAssignment(BaseModel):
+    """Rejects (422) bodies that try to set server-owned fields; other unknown keys are ignored."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_protected(cls, data):
+        if isinstance(data, dict):
+            bad = sorted(PROTECTED_FIELDS.intersection(data.keys()))
+            if bad:
+                raise ValueError(f"fields not settable by clients: {', '.join(bad)}")
+        return data
 
 
 # ---------------------------------------------------------------------------
@@ -51,11 +74,16 @@ SA_PROVINCE_CHOICES = [
 ]
 
 
+CUSTOMER_STATUS_CHOICES = ["active", "suspended", "churned"]
+SEGMENT_FIELDS = frozenset({"province", "status", "email"})
+SEGMENT_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"})
+
+
 # ---------------------------------------------------------------------------
 # Customer schemas
 # ---------------------------------------------------------------------------
 
-class CustomerCreate(BaseModel):
+class CustomerCreate(_NoMassAssignment):
     first_name: str = Field(..., min_length=1, max_length=120)
     last_name: str = Field(..., min_length=1, max_length=120)
     email: EmailStr
@@ -77,7 +105,7 @@ class CustomerCreate(BaseModel):
         return v
 
 
-class CustomerUpdate(BaseModel):
+class CustomerUpdate(_NoMassAssignment):
     first_name: Optional[str] = Field(None, min_length=1, max_length=120)
     last_name: Optional[str] = Field(None, min_length=1, max_length=120)
     email: Optional[EmailStr] = None
@@ -115,7 +143,7 @@ class CustomerRead(BaseModel):
     tenant_id: uuid.UUID
     first_name: str
     last_name: str
-    email: str
+    email: Optional[str] = None
     phone: Optional[str] = None
     id_number: Optional[str] = None
     address: Optional[str] = None
@@ -129,13 +157,16 @@ class CustomerRead(BaseModel):
 
 class Customer360(CustomerRead):
     """Extended customer view aggregating cross-service data."""
-    services: List[Dict[str, Any]] = Field(default_factory=list)
-    billing: List[Dict[str, Any]] = Field(default_factory=list)
-    support: List[Dict[str, Any]] = Field(default_factory=list)
-    network: List[Dict[str, Any]] = Field(default_factory=list)
+    # null = that upstream service failed or timed out (see section_errors); [] = it answered "none".
+    services: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    billing: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    support: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    network: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     tags: List[str] = Field(default_factory=list)
     notes_count: int = 0
     lifecycle_data: Optional[Dict[str, Any]] = None
+    partial: bool = False
+    section_errors: Dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +204,7 @@ class TagRead(BaseModel):
 # Lead schemas
 # ---------------------------------------------------------------------------
 
-class LeadCreate(BaseModel):
+class LeadCreate(_NoMassAssignment):
     source: Optional[str] = Field(None, max_length=100)
     first_name: str = Field(..., min_length=1, max_length=120)
     last_name: str = Field(..., min_length=1, max_length=120)
@@ -183,7 +214,7 @@ class LeadCreate(BaseModel):
     interested_package: Optional[str] = Field(None, max_length=120)
 
 
-class LeadUpdate(BaseModel):
+class LeadUpdate(_NoMassAssignment):
     status: Optional[str] = None
     assigned_to: Optional[uuid.UUID] = None
     notes: Optional[str] = None
@@ -193,12 +224,7 @@ class LeadUpdate(BaseModel):
     @field_validator("status")
     @classmethod
     def check_status(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        allowed = {"new", "contacted", "qualified", "proposal", "converted", "lost"}
-        if v.strip().lower() not in allowed:
-            raise ValueError(f"status must be one of {allowed}")
-        return v.strip().upper()
+        return normalize_status(v)  # upper-case, validated against the sales vocabulary
 
 
 class LeadRead(BaseModel):
@@ -228,9 +254,33 @@ class LeadRead(BaseModel):
 
 class SegmentRule(BaseModel):
     """A single segment filter rule."""
-    field: str  # e.g. "tenure", "spend", "province", "package_type", "payment_method", "churn_risk"
+    field: str  # one of SEGMENT_FIELDS (the columns the segment engine can filter on)
     operator: str  # "eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"
     value: Any
+
+    @model_validator(mode="after")
+    def _check_rule(self):
+        if self.field not in SEGMENT_FIELDS:
+            raise ValueError(f"field must be one of {sorted(SEGMENT_FIELDS)}")
+        if self.operator not in SEGMENT_OPERATORS:
+            raise ValueError(f"operator must be one of {sorted(SEGMENT_OPERATORS)}")
+        scalar = (str, int, float)
+        if self.operator == "in":
+            if not isinstance(self.value, list) or not 1 <= len(self.value) <= 100                     or not all(isinstance(v, scalar) and not isinstance(v, bool) for v in self.value):
+                raise ValueError("'in' needs a list of 1-100 strings/numbers")
+            values = self.value
+        else:
+            if not isinstance(self.value, scalar) or isinstance(self.value, bool):
+                raise ValueError("value must be a string or number")
+            values = [self.value]
+        if self.operator == "contains" and (not isinstance(self.value, str) or not 1 <= len(self.value) <= 100):
+            raise ValueError("'contains' needs a string of 1-100 characters")
+        if any(isinstance(v, str) and len(v) > 255 for v in values):
+            raise ValueError("value too long")
+        enum_values = {"status": CUSTOMER_STATUS_CHOICES, "province": SA_PROVINCE_CHOICES}.get(self.field)
+        if enum_values and self.operator in {"eq", "ne", "in"} and any(v not in enum_values for v in values):
+            raise ValueError(f"{self.field} must be one of {enum_values}")
+        return self
 
 
 class SegmentCreate(BaseModel):
@@ -361,13 +411,16 @@ class CustomerDetailsResponse(BaseModel):
     """Tab 1: Customer Details — identity, properties, billing, subscriptions."""
     customer: CustomerRead
     company: Optional[Dict[str, Any]] = None
-    properties: List[PropertyAddress] = Field(default_factory=list)
-    property_accounts: List[PropertyAccountInfo] = Field(default_factory=list)
-    service_addresses: List[ServiceAddressInfo] = Field(default_factory=list)
+    # A section that could not be read is null and named in section_errors (partial=true).
+    properties: Optional[List[PropertyAddress]] = Field(default_factory=list)
+    property_accounts: Optional[List[PropertyAccountInfo]] = Field(default_factory=list)
+    service_addresses: Optional[List[ServiceAddressInfo]] = Field(default_factory=list)
     billing_account: Optional[BillingAccountInfo] = None
-    subscriptions: List[SubscriptionInfo] = Field(default_factory=list)
-    payment_methods: List[PaymentMethodInfo] = Field(default_factory=list)
-    handover_history: List[HandoverHistoryItem] = Field(default_factory=list)
+    subscriptions: Optional[List[SubscriptionInfo]] = Field(default_factory=list)
+    payment_methods: Optional[List[PaymentMethodInfo]] = Field(default_factory=list)
+    handover_history: Optional[List[HandoverHistoryItem]] = Field(default_factory=list)
+    partial: bool = False
+    section_errors: Dict[str, str] = Field(default_factory=dict)
 
 
 # ── Tab 2: Customer Experience (CX) ──
@@ -422,8 +475,8 @@ class ActivityTimelineItem(BaseModel):
 
 
 class CXSummary(BaseModel):
-    total_orders: int = 0
-    open_tickets: int = 0
+    total_orders: Optional[int] = 0
+    open_tickets: Optional[int] = 0
     avg_technician_rating: Optional[float] = None
     last_interaction: Optional[datetime] = None
     lifecycle_stage: Optional[str] = None
@@ -431,13 +484,15 @@ class CXSummary(BaseModel):
 
 class CXResponse(BaseModel):
     """Tab 2: Customer Experience — orders, deliveries, visits, tickets, timeline."""
-    orders: List[OrderSummary] = Field(default_factory=list)
-    deliveries: List[DeliverySummary] = Field(default_factory=list)
-    technician_visits: List[TechnicianVisitSummary] = Field(default_factory=list)
-    support_tickets: List[SupportTicketSummary] = Field(default_factory=list)
-    activity_timeline: List[ActivityTimelineItem] = Field(default_factory=list)
+    orders: Optional[List[OrderSummary]] = Field(default_factory=list)
+    deliveries: Optional[List[DeliverySummary]] = Field(default_factory=list)
+    technician_visits: Optional[List[TechnicianVisitSummary]] = Field(default_factory=list)
+    support_tickets: Optional[List[SupportTicketSummary]] = Field(default_factory=list)
+    activity_timeline: Optional[List[ActivityTimelineItem]] = Field(default_factory=list)
     nps_score: Optional[int] = None
     cx_summary: CXSummary = Field(default_factory=CXSummary)
+    partial: bool = False
+    section_errors: Dict[str, str] = Field(default_factory=dict)
 
 
 # ── Tab 3: CRM ──
@@ -494,27 +549,30 @@ class CRMSummary(BaseModel):
 class CRMResponse(BaseModel):
     """Tab 3: CRM — sales pipeline, deals, quotes, commissions, lifecycle."""
     lead: Optional[Dict[str, Any]] = None
-    deals: List[DealSummary] = Field(default_factory=list)
-    quotes: List[QuoteSummary] = Field(default_factory=list)
-    commissions: List[CommissionSummary] = Field(default_factory=list)
+    deals: Optional[List[DealSummary]] = Field(default_factory=list)
+    quotes: Optional[List[QuoteSummary]] = Field(default_factory=list)
+    commissions: Optional[List[CommissionSummary]] = Field(default_factory=list)
     segments: List[Dict[str, Any]] = Field(default_factory=list)
-    tags: List[str] = Field(default_factory=list)
-    notes: List[Dict[str, Any]] = Field(default_factory=list)
+    tags: Optional[List[str]] = Field(default_factory=list)
+    notes: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     lifecycle: Optional[LifecycleInfo] = None
     crm_summary: CRMSummary = Field(default_factory=CRMSummary)
+    partial: bool = False
+    section_errors: Dict[str, str] = Field(default_factory=dict)
 
 
 # ── Tab 4: Customer Value Management (CVM) ──
 
 class FinancialSummary(BaseModel):
-    mrr: Decimal = Decimal("0")
-    arr: Decimal = Decimal("0")
-    ltv: Decimal = Decimal("0")
-    outstanding_balance: Decimal = Decimal("0")
-    payment_reliability_pct: float = 100.0
-    total_invoices: int = 0
-    paid_invoices: int = 0
-    overdue_invoices: int = 0
+    # None = not available (section failed / nothing to measure); never a made-up default.
+    mrr: Optional[Decimal] = None
+    arr: Optional[Decimal] = None
+    ltv: Optional[Decimal] = None
+    outstanding_balance: Optional[Decimal] = None
+    payment_reliability_pct: Optional[float] = None
+    total_invoices: Optional[int] = None
+    paid_invoices: Optional[int] = None
+    overdue_invoices: Optional[int] = None
 
 
 class InvoiceSummary(BaseModel):
@@ -544,7 +602,7 @@ class ChurnPredictionInfo(BaseModel):
 
 
 class HealthInfo(BaseModel):
-    score: int = 50
+    score: Optional[int] = None
     is_at_risk: bool = False
     risk_reason: Optional[str] = None
     monthly_recurring_revenue: Decimal = Decimal("0")
@@ -553,28 +611,30 @@ class HealthInfo(BaseModel):
 
 
 class CVMSummary(BaseModel):
-    customer_tier: str = "BRONZE"
-    value_segment: str = "STANDARD"
-    risk_segment: str = "LOW"
+    customer_tier: str = "NOT_ASSESSED"
+    value_segment: str = "NOT_ASSESSED"
+    risk_segment: str = "UNKNOWN"
     recommended_action: Optional[str] = None
 
 
 class CVMResponse(BaseModel):
     """Tab 4: Customer Value Management — financial, churn, health, usage."""
-    financial_summary: FinancialSummary = Field(default_factory=FinancialSummary)
-    invoices: List[InvoiceSummary] = Field(default_factory=list)
-    payments: List[PaymentSummary] = Field(default_factory=list)
+    financial_summary: Optional[FinancialSummary] = None
+    invoices: Optional[List[InvoiceSummary]] = Field(default_factory=list)
+    payments: Optional[List[PaymentSummary]] = Field(default_factory=list)
     churn_prediction: Optional[ChurnPredictionInfo] = None
-    health: HealthInfo = Field(default_factory=HealthInfo)
-    usage_summary: List[Dict[str, Any]] = Field(default_factory=list)
-    cvm_summary: CVMSummary = Field(default_factory=CVMSummary)
+    health: Optional[HealthInfo] = None
+    usage_summary: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+    cvm_summary: Optional[CVMSummary] = None
+    partial: bool = False
+    section_errors: Dict[str, str] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
 # Company (B2B Account) schemas
 # ---------------------------------------------------------------------------
 
-class CompanyCreate(BaseModel):
+class CompanyCreate(_NoMassAssignment):
     name: str = Field(..., min_length=1, max_length=255)
     registration_number: Optional[str] = Field(None, max_length=50)
     tax_id: Optional[str] = Field(None, max_length=50)
@@ -589,7 +649,7 @@ class CompanyCreate(BaseModel):
     notes: Optional[str] = None
 
 
-class CompanyUpdate(BaseModel):
+class CompanyUpdate(_NoMassAssignment):
     name: Optional[str] = Field(None, max_length=255)
     registration_number: Optional[str] = None
     tax_id: Optional[str] = None

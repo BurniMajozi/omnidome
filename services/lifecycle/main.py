@@ -521,6 +521,7 @@ async def get_funnel(
         select(
             LifecycleEvent.to_stage,
             func.count(LifecycleEvent.id).label("count"),
+            func.count(func.distinct(LifecycleEvent.customer_id)).label("customers"),
         )
         .where(
             LifecycleEvent.tenant_id == tenant_uuid,
@@ -533,7 +534,10 @@ async def get_funnel(
     rows = result.all()
 
     return {
-        "funnel": [{"stage": row.to_stage, "entries": row.count} for row in rows],
+        # `entries` counts transition events (a customer can enter a stage twice); `customers`
+        # counts each customer once per stage and is the figure to use for a funnel.
+        "funnel": [{"stage": row.to_stage, "entries": row.count, "customers": row.customers,
+                    "source": "lifecycle_events"} for row in rows],
         "period_days": days,
     }
 

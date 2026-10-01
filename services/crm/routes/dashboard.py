@@ -10,14 +10,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
-from sqlalchemy import func, select, text
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import and_, case, func, select, text
 
 from services.common.auth import AuthContext, get_auth_context
 from services.crm.database import get_session
-from services.crm.models import ActivityEvent, Customer, Lead
+from services.crm.normalize import CONVERTED_LEAD_STATUSES, OPEN_LEAD_STATUSES
+from services.crm.models import ActivityEvent, Customer, Lead, RetentionPrediction
 from services.lifecycle.models import CustomerLifecycle
-from services.retention.batch_churn import RetentionPrediction
 
 logger = logging.getLogger("crm.dashboard")
 
@@ -71,90 +71,78 @@ def _pct_change(current: float, previous: float) -> Optional[str]:
     return f"{sign}{change:.1f}%"
 
 
+def _count_if(condition):
+    """COUNT(*) FILTER (WHERE condition) portable across backends."""
+    return func.count(case((condition, 1)))
+
+
+def _lead_status_upper():
+    return func.upper(func.trim(Lead.status))
+
+
 @router.get("/customers/dashboard-summary")
 async def dashboard_summary(ctx: AuthContext = Depends(get_auth_context)):
+    """KPI payload. A handful of aggregate queries (customers by status, 6 months of growth,
+    4 weeks of lead flow, leads by status, MRR) instead of ~25 sequential counts. Lead statuses
+    are compared case-insensitively (the shared `leads` table stores UPPERCASE, older rows
+    lowercase)."""
     now = datetime.now(timezone.utc)
+    tid = ctx.tenant_id
+    months = [(year, month, *_month_bounds(year, month)) for year, month in _last_n_months(6, now)]
+    weeks = []
+    for i in range(3, -1, -1):
+        week_end = now - timedelta(days=7 * i)
+        weeks.append((4 - i, week_end - timedelta(days=7), week_end))
+    converted_upper = list(CONVERTED_LEAD_STATUSES)
 
     async with get_session() as session:
-        total_customers = (
-            await session.execute(select(func.count(Customer.id)).where(Customer.tenant_id == ctx.tenant_id))
-        ).scalar_one()
-
         status_counts_rows = (
             await session.execute(
                 select(Customer.status, func.count(Customer.id))
-                .where(Customer.tenant_id == ctx.tenant_id)
+                .where(Customer.tenant_id == tid)
                 .group_by(Customer.status)
             )
         ).all()
-        status_counts = {row[0]: row[1] for row in status_counts_rows}
+        status_counts = {str(row[0]).lower(): row[1] for row in status_counts_rows}
+        total_customers = sum(status_counts.values())
 
-        # 6-month customer growth (cumulative active count as of month end) & churn (churned that month)
-        customer_growth = []
-        for year, month in _last_n_months(6, now):
-            start, end = _month_bounds(year, month)
-            active_as_of_end = (
-                await session.execute(
-                    select(func.count(Customer.id)).where(
-                        Customer.tenant_id == ctx.tenant_id,
-                        Customer.created_at < end,
-                        Customer.status != "churned",
-                    )
-                )
-            ).scalar_one()
-            churned_this_month = (
-                await session.execute(
-                    select(func.count(Customer.id)).where(
-                        Customer.tenant_id == ctx.tenant_id,
-                        Customer.status == "churned",
-                        Customer.updated_at >= start,
-                        Customer.updated_at < end,
-                    )
-                )
-            ).scalar_one()
-            customer_growth.append(
-                {"month": start.strftime("%b"), "customers": active_as_of_end, "churn": churned_this_month}
-            )
+        # 6-month customer growth (non-churned as of month end) & churn (churned that month): ONE query
+        month_cols = []
+        for year, month, start, end in months:
+            month_cols.append(_count_if(and_(Customer.created_at < end, Customer.status != "churned")))
+            month_cols.append(_count_if(and_(Customer.status == "churned",
+                                             Customer.updated_at >= start, Customer.updated_at < end)))
+        growth_row = (await session.execute(select(*month_cols).where(Customer.tenant_id == tid))).one()
+        customer_growth = [
+            {"month": start.strftime("%b"), "customers": growth_row[2 * i], "churn": growth_row[2 * i + 1]}
+            for i, (_, _, start, _) in enumerate(months)
+        ]
 
-        # 4-week lead generation & conversion
-        lead_funnel = []
-        for i in range(3, -1, -1):
-            week_end = now - timedelta(days=7 * i)
-            week_start = week_end - timedelta(days=7)
-            leads_created = (
-                await session.execute(
-                    select(func.count(Lead.id)).where(
-                        Lead.tenant_id == ctx.tenant_id,
-                        Lead.created_at >= week_start,
-                        Lead.created_at < week_end,
-                    )
-                )
-            ).scalar_one()
-            leads_converted = (
-                await session.execute(
-                    select(func.count(Lead.id)).where(
-                        Lead.tenant_id == ctx.tenant_id,
-                        Lead.status == "converted",
-                        Lead.updated_at >= week_start,
-                        Lead.updated_at < week_end,
-                    )
-                )
-            ).scalar_one()
-            lead_funnel.append({"week": f"W{4 - i}", "leads": leads_created, "converted": leads_converted})
+        # 4-week lead generation & conversion: ONE query
+        week_cols = []
+        for _, week_start, week_end in weeks:
+            week_cols.append(_count_if(and_(Lead.created_at >= week_start, Lead.created_at < week_end)))
+            week_cols.append(_count_if(and_(_lead_status_upper().in_(converted_upper),
+                                            Lead.updated_at >= week_start, Lead.updated_at < week_end)))
+        week_row = (await session.execute(select(*week_cols).where(Lead.tenant_id == tid))).one()
+        lead_funnel = [
+            {"week": f"W{n}", "leads": week_row[2 * i], "converted": week_row[2 * i + 1]}
+            for i, (n, _, _) in enumerate(weeks)
+        ]
 
-        total_leads = (
-            await session.execute(select(func.count(Lead.id)).where(Lead.tenant_id == ctx.tenant_id))
-        ).scalar_one()
         lead_status_rows = (
             await session.execute(
-                select(Lead.status, func.count(Lead.id))
-                .where(Lead.tenant_id == ctx.tenant_id)
-                .group_by(Lead.status)
+                select(_lead_status_upper(), func.count(Lead.id)).where(Lead.tenant_id == tid)
+                .group_by(_lead_status_upper())
             )
         ).all()
-        lead_status_counts = {row[0]: row[1] for row in lead_status_rows}
-        active_leads = sum(lead_status_counts.get(s, 0) for s in ("new", "contacted", "qualified"))
-        converted_leads = lead_status_counts.get("converted", 0)
+        lead_status_counts: dict[str, int] = {}
+        for key, count in lead_status_rows:
+            lead_status_counts[key or ""] = lead_status_counts.get(key or "", 0) + count
+        total_leads = sum(lead_status_counts.values())
+        active_leads = sum(lead_status_counts.get(k, 0) for k in OPEN_LEAD_STATUSES)
+        converted_leads = sum(lead_status_counts.get(k, 0) for k in CONVERTED_LEAD_STATUSES)
+        won_from_leads = lead_status_counts.get("WON", 0)
         conversion_rate = round((converted_leads / total_leads * 100), 1) if total_leads else 0.0
 
         mrr_row = (
@@ -162,11 +150,13 @@ async def dashboard_summary(ctx: AuthContext = Depends(get_auth_context)):
                 select(func.avg(CustomerLifecycle.monthly_recurring_revenue), func.count(CustomerLifecycle.id))
                 .select_from(CustomerLifecycle)
                 .join(Customer, Customer.id == CustomerLifecycle.customer_id)
-                .where(Customer.tenant_id == ctx.tenant_id, CustomerLifecycle.monthly_recurring_revenue > 0)
+                .where(Customer.tenant_id == tid, CustomerLifecycle.monthly_recurring_revenue > 0)
             )
         ).one()
         avg_mrr = float(mrr_row[0] or 0)
         customers_with_mrr = mrr_row[1] or 0
+
+    active_customers = status_counts.get("active", 0)
 
     customers_change = (
         _pct_change(customer_growth[-1]["customers"], customer_growth[-2]["customers"])
@@ -202,11 +192,11 @@ async def dashboard_summary(ctx: AuthContext = Depends(get_auth_context)):
             "iconKey": "leads",
             "backTitle": "Lead Pipeline",
             "backDetails": [
-                {"label": "New", "value": str(lead_status_counts.get("new", 0))},
-                {"label": "Contacted", "value": str(lead_status_counts.get("contacted", 0))},
-                {"label": "Qualified", "value": str(lead_status_counts.get("qualified", 0))},
+                {"label": "New", "value": str(lead_status_counts.get("NEW", 0))},
+                {"label": "Contacted", "value": str(lead_status_counts.get("CONTACTED", 0))},
+                {"label": "Qualified", "value": str(lead_status_counts.get("QUALIFIED", 0))},
             ],
-            "backInsight": f"{lead_status_counts.get('qualified', 0)} leads are qualified and ready to convert.",
+            "backInsight": f"{lead_status_counts.get('QUALIFIED', 0)} leads are qualified and ready to convert.",
         },
         {
             "id": "3",
@@ -218,7 +208,7 @@ async def dashboard_summary(ctx: AuthContext = Depends(get_auth_context)):
             "backTitle": "Conversion Detail",
             "backDetails": [
                 {"label": "Converted", "value": str(converted_leads)},
-                {"label": "Lost", "value": str(lead_status_counts.get("lost", 0))},
+                {"label": "Lost", "value": str(lead_status_counts.get("LOST", 0))},
                 {"label": "Total Leads", "value": str(total_leads)},
             ],
             "backInsight": f"{converted_leads} of {total_leads} leads have converted to customers.",
@@ -246,11 +236,17 @@ async def dashboard_summary(ctx: AuthContext = Depends(get_auth_context)):
         "customerData": customer_growth,
         "leadData": lead_funnel,
         "flashcardKPIs": flashcard_kpis,
+        # Separate sources so the UI never mixes a lead that was won with a live customer:
+        "won_from_leads": won_from_leads,
+        "active_customers": active_customers,
+        "convertedLeads": converted_leads,
+        "totalLeads": total_leads,
+        "leadStatusCounts": lead_status_counts,
     }
 
 
 @router.get("/customers/activities")
-async def list_activities(ctx: AuthContext = Depends(get_auth_context), limit: int = 10):
+async def list_activities(ctx: AuthContext = Depends(get_auth_context), limit: int = Query(10, ge=1, le=200)):
     now = datetime.now(timezone.utc)
     async with get_session() as session:
         rows = (
@@ -258,7 +254,7 @@ async def list_activities(ctx: AuthContext = Depends(get_auth_context), limit: i
                 select(ActivityEvent, Customer.first_name, Customer.last_name)
                 .join(Customer, Customer.id == ActivityEvent.customer_id)
                 .where(ActivityEvent.tenant_id == ctx.tenant_id)
-                .order_by(ActivityEvent.created_at.desc())
+                .order_by(ActivityEvent.created_at.desc(), ActivityEvent.id)
                 .limit(limit)
             )
         ).all()
@@ -280,7 +276,7 @@ async def list_activities(ctx: AuthContext = Depends(get_auth_context), limit: i
 
 
 @router.get("/tasks")
-async def list_crm_tasks(ctx: AuthContext = Depends(get_auth_context), limit: int = 10):
+async def list_crm_tasks(ctx: AuthContext = Depends(get_auth_context), limit: int = Query(10, ge=1, le=200)):
     """Reads the shared `tasks` table (owned by master_schema.sql, not CRM)."""
     async with get_session() as session:
         rows = (
@@ -292,7 +288,7 @@ async def list_crm_tasks(ctx: AuthContext = Depends(get_auth_context), limit: in
                     from tasks t
                     left join users u on u.id = t.user_id
                     where t.tenant_id = :tenant_id
-                    order by t.due_date asc nulls last
+                    order by t.due_date asc nulls last, t.id
                     limit :limit
                     """
                 ),
@@ -338,7 +334,7 @@ async def customer_insights(ctx: AuthContext = Depends(get_auth_context)):
                 select(Lead)
                 .where(
                     Lead.tenant_id == ctx.tenant_id,
-                    Lead.status.in_(["new", "contacted", "qualified"]),
+                    func.upper(func.trim(Lead.status)).in_(list(OPEN_LEAD_STATUSES)),
                     Lead.updated_at < stalled_cutoff,
                 )
                 .order_by(Lead.updated_at.asc())

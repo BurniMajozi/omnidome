@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import and_, func, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.crm.access import has_tier, redact_customer, require_write
 from services.crm.database import get_session
 from services.crm.models import Customer, Segment
 from services.crm.schemas import (
@@ -29,6 +30,10 @@ FIELD_MAP = {
     "email": Customer.email,
 }
 
+def _like_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 OPERATOR_MAP = {
     "eq": lambda col, val: col == val,
     "ne": lambda col, val: col != val,
@@ -37,7 +42,7 @@ OPERATOR_MAP = {
     "lt": lambda col, val: col < val,
     "lte": lambda col, val: col <= val,
     "in": lambda col, val: col.in_(val if isinstance(val, list) else [val]),
-    "contains": lambda col, val: col.ilike(f"%{val}%"),
+    "contains": lambda col, val: col.ilike("%" + _like_escape(str(val)) + "%", escape="\\"),
 }
 
 
@@ -72,7 +77,7 @@ async def _count_segment_customers(session, rules: list[dict], tenant_id: uuid.U
 @router.post("", response_model=SegmentRead, status_code=status.HTTP_201_CREATED)
 async def create_segment(
     body: SegmentCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         rules_dicts = [r.model_dump() for r in body.rules]
@@ -105,7 +110,7 @@ async def list_segments(
         segments_result = await session.execute(
             select(Segment)
             .where(Segment.tenant_id == ctx.tenant_id)
-            .order_by(Segment.created_at.desc())
+            .order_by(Segment.created_at.desc(), Segment.id)
         )
         segments = segments_result.scalars().all()
 
@@ -153,14 +158,15 @@ async def get_segment_customers(
         items_result = await session.execute(
             select(Customer)
             .where(and_(*filters))
-            .order_by(Customer.created_at.desc())
+            .order_by(Customer.created_at.desc(), Customer.id)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
         items = items_result.scalars().all()
+        is_admin = await has_tier(ctx, session, "admin")
 
         return PaginatedResponse(
-            items=[CustomerRead.model_validate(c) for c in items],
+            items=[redact_customer(CustomerRead.model_validate(c).model_dump(mode="json"), is_admin) for c in items],
             total=total,
             page=page,
             page_size=page_size,

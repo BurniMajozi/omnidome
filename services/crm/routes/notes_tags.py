@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.crm.access import require_write
 from services.crm.database import get_session
 from services.crm.models import Customer, CustomerNote, CustomerTag
 from services.crm.schemas import NoteCreate, NoteRead, TagCreate, TagRead
@@ -21,7 +22,7 @@ router = APIRouter(prefix="/customers", tags=["Notes & Tags"])
 async def add_note(
     customer_id: uuid.UUID,
     body: NoteCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         result = await session.execute(
@@ -71,7 +72,7 @@ async def list_notes(
                 CustomerNote.customer_id == customer_id,
                 CustomerNote.tenant_id == ctx.tenant_id,
             )
-            .order_by(CustomerNote.created_at.desc())
+            .order_by(CustomerNote.created_at.desc(), CustomerNote.id)
             .limit(limit)
         )
         notes = notes_result.scalars().all()
@@ -86,7 +87,7 @@ async def list_notes(
 async def add_tag(
     customer_id: uuid.UUID,
     body: TagCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         result = await session.execute(
@@ -146,7 +147,7 @@ async def list_tags(
                 CustomerTag.customer_id == customer_id,
                 CustomerTag.tenant_id == ctx.tenant_id,
             )
-            .order_by(CustomerTag.created_at.desc())
+            .order_by(CustomerTag.created_at.desc(), CustomerTag.id)
         )
         tags = tags_result.scalars().all()
         return [TagRead.model_validate(t) for t in tags]
@@ -160,7 +161,7 @@ async def list_tags(
 async def remove_tag(
     customer_id: uuid.UUID,
     tag: str,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         result = await session.execute(

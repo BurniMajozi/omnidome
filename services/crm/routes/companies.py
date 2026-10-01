@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_, select
 
 from services.common.auth import AuthContext, get_auth_context
+from services.crm.access import has_tier, redact_customer, require_write
 from services.crm.database import get_session
 from services.crm.models import Company, Customer
 from services.crm.schemas import (
@@ -27,7 +28,7 @@ router = APIRouter(prefix="/companies", tags=["Companies"])
 @router.post("", response_model=CompanyRead, status_code=status.HTTP_201_CREATED)
 async def create_company(
     body: CompanyCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         company = Company(
@@ -90,7 +91,7 @@ async def list_companies(
 
         # Fetch page
         stmt = (
-            stmt.order_by(Company.created_at.desc())
+            stmt.order_by(Company.created_at.desc(), Company.id)
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -147,12 +148,13 @@ async def get_company(
 
         # Fetch member customers
         members_stmt = select(Customer).where(Customer.company_id == company_id, Customer.tenant_id == ctx.tenant_id)
-        members_result = await session.execute(members_stmt)
+        members_result = await session.execute(members_stmt.order_by(Customer.created_at.desc(), Customer.id).limit(500))
         members = members_result.scalars().all()
+        is_admin = await has_tier(ctx, session, "admin")
 
         record = CompanyRead.model_validate(company).model_dump(mode="json")
         record["members_count"] = len(members)
-        record["members"] = [CustomerRead.model_validate(m).model_dump(mode="json") for m in members]
+        record["members"] = [redact_customer(CustomerRead.model_validate(m).model_dump(mode="json"), is_admin) for m in members]
         return record
 
 
@@ -164,7 +166,7 @@ async def get_company(
 async def update_company(
     company_id: uuid.UUID,
     body: CompanyUpdate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_write),
 ):
     async with get_session() as session:
         result = await session.execute(

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     Date,
+    Float,
     DateTime,
     Enum as SAEnum,
     ForeignKey,
@@ -62,8 +63,10 @@ class Customer(Base):
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     first_name: Mapped[str] = mapped_column(String(120), nullable=False)
     last_name: Mapped[str] = mapped_column(String(120), nullable=False)
-    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     phone: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # E.164-ish form of `phone` (services/crm/normalize.py); dedupe key. Added by crm/migrations.py.
+    phone_normalized: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     id_number: Mapped[Optional[str]] = mapped_column(String(13), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     province: Mapped[Optional[str]] = mapped_column(SA_PROVINCES, nullable=True)
@@ -535,3 +538,41 @@ class ActivityEvent(Base):
     __table_args__ = (
         Index("ix_activity_events_customer", "tenant_id", "customer_id", "created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# RetentionPrediction (read mirror)
+# ---------------------------------------------------------------------------
+
+class RetentionPrediction(Base):
+    """Mirror of services.retention.batch_churn.RetentionPrediction (same table/DDL).
+
+    CRM only reads this table; importing the retention module would drag numpy/sklearn into
+    the CRM image. Keep the columns in step with the retention model.
+    """
+    __tablename__ = "retention_predictions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    batch_run_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    account_number = Column(String(64), default="")
+    customer_name = Column(String(256), default="")
+    risk_score = Column(Float, nullable=False)
+    risk_level = Column(String(16), nullable=False)
+    churn_probability = Column(Float, nullable=False)
+    primary_reason = Column(String(64), default="")
+    confidence = Column(Float, default=0.0)
+    top_factors = Column(Text, default="")
+    tenure_months = Column(Float, default=0)
+    monthly_spend_zar = Column(Float, default=0)
+    support_tickets_30d = Column(Float, default=0)
+    payment_failures_90d = Column(Float, default=0)
+    contract_days_remaining = Column(Float, default=0)
+    usage_trend = Column(Float, default=1.0)
+    nps_score = Column(Float, default=50)
+    competitor_mentions = Column(Float, default=0)
+    days_since_last_login = Column(Float, default=0)
+    num_products = Column(Float, default=1)
+    flagged_for_retention = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
