@@ -493,8 +493,10 @@ export interface EmailJourney {
   trigger_type: string
   status: "active" | "draft" | "paused"
   steps: JourneyStep[]
-  total_enrolled?: number
-  total_completed?: number
+  total_enrolled?: number | null
+  total_completed?: number | null
+  /** false when the backend has no enrolment tracking: counts are null, never show them as figures. */
+  enrollment_tracked?: boolean
   created_at?: string
   updated_at?: string
 }

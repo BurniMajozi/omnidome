@@ -531,6 +531,44 @@ def test_journey_trigger_is_501(client):
     assert r.status_code == 501 and "enrolled" not in r.text.lower()
 
 
+def test_fresh_tenant_whatsapp_endpoints_are_empty_not_seeded(client):
+    c, log = client
+    act_as(roles=["manager"])
+    for k in (mk._WHATSAPP_SENDERS, mk._WHATSAPP_TEMPLATES, mk._WHATSAPP_FLOWS,
+              mk._WHATSAPP_GROUPS, mk._WHATSAPP_CONVERSIONS):
+        k.pop(str(TENANT), None)
+    for path in ("senders", "templates", "flows", "groups", "conversions"):
+        r = c.get(f"/whatsapp/{path}")
+        assert r.status_code == 200 and r.json() == [], (path, r.text)
+    # a created asset is the only thing a tenant ever sees
+    r = c.post("/whatsapp/templates", json={"name": "My Tpl", "body": "hello"})
+    assert r.status_code == 201
+    names = [x["name"] for x in c.get("/whatsapp/templates").json()]
+    assert names == ["my_tpl"]
+    assert "sandbox" not in c.get("/whatsapp/senders").text.lower()
+    mk._WHATSAPP_TEMPLATES.pop(str(TENANT), None)
+
+
+def test_whatsapp_number_provisioning_is_not_faked(client):
+    c, log = client
+    act_as(roles=["admin", "manager"])
+    r = c.post("/whatsapp/senders/connect", json={"mode": "get_number"})
+    assert r.status_code == 501
+
+
+def test_journeys_have_no_invented_stats(client):
+    c, log = client
+    act_as(roles=["manager"])
+    mk._EMAIL_JOURNEYS.pop(str(TENANT), None)
+    r = c.get("/email/journeys")
+    assert r.status_code == 200 and r.json() == []
+    assert not hasattr(mk, "_default_journeys")
+    mk._EMAIL_JOURNEYS[str(TENANT)] = [{"id": "j1", "name": "Mine", "total_enrolled": 5, "total_completed": 2, "steps": []}]
+    j = c.get("/email/journeys").json()[0]
+    assert j["enrollment_tracked"] is False and j["total_enrolled"] is None and j["total_completed"] is None
+    mk._EMAIL_JOURNEYS.pop(str(TENANT), None)
+
+
 # ───────────────────── H6 / M12: profile + upstream errors ─────────────────────
 
 def test_no_platform_profile_fallback(env):

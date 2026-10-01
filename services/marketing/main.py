@@ -1629,148 +1629,14 @@ async def delete_template(
 
 _EMAIL_JOURNEYS: Dict[str, List[Dict[str, Any]]] = {}
 
-def _default_journeys() -> List[Dict[str, Any]]:
-    return [
-        {
-            "id": "11111111-1111-1111-1111-111111111101",
-            "name": "Welcome & Onboarding Journey",
-            "description": "Nurtures new subscribers and customers through account setup and key value props.",
-            "trigger_type": "signup",
-            "status": "active",
-            "total_enrolled": 1420,
-            "total_completed": 1184,
-            "created_at": "2026-09-20T10:00:00Z",
-            "steps": [
-                {
-                    "id": "step-1",
-                    "type": "trigger",
-                    "title": "Trigger: New Customer Subscribed",
-                    "condition": "Event: user.signup OR newsletter.optin",
-                    "stats": {"entered": 1420, "completed": 1420},
-                },
-                {
-                    "id": "step-2",
-                    "type": "template",
-                    "title": "Send: Welcome & Own Your Newsletter",
-                    "template_name": "Own your newsletter",
-                    "delay_hours": 0,
-                    "stats": {"entered": 1420, "completed": 1420, "open_rate": 68.4, "click_rate": 31.2},
-                },
-                {
-                    "id": "step-3",
-                    "type": "delay",
-                    "title": "Wait 2 Days",
-                    "delay_hours": 48,
-                    "stats": {"entered": 1390, "completed": 1320},
-                },
-                {
-                    "id": "step-4",
-                    "type": "condition",
-                    "title": "Branch: Check if First Email Opened",
-                    "condition": "email.opened == true",
-                    "stats": {"entered": 1320, "completed": 1320},
-                },
-                {
-                    "id": "step-5",
-                    "type": "template",
-                    "title": "Send: Pro Tips & Quick Setup Guide",
-                    "template_name": "Getting Started Quick Guide",
-                    "delay_hours": 0,
-                    "stats": {"entered": 903, "completed": 880, "open_rate": 54.1, "click_rate": 22.8},
-                },
-                {
-                    "id": "step-6",
-                    "type": "action",
-                    "title": "Action: Add Tag 'onboarding-completed'",
-                    "action_type": "add_tag",
-                    "stats": {"entered": 880, "completed": 880},
-                },
-            ],
-        },
-        {
-            "id": "11111111-1111-1111-1111-111111111102",
-            "name": "Commercial Guarding Lead Nurture",
-            "description": "Automated sales enablement sequence for high-intent business leads.",
-            "trigger_type": "lead_tagged",
-            "status": "active",
-            "total_enrolled": 430,
-            "total_completed": 310,
-            "created_at": "2026-09-22T08:30:00Z",
-            "steps": [
-                {
-                    "id": "lead-1",
-                    "type": "trigger",
-                    "title": "Trigger: Lead Tagged 'Commercial'",
-                    "condition": "Tag: Commercial",
-                    "stats": {"entered": 430, "completed": 430},
-                },
-                {
-                    "id": "lead-2",
-                    "type": "template",
-                    "title": "Send: Commercial Security Assessment",
-                    "template_name": "Commercial Assessment Intro",
-                    "delay_hours": 0,
-                    "stats": {"entered": 430, "completed": 430, "open_rate": 72.1, "click_rate": 41.5},
-                },
-                {
-                    "id": "lead-3",
-                    "type": "delay",
-                    "title": "Wait 1 Day",
-                    "delay_hours": 24,
-                    "stats": {"entered": 420, "completed": 410},
-                },
-                {
-                    "id": "lead-4",
-                    "type": "template",
-                    "title": "Send: Case Study & Client Proof",
-                    "template_name": "Enterprise Security Case Study",
-                    "delay_hours": 0,
-                    "stats": {"entered": 410, "completed": 395, "open_rate": 61.0, "click_rate": 29.4},
-                },
-            ],
-        },
-        {
-            "id": "11111111-1111-1111-1111-111111111103",
-            "name": "Subscriber Re-engagement Sequence",
-            "description": "Recovers dormant subscribers who haven't opened in 30 days.",
-            "trigger_type": "inactivity",
-            "status": "draft",
-            "total_enrolled": 210,
-            "total_completed": 95,
-            "created_at": "2026-09-25T14:15:00Z",
-            "steps": [
-                {
-                    "id": "re-1",
-                    "type": "trigger",
-                    "title": "Trigger: Inactive for 30 Days",
-                    "condition": "activity.last_opened > 30d",
-                    "stats": {"entered": 210, "completed": 210},
-                },
-                {
-                    "id": "re-2",
-                    "type": "template",
-                    "title": "Send: We Miss You Exclusive Offer",
-                    "template_name": "Re-engagement Promo",
-                    "delay_hours": 0,
-                    "stats": {"entered": 210, "completed": 210, "open_rate": 45.2, "click_rate": 18.0},
-                },
-                {
-                    "id": "re-3",
-                    "type": "delay",
-                    "title": "Wait 4 Days",
-                    "delay_hours": 96,
-                    "stats": {"entered": 200, "completed": 190},
-                },
-                {
-                    "id": "re-4",
-                    "type": "condition",
-                    "title": "Branch: Check if Clicked Promo",
-                    "condition": "email.clicked == true",
-                    "stats": {"entered": 190, "completed": 190},
-                },
-            ],
-        },
-    ]
+def _journey_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Journey enrolment is not tracked anywhere (no enrolment table / step executor), so never
+    report enrolment or completion figures: mark the row untracked and null the counters."""
+    out = dict(item)
+    out["total_enrolled"] = None
+    out["total_completed"] = None
+    out["enrollment_tracked"] = False
+    return out
 
 
 @app.get("/email/journeys")
@@ -1787,13 +1653,11 @@ async def list_email_journeys(
                 {"tid": tkey},
             ).mappings().all()
             if rows:
-                return [dict(r) for r in rows]
+                return [_journey_out(dict(r)) for r in rows]
     except Exception as e:
         logger.warning("DB journey query fallback: %s", e)
 
-    if tkey not in _EMAIL_JOURNEYS:
-        _EMAIL_JOURNEYS[tkey] = _default_journeys()
-    return _EMAIL_JOURNEYS[tkey]
+    return [_journey_out(x) for x in _EMAIL_JOURNEYS.get(tkey, [])]
 
 
 @app.post("/email/journeys", status_code=201, dependencies=[Depends(require_marketing_write)])
@@ -1840,14 +1704,11 @@ async def create_email_journey(
             )
             row = conn.execute(text("SELECT * FROM marketing_email_journeys WHERE id = :id"), {"id": jid}).mappings().first()
             if row:
-                return dict(row)
+                return _journey_out(dict(row))
     except Exception as e:
         logger.warning("DB journey insert fallback: %s", e)
-
-    if tkey not in _EMAIL_JOURNEYS:
-        _EMAIL_JOURNEYS[tkey] = _default_journeys()
-    _EMAIL_JOURNEYS[tkey].insert(0, record)
-    return record
+    _EMAIL_JOURNEYS.setdefault(tkey, []).insert(0, record)
+    return _journey_out(record)
 
 
 @app.get("/email/journeys/{journey_id}")
@@ -1865,14 +1726,12 @@ async def get_email_journey(
                 {"id": journey_id, "tid": tkey},
             ).mappings().first()
             if row:
-                return dict(row)
+                return _journey_out(dict(row))
     except Exception as e:
         logger.warning("DB journey fetch fallback: %s", e)
-
-    items = _EMAIL_JOURNEYS.get(tkey, _default_journeys())
-    for item in items:
+    for item in _EMAIL_JOURNEYS.get(tkey, []):
         if item["id"] == journey_id:
-            return item
+            return _journey_out(item)
     raise HTTPException(status_code=404, detail="Journey not found")
 
 
@@ -1910,12 +1769,10 @@ async def update_email_journey(
             with engine.begin() as conn:
                 row = conn.execute(text(sql), params).mappings().first()
                 if row:
-                    return dict(row)
+                    return _journey_out(dict(row))
     except Exception as e:
         logger.warning("DB journey update fallback: %s", e)
-
-    items = _EMAIL_JOURNEYS.get(tkey, _default_journeys())
-    for item in items:
+    for item in _EMAIL_JOURNEYS.get(tkey, []):
         if item["id"] == journey_id:
             if body.name is not None: item["name"] = body.name
             if body.description is not None: item["description"] = body.description
@@ -1923,7 +1780,7 @@ async def update_email_journey(
             if body.status is not None: item["status"] = body.status
             if body.steps is not None: item["steps"] = body.steps
             item["updated_at"] = datetime.now(timezone.utc).isoformat()
-            return item
+            return _journey_out(item)
     raise HTTPException(status_code=404, detail="Journey not found")
 
 
@@ -5189,144 +5046,11 @@ _WHATSAPP_CONVERSIONS: Dict[str, List[Dict[str, Any]]] = {}
 
 
 def _init_default_whatsapp(tenant_key: str):
-    if tenant_key not in _WHATSAPP_SENDERS:
-        _WHATSAPP_SENDERS[tenant_key] = [
-            {
-                "id": "snd-sandbox-01",
-                "name": "Sandbox",
-                "number": "+1 202 908 7457",
-                "type": "Sandbox",
-                "name_review": "Approved",
-                "business_verification": "Verified",
-                "status": "LIVE",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-        ]
-    if tenant_key not in _WHATSAPP_TEMPLATES:
-        _WHATSAPP_TEMPLATES[tenant_key] = [
-            {
-                "id": "tpl-welcome-01",
-                "name": "welcome_onboarding",
-                "category": "MARKETING",
-                "language": "en_US",
-                "status": "APPROVED",
-                "header": "Welcome to OmniDome! 🚀",
-                "body": "Hi {{1}}, thank you for registering your interest in OmniDome fiber. Your quote reference is #{{2}}. Reply 1 to connect with an agent.",
-                "footer": "Opt-out reply STOP",
-                "buttons": ["View Quote", "Chat with Agent"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "id": "tpl-cart-abandon",
-                "name": "fiber_cart_recovery",
-                "category": "UTILITY",
-                "language": "en_US",
-                "status": "APPROVED",
-                "header": "Complete your order 🛒",
-                "body": "Hi {{1}}, we noticed you left a 100Mbps fiber package in your cart. Complete checkout today and get free installation!",
-                "footer": "OmniDome Sales",
-                "buttons": ["Complete Checkout"],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ]
-    if tenant_key not in _WHATSAPP_FLOWS:
-        _WHATSAPP_FLOWS[tenant_key] = [
-            {
-                "id": "flw-lead-gen-01",
-                "name": "Customer Welcome & Quote",
-                "trigger": "Incoming greeting or 'QUOTE' keyword",
-                "status": "ACTIVE",
-                "steps_count": 4,
-                "nodes": [
-                    {"id": "n1", "type": "trigger", "label": "Customer says 'Hi' or 'Quote'"},
-                    {"id": "n2", "type": "menu", "label": "Select: 1. Home Fiber  2. Business Internet  3. Check Coverage"},
-                    {"id": "n3", "type": "action", "label": "Capture address & check MetroFibre/Openserve"},
-                    {"id": "n4", "type": "crm", "label": "Generate Deal in Sales Dome & notify agent"},
-                ],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "id": "flw-support-triage",
-                "name": "Support Triage & Ticket Creation",
-                "trigger": "Keyword 'HELP' or 'DOWN'",
-                "status": "ACTIVE",
-                "steps_count": 3,
-                "nodes": [
-                    {"id": "n1", "type": "trigger", "label": "Customer says 'Internet down'"},
-                    {"id": "n2", "type": "diagnostic", "label": "Query ONT status via Network Dome"},
-                    {"id": "n3", "type": "ticket", "label": "Open Priority Trouble Ticket"},
-                ],
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ]
-    if tenant_key not in _WHATSAPP_GROUPS:
-        _WHATSAPP_GROUPS[tenant_key] = [
-            {
-                "id": "grp-1",
-                "sender_id": "snd-sandbox-01",
-                "sender_name": "Sandbox",
-                "sender_number": "+1 202 908 7457",
-                "name": "Cape Town Fiber Expansion Leads",
-                "participant_count": 142,
-                "role": "admin",
-                "invite_link": "https://chat.whatsapp.com/invite/CPT-FIBRE-2026",
-                "is_active": True,
-                "last_message_at": datetime.now(timezone.utc).isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "id": "grp-2",
-                "sender_id": "snd-sandbox-01",
-                "sender_name": "Sandbox",
-                "sender_number": "+1 202 908 7457",
-                "name": "Johannesburg Business Internet SLA",
-                "participant_count": 48,
-                "role": "admin",
-                "invite_link": "https://chat.whatsapp.com/invite/JHB-BIZ-SLA",
-                "is_active": True,
-                "last_message_at": datetime.now(timezone.utc).isoformat(),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ]
-    if tenant_key not in _WHATSAPP_CONVERSIONS:
-        _WHATSAPP_CONVERSIONS[tenant_key] = [
-            {
-                "id": "conv-1",
-                "customer_name": "Sipho Khumalo",
-                "phone_number": "+27 82 456 7890",
-                "deal_name": "200Mbps Home Uncapped - Sandton",
-                "deal_value_zar": 12800,
-                "event_type": "QUOTE_REQUEST",
-                "flow_or_template": "Customer Welcome & Quote",
-                "sales_channel": "MARKETING",
-                "status": "DEAL_CREATED",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "id": "conv-2",
-                "customer_name": "Nadia Van Der Merwe",
-                "phone_number": "+27 71 890 1234",
-                "deal_name": "500Mbps Dedicated Business Fiber",
-                "deal_value_zar": 34500,
-                "event_type": "CHECKOUT_COMPLETED",
-                "flow_or_template": "fiber_cart_recovery",
-                "sales_channel": "MARKETING",
-                "status": "CONVERTED",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-            {
-                "id": "conv-3",
-                "customer_name": "Tshepo Modise",
-                "phone_number": "+27 83 234 5678",
-                "deal_name": "100Mbps Prepaid Fiber Bundle",
-                "deal_value_zar": 7990,
-                "event_type": "LEAD_CAPTURED",
-                "flow_or_template": "welcome_onboarding",
-                "sales_channel": "MARKETING",
-                "status": "PENDING_SALES",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        ]
+    """Ensure empty per-tenant stores exist. Never inserts demo/seed rows:
+    the WhatsApp tab shows only what the tenant actually created/connected."""
+    for store in (_WHATSAPP_SENDERS, _WHATSAPP_TEMPLATES, _WHATSAPP_FLOWS,
+                  _WHATSAPP_GROUPS, _WHATSAPP_CONVERSIONS):
+        store.setdefault(tenant_key, [])
 
 
 @app.get("/whatsapp/senders", response_model=List[Dict[str, Any]])
@@ -5351,19 +5075,8 @@ async def connect_whatsapp_number(
     tkey = str(tenant_id)
     _init_default_whatsapp(tkey)
     if body.mode == "get_number":
-        # Simulating automated virtual number provisioning
-        num_suffix = uuid.uuid4().hex[:7]
-        assigned_num = f"{body.country_code} 82 {num_suffix[:3]} {num_suffix[3:]}"
-        sender = {
-            "id": f"snd-{uuid.uuid4().hex[:8]}",
-            "name": body.display_name or "OmniDome Fiber",
-            "number": assigned_num,
-            "type": "Business Number ($3/mo)",
-            "name_review": "Approved",
-            "business_verification": "Verified",
-            "status": "LIVE",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+        # No number-provisioning provider is integrated; never invent a number.
+        raise HTTPException(status_code=501, detail="Number provisioning is not implemented; connect your own number")
     else:
         # Using own existing number with verification
         sender = {
@@ -5483,9 +5196,9 @@ async def create_whatsapp_group(
     sender = next((s for s in _WHATSAPP_SENDERS.get(tkey, []) if s.get("id") == body.sender_id), None)
     group = {
         "id": f"grp-{uuid.uuid4().hex[:8]}",
-        "sender_id": body.sender_id or (sender.get("id") if sender else "snd-sandbox-01"),
-        "sender_name": sender.get("name") if sender else "Sandbox",
-        "sender_number": sender.get("number") if sender else "+1 202 908 7457",
+        "sender_id": body.sender_id or (sender.get("id") if sender else None),
+        "sender_name": sender.get("name") if sender else None,
+        "sender_number": sender.get("number") if sender else None,
         "name": body.name,
         "participant_count": 1,
         "role": "admin",

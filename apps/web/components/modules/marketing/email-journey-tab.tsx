@@ -154,8 +154,10 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
     loadJourneys()
   }
 
-  const openRates = journeys.flatMap((j) => (j.steps || []).map((st) => st.stats?.open_rate).filter((v): v is number => typeof v === "number"))
-  const avgOpenRate = openRates.length ? `${(openRates.reduce((a, b) => a + b, 0) / openRates.length).toFixed(1)}%` : "No data yet"
+  // Enrolment is only reported when the backend says it tracks it; otherwise show "Not tracked", never a figure.
+  const tracked = journeys.length > 0 && journeys.every((j) => j.enrollment_tracked === true)
+  const openRates = !tracked ? [] : journeys.flatMap((j) => (j.steps || []).map((st) => st.stats?.open_rate).filter((v): v is number => typeof v === "number"))
+  const avgOpenRate = !tracked ? "Not tracked" : openRates.length ? `${(openRates.reduce((a, b) => a + b, 0) / openRates.length).toFixed(1)}%` : "No data yet"
 
   if (journeysLoad.state !== "ready") {
     return <NotConnected loadable={journeysLoad} service="The marketing service" onRetry={loadJourneys} />
@@ -203,13 +205,13 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
         <div className="rounded-xl border bg-card p-4">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Enrolled Contacts</div>
           <div className="mt-1 text-2xl font-bold text-foreground">
-            {journeys.reduce((sum, j) => sum + (j.total_enrolled || 0), 0).toLocaleString()}
+            {tracked ? journeys.reduce((sum, j) => sum + (j.total_enrolled || 0), 0).toLocaleString() : "Not tracked"}
           </div>
         </div>
         <div className="rounded-xl border bg-card p-4">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Completed Journeys</div>
           <div className="mt-1 text-2xl font-bold text-foreground">
-            {journeys.reduce((sum, j) => sum + (j.total_completed || 0), 0).toLocaleString()}
+            {tracked ? journeys.reduce((sum, j) => sum + (j.total_completed || 0), 0).toLocaleString() : "Not tracked"}
           </div>
         </div>
         <div className="rounded-xl border bg-card p-4">
@@ -361,7 +363,7 @@ export function EmailJourneyTab({ onOpenTemplateInBuilder }: EmailJourneyTabProp
                             )}
 
                             {/* Performance statistics */}
-                            {step.stats && (
+                            {activeJourney?.enrollment_tracked === true && step.stats && (
                               <div className="flex items-center gap-3 pt-2 text-[11px] text-muted-foreground font-mono">
                                 <span>Entered: {step.stats.entered}</span>
                                 {step.stats.open_rate !== undefined && (
