@@ -11,7 +11,7 @@
 
 set -u
 cd "$(dirname "$0")/.." || exit 1
-POLL_SECONDS="${POLL_SECONDS:-20}"
+POLL_SECONDS="${POLL_SECONDS:-60}"
 
 # Let dockerd settle after its own (re)start before the first check.
 sleep 10

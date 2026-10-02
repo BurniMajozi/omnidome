@@ -18,7 +18,7 @@ set -u
 cd "$(dirname "$0")/.." || exit 1
 export COMPOSE_FILE=docker-compose.yaml:docker-compose.override.yml:docker-compose.local.yml
 
-STAGGER_SECONDS="${STAGGER_SECONDS:-8}"
+STAGGER_SECONDS="${STAGGER_SECONDS:-10}"
 
 is_up() {
   # "true" if a container for this compose service is Up (any health state).
@@ -40,13 +40,29 @@ else
   echo "[start-local] db already up, skipping"
 fi
 
-# The rest of the lean set, one at a time -- only the ones not already up.
-SERVICES="gateway crm sales marketing iot web tenant_memory agent-orchestrator"
+# Keep the default desktop profile small enough for the local 3-vCPU WSL VM.
+# Optional services can be started explicitly with docker compose, or with
+# OMNIDOME_LOCAL_PROFILE=extended for the former auto-start set.
+case "${OMNIDOME_LOCAL_PROFILE:-core}" in
+  core) SERVICES="admin crm sales communication web" ;;
+  extended) SERVICES="admin crm sales communication web gateway marketing iot tenant_memory agent-orchestrator" ;;
+  *) echo "[start-local] unknown profile" >&2; exit 2 ;;
+esac
 
 for s in $SERVICES; do
   if is_up "$s"; then
     echo "[start-local] $s already up, skipping"
     continue
+  fi
+  capacity=false
+  for i in $(seq 1 18); do
+    read -r current_load _ < /proc/loadavg
+    if awk -v load="$current_load" 'BEGIN {exit !(load < 6)}'; then capacity=true; break; fi
+    sleep 5
+  done
+  if [ "$capacity" != true ]; then
+    echo "[start-local] waiting for capacity before $s; will retry on next watchdog pass"
+    break
   fi
   echo "[start-local] starting $s ..."
   docker compose up -d --no-deps "$s"
