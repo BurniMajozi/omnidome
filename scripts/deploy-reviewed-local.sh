@@ -5,8 +5,18 @@ source_root=/mnt/c/Users/Benedict/Desktop/OminiDome/omnidome
 runtime_root=/home/benedict/omnidome
 cd "$runtime_root"
 export COMPOSE_FILE=docker-compose.yaml:docker-compose.override.yml:docker-compose.local.yml
-step=${1:?backup, mirror, backend SERVICE, or web}
-if [[ "$step" == backup ]]; then
+step=${1:?backup, mirror, queued-backend SERVICE, backend SERVICE, or web}
+if [[ "$step" == queued-backend ]]; then
+  for attempt in $(seq 1 20); do
+    read -r current_load _ < /proc/loadavg
+    if awk -v current_load="$current_load" 'BEGIN {exit !(current_load < 8)}'; then
+      exec bash "$0" backend "${2:?service}"
+    fi
+    if (( attempt % 4 == 1 )); then echo "Waiting for host capacity: $current_load"; fi
+    sleep 15
+  done
+  exit 3
+elif [[ "$step" == backup ]]; then
   backup=/home/benedict/rollback_codex_review
   mkdir -p "$backup"
   chmod 700 "$backup"

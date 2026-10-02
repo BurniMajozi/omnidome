@@ -21,7 +21,6 @@ import { Input } from "@/components/ui/input"
 import {
   listFieldTechniciansRoster,
   type FieldTechnicianProfile,
-  type VanStockItem,
 } from "@/lib/hr-api"
 
 export function FieldTechVanStockView() {
@@ -29,15 +28,6 @@ export function FieldTechVanStockView() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const [selectedTech, setSelectedTech] = useState<FieldTechnicianProfile | null>(null)
-  const [auditSuccessMsg, setAuditSuccessMsg] = useState<string | null>(null)
-  const [replenishModalOpen, setReplenishModalOpen] = useState(false)
-  const [replenishItem, setReplenishItem] = useState<{ vanCode: string; sku: string; qty: number }>({
-    vanCode: "",
-    sku: "ONT-FBR-01",
-    qty: 5,
-  })
-
   const fetchTechs = async () => {
     setLoading(true)
     setError(null)
@@ -65,18 +55,6 @@ export function FieldTechVanStockView() {
   const totalVanStockValue = techRoster.reduce((sum, t) => sum + t.total_equipment_value_zar, 0)
   const onDutyCount = techRoster.filter((t) => t.shift_status === "ON_DUTY" || !!t.shift_today).length
   const certifiedCount = techRoster.filter((t) => t.certifications && t.certifications.length > 0).length
-
-  const handleAuditVan = (tech: FieldTechnicianProfile) => {
-    setAuditSuccessMsg(`Audited VAN-${tech.employee_code} (${tech.full_name}): All ${tech.van_stock.length} inventory lines verified against warehouse dispatch ledger.`)
-    setTimeout(() => setAuditSuccessMsg(null), 6000)
-  }
-
-  const handleReplenishSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setAuditSuccessMsg(`Replenishment requisition logged: +${replenishItem.qty} units of ${replenishItem.sku} dispatched to VAN-${replenishItem.vanCode}.`)
-    setReplenishModalOpen(false)
-    setTimeout(() => setAuditSuccessMsg(null), 6000)
-  }
 
   return (
     <div className="space-y-6">
@@ -109,23 +87,13 @@ export function FieldTechVanStockView() {
         </div>
       </div>
 
-      {auditSuccessMsg && (
-        <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-xs text-emerald-400 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 shrink-0" />
-            <span>{auditSuccessMsg}</span>
-          </div>
-          <button onClick={() => setAuditSuccessMsg(null)} className="text-emerald-400 hover:text-white">✕</button>
-        </div>
-      )}
-
       {/* KPI Stats */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card className="p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground">Field Technicians</p>
-              <p className="text-2xl font-bold text-foreground mt-1">{loading ? "…" : techRoster.length}</p>
+              <p className="text-2xl font-bold text-foreground mt-1">{loading ? "…" : error ? "—" : techRoster.length}</p>
               <p className="text-[11px] text-muted-foreground mt-0.5">splicers & fiber installers</p>
             </div>
             <div className="rounded-lg bg-primary/10 p-2.5 text-primary">
@@ -138,7 +106,7 @@ export function FieldTechVanStockView() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground">On-Duty Shifts</p>
-              <p className="text-2xl font-bold text-emerald-400 mt-1">{loading ? "…" : onDutyCount}</p>
+              <p className="text-2xl font-bold text-emerald-400 mt-1">{loading ? "…" : error ? "—" : onDutyCount}</p>
               <p className="text-[11px] text-emerald-400 mt-0.5">active in service zones</p>
             </div>
             <div className="rounded-lg bg-emerald-500/10 p-2.5 text-emerald-400">
@@ -152,7 +120,7 @@ export function FieldTechVanStockView() {
             <div>
               <p className="text-xs text-muted-foreground">Total Van Stock Value</p>
               <p className="text-2xl font-bold text-foreground mt-1">
-                {loading ? "…" : `R ${totalVanStockValue.toLocaleString()}`}
+                {loading ? "…" : error ? "—" : `R ${totalVanStockValue.toLocaleString()}`}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">allocated mobile inventory</p>
             </div>
@@ -166,7 +134,7 @@ export function FieldTechVanStockView() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-muted-foreground">Certified Splicers</p>
-              <p className="text-2xl font-bold text-foreground mt-1">{loading ? "…" : certifiedCount}</p>
+              <p className="text-2xl font-bold text-foreground mt-1">{loading ? "…" : error ? "—" : certifiedCount}</p>
               <p className="text-[11px] text-muted-foreground mt-0.5">fiber & safety accredited</p>
             </div>
             <div className="rounded-lg bg-blue-500/10 p-2.5 text-blue-400">
@@ -237,7 +205,7 @@ export function FieldTechVanStockView() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => handleAuditVan(tech)}
+                          disabled title="Van audit workflow is not connected"
                           className="h-7 text-xs"
                         >
                           <CheckCircle2 className="h-3 w-3 mr-1 text-emerald-400" />
@@ -246,10 +214,7 @@ export function FieldTechVanStockView() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => {
-                            setReplenishItem({ vanCode: tech.employee_code, sku: "ONT-FBR-01", qty: 5 })
-                            setReplenishModalOpen(true)
-                          }}
+                          disabled title="Van replenishment workflow is not connected"
                           className="h-7 text-xs"
                         >
                           <Plus className="h-3 w-3 mr-1" />
@@ -321,64 +286,6 @@ export function FieldTechVanStockView() {
         </CardContent>
       </Card>
 
-      {/* Replenish Van Stock Modal */}
-      {replenishModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div>
-                <h3 className="text-base font-bold text-foreground">Disptach Requisition to VAN-{replenishItem.vanCode}</h3>
-                <p className="text-xs text-muted-foreground mt-0.5">Transfer equipment from main warehouse stock to mobile van unit.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setReplenishModalOpen(false)}
-                className="rounded-lg p-1 text-muted-foreground hover:bg-muted"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleReplenishSubmit} className="space-y-3.5">
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Select Equipment Item</label>
-                <select
-                  value={replenishItem.sku}
-                  onChange={(e) => setReplenishItem({ ...replenishItem, sku: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="ONT-FBR-01">Vumatel/Openserve 1Gbps ONT (R 850)</option>
-                  <option value="RTR-WIFI6">Wi-Fi 6 Gigabit Router (R 1,200)</option>
-                  <option value="FBR-DROP-100M">Fiber Drop Cable 100m Drum (R 650)</option>
-                  <option value="SPLICE-TRAY-24">24-Core Splice Protection Tray (R 180)</option>
-                  <option value="OPT-PWR-METER">Optical Laser Power Meter (R 2,400)</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-muted-foreground">Quantity to Dispatch</label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={replenishItem.qty}
-                  onChange={(e) => setReplenishItem({ ...replenishItem, qty: Number(e.target.value) || 1 })}
-                  className="mt-1 text-xs"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" size="sm" onClick={() => setReplenishModalOpen(false)}>
-                  Cancel
-                </Button>
-                <Button type="submit" variant="cta" size="sm">
-                  Confirm Dispatch
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
