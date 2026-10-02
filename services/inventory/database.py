@@ -12,8 +12,8 @@ from decimal import Decimal
 from typing import AsyncGenerator, Optional
 
 from sqlalchemy import (
-    Boolean, Date, DateTime, Enum as SAEnum, ForeignKey, Index, Integer, Numeric,
-    String, Text, UniqueConstraint, func, select,
+    Boolean, CheckConstraint, Computed, Date, DateTime, Enum as SAEnum, ForeignKey, Index, Integer,
+    Numeric, String, Text, UniqueConstraint, func, select, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -42,10 +42,9 @@ MOVEMENT_TYPE = SAEnum(
     name="stock_movement_type", create_type=True,
 )
 
-PO_STATUS = SAEnum(
-    "draft", "submitted", "approved", "partially_received", "received", "cancelled",
-    name="po_status", create_type=True,
-)
+# Purchase-order status is a plain VARCHAR(30) (it was the Postgres enum ``po_status``; the startup
+# migration converts live columns). The state machine lives in routes/purchasing.py (PO_STATES).
+# draft | pending_approval | approved | rejected | sent | partially_received | received | cancelled
 
 GR_STATUS = SAEnum(
     "pending", "received", "inspected", "accepted", "rejected", "partially_accepted",
@@ -413,6 +412,8 @@ class Supplier(Base, SoftDeleteMixin):
     tax_id: Mapped[Optional[str]] = mapped_column(String(50))
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100))  # "Net 30", "Net 60"
     lead_time_days: Mapped[int] = mapped_column(Integer, default=7)
+    # Optional per-PO spend ceiling (ZAR, incl. VAT). NULL = no limit. Enforced when a PO is submitted.
+    spend_limit: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[Optional[str]] = mapped_column(Text)
 
@@ -446,7 +447,7 @@ class PurchaseOrder(Base, SoftDeleteMixin):
     )
 
     po_number: Mapped[str] = mapped_column(String(50), nullable=False)
-    status: Mapped[str] = mapped_column(PO_STATUS, nullable=False, default="draft")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="draft")
 
     # Totals
     subtotal_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
@@ -458,9 +459,24 @@ class PurchaseOrder(Base, SoftDeleteMixin):
     expected_delivery: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="ZAR")
+
     # Actor
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    submitted_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_mode: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)   # manual | auto
+    approval_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)    # sha256 of what was approved
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Dispatch to the supplier
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_to: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    sent_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    send_claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -538,6 +554,11 @@ class GoodsReceipt(Base):
     # Supplier delivery
     supplier_delivery_note: Mapped[Optional[str]] = mapped_column(String(100))
     supplier_invoice_number: Mapped[Optional[str]] = mapped_column(String(100))
+    # Caller-supplied idempotency key: a replay of the same (tenant, PO, receipt_ref) returns the
+    # original receipt instead of receiving the goods twice.
+    receipt_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    value_ex_vat_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    vat_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
 
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -551,6 +572,8 @@ class GoodsReceipt(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "gr_number", name="uq_gr_tenant_number"),
         Index("ix_gr_tenant_status", "tenant_id", "status"),
+        Index("uq_gr_tenant_po_receipt_ref", "tenant_id", "po_id", "receipt_ref", unique=True,
+              postgresql_where=text("receipt_ref IS NOT NULL"), sqlite_where=text("receipt_ref IS NOT NULL")),
     )
 
 
@@ -624,6 +647,13 @@ class Warehouse(Base, SoftDeleteMixin):
 # ════════════════════════════════════════════════════════════════════════
 
 class InventoryLevel(Base):
+    """Stock of one product in one warehouse.
+
+    Single source of truth: ``soh`` (physical on hand), ``allocated`` (promised to jobs/orders) and
+    ``reserved`` (safety stock) are the only stored quantities. ``available`` is a GENERATED column
+    (``soh - allocated - reserved``) so it can never drift; never write to it. Every write is a delta
+    in SQL (``soh = soh + :n``), never read-modify-write.
+    """
     __tablename__ = "inventory_levels"
 
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -635,11 +665,13 @@ class InventoryLevel(Base):
         PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="CASCADE")
     )
 
-    soh: Mapped[int] = mapped_column(Integer, default=0)          # Stock on hand
-    sit: Mapped[int] = mapped_column(Integer, default=0)          # Stock in transit
-    allocated: Mapped[int] = mapped_column(Integer, default=0)     # Allocated to orders
-    reserved: Mapped[int] = mapped_column(Integer, default=0)      # Reserved (safety stock)
-    available: Mapped[int] = mapped_column(Integer, default=0)     # soh - allocated - reserved
+    soh: Mapped[int] = mapped_column(Integer, default=0, nullable=False)           # Stock on hand
+    sit: Mapped[int] = mapped_column(Integer, default=0, nullable=False)           # Stock in transit
+    allocated: Mapped[int] = mapped_column(Integer, default=0, nullable=False)     # Allocated to orders
+    reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)      # Reserved (safety stock)
+    available: Mapped[int] = mapped_column(
+        Integer, Computed("soh - allocated - reserved", persisted=True)
+    )                                                                              # derived, read-only
     min_threshold: Mapped[int] = mapped_column(Integer, default=10)
     max_threshold: Mapped[Optional[int]] = mapped_column(Integer, default=100)
     reorder_point: Mapped[int] = mapped_column(Integer, default=20)
@@ -654,8 +686,13 @@ class InventoryLevel(Base):
 
     __table_args__ = (
         UniqueConstraint("warehouse_id", "product_id"),
+        Index("uq_inv_level_tenant_wh_product", "tenant_id", "warehouse_id", "product_id", unique=True),
         Index("ix_inv_level_tenant_product", "tenant_id", "product_id"),
         Index("ix_inv_level_low_stock", "tenant_id", "available", "reorder_point"),
+        CheckConstraint("soh >= 0", name="ck_inv_level_soh_nonneg"),
+        CheckConstraint("allocated >= 0", name="ck_inv_level_allocated_nonneg"),
+        CheckConstraint("reserved >= 0", name="ck_inv_level_reserved_nonneg"),
+        CheckConstraint("soh >= allocated + reserved", name="ck_inv_level_available_nonneg"),
     )
 
 
@@ -755,6 +792,14 @@ class StockMovement(Base):
     # Serialized items
     serial_numbers: Mapped[Optional[list]] = mapped_column(JSONB, nullable=True, default=list)
 
+    # Idempotency + audit (added by the startup migration for pre-existing tables)
+    client_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)   # PO number / job id / ...
+    before_soh: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)      # on-hand at the primary location
+    after_soh: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    dest_before_soh: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # transfers: destination
+    dest_after_soh: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     notes: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -762,6 +807,8 @@ class StockMovement(Base):
     product = relationship("Product", back_populates="stock_movements")
 
     __table_args__ = (
+        Index("uq_stock_move_tenant_client_ref", "tenant_id", "client_ref", unique=True,
+              postgresql_where=text("client_ref IS NOT NULL"), sqlite_where=text("client_ref IS NOT NULL")),
         Index("ix_stock_move_tenant", "tenant_id", "created_at"),
         Index("ix_stock_move_product", "product_id", "created_at"),
         Index("ix_stock_move_type", "movement_type"),
@@ -817,6 +864,69 @@ class StockPipelineSnapshot(Base):
 
 
 # ════════════════════════════════════════════════════════════════════════
+# SETTINGS / APPROVALS / FINANCE OUTBOX
+# ════════════════════════════════════════════════════════════════════════
+
+class InventorySettings(Base):
+    """Per-tenant inventory settings. ``auto_approve_limit`` (ZAR incl. VAT): purchase orders whose
+    total is at or below it skip human approval; 0 (default) disables auto-approval."""
+    __tablename__ = "inventory_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    auto_approve_limit: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0.00"))
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (UniqueConstraint("tenant_id", name="uq_inventory_settings_tenant"),)
+
+
+class PurchaseOrderApproval(Base):
+    """Immutable record of each approve/reject decision, with the approver's drawn signature and a
+    hash of exactly what was decided on (supplier, currency, lines). Auto-approvals are recorded too
+    (signature_data NULL, signer_name 'auto-approval')."""
+    __tablename__ = "purchase_order_approvals"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    po_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("inventory_purchase_orders.id", ondelete="CASCADE"), nullable=False
+    )
+    decision: Mapped[str] = mapped_column(String(10), nullable=False)       # approved | rejected
+    mode: Mapped[str] = mapped_column(String(10), nullable=False, default="manual")  # manual | auto
+    signature_data: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # data:image/png;base64,...
+    signer_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    signer_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    comment: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    po_total_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    po_total_zar: Mapped[Optional[Decimal]] = mapped_column(Numeric(14, 2), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (Index("ix_po_approvals_po", "po_id", "decided_at"),)
+
+
+class InventoryFinanceOutbox(Base):
+    """Journal entries owed to finance. Written in the SAME transaction as the stock change and
+    delivered after commit (mirrors billing_finance_outbox); finance de-duplicates on (source, source_id)."""
+    __tablename__ = "inventory_finance_outbox"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    source: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending")  # pending|sent|failed
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "source", "source_id", name="uq_inventory_outbox_source"),
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════
 # DOCUMENT NUMBERING
 # ════════════════════════════════════════════════════════════════════════
 
@@ -845,6 +955,12 @@ async def next_sequence_number(session: AsyncSession, tenant_id: uuid.UUID, doc_
     Uses a `FOR UPDATE` lock on the sequence row to prevent duplicates under
     concurrent generation. Format: <prefix>-<TENANT4>-<seq:06d>.
     """
+    if session.get_bind().dialect.name == "postgresql":
+        # FOR UPDATE cannot lock an absent sequence row on the first request.
+        import hashlib
+        from sqlalchemy import text
+        key = int.from_bytes(hashlib.sha256(f"inventory-sequence:{tenant_id}:{doc_type}".encode()).digest()[:8], "big", signed=True)
+        await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
     result = await session.execute(
         select(InventorySequence)
         .where(InventorySequence.tenant_id == tenant_id, InventorySequence.doc_type == doc_type)
@@ -890,6 +1006,9 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_tables():
-    engine = get_async_engine()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Create missing tables and bring pre-existing (legacy-shaped) ones to the ORM shape.
+
+    Delegates to services.inventory.schema: create_all + idempotent statements under a Postgres
+    advisory lock, wrapped in run_with_db_retry. Never raises for data problems (duplicates are logged)."""
+    from services.inventory.schema import init_schema
+    await init_schema(Base)

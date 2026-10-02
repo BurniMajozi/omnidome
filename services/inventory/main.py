@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, Header, status
 from pydantic import BaseModel, Field, validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 import uuid
 from datetime import datetime, date
 import logging
@@ -8,9 +8,11 @@ from decimal import Decimal
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
-from services.common.auth import get_current_tenant_id
+from services.common.auth import get_current_tenant_id, get_current_user_id
+from services.inventory.access import require_tier
+from services.inventory.stock import apply_move, checkout
 from services.common.background_tasks import schedule_background
-from services.inventory.database import get_session, init_tables, Product, Warehouse, InventoryLevel, StockMovement
+from services.inventory.database import get_session, init_tables, Product, ProductCategory, Warehouse, InventoryLevel, StockMovement
 from services.inventory.routes.purchasing import router as purchasing_router
 
 app = FastAPI(title="CoreConnect Inventory Service", version="0.2.0")
@@ -25,65 +27,10 @@ async def health():
 
 # ── DB-based stock operations (replaces in-memory store) ───────────────
 
-async def _ensure_sample_data(tenant_id: uuid.UUID, db):
-    """Seed sample products, warehouses, and inventory levels if empty"""
-    from sqlalchemy import select
-
-    # Check if tenant already has products
-    result = await db.execute(select(Product).where(Product.tenant_id == tenant_id).limit(1))
-    if result.scalar_one_or_none():
-        return  # Already seeded
-
-    # Create sample products
-    products = [
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="ONT-V1", name="Vumatel ONT",
-                cost_price=Decimal("450.00"), rrp=Decimal("799.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="ONT-H1", name="Huawei ONT",
-                cost_price=Decimal("520.00"), rrp=Decimal("899.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="RTR-NET-05", name="Netgear Router",
-                cost_price=Decimal("350.00"), rrp=Decimal("599.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="RTR-TP-01", name="TP-Link Router",
-                cost_price=Decimal("200.00"), rrp=Decimal("349.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="SC-SC-SM", name="SC-SC Single Mode Patch",
-                cost_price=Decimal("15.00"), rrp=Decimal("35.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="SC-LC-MM", name="SC-LC Multi Mode Patch",
-                cost_price=Decimal("20.00"), rrp=Decimal("45.00")),
-        Product(id=uuid.uuid4(), tenant_id=tenant_id, sku="ONT-FTTH", name="FTTH ONT Generic",
-                cost_price=Decimal("400.00"), rrp=Decimal("699.00")),
-    ]
-    for p in products:
-        db.add(p)
-    await db.flush()
-
-    # Create sample warehouses
-    wh_jhb = Warehouse(id=uuid.uuid4(), tenant_id=tenant_id, name="Main JHB", location="Johannesburg")
-    wh_ct = Warehouse(id=uuid.uuid4(), tenant_id=tenant_id, name="Cape Town", location="Cape Town")
-    wh_dbn = Warehouse(id=uuid.uuid4(), tenant_id=tenant_id, name="Durban", location="Durban")
-    for wh in [wh_jhb, wh_ct, wh_dbn]:
-        db.add(wh)
-    await db.flush()
-
-    # Create inventory levels
-    levels = [
-        (products[0].id, wh_jhb.id, 150, 10),
-        (products[1].id, wh_jhb.id, 80, 5),
-        (products[2].id, wh_jhb.id, 12, 2),
-        (products[3].id, wh_ct.id, 45, 8),
-        (products[4].id, wh_jhb.id, 500, 50),
-        (products[5].id, wh_jhb.id, 200, 20),
-        (products[6].id, wh_dbn.id, 30, 3),
-    ]
-    for pid, wid, soh, alloc in levels:
-        db.add(InventoryLevel(
-            tenant_id=tenant_id, warehouse_id=wid, product_id=pid,
-            soh=soh, allocated=alloc,
-        ))
-    await db.flush()
-
-
 @app.on_event("startup")
 async def startup_entitlements() -> None:
     guard.ensure_startup()
+    await init_tables()
 
 
 @app.middleware("http")
@@ -97,6 +44,14 @@ def _calc_margin(cost_price: Decimal, rrp: Decimal) -> float:
     if rrp and rrp > 0:
         return round(float((rrp - cost_price) / rrp * 100), 2)
     return 0.0
+
+async def _check_category(db, tenant_id, category_id):
+    if category_id is not None:
+        from sqlalchemy import select
+        row = (await db.execute(select(ProductCategory.id).where(ProductCategory.id == category_id,
+            ProductCategory.tenant_id == tenant_id))).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, "Category not found")
 
 
 # --- Pydantic Models ---
@@ -171,8 +126,10 @@ class ShipmentCreate(BaseModel):
 class StockUpdate(BaseModel):
     product_id: uuid.UUID
     warehouse_id: uuid.UUID
-    quantity: int
-    movement_type: str # PURCHASE, TRANSFER, SALE, RETURN_FROM_CUSTOMER
+    quantity: int = Field(gt=0)
+    movement_type: Literal["PURCHASE", "TRANSFER", "SALE", "RETURN_FROM_CUSTOMER", "WRITE_OFF"]
+    destination_warehouse_id: Optional[uuid.UUID] = None
+    client_ref: Optional[str] = Field(None, min_length=1, max_length=96)
 
 class SalesPlan(BaseModel):
     product_id: uuid.UUID
@@ -183,24 +140,28 @@ class SalesPlan(BaseModel):
 class StockCheckoutItem(BaseModel):
     product_id: str
     quantity: int = Field(gt=0, le=100)
+    warehouse_id: Optional[uuid.UUID] = None
 
 
 class StockCheckoutRequest(BaseModel):
-    job_id: str = "unknown"
-    items: List[StockCheckoutItem] = []
+    job_id: str = Field("unknown", max_length=100)
+    items: List[StockCheckoutItem] = Field(min_length=1, max_length=100)
+    warehouse_id: Optional[uuid.UUID] = None
+    client_ref: Optional[str] = Field(None, min_length=1, max_length=96)
 
 # --- Routes ---
 @app.get("/")
 async def root():
     return {"message": "CoreConnect Inventory Service is active"}
 
-@app.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
+@app.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("write"))])
 async def create_product(
     product: ProductCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db=Depends(get_session),
 ):
     """Create a new product."""
+    await _check_category(db, tenant_id, product.category_id)
     p = Product(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
@@ -242,7 +203,6 @@ async def list_products(
     """List all products for tenant."""
     from sqlalchemy import select
 
-    await _ensure_sample_data(tenant_id, db)
     result = await db.execute(
         select(Product).where(Product.tenant_id == tenant_id)
     )
@@ -302,7 +262,7 @@ async def get_product(
     )
 
 
-@app.put("/products/{product_id}", response_model=ProductResponse)
+@app.put("/products/{product_id}", response_model=ProductResponse, dependencies=[Depends(require_tier("write"))])
 async def update_product(
     product_id: uuid.UUID,
     body: ProductUpdate,
@@ -323,6 +283,8 @@ async def update_product(
         raise HTTPException(status_code=404, detail="Product not found")
 
     update_data = body.dict(exclude_unset=True)
+    if "category_id" in update_data:
+        await _check_category(db, tenant_id, update_data["category_id"])
     for field, value in update_data.items():
         setattr(p, field, value)
 
@@ -345,7 +307,7 @@ async def update_product(
     )
 
 
-@app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_tier("manager"))])
 async def delete_product(
     product_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -368,57 +330,23 @@ async def delete_product(
     await db.flush()
 
 
-@app.post("/stock/move", status_code=status.HTTP_202_ACCEPTED)
+@app.post("/stock/move", dependencies=[Depends(require_tier("write"))])
 async def move_stock(
     move: StockUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    idempotency_key: Optional[str] = Header(None),
     db=Depends(get_session),
 ):
-    """Handle stock movements including reverse logistics (returns) — DB-persisted"""
-    from sqlalchemy import select
+    return await apply_move(db, tenant_id, user_id, move, idempotency_key or move.client_ref)
 
-    await _ensure_sample_data(tenant_id, db)
-
-    # Record the movement
-    db.add(StockMovement(
-        tenant_id=tenant_id,
-        product_id=move.product_id,
-        from_warehouse_id=move.warehouse_id if move.movement_type in ("TRANSFER", "SALE") else None,
-        to_warehouse_id=move.warehouse_id if move.movement_type in ("PURCHASE", "RETURN_FROM_CUSTOMER") else None,
-        quantity=move.quantity,
-        movement_type=move.movement_type,
-    ))
-
-    # Update inventory level
-    level_result = await db.execute(
-        select(InventoryLevel).where(
-            InventoryLevel.tenant_id == tenant_id,
-            InventoryLevel.product_id == move.product_id,
-            InventoryLevel.warehouse_id == move.warehouse_id,
-        )
-    )
-    level = level_result.scalar_one_or_none()
-
-    if level:
-        if move.movement_type == "PURCHASE":
-            level.soh += move.quantity
-        elif move.movement_type == "SALE":
-            level.allocated += move.quantity
-        elif move.movement_type == "RETURN_FROM_CUSTOMER":
-            level.soh += move.quantity
-        elif move.movement_type == "TRANSFER":
-            level.soh -= move.quantity
-        elif move.movement_type == "WRITE_OFF":
-            level.soh -= move.quantity
-
+@app.post("/warehouses", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("manager"))])
+async def create_warehouse(wh: WarehouseCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    warehouse = Warehouse(tenant_id=tenant_id, code=f"WH-{uuid.uuid4().hex[:12]}", **wh.model_dump())
+    db.add(warehouse)
     await db.flush()
-    logging.info(f"Stock Movement: {move.movement_type} for {move.product_id} x {move.quantity}")
-    return {"status": "MOVING", "job_id": str(uuid.uuid4())}
-
-@app.post("/warehouses", status_code=status.HTTP_201_CREATED)
-async def create_warehouse(wh: WarehouseCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    logging.info(f"Creating Warehouse: {wh.name} (External: {wh.is_external})")
-    return {"id": uuid.uuid4(), **wh.dict()}
+    await db.refresh(warehouse)
+    return {"id": str(warehouse.id), **wh.model_dump()}
 
 
 @app.get("/warehouses")
@@ -474,7 +402,7 @@ async def get_warehouse(
     }
 
 
-@app.put("/warehouses/{warehouse_id}")
+@app.put("/warehouses/{warehouse_id}", dependencies=[Depends(require_tier("manager"))])
 async def update_warehouse(
     warehouse_id: uuid.UUID,
     body: WarehouseCreate,
@@ -510,7 +438,7 @@ async def update_warehouse(
     }
 
 
-@app.delete("/warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete("/warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_tier("manager"))])
 async def delete_warehouse(
     warehouse_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
@@ -533,57 +461,28 @@ async def delete_warehouse(
     await db.flush()
 
 
-@app.post("/shipments", status_code=status.HTTP_201_CREATED)
+@app.post("/shipments", dependencies=[Depends(require_tier("write"))])
 async def create_global_shipment(shipment: ShipmentCreate, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     """Track stock from origin (e.g. China) to destination via global supply chain"""
-    logging.info(f"New Global Shipment created. ETA: {shipment.eta}")
-    return {"id": uuid.uuid4(), "status": shipment.status, "eta": shipment.eta}
+    raise HTTPException(501, "Shipment tracking is not connected")
 
 @app.get("/reports/sell-thru")
-async def get_sell_thru(category_id: Optional[uuid.UUID] = None):
+async def get_sell_thru(category_id: Optional[uuid.UUID] = None, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
     """Calculate sell-thru % against every SKU"""
-    # Mock data
-    return [
-        {
-            "sku": "ONT-V1",
-            "name": "Vumatel ONT",
-            "category": "Network",
-            "soh": 150,
-            "sold": 45,
-            "sell_thru_percent": 30.0
-        }
-    ]
+    raise HTTPException(501, "Sell-through reporting is not connected")
 
-@app.post("/planning", status_code=status.HTTP_201_CREATED)
+@app.post("/planning", dependencies=[Depends(require_tier("write"))])
 async def create_sales_plan(plan: SalesPlan, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    return {"status": "PLANNED", "plan_id": uuid.uuid4()}
+    raise HTTPException(501, "Sales planning is not connected")
 
-# --- Auto-Replenishment Logic ---
-async def check_low_stock_thresholds():
-    """Background task to scan for stock falling below min_threshold"""
-    logging.info("Scanning for low stock items...")
-    # Mock finding a low stock item
-    low_stock_items = [
-        {"sku": "RTR-NET-05", "soh": 12, "min_threshold": 20, "warehouse": "Main JHB"}
-    ]
-    
-    for item in low_stock_items:
-        if item["soh"] < item["min_threshold"]:
-            logging.warning(f"THRESHOLD ALERT: {item['sku']} at {item['soh']} units. Triggering Auto-Replenishment...")
-            # Here we would create a Draft Purchase Order in the DB
-            # and notify the procurement team via email/Slack
-
-@app.on_event("startup")
-async def startup_event():
-    # In a real app, use a task scheduler like Celery or APScheduler
-    # For demo, we just log the startup
-    logging.info("Inventory Service Started. Auto-Replenishment engine active.")
-
-@app.post("/stock/monitor", status_code=status.HTTP_200_OK)
-async def trigger_manual_scan():
-    """Manually trigger a threshold check"""
-    schedule_background(check_low_stock_thresholds())
-    return {"message": "Replenishment scan initiated"}
+@app.post("/stock/monitor", dependencies=[Depends(require_tier("write"))])
+async def trigger_manual_scan(tenant_id: uuid.UUID = Depends(get_current_tenant_id), db=Depends(get_session)):
+    from sqlalchemy import select
+    result = await db.execute(select(InventoryLevel).where(InventoryLevel.tenant_id == tenant_id,
+        InventoryLevel.available < InventoryLevel.reorder_point))
+    return {"status": "completed", "low_stock": [{"product_id": str(row.product_id),
+        "warehouse_id": str(row.warehouse_id), "available": row.available,
+        "reorder_point": row.reorder_point} for row in result.scalars().all()], "purchase_orders_created": 0}
 
 
 # ── Stock Query (DB-persisted) ─────────────────────────────────────────
@@ -598,13 +497,11 @@ async def query_stock(
     """Query stock levels by SKU or warehouse"""
     from sqlalchemy import select, join
 
-    await _ensure_sample_data(tenant_id, db)
-
     stmt = (
         select(Product, InventoryLevel, Warehouse)
         .join(InventoryLevel, InventoryLevel.product_id == Product.id)
         .join(Warehouse, Warehouse.id == InventoryLevel.warehouse_id)
-        .where(InventoryLevel.tenant_id == tenant_id)
+        .where(InventoryLevel.tenant_id == tenant_id, Product.tenant_id == tenant_id, Warehouse.tenant_id == tenant_id)
     )
 
     if sku:
@@ -623,81 +520,24 @@ async def query_stock(
             "name": product.name,
             "soh": level.soh,
             "allocated": level.allocated,
-            "available": level.soh - level.allocated,
+            "reserved": level.reserved,
+            "available": level.soh - level.allocated - level.reserved,
+            "warehouse_id": str(wh.id),
             "warehouse_name": wh.name,
         })
 
     return items
 
 
-@app.post("/stock/checkout")
+@app.post("/stock/checkout", dependencies=[Depends(require_tier("write"))])
 async def checkout_stock(
     payload: StockCheckoutRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    idempotency_key: Optional[str] = Header(None),
     db=Depends(get_session),
 ):
-    """Checkout stock for a job (mobile technician app) — DB-persisted"""
-    from sqlalchemy import select
-
-    await _ensure_sample_data(tenant_id, db)
-
-    job_id = payload.job_id
-    results = []
-
-    for item in payload.items:
-        # Find product by ID or SKU
-        product_result = await db.execute(
-            select(Product).where(
-                Product.tenant_id == tenant_id,
-                (Product.id == uuid.UUID(item.product_id)) | (Product.sku == item.product_id),
-            )
-        )
-        product = product_result.scalar_one_or_none()
-
-        if not product:
-            results.append({"product_id": item.product_id, "status": "NOT_FOUND"})
-            continue
-
-        # Find inventory level for this product
-        level_result = await db.execute(
-            select(InventoryLevel).where(
-                InventoryLevel.tenant_id == tenant_id,
-                InventoryLevel.product_id == product.id,
-            )
-        )
-        level = level_result.scalar_one_or_none()
-
-        if not level:
-            results.append({"product_id": item.product_id, "status": "NO_STOCK_RECORD"})
-            continue
-
-        available = level.soh - level.allocated
-        if available < item.quantity:
-            results.append({
-                "product_id": item.product_id, "status": "INSUFFICIENT",
-                "requested": item.quantity, "available": available,
-            })
-            continue
-
-        # Update allocated
-        level.allocated += item.quantity
-
-        # Record stock movement
-        db.add(StockMovement(
-            tenant_id=tenant_id,
-            product_id=product.id,
-            quantity=item.quantity,
-            movement_type="SALE",
-            reference_id=uuid.UUID(job_id) if job_id != "unknown" else None,
-        ))
-
-        results.append({
-            "product_id": item.product_id, "status": "CHECKED_OUT",
-            "quantity": item.quantity, "remaining": level.soh - level.allocated,
-        })
-
-    await db.flush()
-    return {"job_id": job_id, "items": results, "status": "complete"}
+    return await checkout(db, tenant_id, user_id, payload, idempotency_key or payload.client_ref)
 
 
 if __name__ == "__main__":

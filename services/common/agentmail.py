@@ -137,6 +137,7 @@ async def send_email(to: str, subject: str, html: str, *, reply_to: Optional[str
 async def send_message(to: list, subject: str, html: str, *, text: Optional[str] = None,
                        cc: Optional[list] = None, bcc: Optional[list] = None,
                        reply_to_message_id: Optional[str] = None,
+                       attachments: Optional[list] = None,
                        timeout: float = 30.0, creds: Optional[Creds] = None) -> str:
     """Multi-recipient send. With `reply_to_message_id`, uses the reply endpoint so the
     provider threads the message (In-Reply-To/References + thread_id); the reply
@@ -144,6 +145,8 @@ async def send_message(to: list, subject: str, html: str, *, text: Optional[str]
     c = _resolve(creds)
     inbox = quote(c.inbox, safe="")
     payload: dict = {"html": html or ""}
+    if attachments:
+        payload["attachments"] = attachments
     if text:
         payload["text"] = text
     if to:

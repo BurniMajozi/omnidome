@@ -23,6 +23,7 @@ from services.common import agentmail as agentmail_client
 from services.common.auth import AuthContext, get_auth_context
 from services.communication.database import get_session
 from services.communication.models import AgentEmail, AgentMailbox, Message
+from services.communication.mail_attachments import PdfAttachment
 
 logger = logging.getLogger("communication.mail")
 
@@ -619,6 +620,13 @@ class SendEmailPayload(BaseModel):
     body_text: str
     body_html: Optional[str] = None
     in_reply_to_email_id: Optional[uuid.UUID] = None
+    attachments: List[PdfAttachment] = Field(default_factory=list, max_length=2)
+
+@router.get("/send-capabilities")
+async def send_capabilities(auth: AuthContext = Depends(get_auth_context)):
+    await require_mail_write(auth)
+    creds = await _tenant_creds(auth.tenant_id)
+    return {"pdf_attachments": True, "configured": agentmail_client.is_configured(creds)}
 
 
 class ReplyPayload(BaseModel):
@@ -637,6 +645,7 @@ async def _deliver_and_store(
     subject: str, body_text: str, body_html: Optional[str],
     reply_to_message_id: Optional[str] = None,
     extra_headers: Optional[dict] = None,
+    attachments: Optional[List[dict]] = None,
 ) -> AgentEmail:
     if not (to or cc or bcc):
         raise HTTPException(status_code=422, detail="At least one recipient is required")
@@ -662,6 +671,7 @@ async def _deliver_and_store(
         provider_id = await agentmail_client.send_message(
             to, subject, html_body, text=body_text, cc=cc, bcc=bcc,
             reply_to_message_id=reply_to_message_id, creds=creds,
+            **({"attachments": attachments} if attachments else {}),
         )
     except agentmail_client.EmailNotConfigured:
         raise HTTPException(status_code=503, detail="Email provider not configured")
@@ -670,6 +680,8 @@ async def _deliver_and_store(
         err = str(e)[:500]
 
     headers: dict = {"to": to, "cc": cc, "bcc": bcc}
+    if attachments:
+        headers["attachments"] = [{"filename": a["filename"], "content_type": a["content_type"]} for a in attachments]
     if reply_to_message_id:
         headers["in_reply_to"] = reply_to_message_id
     if err:
@@ -723,6 +735,7 @@ async def send_email_route(payload: SendEmailPayload, auth: AuthContext = Depend
     return await _deliver_and_store(
         auth.tenant_id, payload.mailbox_id, to, cc, bcc,
         payload.subject, payload.body_text, payload.body_html, reply_mid,
+        **({"attachments": [a.model_dump() for a in payload.attachments]} if payload.attachments else {}),
     )
 
 
