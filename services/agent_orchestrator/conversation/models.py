@@ -27,7 +27,7 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 
 CONVERSATION_STATUS = SAEnum(
-    "active", "completed", "escalated", "abandoned",
+    "active", "completed", "escalated", "abandoned", "awaiting_hitl",
     name="conversation_status", create_type=True,
 )
 

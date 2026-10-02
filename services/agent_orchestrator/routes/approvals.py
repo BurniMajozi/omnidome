@@ -22,6 +22,8 @@ router = APIRouter()
 
 class ApproveRequest(BaseModel):
     notes: Optional[str] = None
+    custom_output: Optional[dict] = None
+    resume_conversation: bool = True
 
 
 class RejectRequest(BaseModel):
@@ -81,9 +83,17 @@ async def approve(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
     # The decision is committed; execution claims the row in its own transaction.
-    await execute_approved(ctx.tenant_id, approval_id)
+    exec_res = await execute_approved(
+        ctx.tenant_id,
+        approval_id,
+        custom_output=body.custom_output if body else None,
+        resume=body.resume_conversation if body is not None and body.resume_conversation is not None else True,
+    )
     async with session_scope() as session:
-        return await get_approval(session, ctx.tenant_id, approval_id)
+        data = await get_approval(session, ctx.tenant_id, approval_id)
+        if exec_res and exec_res.get("resumed_response"):
+            data["resumed_response"] = exec_res["resumed_response"]
+        return data
 
 
 @router.post("/{approval_id}/reject")

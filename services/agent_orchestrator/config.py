@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    # Jev / TypeSafe System One Tool Gating (HITL Recipe)
+    typesafe_api_key: str = ""
+    typesafe_base_url: str = "https://api.typesafe.ai/v1/systemone"
+    typesafe_model: str = "jev-latest"
+    jev_gate_enabled: bool = True
+
     # Chat backend: "native" uses Agent.run() / llm_client with model_routes;
     # "hermes" bridges to Hermes's local API server. Default to "native" for immediate
     # responsiveness and graceful resilience.

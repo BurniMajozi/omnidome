@@ -28,7 +28,7 @@ from sqlalchemy import select, text
 
 from services.common.db import session_scope
 from services.common.event_bus import EventConsumer, notify, publish
-from services.agent_orchestrator.models import AgentAction, AgentApproval
+from services.agent_orchestrator.models import AgentAction, AgentApproval, AgentConversation, AgentMessage
 from services.agent_orchestrator import memory_capture
 from services.agent_orchestrator.tools import tool_registry
 
@@ -126,9 +126,16 @@ def _format_display_metadata(agent_type: str, tool_name: str, arguments: dict) -
         impact = "high"
         title = f"Create Customer Record: {arguments.get('first_name', '')} {arguments.get('last_name', '')}".strip()
 
-    args_str = ", ".join(f"{k}={v}" for k, v in arguments.items() if v)
+    args_str = ", ".join(f"{k}={v}" for k, v in arguments.items() if v and not k.startswith("_"))
     summary = f"{agent_type} requested execution of {tool_name}. Parameters: {args_str or 'none'}."
     context = f"Requires executive authorization before execution. Target service: {tool_name.split('_')[0]}."
+
+    jev_info = arguments.get("_jev_gate")
+    if isinstance(jev_info, dict) and jev_info.get("evaluated_by_jev"):
+        risk = float(jev_info.get("risk_score", 3.0))
+        act = jev_info.get("action", "require_approval")
+        impact = "critical" if risk >= 4.5 else "high" if risk >= 3.5 else "medium" if risk >= 2.0 else "low"
+        context = f"Jev System One (Risk {risk:.1f}/5.0 | {act}): {jev_info.get('reason', '')}"
 
     return {
         "agentName": agent_names.get(agent_type, agent_type.capitalize()),
@@ -150,6 +157,8 @@ async def request_approval(
     conversation_id: Optional[uuid.UUID | str] = None,
     run_id: Optional[uuid.UUID | str] = None,
     requested_by: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    jev_gate: Optional[dict] = None,
 ) -> dict:
     """Store approval request in caller's session, publish event and raise notification."""
     approval_id = uuid.uuid4()
@@ -159,12 +168,18 @@ async def request_approval(
     run_uuid = uuid.UUID(str(run_id)) if run_id else None
     expires_at = datetime.now(timezone.utc) + timedelta(hours=DEFAULT_EXPIRATION_HOURS)
 
+    stored_arguments = dict(arguments or {})
+    if tool_call_id:
+        stored_arguments["_tool_call_id"] = tool_call_id
+    if jev_gate:
+        stored_arguments["_jev_gate"] = jev_gate
+
     approval = AgentApproval(
         id=approval_id,
         tenant_id=t_id,
         agent_type=agent_type,
         tool_name=tool_name,
-        arguments=arguments or {},
+        arguments=stored_arguments,
         conversation_id=conv_uuid,
         run_id=run_uuid,
         requested_by=requested_by,
@@ -180,10 +195,12 @@ async def request_approval(
         "tenant_id": str(t_id),
         "agent_type": agent_type,
         "tool_name": tool_name,
-        "arguments": arguments or {},
+        "arguments": stored_arguments,
         "conversation_id": str(conv_uuid) if conv_uuid else None,
         "run_id": str(run_uuid) if run_uuid else None,
         "requested_by": requested_by,
+        "tool_call_id": tool_call_id,
+        "jev_gate": jev_gate,
         "expires_at": expires_at.isoformat(),
     }
 
@@ -213,6 +230,8 @@ async def request_approval(
         "reference": ref,
         "status": "pending",
         "expires_at": expires_at.isoformat(),
+        "tool_call_id": tool_call_id,
+        "jev_gate": jev_gate,
         "message": f"Submitted for approval (#{ref}); tell the user it will run once approved.",
     }
 
@@ -225,6 +244,8 @@ async def request_approval_standalone(
     conversation_id: Optional[uuid.UUID | str] = None,
     run_id: Optional[uuid.UUID | str] = None,
     requested_by: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    jev_gate: Optional[dict] = None,
 ) -> dict:
     """Convenience wrapper when not inside a DB transaction."""
     tenant = tenant_id or "00000000-0000-0000-0000-000000000001"
@@ -238,6 +259,8 @@ async def request_approval_standalone(
             conversation_id=conversation_id,
             run_id=run_id,
             requested_by=requested_by,
+            tool_call_id=tool_call_id,
+            jev_gate=jev_gate,
         )
 
 
@@ -482,27 +505,170 @@ async def _record(row: AgentApproval, result: dict) -> None:
         )
 
 
-async def execute_approved(tenant_id: str | uuid.UUID, approval_id: str | uuid.UUID) -> Optional[dict]:
-    """Run an approved call at most once: claim (committed) -> run -> record.
-    Returns the result, or None when there is nothing to run (not approved, or
-    already claimed by the approve route / bus consumer / an earlier attempt)."""
+async def mark_conversation_awaiting_hitl(conversation_id: uuid.UUID | str, tenant_id: uuid.UUID | str) -> None:
+    """Mark conversation status as awaiting_hitl when a tool call pauses for human input."""
+    conv_uuid = uuid.UUID(str(conversation_id))
+    t_id = uuid.UUID(str(tenant_id))
+    async with session_scope() as session:
+        conv = (await session.execute(
+            select(AgentConversation).where(
+                AgentConversation.id == conv_uuid,
+                AgentConversation.tenant_id == t_id,
+            )
+        )).scalar_one_or_none()
+        if conv:
+            conv.status = "awaiting_hitl"
+            ctx = dict(conv.context or {})
+            ctx["hitl_status"] = "awaiting_hitl"
+            conv.context = ctx
+            await session.flush()
+
+
+async def resume_conversation(
+    tenant_id: str | uuid.UUID,
+    conversation_id: uuid.UUID | str,
+    tool_name: str,
+    tool_args: dict,
+    tool_result: dict,
+    tool_call_id: Optional[str] = None,
+    agent_type: Optional[str] = None,
+) -> Optional[str]:
+    """Resume an in-flight conversation after human review (OpenRouter HITL pattern)."""
+    from services.agent_orchestrator.agents import Agent
+
+    conv_uuid = uuid.UUID(str(conversation_id))
+    t_id = uuid.UUID(str(tenant_id))
+
+    async with session_scope() as session:
+        conv = (await session.execute(
+            select(AgentConversation).where(
+                AgentConversation.id == conv_uuid,
+                AgentConversation.tenant_id == t_id,
+            )
+        )).scalar_one_or_none()
+        if not conv:
+            logger.warning("Cannot resume: conversation %s not found for tenant %s", conv_uuid, t_id)
+            return None
+
+        eff_agent = agent_type or conv.agent_type
+        msg_res = await session.execute(
+            select(AgentMessage)
+            .where(AgentMessage.conversation_id == conv_uuid)
+            .order_by(AgentMessage.created_at.asc())
+        )
+        msgs = msg_res.scalars().all()
+        history = [
+            {"role": m.role, "content": m.content or "", "id": str(m.id)}
+            for m in msgs
+            if m.role in ("user", "assistant", "tool")
+        ]
+        conv.status = "active"
+        ctx = dict(conv.context or {})
+        ctx.pop("hitl_status", None)
+        conv.context = ctx
+        await session.flush()
+
+    # Outside DB lock, resume agent reasoning turn
+    agent = Agent(agent_type=eff_agent, tenant_id=t_id, context=conv.context or {})
+    resumed = await agent.resume_with_approved_result(
+        history=history,
+        tool_name=tool_name,
+        tool_args=tool_args,
+        tool_result=tool_result,
+        tool_call_id=tool_call_id,
+        conversation_id=conv_uuid,
+    )
+
+    final_content = resumed.get("content", "")
+    if not final_content.strip():
+        final_content = f"Action on {tool_name} was approved and completed successfully."
+
+    call_id = tool_call_id or f"call_{uuid.uuid4().hex[:8]}"
+    async with session_scope() as session:
+        tool_msg = AgentMessage(
+            conversation_id=conv_uuid,
+            role="tool",
+            content=json.dumps(tool_result, default=str),
+            tool_results=[{"name": tool_name, "call_id": call_id, "result": tool_result}],
+        )
+        assistant_msg = AgentMessage(
+            conversation_id=conv_uuid,
+            role="assistant",
+            content=final_content,
+        )
+        session.add(tool_msg)
+        session.add(assistant_msg)
+        await session.flush()
+
+        await publish(
+            session,
+            tenant_id=t_id,
+            event_type="agents.conversation.resumed",
+            payload={
+                "conversation_id": str(conv_uuid),
+                "message": final_content,
+                "tool_name": tool_name,
+                "tool_result": tool_result,
+            },
+            source="orchestrator",
+            idempotency_key=f"resumed:{conv_uuid}:{call_id}",
+        )
+
+    return final_content
+
+
+async def execute_approved(
+    tenant_id: str | uuid.UUID,
+    approval_id: str | uuid.UUID,
+    custom_output: Optional[dict] = None,
+    resume: bool = True,
+) -> Optional[dict]:
+    """Run an approved call at most once: claim (committed) -> run -> record -> resume conversation.
+    Returns dict with execution_result and optional resumed_response."""
     row = await _claim(tenant_id, approval_id)
     if row is None:
         return None
-    tool = tool_registry.get(row.tool_name)
-    if not tool:
-        result = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
+
+    clean_args = {k: v for k, v in (row.arguments or {}).items() if not k.startswith("_")}
+
+    if custom_output is not None:
+        # HITL onResponseReceived pattern: human supplied custom output
+        logger.info("Using human-supplied custom output for %s (#%s)", row.tool_name, approval_ref(row.id))
+        result = custom_output
     else:
-        logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, approval_ref(row.id))
+        tool = tool_registry.get(row.tool_name)
+        if not tool:
+            result = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
+        else:
+            logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, approval_ref(row.id))
+            try:
+                result = await tool.execute(
+                    tool_input=clean_args,
+                    tenant_id=str(row.tenant_id),
+                    user_id=acting_user_id(row),
+                )
+            except Exception as exc:  # noqa: BLE001 - the failure is the outcome to record
+                logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
+                result = {"success": False, "error": str(exc)}
+
+    resumed_response = None
+    if resume and row.conversation_id:
         try:
-            result = await tool.execute(
-                tool_input=row.arguments or {},
-                tenant_id=str(row.tenant_id),
-                user_id=acting_user_id(row),
+            resumed_response = await resume_conversation(
+                tenant_id=row.tenant_id,
+                conversation_id=row.conversation_id,
+                tool_name=row.tool_name,
+                tool_args=clean_args,
+                tool_result=result,
+                tool_call_id=(row.arguments or {}).get("_tool_call_id"),
+                agent_type=row.agent_type,
             )
-        except Exception as exc:  # noqa: BLE001 - the failure is the outcome to record
-            logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
-            result = {"success": False, "error": str(exc)}
+        except Exception as exc:
+            logger.error("Failed to resume conversation %s: %s", row.conversation_id, exc)
+
+    if resumed_response and isinstance(result, dict):
+        result["resumed_response"] = resumed_response
+
     await _record(row, result)
     return result
 

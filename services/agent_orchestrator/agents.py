@@ -213,12 +213,18 @@ class Agent:
                 duration_ms=int((time.perf_counter() - started) * 1000), stopped_by=stopped_by,
                 unavailable=unavailable,
             )
+            has_pending = any(
+                isinstance(tc.get("result"), dict) and tc["result"].get("requires_approval")
+                for tc in tool_call_log
+            )
+            hitl_status = "awaiting_hitl" if has_pending else "completed"
             return {
                 "content": content,
                 "tool_calls": tool_call_log,
                 "conversation_id": conversation_id,
                 "unavailable": unavailable,
                 "stopped_by": stopped_by,
+                "status": hitl_status,
             }
 
         while tool_count < MAX_TOOL_CALLS:
@@ -351,12 +357,35 @@ class Agent:
         if "customer_id" in self.context and "customer_id" not in enriched_args:
             enriched_args["customer_id"] = self.context["customer_id"]
 
-        # Spec A8: tools requiring approval do NOT execute directly.
-        if getattr(tool, "requires_approval", False):
-            from services.agent_orchestrator.approvals import request_approval_standalone
+        # Jev System One Dynamic Tool Gate (HITL Recipe & Jev Gating)
+        from services.agent_orchestrator.jev_gate import evaluate_tool_call
+        verdict = await evaluate_tool_call(
+            agent_type=self.agent_type,
+            tool_name=tool_name,
+            arguments=enriched_args,
+            tool=tool,
+            tenant_id=tenant,
+            channel=self.channel,
+        )
+
+        if verdict.action == "block":
+            logger.warning("Tool call %s blocked by Jev safety gate: %s", tool_name, verdict.reason)
+            return tool_name, tool_args, {
+                "success": False,
+                "refused": True,
+                "error": f"Tool execution blocked by safety policy: {verdict.reason}",
+                "jev_gate": verdict.to_dict(),
+            }
+
+        if verdict.action == "require_approval":
+            from services.agent_orchestrator.approvals import (
+                request_approval_standalone,
+                mark_conversation_awaiting_hitl,
+            )
             conv_id = conversation_id or self.context.get("conversation_id")
             run_id = self.context.get("run_id")
             user_id = str(self.context.get("user_id", ""))
+            call_id = tc.get("id", "") or f"call_{uuid.uuid4().hex[:8]}"
             appr = await request_approval_standalone(
                 tenant_id=tenant,
                 agent_type=self.agent_type,
@@ -365,13 +394,24 @@ class Agent:
                 conversation_id=conv_id,
                 run_id=run_id,
                 requested_by=user_id or self.agent_type,
+                tool_call_id=call_id,
+                jev_gate=verdict.to_dict(),
             )
+            if conv_id and tenant:
+                try:
+                    await mark_conversation_awaiting_hitl(conv_id, tenant)
+                except Exception as exc:
+                    logger.warning("Failed to mark conversation %s as awaiting_hitl: %s", conv_id, exc)
+
             return tool_name, tool_args, {
                 "success": True,
                 "requires_approval": True,
+                "status": "awaiting_hitl",
                 "approval_id": appr["id"],
                 "reference": appr["reference"],
                 "message": appr["message"],
+                "tool_call_id": call_id,
+                "jev_gate": verdict.to_dict(),
             }
 
         timeout = getattr(tool, "timeout_s", None) or DEFAULT_TOOL_TIMEOUT_S
@@ -448,3 +488,61 @@ class Agent:
                 "tool_call_id": c["id"],
                 "content": budget_tool_result(c["result"], max_chars),
             })
+
+    async def resume_with_approved_result(
+        self,
+        history: List[Dict[str, Any]],
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        tool_result: Dict[str, Any],
+        tool_call_id: Optional[str] = None,
+        conversation_id: Optional[uuid.UUID] = None,
+    ) -> Dict[str, Any]:
+        """Resume an in-flight conversation turn after human approval or HITL result injection.
+        Follows the OpenRouter HITL cookbook resume pattern."""
+        await self.load_skills()
+        call_id = tool_call_id or f"call_{uuid.uuid4().hex[:8]}"
+
+        messages: List[Dict[str, Any]] = []
+        if history:
+            for m in history:
+                role = m.get("role", "user")
+                content = m.get("content")
+                if role in ("user", "assistant", "system", "tool"):
+                    item: Dict[str, Any] = {"role": role, "content": content}
+                    if m.get("tool_call_id"):
+                        item["tool_call_id"] = m["tool_call_id"]
+                    if m.get("tool_calls"):
+                        item["tool_calls"] = m["tool_calls"]
+                    messages.append(item)
+
+        # Append the tool call and tool result round
+        self._append_tool_round(messages, [{
+            "id": call_id,
+            "name": tool_name,
+            "arguments": tool_args,
+            "result": tool_result,
+        }])
+
+        tenant = str(self.tenant_id) if self.tenant_id else None
+        tools_for_llm = tool_registry.to_openai_format(self.tools)
+
+        try:
+            result = await llm_client.chat(
+                agent_type=self.agent_type,
+                messages=messages,
+                tools=tools_for_llm,
+                tenant_id=tenant,
+                channel=self.channel,
+                system_extra=self.skills_prompt,
+            )
+            content = clean_response(result.get("content") or "")
+        except Exception as exc:
+            logger.error("Resume turn failed for %s: %s", self.agent_type, exc)
+            content = f"The action for {tool_name} was approved and executed successfully."
+
+        return {
+            "content": content,
+            "tool_call_id": call_id,
+            "conversation_id": conversation_id,
+        }

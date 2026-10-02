@@ -687,11 +687,21 @@ async def invoke_agent(
             await _store_compaction(session, conversation_id, agent.compaction_update)
             await session.flush()
 
+    tool_calls = result.get("tool_calls", [])
+    pending = [
+        tc["result"]
+        for tc in tool_calls
+        if isinstance(tc.get("result"), dict) and tc["result"].get("requires_approval")
+    ]
+    hitl_status = "awaiting_hitl" if pending else "completed"
+
     return AgentInvokeResponse(
         conversation_id=conversation_id,
         message=final_content,
-        tool_calls=result.get("tool_calls", []),
+        tool_calls=tool_calls,
         agent_type=effective_agent_type,
+        status=hitl_status,
+        pending_approvals=pending if pending else None,
     )
 
 

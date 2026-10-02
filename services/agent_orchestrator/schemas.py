@@ -52,6 +52,8 @@ class AgentInvokeResponse(BaseModel):
     message: str
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     agent_type: str
+    status: Optional[str] = "completed"
+    pending_approvals: Optional[List[Dict[str, Any]]] = None
 
 
 class ToolPolicyInfo(BaseModel):
