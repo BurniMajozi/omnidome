@@ -661,11 +661,15 @@ services:
     build:
       context: .
       dockerfile: services/lifecycle/Dockerfile
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:8018:8018"
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - LIFECYCLE_SERVICE_URL=http://lifecycle:8018
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
     depends_on:
       db:
         condition: service_healthy

@@ -27,14 +27,21 @@ os.environ["SALES_ENFORCE_ROLES"] = "true"
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from services.sales.main import app  # noqa: E402
+from services.sales.main import app, guard  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def client():
-    with TestClient(app) as c:
-        yield c
-    testdb.reset_engines()
+    # Other test modules can construct the app before use_test_database sets
+    # its environment. This suite tests sales authorization, not entitlements.
+    prior = guard.enforce_modules
+    guard.enforce_modules = False
+    try:
+        with TestClient(app) as c:
+            yield c
+    finally:
+        guard.enforce_modules = prior
+        testdb.reset_engines()
 
 
 @pytest.fixture

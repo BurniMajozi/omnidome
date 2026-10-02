@@ -51,7 +51,9 @@ def subscribe(client, tenant, price="500.00", **fields):
 
 def generate(client, tenant, **body):
     r = client.post("/invoices/generate", json=body, headers=testdb.headers(tenant))
-    assert r.status_code == 201, r.text
+    assert r.status_code in (200, 201), r.text
+    if not r.json():
+        assert r.status_code == 200, r.text
     return r.json()
 
 

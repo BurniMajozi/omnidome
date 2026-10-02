@@ -354,6 +354,7 @@ async def init_tables():
             await conn.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _SCHEMA_LOCK_KEY})
         await conn.run_sync(Base.metadata.create_all)
         if is_pg:
+            await conn.execute(text("ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITHOUT TIME ZONE"))
             dupes = (await conn.execute(text(_UNIQUE_SOURCE_DUPES_SQL))).scalar() or 0
             if dupes:
                 logger.warning("journal_entries has %s duplicated (tenant, source, source_id) keys; "
@@ -369,6 +370,12 @@ async def next_journal_reference(db: AsyncSession, tenant_id: uuid.UUID) -> str:
     lock on the per-tenant sequence row prevents duplicates under concurrent
     creation. Format: JE-<TENANT4>-<seq:06d>.
     """
+    if db.get_bind().dialect.name == "postgresql":
+        # Serialize first-row creation as well as subsequent increments.
+        import hashlib
+        from sqlalchemy import text
+        key = int.from_bytes(hashlib.sha256(f"finance-sequence:{tenant_id}".encode()).digest()[:8], "big", signed=True)
+        await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
     result = await db.execute(
         select(JournalEntrySequence)
         .where(JournalEntrySequence.tenant_id == tenant_id)

@@ -32,6 +32,10 @@ services:
     command: sh -c "uvicorn services.billing.main:app --host 0.0.0.0 --port 8003 --workers 1"
   finance:
     restart: "no"
+    command: sh -c "uvicorn services.finance.main:app --host 0.0.0.0 --port 8015 --workers 1"
+  inventory:
+    restart: "no"
+    command: sh -c "uvicorn services.inventory.main:app --host 0.0.0.0 --port 8010 --workers 1"
   rica:
     restart: "no"
   network:
