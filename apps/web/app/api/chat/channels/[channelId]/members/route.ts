@@ -6,6 +6,7 @@ const COMMUNICATION_SERVICE_URL = process.env.COMMUNICATION_SERVICE_URL || "http
 
 // Invite/add members to a channel, and list them.
 async function forward(request: NextRequest, channelId: string, method: "GET" | "POST") {
+  try {
   const { headers, identity } = await identityHeaders(request)
   if (!identity) return NextResponse.json({ error: "unauthenticated" }, { status: 401 })
 
@@ -18,6 +19,9 @@ async function forward(request: NextRequest, channelId: string, method: "GET" | 
   )
   const payload = await response.json().catch(() => null)
   return NextResponse.json(payload ?? {}, { status: response.status })
+  } catch {
+    return NextResponse.json({ error: "service_unreachable" }, { status: 503 })
+  }
 }
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ channelId: string }> }) {

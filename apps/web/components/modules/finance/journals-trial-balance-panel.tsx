@@ -99,7 +99,7 @@ export function JournalsTrialBalancePanel({ journals, trialBalance }: JournalsTr
               </tbody>
             </table>
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">Trial balance is balanced with debit totals equal to credit totals.</p>
+          <p className="mt-3 text-xs text-muted-foreground">{Math.round(totals.debit * 100) === Math.round(totals.credit * 100) ? "Debit and credit totals balance." : "Debit and credit totals do not balance."}</p>
         </CardContent>
       </Card>
     </div>

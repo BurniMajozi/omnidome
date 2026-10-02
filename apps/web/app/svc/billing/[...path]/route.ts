@@ -18,8 +18,30 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     url.searchParams.set(key, value)
   })
 
+  // Public, signature-authenticated callback. Forward exact bytes to the verified
+  // backend path; never inject tenant identity into a Paystack event.
+  if (pathStr === "payments/paystack/webhook") {
+    if (request.method !== "POST") return NextResponse.json({ error: "Method not allowed" }, { status: 405 })
+    const signature = request.headers.get("x-paystack-signature")
+    if (!signature) return NextResponse.json({ error: "Missing Paystack signature" }, { status: 401 })
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": request.headers.get("content-type") || "application/json", "x-paystack-signature": signature },
+        body: await request.arrayBuffer(),
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+      })
+      return new NextResponse([204, 205, 304].includes(res.status) ? null : await res.text(), {
+        status: res.status, headers: { "Content-Type": res.headers.get("content-type") || "application/json" },
+      })
+    } catch {
+      return NextResponse.json({ error: "Billing service unreachable" }, { status: 502 })
+    }
+  }
+
   const headers = new Headers()
-  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
+  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type", "idempotency-key"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -14,11 +14,10 @@ import { BankReconciliationPanel } from "./finance/bank-reconciliation-panel"
 import { StatementsPanel } from "./finance/statements-panel"
 import { ScenarioPlanningPanel } from "./finance/scenario-planning-panel"
 import { formatCurrency } from "./finance/utils"
+import { sumCents, toCents } from "@/lib/money"
+import { ledgerIsEmpty, scenarioBase } from "@/lib/finance-derive"
 import { BarChart3, Clock, DollarSign, TrendingUp } from "lucide-react"
 import {
-  getStatements, getCashFlow,
-  listRevenueContracts, listExpenseReceipts, listApprovalRequests, listPurchaseOrders,
-  listFixedAssets, listRecurringPayments, listBankItems,
   type FinanceOverview, type Statements, type CashFlowStatement, type StatementLineRaw,
   type RevenueContract, type ExpenseReceipt, type ApprovalRequest, type PurchaseOrder,
   type FixedAsset, type RecurringPayment, type BankStatementItem,
@@ -29,7 +28,7 @@ function toStatementLines(lines: StatementLineRaw[]) {
     .filter((l) => l.line !== "")
     .map((l) => ({
       label: l.line,
-      amount: typeof l.amount === "number" ? l.amount : 0,
+      amount: (toCents(l.amount) ?? NaN) / 100,
       style: l.section ? ("section" as const) : l.total ? ("total" as const) : l.subtotal ? ("subtotal" as const) : undefined,
       indent: !l.section && !l.total,
     }))
@@ -49,35 +48,33 @@ export function FinanceModule() {
   const overview = overviewL.state === "ready" ? overviewL.data : null
   const serviceReady = overviewL.state === "ready"
   const [activeTab, setActiveTab] = useState("overview")
-  const [statements, setStatements] = useState<Statements | null>(null)
-  const [cashFlowStmt, setCashFlowStmt] = useState<CashFlowStatement | null>(null)
-  const [contracts, setContracts] = useState<RevenueContract[]>([])
-  const [receipts, setReceipts] = useState<ExpenseReceipt[]>([])
-  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([])
-  const [assets, setAssets] = useState<FixedAsset[]>([])
-  const [recurringPayments, setRecurringPayments] = useState<RecurringPayment[]>([])
-  const [bankItems, setBankItems] = useState<BankStatementItem[]>([])
-
-  useEffect(() => {
-    if (!serviceReady) return
-    getStatements().then(setStatements)
-    getCashFlow().then(setCashFlowStmt)
-    listRevenueContracts().then(setContracts)
-    listExpenseReceipts().then(setReceipts)
-    listApprovalRequests().then(setApprovals)
-    listPurchaseOrders().then(setPurchaseOrders)
-    listFixedAssets().then(setAssets)
-    listRecurringPayments().then(setRecurringPayments)
-    listBankItems().then(setBankItems)
-  }, [serviceReady])
+  const statementsL = useLoadable<Statements>("/svc/finance/statements")
+  const cashFlowL = useLoadable<CashFlowStatement>("/svc/finance/cash-flow")
+  const contractsL = useLoadable<RevenueContract[]>("/svc/finance/revenue-contracts")
+  const receiptsL = useLoadable<ExpenseReceipt[]>("/svc/finance/expense-receipts")
+  const approvalsL = useLoadable<ApprovalRequest[]>("/svc/finance/approval-requests")
+  const ordersL = useLoadable<PurchaseOrder[]>("/svc/finance/purchase-orders")
+  const assetsL = useLoadable<FixedAsset[]>("/svc/finance/fixed-assets")
+  const recurringL = useLoadable<RecurringPayment[]>("/svc/finance/recurring-payments")
+  const bankL = useLoadable<BankStatementItem[]>("/svc/finance/bank-items")
+  const statements = statementsL.value.state === "ready" ? statementsL.value.data : null
+  const cashFlowStmt = cashFlowL.value.state === "ready" ? cashFlowL.value.data : null
+  const contracts = contractsL.value.state === "ready" ? contractsL.value.data : []
+  const receipts = receiptsL.value.state === "ready" ? receiptsL.value.data : []
+  const approvals = approvalsL.value.state === "ready" ? approvalsL.value.data : []
+  const purchaseOrders = ordersL.value.state === "ready" ? ordersL.value.data : []
+  const assets = assetsL.value.state === "ready" ? assetsL.value.data : []
+  const recurringPayments = recurringL.value.state === "ready" ? recurringL.value.data : []
+  const bankItems = bankL.value.state === "ready" ? bankL.value.data : []
+  const base = scenarioBase(overview?.kpis, cashFlowStmt?.investing_activities.total)
+  const expenseFailure = [receiptsL, approvalsL, ordersL, assetsL, recurringL].find(l => l.value.state !== "ready")
 
   const flashcardKPIs = useMemo(() => {
-    if (!overview || !cashFlowStmt) return []
-    const fcf = cashFlowStmt.operating_activities.total + cashFlowStmt.investing_activities.total
+    if (!overview || !cashFlowStmt || ledgerIsEmpty(overview.kpis, cashFlowStmt.net_change_in_cash)) return []
+    const fcf = sumCents([cashFlowStmt.operating_activities.total, cashFlowStmt.investing_activities.total]) / 100
     const ebitMargin = overview.kpis.revenue > 0 ? (overview.kpis.ebit / overview.kpis.revenue) * 100 : 0
     return [
-      { id: "1", title: "Revenue (YTD)", value: formatCurrency(overview.kpis.revenue), change: "", changeType: "neutral" as const, icon: <TrendingUp className="h-5 w-5 text-emerald-400" />, backTitle: "Revenue Detail", backDetails: [{ label: "Period", value: overview.period }], backInsight: "Computed from posted GL revenue accounts." },
+      { id: "1", title: "Revenue", value: formatCurrency(overview.kpis.revenue), change: "", changeType: "neutral" as const, icon: <TrendingUp className="h-5 w-5 text-emerald-400" />, backTitle: "Revenue Detail", backDetails: [{ label: "Period", value: overview.period }], backInsight: "Computed from posted GL revenue accounts." },
       { id: "2", title: "EBIT", value: formatCurrency(overview.kpis.ebit), change: `${ebitMargin.toFixed(1)}% margin`, changeType: "neutral" as const, icon: <BarChart3 className="h-5 w-5 text-blue-400" />, backTitle: "EBIT Detail", backDetails: [{ label: "Revenue", value: formatCurrency(overview.kpis.revenue) }, { label: "Expenses", value: formatCurrency(overview.kpis.expenses) }], backInsight: "Revenue minus posted GL expenses." },
       { id: "3", title: "Free Cash Flow", value: formatCurrency(fcf), change: "", changeType: "neutral" as const, icon: <DollarSign className="h-5 w-5 text-amber-400" />, backTitle: "Cash Flow Detail", backDetails: [{ label: "Operating", value: formatCurrency(cashFlowStmt.operating_activities.total) }, { label: "Investing", value: formatCurrency(cashFlowStmt.investing_activities.total) }], backInsight: "Operating cash flow plus investing activities." },
       { id: "4", title: "Cash Position", value: formatCurrency(overview.kpis.cash_position), change: "", changeType: "neutral" as const, icon: <Clock className="h-5 w-5 text-violet-400" />, backTitle: "Cash Detail", backDetails: [{ label: "As of", value: new Date(overview.generated_at).toLocaleDateString() }], backInsight: "GL cash account balance from posted entries." },
@@ -96,7 +93,7 @@ export function FinanceModule() {
     ]
   }, [cashFlowStmt])
 
-  const dataSources = ["Sales", "CRM", "Billing", "Network", "Inventory", "HR", "Marketing"]
+
 
   return (
     <ModuleLayout
@@ -131,58 +128,55 @@ export function FinanceModule() {
               <CardTitle className="text-base">Integrated Data Sources</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-2">
-              {dataSources.map((source) => (
-                <Badge key={source} variant="outline" className="text-xs">
-                  {source}
-                </Badge>
-              ))}
-              <Badge className="badge-success">Adjustments Enabled</Badge>
+              <Badge variant="outline">Source connectivity is not reported by the finance API</Badge>
+              <p className="text-xs text-muted-foreground">Journal source values identify recorded postings. They do not confirm a current connection to another service.</p>
             </CardContent>
           </Card>
-          <RevenueRecognitionPanel
+          {contractsL.value.state !== "ready" ? <NotConnected loadable={contractsL.value} service="Revenue contracts" onRetry={contractsL.reload} /> : <RevenueRecognitionPanel
             recognitionSeries={[]}
             contracts={contracts}
-          />
+          />}
         </TabsContent>
 
         <TabsContent value="expenses" className="mt-4">
-          <ExpenseTrackingPanel
+          {expenseFailure ? <NotConnected loadable={expenseFailure.value} service="Expense records" onRetry={() => [receiptsL, approvalsL, ordersL, assetsL, recurringL].forEach(l => l.reload())} /> : <ExpenseTrackingPanel
             receipts={receipts}
             approvals={approvals}
             purchaseOrders={purchaseOrders}
             assets={assets}
             recurringPayments={recurringPayments}
-          />
+          />}
         </TabsContent>
 
         <TabsContent value="journals" className="mt-4">
-          <LiveJournalEntries />
+          <LiveJournalEntries onChanged={() => { reloadOverview(); statementsL.reload(); cashFlowL.reload() }} />
         </TabsContent>
 
         <TabsContent value="bank" className="mt-4">
-          <BankReconciliationPanel
+          {bankL.value.state !== "ready" ? <NotConnected loadable={bankL.value} service="Bank records" onRetry={bankL.reload} /> : <BankReconciliationPanel
             bankItems={bankItems}
             auditTrail={[]}
-          />
+          />}
         </TabsContent>
 
         <TabsContent value="statements" className="mt-4">
-          <StatementsPanel
+          {statementsL.value.state !== "ready" ? <NotConnected loadable={statementsL.value} service="Finance statements" onRetry={statementsL.reload} /> : cashFlowL.value.state !== "ready" ? <NotConnected loadable={cashFlowL.value} service="Cash flow" onRetry={cashFlowL.reload} /> : <StatementsPanel
             balanceSheet={liveBalanceSheet}
             incomeStatement={liveIncomeStatement}
             cashFlow={liveCashFlowLines}
-          />
+          />}
         </TabsContent>
 
         <TabsContent value="scenario" className="mt-4">
-          <ScenarioPlanningPanel
-            baseRevenue={overview?.kpis.revenue ?? 0}
-            baseOpex={overview?.kpis.expenses ?? 0}
-            baseCapex={0}
+          {cashFlowL.value.state !== "ready" ? <NotConnected loadable={cashFlowL.value} service="Scenario cash flow base" onRetry={cashFlowL.reload} /> : base ? <ScenarioPlanningPanel
+            baseRevenue={base.revenue}
+            baseOpex={base.opex}
+            baseCapex={base.capex}
             baseDepreciation={0}
             baseInterest={0}
             taxRate={0.27}
-          />
+          /> : <p className="text-muted-foreground">No revenue or expense activity available for a scenario.</p>}
+          <p className="text-xs text-muted-foreground">Depreciation and interest are assumed zero; tax rate is a planning assumption.</p>
         </TabsContent>
       </Tabs>
       )}

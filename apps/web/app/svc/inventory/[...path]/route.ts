@@ -2,6 +2,7 @@ import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
+import { readBodyLimited, isNullBodyStatus } from "@/lib/proxy-body"
 
 const INVENTORY_SERVICE_URL = process.env.INVENTORY_SERVICE_URL || "http://inventory:8010"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -19,7 +20,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   })
 
   const headers = new Headers()
-  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type"]) {
+  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type", "idempotency-key"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }
@@ -37,23 +38,28 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   else headers.delete("x-permissions")
 
   try {
-    const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
+    const incoming = await readBodyLimited(request)
+    if (!incoming.ok) return NextResponse.json({ error: incoming.error }, { status: incoming.status })
     const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
-      body,
+      body: incoming.body as BodyInit | undefined,
+      signal: AbortSignal.timeout(30_000),
     })
     const contentType = res.headers.get("content-type") || "application/json"
-    const data = await res.text()
+    const data = await res.arrayBuffer()
     // 204/205/304 must not carry a body: passing "" makes NextResponse throw,
     // which the catch below turned into a 502 for every successful DELETE.
-    const noBody = res.status === 204 || res.status === 205 || res.status === 304
+    const noBody = isNullBodyStatus(res.status)
+    const responseHeaders = new Headers({ "Content-Type": contentType })
+    const disposition = res.headers.get("content-disposition")
+    if (disposition) responseHeaders.set("content-disposition", disposition)
     return new NextResponse(noBody ? null : data, {
       status: res.status,
-      headers: { "Content-Type": contentType },
+      headers: responseHeaders,
     })
   } catch (err) {
-    return NextResponse.json({ error: "Inventory service unreachable", details: String(err) }, { status: 502 })
+    return NextResponse.json({ error: "Inventory service unreachable" }, { status: 502 })
   }
 }
 

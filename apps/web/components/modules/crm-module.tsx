@@ -57,24 +57,23 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { PageHeader } from "@/components/ui/page-header"
-import { LeadFunnelView } from "./sales/lead-funnel-view"
 import { LifecycleDashboard } from "./lifecycle/lifecycle-dashboard"
 import { ErrorBoundary } from "@/components/ui/error-boundary"
 import {
-  getActivities,
-  getDashboardSummary,
-  getInsights,
-  getTasks,
-  listCustomers,
-  getCustomer360,
-  getCustomerNotes,
+  loadActivities,
+  loadDashboardSummary,
+  loadInsights,
+  loadTasks,
+  loadCustomers,
+  loadCustomer360,
+  loadCustomerNotes,
   addCustomerNote,
   createCustomer,
-  listLeads,
+  loadLeads,
   createLead,
   updateLead,
   convertLead,
-  listCompanies,
+  loadCompanies,
   createCompany,
   type Activity,
   type AiRecommendation,
@@ -87,6 +86,9 @@ import {
   type LeadItem,
   type CompanyItem,
 } from "@/lib/crm-api"
+import { normalizeLeadStatus, isClosedLostStatus, leadStageDistribution, read360Meta } from "@/lib/crm-derive"
+import { describeLoadable, type Loadable } from "@/lib/service-state"
+import { NotConnected } from "@/components/ui/not-connected"
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -94,7 +96,7 @@ function cn(...classes: (string | false | undefined | null)[]) {
   return classes.filter(Boolean).join(" ")
 }
 
-const formatCurrency = (value: number) => `R ${value.toLocaleString("en-ZA")}`
+const formatCurrency = (value: number | null | undefined) => value == null ? "Not assessed" : `R ${value.toLocaleString("en-ZA")}`
 
 const crmKpiIconMap: Record<string, JSX.Element> = {
   customers: <Users className="h-5 w-5 text-emerald-400" />,
@@ -108,7 +110,11 @@ const KANBAN_STAGES = [
   { id: "CONTACTED", label: "Contacted", color: "border-amber-500/30 bg-amber-500/5 text-amber-400" },
   { id: "QUALIFIED", label: "Qualified", color: "border-purple-500/30 bg-purple-500/5 text-purple-400" },
   { id: "PROPOSAL", label: "Coverage / Proposal", color: "border-cyan-500/30 bg-cyan-500/5 text-cyan-400" },
+  { id: "NEGOTIATION", label: "Negotiation", color: "border-cyan-500/30 bg-cyan-500/5 text-cyan-400" },
   { id: "CONVERTED", label: "Won / Customer", color: "border-emerald-500/30 bg-emerald-500/5 text-emerald-400" },
+  { id: "LOST", label: "Lost", color: "border-red-500/30 bg-red-500/5 text-red-400" },
+  { id: "DISQUALIFIED", label: "Disqualified", color: "border-red-500/30 bg-red-500/5 text-red-400" },
+  { id: "OTHER", label: "Other statuses", color: "border-border text-muted-foreground" },
 ]
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -127,19 +133,30 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
   const [newNote, setNewNote] = useState("")
   const [loading, setLoading] = useState(false)
   const [submittingNote, setSubmittingNote] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [noteError, setNoteError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"overview" | "timeline" | "notes">("overview")
 
   const loadDetails = useCallback(async (id: string) => {
     setLoading(true)
+    setData360(null)
+    setNotes([])
+    setDetailError(null)
+    setNoteError(null)
     try {
       const [fullData, customerNotes] = await Promise.all([
-        getCustomer360(id),
-        getCustomerNotes(id),
+        loadCustomer360(id),
+        loadCustomerNotes(id),
       ])
-      setData360(fullData)
-      setNotes(customerNotes)
+      if (fullData.state === "ready") {
+        setData360(fullData.data)
+        const meta = read360Meta(fullData.data)
+        if (meta.partial) setDetailError(`Some sections are unavailable: ${Object.keys(meta.sectionErrors).join(", ")}`)
+      } else setDetailError(describeLoadable(fullData, "CRM customer")?.detail ?? "Customer unavailable")
+      if (customerNotes.state === "ready") setNotes(customerNotes.data)
+      else setNoteError(describeLoadable(customerNotes, "CRM notes")?.detail ?? "Notes unavailable")
     } catch (e) {
-      console.error(e)
+      setDetailError(e instanceof Error ? e.message : "Customer unavailable")
     } finally {
       setLoading(false)
     }
@@ -154,14 +171,15 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
   const handleAddNote = async () => {
     if (!customer?.id || !newNote.trim()) return
     setSubmittingNote(true)
+    setNoteError(null)
     try {
       const created = await addCustomerNote(customer.id, newNote.trim())
-      if (created) {
-        setNotes((prev) => [created, ...prev])
+      if (created.ok) {
+        setNotes((prev) => [created.data, ...prev])
         setNewNote("")
-      }
+      } else setNoteError(created.error.message)
     } catch (err) {
-      console.error(err)
+      setNoteError(err instanceof Error ? err.message : "Could not save note")
     } finally {
       setSubmittingNote(false)
     }
@@ -259,6 +277,9 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
 
         {/* Tab Content */}
         <ScrollArea className="flex-1 p-6">
+          {detailError && <p role="alert" className="mb-3 text-sm text-destructive">{detailError}</p>}
+          {noteError && <p role="alert" className="mb-3 text-sm text-destructive">{noteError}</p>}
+          {(detailError || noteError) && <Button variant="outline" size="sm" onClick={() => loadDetails(customer.id)}>Retry details</Button>}
           {loading ? (
             <div className="flex h-48 items-center justify-center">
               <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />
@@ -281,11 +302,11 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
                   </div>
                   <div className="rounded-lg border border-border/50 bg-background/50 p-3">
                     <p className="text-[10px] text-muted-foreground uppercase">Province</p>
-                    <p className="font-medium text-foreground capitalize">{customer.province || "Gauteng"}</p>
+                    <p className="font-medium text-foreground capitalize">{customer.province || "Not provided"}</p>
                   </div>
                   <div className="rounded-lg border border-border/50 bg-background/50 p-3">
                     <p className="text-[10px] text-muted-foreground uppercase">Customer Tier</p>
-                    <p className="font-medium text-foreground">{customer.customer_type}</p>
+                    <p className="font-medium text-foreground">{customer.customer_type ?? "Not assessed"}</p>
                   </div>
                 </div>
               </div>
@@ -300,10 +321,10 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
                     <MapPin className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium text-foreground">
-                        {customer.address || "123 Main Road, Sandton, Johannesburg"}
+                        {customer.address || "Not provided"}
                       </p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        ISP Fibre ONT installed · Connected to Vumatel / Openserve network
+                        Installation details require service records.
                       </p>
                     </div>
                   </div>
@@ -320,21 +341,21 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
                     <Phone className="h-4 w-4 text-cyan-400" />
                     <div>
                       <p className="font-medium text-foreground">Call Center</p>
-                      <p className="text-[10px] text-muted-foreground">Deepgram logs synced</p>
+                      <p className="text-[10px] text-muted-foreground">Call records require assessment</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 rounded-lg border border-border/40 bg-muted/10 p-2.5">
                     <DollarSign className="h-4 w-4 text-purple-400" />
                     <div>
                       <p className="font-medium text-foreground">Sales Pipeline</p>
-                      <p className="text-[10px] text-muted-foreground">Active quotes linked</p>
+                      <p className="text-[10px] text-muted-foreground">Quotes require assessment</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 rounded-lg border border-border/40 bg-muted/10 p-2.5">
                     <Bot className="h-4 w-4 text-violet-400" />
                     <div>
                       <p className="font-medium text-foreground">Agent Orchestrator</p>
-                      <p className="text-[10px] text-muted-foreground">Retention watcher active</p>
+                      <p className="text-[10px] text-muted-foreground">Automation status unavailable</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 rounded-lg border border-border/40 bg-muted/10 p-2.5">
@@ -349,23 +370,13 @@ function CustomerSheet({ customer, onClose, onCall }: CustomerSheetProps) {
             </div>
           ) : activeTab === "timeline" ? (
             <div className="space-y-4">
-              <div className="relative border-l border-border/60 pl-4 space-y-4 ml-2">
-                <div className="relative">
-                  <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-emerald-400 ring-4 ring-card" />
-                  <p className="text-xs font-semibold text-foreground">Account Created & RICA Verified</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Customer record provisioned in Omnidome database</p>
+              {!data360 ? <p className="text-sm text-muted-foreground">Customer activity is unavailable.</p> : data360.lifecycle_data?.history == null ? <p className="text-sm text-muted-foreground">Lifecycle history is unavailable.</p> : data360.lifecycle_data.history.length === 0 ? <p className="text-sm text-muted-foreground">No lifecycle history recorded.</p> : data360.lifecycle_data.history.map((event: any, index: number) => (
+                <div key={event.id ?? index} className="rounded border border-border p-3 text-sm">
+                  <p>{event.from_stage ? `${event.from_stage} → ` : ""}{event.to_stage ?? "Recorded event"}</p>
+                  {event.reason && <p className="text-xs text-muted-foreground">{event.reason}</p>}
+                  {event.created_at && <p className="text-xs text-muted-foreground">{new Date(event.created_at).toLocaleString("en-ZA")}</p>}
                 </div>
-                <div className="relative">
-                  <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-cyan-400 ring-4 ring-card" />
-                  <p className="text-xs font-semibold text-foreground">Fibre Service Active</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Package: 100 Mbps Uncapped Fibre (MRR: {formatCurrency(customer.mrr)})</p>
-                </div>
-                <div className="relative">
-                  <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-violet-400 ring-4 ring-card" />
-                  <p className="text-xs font-semibold text-foreground">Journey Engine Enrolled</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">Monitoring retention signals and customer happiness</p>
-                </div>
-              </div>
+              ))}
             </div>
           ) : (
             <div className="space-y-4">
@@ -433,6 +444,8 @@ export function CrmModule() {
   const [leads, setLeads] = useState<LeadItem[]>([])
   const [companies, setCompanies] = useState<CompanyItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [readErrors, setReadErrors] = useState<Record<string, Loadable<unknown>>>({})
+  const [mutationError, setMutationError] = useState<string | null>(null)
 
   // ── Search & Filter States ─────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState("")
@@ -456,24 +469,25 @@ export function CrmModule() {
     setLoading(true)
     try {
       const [summary, activityFeed, taskList, insights, custList, leadList, compList] = await Promise.all([
-        getDashboardSummary(),
-        getActivities(),
-        getTasks(),
-        getInsights(),
-        listCustomers({ pageSize: 50 }),
-        listLeads({ pageSize: 100 }),
-        listCompanies({ pageSize: 50 }),
+        loadDashboardSummary(true),
+        loadActivities(true),
+        loadTasks(true),
+        loadInsights(true),
+        loadCustomers({ pageSize: 50 }, true),
+        loadLeads({ pageSize: 100 }, true),
+        loadCompanies({ pageSize: 50 }, true),
       ])
-      setSummaryData(summary)
-      setActivities(activityFeed)
-      setTasks(taskList)
-      setAiRecommendations(insights.aiRecommendations)
-      setIssues(insights.issues)
-      setCustomers(custList.items)
-      setLeads(leadList.items)
-      setCompanies(compList.items)
+      setReadErrors(Object.fromEntries(Object.entries({ summary, activityFeed, taskList, insights, custList, leadList, compList }).filter(([, result]) => result.state !== "ready")))
+      setSummaryData(summary.state === "ready" ? summary.data : null)
+      setActivities(activityFeed.state === "ready" ? activityFeed.data : [])
+      setTasks(taskList.state === "ready" ? taskList.data : [])
+      setAiRecommendations(insights.state === "ready" ? insights.data.aiRecommendations : [])
+      setIssues(insights.state === "ready" ? insights.data.issues : [])
+      setCustomers(custList.state === "ready" ? custList.data.items : [])
+      setLeads(leadList.state === "ready" ? leadList.data.items : [])
+      setCompanies(compList.state === "ready" ? compList.data.items : [])
     } catch (err) {
-      console.error("Failed to load CRM data", err)
+      setReadErrors({ CRM: { state: "error", status: null, message: err instanceof Error ? err.message : "Failed to load CRM" } })
     } finally {
       setLoading(false)
     }
@@ -489,7 +503,7 @@ export function CrmModule() {
       const matchesSearch =
         !customerSearch ||
         `${c.first_name} ${c.last_name}`.toLowerCase().includes(customerSearch.toLowerCase()) ||
-        c.email.toLowerCase().includes(customerSearch.toLowerCase()) ||
+        (c.email ?? "").toLowerCase().includes(customerSearch.toLowerCase()) ||
         (c.account_number && c.account_number.toLowerCase().includes(customerSearch.toLowerCase()))
       const matchesStatus = customerStatusFilter === "all" || c.status.toLowerCase() === customerStatusFilter.toLowerCase()
       return matchesSearch && matchesStatus
@@ -498,20 +512,14 @@ export function CrmModule() {
 
   // ── Kanban Pipeline Grouping ───────────────────────────────────────────────
   const leadsByStage = useMemo(() => {
-    const map: Record<string, LeadItem[]> = {
-      NEW: [],
-      CONTACTED: [],
-      QUALIFIED: [],
-      PROPOSAL: [],
-      CONVERTED: [],
-    }
+    const map: Record<string, LeadItem[]> = Object.fromEntries(KANBAN_STAGES.map((stage) => [stage.id, []]))
 
     leads.forEach((l) => {
-      const statusUpper = (l.status || "NEW").toUpperCase()
+      const statusUpper = normalizeLeadStatus(l.status)
       if (map[statusUpper]) {
         map[statusUpper].push(l)
       } else {
-        map.NEW.push(l)
+        map.OTHER.push(l)
       }
     })
     return map
@@ -519,48 +527,53 @@ export function CrmModule() {
 
   // ── Kanban Advance Stage ───────────────────────────────────────────────────
   const handleAdvanceStage = async (lead: LeadItem) => {
-    const currentUpper = (lead.status || "NEW").toUpperCase()
-    const stageOrder = ["NEW", "CONTACTED", "QUALIFIED", "PROPOSAL", "CONVERTED"]
+    setMutationError(null)
+    const currentUpper = normalizeLeadStatus(lead.status)
+    const stageOrder = ["NEW", "CONTACTED", "QUALIFIED", "PROPOSAL", "NEGOTIATION"]
     const currentIndex = stageOrder.indexOf(currentUpper)
     if (currentIndex >= 0 && currentIndex < stageOrder.length - 1) {
       const nextStage = stageOrder[currentIndex + 1]
       try {
         const updated = await updateLead(lead.id, { status: nextStage })
-        if (updated) {
-          setLeads((prev) => prev.map((item) => (item.id === lead.id ? updated : item)))
-        }
+        if (!updated.ok) { setMutationError(updated.error.message); return }
+        setLeads((prev) => prev.map((item) => (item.id === lead.id ? updated.data : item)))
+        await loadCrmData()
       } catch (err) {
-        console.error("Failed to advance lead", err)
+        setMutationError(err instanceof Error ? err.message : "Could not advance lead")
       }
     }
   }
 
   // ── Convert Lead ───────────────────────────────────────────────────────────
   const handleConvertLead = async (leadId: string) => {
+    setMutationError(null)
     try {
       const newCustomer = await convertLead(leadId)
-      if (newCustomer) {
+      if (newCustomer.ok) {
         setLeads((prev) => prev.map((l) => (l.id === leadId ? { ...l, status: "CONVERTED" } : l)))
-        setCustomers((prev) => [newCustomer, ...prev])
-      }
+        setCustomers((prev) => [newCustomer.data, ...prev])
+        await loadCrmData()
+      } else setMutationError(newCustomer.error.message)
     } catch (err) {
-      console.error("Failed to convert lead", err)
+      setMutationError(err instanceof Error ? err.message : "Could not convert lead")
     }
   }
 
   // ── Create Lead ────────────────────────────────────────────────────────────
   const handleCreateLead = async () => {
-    if (!newLeadForm.first_name.trim() || !newLeadForm.last_name.trim()) return
+    if (!newLeadForm.first_name.trim() || !newLeadForm.last_name.trim()) { setMutationError("First and last name are required."); return }
     setSavingEntity(true)
+    setMutationError(null)
     try {
       const created = await createLead(newLeadForm)
-      if (created) {
-        setLeads((prev) => [created, ...prev])
+      if (created.ok) {
+        setLeads((prev) => [created.data, ...prev])
         setIsNewLeadOpen(false)
         setNewLeadForm({ first_name: "", last_name: "", email: "", phone: "", source: "PORTAL_WEBSITE", interested_package: "100 Mbps Fibre" })
-      }
+        await loadCrmData()
+      } else setMutationError(created.error.message)
     } catch (e) {
-      console.error(e)
+      setMutationError(e instanceof Error ? e.message : "Could not save record")
     } finally {
       setSavingEntity(false)
     }
@@ -568,17 +581,19 @@ export function CrmModule() {
 
   // ── Create Customer ────────────────────────────────────────────────────────
   const handleCreateCustomer = async () => {
-    if (!newCustForm.first_name.trim() || !newCustForm.last_name.trim() || !newCustForm.email.trim()) return
+    if (!newCustForm.first_name.trim() || !newCustForm.last_name.trim()) { setMutationError("First and last name are required."); return }
     setSavingEntity(true)
+    setMutationError(null)
     try {
       const created = await createCustomer(newCustForm)
-      if (created) {
-        setCustomers((prev) => [created, ...prev])
+      if (created.ok) {
+        setCustomers((prev) => [created.data, ...prev])
         setIsNewCustomerOpen(false)
         setNewCustForm({ first_name: "", last_name: "", email: "", phone: "", address: "", province: "gauteng" })
-      }
+        await loadCrmData()
+      } else setMutationError(created.error.message)
     } catch (e) {
-      console.error(e)
+      setMutationError(e instanceof Error ? e.message : "Could not save record")
     } finally {
       setSavingEntity(false)
     }
@@ -588,15 +603,17 @@ export function CrmModule() {
   const handleCreateCompany = async () => {
     if (!newCompForm.name.trim()) return
     setSavingEntity(true)
+    setMutationError(null)
     try {
       const created = await createCompany(newCompForm)
-      if (created) {
-        setCompanies((prev) => [created, ...prev])
+      if (created.ok) {
+        setCompanies((prev) => [created.data, ...prev])
         setIsNewCompanyOpen(false)
         setNewCompForm({ name: "", registration_number: "", industry: "Technology", contact_person: "", email: "", phone: "" })
-      }
+        await loadCrmData()
+      } else setMutationError(created.error.message)
     } catch (e) {
-      console.error(e)
+      setMutationError(e instanceof Error ? e.message : "Could not save record")
     } finally {
       setSavingEntity(false)
     }
@@ -608,8 +625,16 @@ export function CrmModule() {
     window.location.href = `/dashboard/call-center?dial=${encodeURIComponent(phone)}`
   }
 
+  if (Object.keys(readErrors).length > 0) {
+    return <div className="space-y-4">
+      {Object.entries(readErrors).map(([section, result]) => <NotConnected key={section} loadable={result} service={`CRM ${section}`} onRetry={loadCrmData} />)}
+      <Button onClick={loadCrmData} disabled={loading}>Retry CRM</Button>
+    </div>
+  }
+
   return (
     <div className="space-y-6">
+      {mutationError && <p role="alert" className="text-sm text-destructive">{mutationError}</p>}
       <PageHeader
         icon={<Users className="h-5 w-5 text-emerald-400" />}
         title="CRM & Customer 360"
@@ -654,7 +679,7 @@ export function CrmModule() {
             <TrendingUp className="h-3.5 w-3.5" /> Overview
           </TabsTrigger>
           <TabsTrigger value="pipeline" className="gap-1.5 text-xs data-[state=active]:text-purple-400">
-            <Kanban className="h-3.5 w-3.5" /> Pipeline ({leads.length})
+            <Kanban className="h-3.5 w-3.5" /> Pipeline ({summaryData?.totalLeads ?? leads.length})
           </TabsTrigger>
           <TabsTrigger value="funnel" className="gap-1.5 text-xs data-[state=active]:text-blue-400">
             <Target className="h-3.5 w-3.5" /> Lead Funnel
@@ -841,7 +866,7 @@ export function CrmModule() {
                             </Badge>
                           </td>
                           <td className="py-3 px-4 text-muted-foreground">
-                            {cust.customer_type}
+                            {cust.customer_type ?? "Not assessed"}
                           </td>
                           <td className="py-3 px-4 text-muted-foreground capitalize">
                             {cust.province || "Gauteng"}
@@ -901,7 +926,7 @@ export function CrmModule() {
         <TabsContent value="pipeline" className="space-y-4 pt-4">
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Drag or advance leads through stages. Qualified leads can be converted into active subscriber accounts with one click.
+              Advance open leads through stages or use Convert to create or link a customer. This board shows up to 100 loaded leads; aggregate counts come from CRM.
             </p>
             <Button size="sm" variant="outline" className="gap-1.5 text-xs" onClick={() => setIsNewLeadOpen(true)}>
               <Plus className="h-3.5 w-3.5" /> Add Lead
@@ -962,7 +987,7 @@ export function CrmModule() {
 
                           {/* Action footer */}
                           <div className="flex items-center justify-between pt-1 gap-1">
-                            {col.id !== "CONVERTED" ? (
+                            {col.id !== "CONVERTED" && !isClosedLostStatus(col.id) && col.id !== "OTHER" ? (
                               <>
                                 <Button
                                   size="sm"
@@ -976,6 +1001,7 @@ export function CrmModule() {
                                   size="sm"
                                   variant="outline"
                                   className="h-6 px-2 text-[10px] gap-1 ml-auto text-muted-foreground hover:text-foreground"
+                                  disabled={col.id === "NEGOTIATION"}
                                   onClick={() => handleAdvanceStage(lead)}
                                 >
                                   Advance <ArrowRight className="h-2.5 w-2.5" />
@@ -983,7 +1009,7 @@ export function CrmModule() {
                               </>
                             ) : (
                               <span className="flex items-center gap-1 text-[10px] font-medium text-emerald-400">
-                                <CheckCircle2 className="h-3 w-3" /> Active Customer
+                                <CheckCircle2 className="h-3 w-3" /> {col.id === "CONVERTED" ? "Converted Customer" : lead.status}
                               </span>
                             )}
                           </div>
@@ -1041,7 +1067,7 @@ export function CrmModule() {
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Payment Terms:</span>
-                      <span className="text-foreground">{comp.payment_terms || "Net 30"}</span>
+                      <span className="text-foreground">{comp.payment_terms || "Not provided"}</span>
                     </div>
                     <div className="flex items-center justify-between">
                       <span>Contact Person:</span>
@@ -1123,11 +1149,13 @@ export function CrmModule() {
         {/* TAB 6: LEAD FUNNEL BY CHANNEL                                     */}
         {/* ───────────────────────────────────────────────────────────────── */}
         <TabsContent value="funnel" className="space-y-6 pt-4">
-          <ErrorBoundary fallbackTitle="Lead Funnel View encountered an issue">
-            <LeadFunnelView
-              onNavigateToLeads={() => setActiveTab("pipeline")}
-            />
-          </ErrorBoundary>
+          <Card><CardHeader><CardTitle>Lead stage distribution</CardTitle><CardDescription>Current lead statuses across all leads. Stage populations are not transition conversion rates.</CardDescription></CardHeader><CardContent>
+            {summaryData?.leadStatusCounts == null ? <p className="text-sm text-muted-foreground">All-lead stage counts are unavailable.</p> : <table className="w-full text-sm">
+              <thead><tr><th className="text-left">Stage</th><th>Leads</th><th>Share of all leads</th></tr></thead>
+              <tbody>{leadStageDistribution(summaryData.leadStatusCounts).map(({ stage, count, pctOfTotal }) => <tr key={stage}><td className="py-2">{stage}</td><td className="text-center">{count}</td><td className="text-center">{pctOfTotal}%</td></tr>)}</tbody>
+            </table>}
+            <Button variant="outline" className="mt-3" onClick={() => setActiveTab("pipeline")}>View loaded leads</Button>
+          </CardContent></Card>
         </TabsContent>
 
         {/* ───────────────────────────────────────────────────────────────── */}
@@ -1144,6 +1172,7 @@ export function CrmModule() {
       {/* Slide-over Customer 360 Sheet                                      */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       <CustomerSheet
+        key={selectedCustomer?.id}
         customer={selectedCustomer}
         onClose={() => setSelectedCustomer(null)}
         onCall={handleCallCustomer}
@@ -1154,6 +1183,7 @@ export function CrmModule() {
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {isNewLeadOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          {mutationError && <p role="alert" className="absolute top-8 rounded bg-card p-4 text-destructive">{mutationError}</p>}
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h3 className="text-sm font-semibold text-foreground">Create New Lead</h3>
@@ -1209,6 +1239,7 @@ export function CrmModule() {
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {isNewCustomerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          {mutationError && <p role="alert" className="absolute top-8 rounded bg-card p-4 text-destructive">{mutationError}</p>}
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h3 className="text-sm font-semibold text-foreground">Add New Customer</h3>
@@ -1271,6 +1302,7 @@ export function CrmModule() {
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {isNewCompanyOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          {mutationError && <p role="alert" className="absolute top-8 rounded bg-card p-4 text-destructive">{mutationError}</p>}
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <h3 className="text-sm font-semibold text-foreground">Register B2B Company</h3>

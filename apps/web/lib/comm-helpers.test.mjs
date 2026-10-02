@@ -2,7 +2,7 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import {
-  displayNameFromUser, resolveAuthorLabel, nextPollDelay, reconnectDelay, shouldStopReconnect, corpTargetText, looksLikeUuid, WS_AUTH_CLOSE_CODES,
+  displayNameFromUser, resolveAuthorLabel, nextPollDelay, reconnectDelay, shouldStopReconnect, corpTargetText, looksLikeUuid, WS_AUTH_CLOSE_CODES, wsClosePolicy,
 } from "./comm-helpers.ts"
 
 const U = "11111111-1111-4111-8111-111111111111"
@@ -49,10 +49,19 @@ test("corpTargetText", () => {
 })
 
 test("shouldStopReconnect stops on the service's own close codes", () => {
-  for (const c of [1008, 4001, 4003, 4401, 4403, 4408]) {
+  for (const c of [1008, 1009, 4001, 4003, 4401, 4403]) {
     assert.equal(shouldStopReconnect(c, 0), true, String(c))
     assert.ok(WS_AUTH_CLOSE_CODES.includes(c))
   }
   assert.equal(shouldStopReconnect(1006, 0), false)
   assert.equal(shouldStopReconnect(1006, 6), true)
+})
+
+test("socket stops denial codes, backs off rate limits and retries idle once immediately", () => {
+  const context = { attempt: 0, wasOpen: true, immediateUsed: false }
+  for (const code of [4001, 4003]) assert.equal(wsClosePolicy(code, context).action, "stop")
+  assert.ok(wsClosePolicy(4429, context).delayMs >= 30000)
+  assert.equal(wsClosePolicy(4408, context).immediate, true)
+  assert.ok(wsClosePolicy(4408, { ...context, immediateUsed: true }).delayMs > 0)
+  assert.equal(wsClosePolicy(1006, { ...context, wasOpen: false, attempt: 5 }).action, "stop")
 })

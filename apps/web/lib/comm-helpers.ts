@@ -54,13 +54,42 @@ export function reconnectDelay(attempt: number, rand: number = Math.random(), ba
   return Math.min(Math.round(raw * jitter), cap)
 }
 
-// 4001/4003 = communication service auth/channel-access denied; 4408 = idle (unanswered pings) close
-export const WS_AUTH_CLOSE_CODES = [1008, 4001, 4003, 4401, 4403, 4408]
+// Closes after which reconnecting cannot succeed (or must not resend what caused the close):
+// 1008/4401/4403 auth style, 4001 bad identity, 4003 channel/origin denied, 1009 frame too large.
+// 4408 (idle) and 4429 (rate/connection cap) have their own policy in wsClosePolicy().
+export const WS_AUTH_CLOSE_CODES = [1008, 1009, 4001, 4003, 4401, 4403]
+export const WS_IDLE_CLOSE_CODE = 4408
+export const WS_RATE_CLOSE_CODE = 4429
+export const WS_RATE_BACKOFF_MS = 30_000
 export const WS_MAX_FAILURES = 5
 
 /** Stop reconnecting after an auth-style close or too many consecutive failures. */
 export function shouldStopReconnect(code: number, consecutiveFailures: number): boolean {
   return WS_AUTH_CLOSE_CODES.includes(code) || consecutiveFailures > WS_MAX_FAILURES
+}
+
+export type WsCloseDecision = { action: "stop"; reason: string } | { action: "retry"; delayMs: number; immediate?: boolean }
+
+/**
+ * What to do when the socket closes.
+ *  - 1009/4001/4003/4401/4403/1008: stop (never resend the oversized frame, never hammer a denied channel)
+ *  - 4429: back off at least 30s (+ jitter)
+ *  - 4408: server dropped an idle socket: reconnect once immediately, then normal back-off
+ *  - anything else: exponential back-off, stop after WS_MAX_FAILURES consecutive failed attempts
+ * attempt = consecutive failures so far; wasOpen = this socket had opened; immediateUsed = the one free
+ * 4408 reconnect was already spent since the last successful open.
+ */
+export function wsClosePolicy(
+  code: number,
+  ctx: { attempt: number; wasOpen: boolean; immediateUsed: boolean; rand?: number },
+): WsCloseDecision {
+  const rand = ctx.rand ?? Math.random()
+  if (WS_AUTH_CLOSE_CODES.includes(code)) return { action: "stop", reason: code === 1009 ? "frame too large" : "not allowed" }
+  if (code === WS_RATE_CLOSE_CODE) return { action: "retry", delayMs: WS_RATE_BACKOFF_MS + Math.round(rand * 5_000) }
+  if (code === WS_IDLE_CLOSE_CODE && !ctx.immediateUsed) return { action: "retry", delayMs: 0, immediate: true }
+  const failures = ctx.wasOpen ? 0 : ctx.attempt + 1
+  if (failures > WS_MAX_FAILURES) return { action: "stop", reason: "too many failed attempts" }
+  return { action: "retry", delayMs: reconnectDelay(ctx.wasOpen ? 0 : ctx.attempt, rand) }
 }
 
 /** Target text for the corporate sales tile: only when a real target AND real actual exist. */

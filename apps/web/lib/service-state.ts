@@ -50,6 +50,10 @@ export function describeLoadable(l: Loadable<unknown>, serviceLabel = "Service")
         detail: `${serviceLabel} is not reachable${l.status ? ` (HTTP ${l.status})` : ""}. No figures are shown until it is connected.`,
       }
     case "denied":
+      if (l.status === 401) return {
+        title: "Session not verified",
+        detail: "Retry to verify your session. If this continues, sign in again.",
+      }
       return {
         title: "Not permitted",
         detail: `You do not have access to ${serviceLabel} data (HTTP ${l.status}).`,
@@ -72,7 +76,7 @@ export function tileLabel(l: Loadable<unknown>): string | null {
     case "unreachable":
       return "Service not running"
     case "denied":
-      return "Not permitted"
+      return l.status === 401 ? "Session not verified" : "Not permitted"
     case "error":
       return "Error loading"
     default:

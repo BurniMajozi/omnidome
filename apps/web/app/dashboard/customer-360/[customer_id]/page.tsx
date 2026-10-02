@@ -16,7 +16,9 @@ import Link from "next/link"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { supabase } from "@/lib/supabase/client"
+import { loadCustomer360, loadCustomer360Section } from "@/lib/crm-api"
+import { formatTier, read360Meta, formatReliability, formatRecommendation } from "@/lib/crm-derive"
+import { describeLoadable } from "@/lib/service-state"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -24,10 +26,10 @@ interface CustomerBasicInfo {
   id: string
   first_name: string
   last_name: string
-  email: string
-  phone: string | null
+  email: string | null
+  phone?: string | null
   status: string
-  account_number: string
+  account_number?: string | null
   tier?: string
 }
 
@@ -51,161 +53,40 @@ function getTierVariant(tier: string | undefined): "default" | "secondary" | "de
   return "outline"
 }
 
-function formatTier(tier: string | undefined): string {
-  if (!tier) return "BRONZE"
-  return tier.toUpperCase()
-}
-
 // ─── Tab placeholder panels ─────────────────────────────────────────────────
 
-function DetailsTab({ customerId }: { customerId: string }) {
+function SectionTab({ customerId, section }: { customerId: string; section: TabId }) {
   const [data, setData] = useState<unknown>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch(`/svc/crm/customers/${customerId}/360/details`, { cache: "no-store" })
-        if (!res.ok) throw new Error(`Failed: ${res.status}`)
-        const json = await res.json()
-        if (!cancelled) setData(json)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load details")
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
+    setLoading(true)
+    setData(null)
+    setError(null)
+    loadCustomer360Section(customerId, section).then((result) => {
+      if (cancelled) return
+      if (result.state === "ready") setData(result.data)
+      else setError(describeLoadable(result, `CRM ${section}`)?.detail ?? "Section unavailable")
+      setLoading(false)
+    })
     return () => { cancelled = true }
-  }, [customerId])
-
+  }, [customerId, section, attempt])
   if (loading) return <TabLoader />
-  if (error) return <TabError message={error} />
-  return (
-    <Card className="border-border bg-card">
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">
-          Customer Details data loaded. Raw payload:
-        </p>
-        <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-secondary/50 p-4 text-xs text-foreground">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      </CardContent>
-    </Card>
-  )
-}
-
-function CXTab({ customerId }: { customerId: string }) {
-  const [data, setData] = useState<unknown>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch(`/svc/crm/customers/${customerId}/360/cx`, { cache: "no-store" })
-        if (!res.ok) throw new Error(`Failed: ${res.status}`)
-        const json = await res.json()
-        if (!cancelled) setData(json)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load CX data")
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [customerId])
-
-  if (loading) return <TabLoader />
-  if (error) return <TabError message={error} />
-  return (
-    <Card className="border-border bg-card">
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">Customer Experience data loaded.</p>
-        <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-secondary/50 p-4 text-xs text-foreground">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      </CardContent>
-    </Card>
-  )
-}
-
-function CRMTab({ customerId }: { customerId: string }) {
-  const [data, setData] = useState<unknown>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch(`/svc/crm/customers/${customerId}/360/crm`, { cache: "no-store" })
-        if (!res.ok) throw new Error(`Failed: ${res.status}`)
-        const json = await res.json()
-        if (!cancelled) setData(json)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load CRM data")
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [customerId])
-
-  if (loading) return <TabLoader />
-  if (error) return <TabError message={error} />
-  return (
-    <Card className="border-border bg-card">
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">CRM / Sales Pipeline data loaded.</p>
-        <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-secondary/50 p-4 text-xs text-foreground">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      </CardContent>
-    </Card>
-  )
-}
-
-function CVMTab({ customerId }: { customerId: string }) {
-  const [data, setData] = useState<unknown>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      try {
-        const res = await fetch(`/svc/crm/customers/${customerId}/360/cvm`, { cache: "no-store" })
-        if (!res.ok) throw new Error(`Failed: ${res.status}`)
-        const json = await res.json()
-        if (!cancelled) setData(json)
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load CVM data")
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    load()
-    return () => { cancelled = true }
-  }, [customerId])
-
-  if (loading) return <TabLoader />
-  if (error) return <TabError message={error} />
-  return (
-    <Card className="border-border bg-card">
-      <CardContent className="pt-6">
-        <p className="text-sm text-muted-foreground">Customer Value Management data loaded.</p>
-        <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-secondary/50 p-4 text-xs text-foreground">
-          {JSON.stringify(data, null, 2)}
-        </pre>
-      </CardContent>
-    </Card>
-  )
+  if (error) return <div><TabError message={error} /><button className="mt-3 text-sm text-primary" onClick={() => setAttempt((n) => n + 1)}>Retry section</button></div>
+  const meta = read360Meta(data)
+  const cvm = data as { churn_prediction?: unknown; financial_summary?: { payment_reliability_pct?: number | null }; cvm_summary?: { customer_tier?: string; recommended_action?: string } } | null
+  return <Card className="border-border bg-card"><CardContent className="pt-6">
+    {meta.partial && <div role="alert" className="mb-3 text-sm text-destructive">Some sections are unavailable: {Object.entries(meta.sectionErrors).map(([name, message]) => `${name}: ${message}`).join("; ")}</div>}
+    {section === "cvm" && <div className="mb-3 text-sm text-muted-foreground">
+      <p>Tier: {formatTier(cvm?.cvm_summary?.customer_tier)}</p>
+      <p>Payment reliability: {formatReliability(cvm?.financial_summary?.payment_reliability_pct)}</p>
+      <p>Recommendation: {formatRecommendation(cvm?.cvm_summary?.recommended_action)}</p>
+      {!cvm?.churn_prediction && <p>Churn prediction: Not assessed</p>}
+    </div>}
+    <pre className="max-h-96 overflow-auto rounded-lg bg-secondary/50 p-4 text-xs text-foreground">{JSON.stringify(data, null, 2)}</pre>
+  </CardContent></Card>
 }
 
 function TabLoader() {
@@ -276,9 +157,12 @@ export default function Customer360Page() {
   const [error, setError] = useState<string | null>(null)
 
   // Track which tabs have been activated (lazy-load gate)
+  const [activeTab, setActiveTab] = useState<TabId>("details")
+  const [headerAttempt, setHeaderAttempt] = useState(0)
   const [activatedTabs, setActivatedTabs] = useState<Set<TabId>>(new Set(["details"]))
 
   const handleTabChange = useCallback((value: string) => {
+    setActiveTab(value as TabId)
     setActivatedTabs((prev) => {
       const next = new Set(prev)
       next.add(value as TabId)
@@ -286,21 +170,19 @@ export default function Customer360Page() {
     })
   }, [])
 
-  // Fetch customer basic info from Supabase
+  // CRM enforces tenant scope and redaction for the header.
   useEffect(() => {
     let cancelled = false
 
     async function loadCustomer() {
+      setLoading(true)
+      setError(null)
+      setCustomer(null)
       try {
-        const { data, error: sbError } = await supabase
-          .from("customers")
-          .select("id, first_name, last_name, email, phone, status, account_number")
-          .eq("id", customerId)
-          .single()
-
-        if (sbError) throw sbError
-        if (!cancelled && data) {
-          setCustomer(data as CustomerBasicInfo)
+        const result = await loadCustomer360(customerId)
+        if (!cancelled) {
+          if (result.state === "ready") setCustomer(result.data)
+          else setError(describeLoadable(result, "CRM customer")?.detail ?? "Customer unavailable")
         }
       } catch (err) {
         if (!cancelled) {
@@ -313,7 +195,7 @@ export default function Customer360Page() {
 
     if (customerId) loadCustomer()
     return () => { cancelled = true }
-  }, [customerId])
+  }, [customerId, headerAttempt])
 
   if (loading) {
     return (
@@ -331,6 +213,7 @@ export default function Customer360Page() {
         <p className="text-sm text-muted-foreground">
           {error ?? "Customer not found"}
         </p>
+        <button className="text-sm text-primary" onClick={() => setHeaderAttempt((n) => n + 1)}>Retry customer</button>
         <Link
           href="/dashboard"
           className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
@@ -357,7 +240,7 @@ export default function Customer360Page() {
       <CustomerHeader customer={customer} />
 
       {/* Tab bar */}
-      <Tabs defaultValue="details" value="details" onValueChange={handleTabChange}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="w-full sm:w-auto">
           <TabsTrigger value="details" className="gap-2">
             <User className="h-4 w-4" />
@@ -384,22 +267,22 @@ export default function Customer360Page() {
         <div className="mt-4">
           {activatedTabs.has("details") && (
             <TabsContent value="details">
-              <DetailsTab customerId={customerId} />
+              <SectionTab key={customerId} customerId={customerId} section="details" />
             </TabsContent>
           )}
           {activatedTabs.has("cx") && (
             <TabsContent value="cx">
-              <CXTab customerId={customerId} />
+              <SectionTab key={customerId} customerId={customerId} section="cx" />
             </TabsContent>
           )}
           {activatedTabs.has("crm") && (
             <TabsContent value="crm">
-              <CRMTab customerId={customerId} />
+              <SectionTab key={customerId} customerId={customerId} section="crm" />
             </TabsContent>
           )}
           {activatedTabs.has("cvm") && (
             <TabsContent value="cvm">
-              <CVMTab customerId={customerId} />
+              <SectionTab key={customerId} customerId={customerId} section="cvm" />
             </TabsContent>
           )}
         </div>

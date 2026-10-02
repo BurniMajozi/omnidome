@@ -2,20 +2,49 @@
  * OmniDome Customer Lifecycle API client.
  */
 
+import { detailMessage } from "@/lib/crm-derive"
+
 const LIFECYCLE_API = "/api/lifecycle"
+
+/**
+ * Identity: the lifecycle service takes the tenant ONLY from the signed
+ * identity the edge gate injects. This client therefore sends no tenant_id
+ * (a differing one is a 403 server-side). Errors carry the HTTP `status` so the
+ * UI can tell "service not running" from "not permitted" from "empty".
+ */
+export class LifecycleApiError extends Error {
+  status: number | null
+  constructor(message: string, status: number | null) {
+    super(message)
+    this.name = "LifecycleApiError"
+    this.status = status
+  }
+}
 
 async function fetchLifecycle<T>(path: string, options?: RequestInit): Promise<T> {
   const url = `${LIFECYCLE_API}${path}`
-  const res = await fetch(url, {
-    ...options,
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    cache: "no-store",
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || `Lifecycle API error: ${res.status}`)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      cache: "no-store",
+      signal: options?.signal ?? AbortSignal.timeout(15_000),
+    })
+  } catch {
+    throw new LifecycleApiError("Lifecycle service did not respond", null)
   }
-  return res.json()
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}) as Record<string, unknown>)
+    const detail = detailMessage(err)
+    throw new LifecycleApiError(detail || `Lifecycle API error: ${res.status}`, res.status)
+  }
+  if (res.status === 204) return null as T
+  try {
+    return await res.json()
+  } catch {
+    throw new LifecycleApiError("Lifecycle service returned an invalid response", res.status)
+  }
 }
 
 export interface LifecycleStage {
@@ -45,7 +74,7 @@ export interface CustomerLifecycle {
   current_stage: string
   is_at_risk: boolean
   health_score: number
-  churn_probability?: number
+  churn_probability?: number | null
   risk_reason?: string
   monthly_recurring_revenue: number
   current_plan?: string
@@ -65,82 +94,75 @@ export interface DashboardData {
 }
 
 export interface FunnelData {
-  funnel: { stage: string; entries: number }[]
+  /** `customers` = distinct customers per stage (server-side); `entries` = transition events. */
+  funnel: { stage: string; entries: number; customers?: number }[]
 }
 
 export const lifecycleApi = {
-  // Stages
-  ensureStages: (tenantId: string) =>
-    fetchLifecycle<{ stages: LifecycleStage[]; message: string }>(
-      `/lifecycle/stages?tenant_id=${tenantId}`,
-      { method: "POST" }
-    ),
-  listStages: (tenantId: string) =>
-    fetchLifecycle<{ stages: LifecycleStage[] }>(
-      `/lifecycle/stages?tenant_id=${tenantId}`
-    ),
+  // Stages. ensureStages creates defaults and is a WRITE: call it once, only
+  // when listStages returns nothing and the caller is admin tier.
+  ensureStages: () =>
+    fetchLifecycle<{ stages: LifecycleStage[]; message: string }>(`/lifecycle/stages`, { method: "POST" }),
+  listStages: () => fetchLifecycle<{ stages: LifecycleStage[] }>(`/lifecycle/stages`),
 
   // Transitions
-  transition: (tenantId: string, data: {
+  transition: (data: {
     customer_id: string
     to_stage: string
     reason?: string
     trigger_source?: string
     trigger_id?: string
   }) =>
-    fetchLifecycle(`/lifecycle/transition?tenant_id=${tenantId}`, {
+    fetchLifecycle(`/lifecycle/transition`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  listEvents: (tenantId: string, customerId?: string, limit?: number) =>
-    fetchLifecycle<{ events: LifecycleEvent[] }>(
-      `/lifecycle/events?tenant_id=${tenantId}${customerId ? `&customer_id=${customerId}` : ""}&limit=${limit || 50}`
-    ),
+  listEvents: (customerId?: string, limit?: number) => {
+    const qs = new URLSearchParams()
+    if (customerId) qs.set("customer_id", customerId)
+    qs.set("limit", String(limit || 50))
+    return fetchLifecycle<{ events: LifecycleEvent[] }>(`/lifecycle/events?${qs}`)
+  },
 
   // Customer lifecycle
-  getCustomerLifecycle: (customerId: string, tenantId: string) =>
-    fetchLifecycle<{ lifecycle: CustomerLifecycle | null }>(
-      `/lifecycle/customer/${customerId}?tenant_id=${tenantId}`
-    ),
-  listLifecycles: (tenantId: string, params?: {
+  getCustomerLifecycle: (customerId: string) =>
+    fetchLifecycle<{ lifecycle: CustomerLifecycle | null }>(`/lifecycle/customer/${encodeURIComponent(customerId)}`),
+  listLifecycles: (params?: {
     stage?: string
     is_at_risk?: boolean
     page?: number
     page_size?: number
   }) => {
-    const qs = new URLSearchParams({ tenant_id: tenantId })
+    const qs = new URLSearchParams()
     if (params?.stage) qs.set("stage", params.stage)
     if (params?.is_at_risk !== undefined) qs.set("is_at_risk", String(params.is_at_risk))
     if (params?.page) qs.set("page", String(params.page))
     if (params?.page_size) qs.set("page_size", String(params.page_size))
-    return fetchLifecycle<{ lifecycles: CustomerLifecycle[]; total: number }>(
-      `/lifecycle/customers?${qs}`
-    )
+    const q = qs.toString()
+    return fetchLifecycle<{ lifecycles: CustomerLifecycle[]; total: number }>(`/lifecycle/customers${q ? `?${q}` : ""}`)
   },
 
   // Dashboard
-  getDashboard: (tenantId: string, days?: number) =>
-    fetchLifecycle<DashboardData>(`/lifecycle/dashboard?tenant_id=${tenantId}&days=${days || 30}`),
-  getFunnel: (tenantId: string, days?: number) =>
-    fetchLifecycle<FunnelData>(`/lifecycle/funnel?tenant_id=${tenantId}&days=${days || 30}`),
+  getDashboard: (days?: number) => fetchLifecycle<DashboardData>(`/lifecycle/dashboard?days=${days || 30}`),
+  getFunnel: (days?: number) => fetchLifecycle<FunnelData>(`/lifecycle/funnel?days=${days || 30}`),
 
-  // Bridges (called by other services)
+  // Bridges (called by other services; tenant comes from the signed identity)
   recordSale: (data: {
-    tenant_id: string; customer_id: string; deal_id: string
+    customer_id: string; deal_id: string
     agent_id?: string; plan?: string; monthly_recurring_revenue?: number; lead_id?: string
   }) =>
     fetchLifecycle(`/lifecycle/from-sale`, { method: "POST", body: JSON.stringify(data) }),
   recordJourneyOutcome: (data: {
-    tenant_id: string; customer_id: string; cancel_event_id: string
+    customer_id: string; cancel_event_id: string
     outcome: string; journey_id?: string; offer_id?: string; reason?: string
   }) =>
     fetchLifecycle(`/lifecycle/from-journey`, { method: "POST", body: JSON.stringify(data) }),
 
   // Context
-  getContext: (customerId: string, tenantId: string) =>
+  getContext: (customerId: string) =>
     fetchLifecycle<{
       lifecycle: CustomerLifecycle | null
       recent_events: LifecycleEvent[]
       available_stages: LifecycleStage[]
-    }>(`/lifecycle/context/${customerId}?tenant_id=${tenantId}`),
+    }>(`/lifecycle/context/${encodeURIComponent(customerId)}`),
 }

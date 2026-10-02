@@ -2,7 +2,10 @@
 
 import { useEffect, useState, useCallback, useRef, useMemo } from "react"
 import { cn } from "@/lib/utils"
-import { useChannelSocket } from "@/lib/useChannelSocket"
+import { useChannelSocket, type WsMessageEvent } from "@/lib/useChannelSocket"
+import { useRoles } from "@/lib/use-roles"
+import { commRequest, HISTORY_PAGE_SIZE } from "@/lib/comm-api"
+import { newClientMsgId, upsertMessage, reconcileSend, prependOlder, mergeNewestPage, parseHistoryPage, sendFailure, actionError, decisionError, canManageChannel, isManagerRole, APPROVAL_STATES, MESSAGE_MAX_CHARS } from "@/lib/comm-messages"
 import { listLoadable, type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { supabase, getSessionSafe } from "@/lib/supabase/client"
@@ -80,6 +83,7 @@ import {
 
 interface Channel {
   id: string
+  created_by?: string | null
   name: string
   isPrivate?: boolean
   is_private?: boolean
@@ -105,13 +109,15 @@ interface SystemMessage {
 
 interface AgentApproval {
   id: string
+  created_by?: string | null
+  user_id?: string | null
   agent: string
   avatar: string
   type: "discount" | "refund" | "credit" | "override"
   customer: string
   amount: string
   reason: string
-  status: "pending" | "approved" | "rejected"
+  status: typeof APPROVAL_STATES[number]
   time: string
 }
 
@@ -137,6 +143,12 @@ interface ActivityItem {
 
 interface Message {
   id: string
+  client_msg_id?: string | null
+  pending?: boolean
+  failed?: boolean
+  sendError?: string
+  retryable?: boolean
+  thread_parent_id?: string | null
   channel_id?: string | null
   user_id?: string | null
   author_name?: string | null
@@ -146,6 +158,7 @@ interface Message {
   reactions?: { emoji: string; count: number }[]
   thread?: number
   isPinned?: boolean
+  is_pinned?: boolean
 }
 
 interface Task {
@@ -269,6 +282,19 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const [channelsState, setChannelsState] = useState<Loadable<Channel[]>>({ state: "loading" })
   const [channelsReload, setChannelsReload] = useState(0)
   const [loadingMessages, setLoadingMessages] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+  const [nextBefore, setNextBefore] = useState<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [historyReload, setHistoryReload] = useState(0)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
+  const { roles } = useRoles()
+  const sendsInFlight = useRef(new Set<string>())
+  const unconfirmedSends = useRef(new Map<string, Message>())
+  const bufferedOwnMessages = useRef(new Map<string, Message>())
+  const historyGeneration = useRef(0)
+  const channelGeneration = useRef(0)
+  const historyChannel = useRef<string | undefined>(undefined)
+  const olderInFlight = useRef(false)
   const [tasks, setTasks] = useState<Task[]>(seedTasks)
   const [approvals, setApprovals] = useState<AgentApproval[]>(seedApprovals)
   const [escalations, setEscalations] = useState<Escalation[]>(seedEscalations)
@@ -308,6 +334,10 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const [newChannelName, setNewChannelName] = useState("")
   const [newChannelPrivate, setNewChannelPrivate] = useState(false)
   const [creatingChannel, setCreatingChannel] = useState(false)
+  const [managedChannel, setManagedChannel] = useState<Channel | null>(null)
+  const [managedName, setManagedName] = useState("")
+  const [managedInvites, setManagedInvites] = useState<Set<string>>(new Set())
+  const [managingChannel, setManagingChannel] = useState(false)
   const [teamUsers, setTeamUsers] = useState<{ id: string; name: string; email?: string }[]>(DEFAULT_TEAM_USERS)
   const [selectedInvites, setSelectedInvites] = useState<Set<string>>(new Set())
   const [replyTo, setReplyTo] = useState<Message | null>(null)
@@ -348,6 +378,8 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   )
   const activeChannel = channels.find((channel) => channel.name === selectedChannel) ?? channels[0]
   const activeChannelId = activeChannel?.id
+  const activeChannelRef = useRef(activeChannelId)
+  useEffect(() => { activeChannelRef.current = activeChannelId }, [activeChannelId])
   const isUuid = (value?: string | null) =>
     !!value &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
@@ -367,15 +399,22 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     return () => listener.subscription.unsubscribe()
   }, [])
 
-  const handleIncomingMessage = useCallback((data: { id: string; user_id?: string; author_name?: string; author_avatar?: string; content: string; created_at: string; [key: string]: unknown }) => {
+  const handleIncomingMessage = useCallback((data: WsMessageEvent["data"] & { author_avatar?: string | null }) => {
+    if (data.channel_id !== activeChannelRef.current) return
+    // MessageRead currently omits client_msg_id in WS events. Wait for the POST's real id
+    // rather than guessing by content (two identical sends or another device are distinct).
+    if (!data.client_msg_id && data.user_id === me.id && unconfirmedSends.current.size) {
+      bufferedOwnMessages.current.set(data.id, data)
+      return
+    }
+    if (data.client_msg_id) unconfirmedSends.current.delete(data.client_msg_id)
     setMessages((prev) => {
-      // Deduplicate — optimistic messages sent by us are already in state
-      if (prev.some((m) => m.id === data.id)) return prev
       const name = authorLabel(data.user_id, data.author_name)
-      return [
-        ...prev,
-        {
+      return upsertMessage(prev, {
+          ...data,
           id: data.id,
+          client_msg_id: typeof data.client_msg_id === "string" ? data.client_msg_id : null,
+          channel_id: typeof data.channel_id === "string" ? data.channel_id : null,
           user_id: data.user_id ?? null,
           author_name: name,
           author_avatar: data.author_avatar || name.slice(0, 2).toUpperCase(),
@@ -383,10 +422,9 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
           created_at: data.created_at,
           reactions: [],
           isPinned: false,
-        },
-      ]
+        })
     })
-  }, [authorLabel])
+  }, [authorLabel, me.id])
 
   const handleTyping = useCallback(({ user_id }: { user_id: string }) => {
     setTypingUsers((prev) => new Set(prev).add(user_id))
@@ -414,11 +452,12 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     const loadChannels = async () => {
       setLoadingChannels(true)
       try {
-        const response = await fetch("/api/chat/channels")
-        const payload = await response.json().catch(() => null)
+        const response = await commRequest("GET", "/api/chat/channels")
+        const payload = response.data
         if (!isMounted) return
         const next = listLoadable<Channel>(response.status, payload)
         setChannelsState(next)
+        if (!response.ok) setActionMessage(actionError(response.status, response.detail, "Load channels"))
         if (next.state === "ready") {
           setChannels(next.data)
           if (next.data.length > 0) {
@@ -446,42 +485,71 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   }, [channelsReload])
 
   useEffect(() => {
-    let isMounted = true
-    if (!activeChannelId) {
+    const generation = ++historyGeneration.current
+    const controller = new AbortController()
+    if (historyChannel.current !== activeChannelId) {
+      historyChannel.current = activeChannelId
+      channelGeneration.current++
       setMessages([])
-      return () => {
-        isMounted = false
-      }
+      unconfirmedSends.current.clear()
+      bufferedOwnMessages.current.clear()
     }
-    if (!isUuid(activeChannelId)) {
-      setMessages([])
-      return () => {
-        isMounted = false
-      }
-    }
+    setReplyTo(null)
+    setHistoryError(null)
+    setNextBefore(null)
+    setLoadingOlder(false)
+    olderInFlight.current = false
+    setLoadingMessages(!!activeChannelId)
+    if (!activeChannelId) return
+    void (async () => {
+      const result = await commRequest("GET", `/api/chat/messages?channel_id=${encodeURIComponent(activeChannelId)}&limit=${HISTORY_PAGE_SIZE}`, undefined, { signal: controller.signal })
+      if (generation !== historyGeneration.current || controller.signal.aborted) return
+      if (result.ok) {
+        const page = parseHistoryPage(result.data)
+        const rows = (page.items as Message[]).filter((row) => {
+          if (!row.client_msg_id && row.user_id === me.id && unconfirmedSends.current.size) {
+            bufferedOwnMessages.current.set(row.id, row)
+            return false
+          }
+          return true
+        })
+        setMessages((prev) => mergeNewestPage(prev, rows))
+        setNextBefore(page.has_more ? page.next_before : null)
+      } else setHistoryError(actionError(result.status, result.detail, "Loading messages"))
+      setLoadingMessages(false)
+    })()
+    return () => { controller.abort() }
+  }, [activeChannelId, historyReload, me.id])
 
-    const loadMessages = async () => {
-      setLoadingMessages(true)
-      try {
-        const response = await fetch(`/api/chat/messages?channel_id=${activeChannelId}`)
-        const payload = await response.json()
-        if (!isMounted) return
-        if (Array.isArray(payload.data)) {
-          setMessages(payload.data)
-        }
-      } catch (error) {
-        console.error("Failed to load messages", error)
-        if (isMounted) setMessages([])
-      } finally {
-        if (isMounted) setLoadingMessages(false)
-      }
-    }
+  const loadOlder = async () => {
+    if (!activeChannelId || !nextBefore || olderInFlight.current) return
+    olderInFlight.current = true
+    setLoadingOlder(true)
+    const generation = historyGeneration.current
+    const result = await commRequest("GET", `/api/chat/messages?channel_id=${encodeURIComponent(activeChannelId)}&limit=${HISTORY_PAGE_SIZE}&before=${encodeURIComponent(nextBefore)}`)
+    if (generation !== historyGeneration.current) return
+    if (result.ok) {
+      const page = parseHistoryPage(result.data)
+      setMessages((prev) => prependOlder(prev, page.items as Message[]))
+      setNextBefore(page.has_more ? page.next_before : null)
+      setHistoryError(null)
+    } else setHistoryError(actionError(result.status, result.detail, "Loading older messages"))
+    olderInFlight.current = false
+    setLoadingOlder(false)
+  }
 
-    loadMessages()
-    return () => {
-      isMounted = false
-    }
-  }, [activeChannelId])
+  useEffect(() => {
+    let cancelled = false
+    void commRequest<{ data: { id: string; title: string; description?: string; status: AgentApproval["status"]; created_by: string; user_id: string }[] }>("GET", "/api/chat/approvals").then((result) => {
+      if (cancelled) return
+      if (!result.ok) { setActionMessage(actionError(result.status, result.detail, "Load approvals")); return }
+      setApprovals((result.data?.data ?? []).filter((a) => APPROVAL_STATES.includes(a.status)).map((a) => ({
+        ...a, agent: "Team member", avatar: "TM", type: "override", customer: a.title,
+        amount: "", reason: a.description ?? "", time: "",
+      })))
+    })
+    return () => { cancelled = true }
+  }, [])
 
   // ── Load tasks + schedule from the backend (kanban/list/to-do live data) ──
   useEffect(() => {
@@ -542,21 +610,27 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
 
   // Real member count for the selected channel (from the channel's own member list).
   const [channelMemberCount, setChannelMemberCount] = useState<number | null>(null)
+  const [ownerMemberChannel, setOwnerMemberChannel] = useState<string | null>(null)
+  const managesChannel = (channel: Channel) => canManageChannel(channel, me.id, roles) || ownerMemberChannel === channel.id
   useEffect(() => {
     setChannelMemberCount(null)
+    setOwnerMemberChannel(null)
     if (!isUuid(activeChannelId)) return
     let cancelled = false
     fetch(`/api/chat/channels/${activeChannelId}/members`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((b) => {
         const list = Array.isArray(b?.data) ? b.data : Array.isArray(b?.items) ? b.items : Array.isArray(b) ? b : null
-        if (!cancelled && list) setChannelMemberCount(list.length)
+        if (!cancelled && list) {
+          setChannelMemberCount(list.length)
+          if (list.some((m: { user_id: string; role: string }) => m.user_id === me.id && m.role === "owner")) setOwnerMemberChannel(activeChannelId ?? null)
+        }
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [activeChannelId])
+  }, [activeChannelId, me.id])
 
   // ── Per-channel unread counts (message_count − locally-stored last-seen) ──
   const [channelUnread, setChannelUnread] = useState<Record<string, number>>({})
@@ -949,17 +1023,58 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     }
   }
 
+  const sendMessage = async (message: Message): Promise<boolean> => {
+    const key = message.client_msg_id
+    if (!key || sendsInFlight.current.has(key)) return false
+    sendsInFlight.current.add(key)
+    unconfirmedSends.current.set(key, message)
+    const generation = channelGeneration.current
+    setMessages((prev) => prev.map((m) => m.client_msg_id === key ? { ...m, pending: true, failed: false, sendError: undefined } : m))
+    const result = await commRequest<{ data: Message[] }>("POST", "/api/chat/messages", {
+      channel_id: message.channel_id, content: message.content,
+      client_msg_id: key, thread_parent_id: message.thread_parent_id ?? null,
+    })
+    sendsInFlight.current.delete(key)
+    const created = result.data?.data?.[0]
+    if (generation !== channelGeneration.current || activeChannelRef.current !== message.channel_id) return false
+    if (result.ok && created?.id) {
+      unconfirmedSends.current.delete(key)
+      bufferedOwnMessages.current.delete(created.id)
+      const buffered = unconfirmedSends.current.size ? [] : Array.from(bufferedOwnMessages.current.values())
+      if (!unconfirmedSends.current.size) bufferedOwnMessages.current.clear()
+      setMessages((prev) => reconcileSend(prev, created, key, buffered))
+      return true
+    }
+    const failure = sendFailure(result.ok ? null : result.status, result.detail)
+    if (!failure.retryable) unconfirmedSends.current.delete(key)
+    const buffered = unconfirmedSends.current.size ? [] : Array.from(bufferedOwnMessages.current.values())
+    if (!unconfirmedSends.current.size) bufferedOwnMessages.current.clear()
+    if (buffered.length) setMessages((prev) => buffered.reduce((list, row) => upsertMessage(list, row), prev))
+    setMessages((prev) => prev.map((m) => m.client_msg_id === key && m.pending ? {
+      ...m, pending: false, failed: true, sendError: failure.text, retryable: failure.retryable,
+    } : m))
+    return false
+  }
+
   const handleSend = async () => {
     const trimmed = messageInput.trim()
-    if (!trimmed || !activeChannelId) return
+    if (!trimmed || !activeChannelId || !me.id || loadingMessages) return
     // Prepend a quote line when replying so the thread context is visible.
     const content = replyTo
       ? `↳ @${(replyTo.author_name ?? "user").replace(/\s+/g, "")}: ${(replyTo.content ?? "").slice(0, 80)}\n${trimmed}`
       : trimmed
 
-    const optimisticId = `msg-${Date.now()}`
+    if (content.length > MESSAGE_MAX_CHARS) {
+      setActionMessage(`Message exceeds ${MESSAGE_MAX_CHARS} characters`)
+      return
+    }
+    const optimisticId = newClientMsgId()
     const optimisticMsg: Message = {
       id: optimisticId,
+      client_msg_id: optimisticId,
+      user_id: me.id,
+      pending: true,
+      thread_parent_id: replyTo && isUuid(replyTo.id) ? replyTo.id : null,
       channel_id: activeChannelId,
       content,
       author_name: currentUserName,
@@ -979,36 +1094,8 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
       content.toLowerCase().includes(`@${a.name.toLowerCase()}`)
     )
 
-    // Send to backend in background
-    const payload = {
-      channel_id: activeChannelId,
-      content,
-      author_name: currentUserName,
-      author_avatar: currentUserAvatar,
-    }
-
-    try {
-      const response = await fetch("/api/chat/messages", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      })
-      if (response.ok) {
-        const result = await response.json()
-        const created = Array.isArray(result.data) ? result.data[0] : null
-        if (created?.id) {
-          // The WebSocket echo can arrive before this response: if the real message is already
-          // in the list, drop the optimistic copy instead of replacing it (avoids a duplicate).
-          setMessages((prev) =>
-            prev.some((m) => m.id === created.id)
-              ? prev.filter((m) => m.id !== optimisticId)
-              : prev.map((m) => (m.id === optimisticId ? { ...created, id: created.id } : m)),
-          )
-        }
-      }
-    } catch (error) {
-      console.error("Failed to send message to backend", error)
-    }
+    const sent = await sendMessage(optimisticMsg)
+    if (!sent) return
 
     // If an agent was mentioned, trigger the agent to respond right inside this channel!
     if (mentionedAgent) {
@@ -1151,7 +1238,8 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
   const toggleInvite = (id: string) =>
     setSelectedInvites((prev) => {
       const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
       return next
     })
 
@@ -1159,50 +1247,64 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     const name = newChannelName.trim().toLowerCase().replace(/\s+/g, "-")
     if (!name || creatingChannel) return
     setCreatingChannel(true)
-    try {
-      const r = await fetch("/api/chat/channels", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, is_private: newChannelPrivate }),
-      })
-      const created = await r.json()
-      if (r.ok && created?.id) {
-        // Invite selected members.
-        const invites = Array.from(selectedInvites)
-        if (invites.length > 0) {
-          try {
-            await fetch(`/api/chat/channels/${created.id}/members`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ user_ids: invites }),
-            })
-          } catch (e) {
-            console.error("Failed to invite members", e)
-          }
-        }
-        setChannels((prev) => [
-          { id: created.id, name: created.name, isPrivate: created.is_private },
-          ...prev.filter((c) => c.id !== created.id),
-        ])
-        setSelectedChannel(created.name)
-        addActivity({
-          id: `activity-${Date.now()}-channel`,
-          type: "chat",
-          title: `Channel created: #${created.name}`,
-          actor: currentUserName,
-          time: "just now",
-          meta: `${created.is_private ? "Private" : "Public"}${invites.length ? ` · ${invites.length} invited` : ""}`,
-        })
-        setChannelDialogOpen(false)
-        setNewChannelName("")
-        setNewChannelPrivate(false)
-        setSelectedInvites(new Set())
-      }
-    } catch (e) {
-      console.error("Failed to create channel", e)
-    } finally {
+    setActionMessage(null)
+    const result = await commRequest<Channel>("POST", "/api/chat/channels", { name, is_private: newChannelPrivate })
+    const created = result.data
+    if (!result.ok || !created?.id) {
+      setActionMessage(actionError(result.status, result.detail, "Create channel"))
       setCreatingChannel(false)
+      return
     }
+    setChannels((prev) => [created, ...prev.filter((c) => c.id !== created.id)])
+    setSelectedChannel(created.name)
+    const invites = Array.from(selectedInvites)
+    if (invites.length) {
+      const invitation = await commRequest("POST", `/api/chat/channels/${created.id}/members`, { user_ids: invites })
+      if (!invitation.ok) setActionMessage(`Channel created. ${actionError(invitation.status, invitation.detail, "Invite members")}`)
+    }
+    setChannelDialogOpen(false)
+    setNewChannelName("")
+    setNewChannelPrivate(false)
+    setSelectedInvites(new Set())
+    setCreatingChannel(false)
+  }
+
+  const manageChannel = async (operation: "rename" | "invite" | "delete") => {
+    const channel = managedChannel
+    if (!channel || !managesChannel(channel) || managingChannel) return
+    setManagingChannel(true)
+    setActionMessage(null)
+    const result = operation === "invite"
+      ? await commRequest("POST", `/api/chat/channels/${channel.id}/members`, { user_ids: Array.from(managedInvites) })
+      : operation === "delete"
+        ? await commRequest("DELETE", `/api/chat/channels/${channel.id}`)
+        : await commRequest<Channel>("PUT", `/api/chat/channels/${channel.id}`, { name: managedName.trim() })
+    setManagingChannel(false)
+    if (!result.ok) { setActionMessage(actionError(result.status, result.detail, operation)); return }
+    setChannelsReload((n) => n + 1)
+    if (operation === "rename" && selectedChannel === channel.name) setSelectedChannel(managedName.trim())
+    setManagedChannel(null)
+    setManagedInvites(new Set())
+  }
+
+  const changePrivacy = async (channel: Channel) => {
+    if (!managesChannel(channel)) return
+    const result = await commRequest<Channel>("PUT", `/api/chat/channels/${channel.id}`, { is_private: !(channel.is_private ?? channel.isPrivate) })
+    if (!result.ok || !result.data?.id) {
+      setActionMessage(actionError(result.status, result.detail, "Change visibility"))
+      return
+    }
+    const updated = result.data
+    setChannels((prev) => prev.map((c) => c.id === channel.id ? updated : c))
+    setActionMessage(null)
+  }
+
+  const leaveChannel = async (channel: Channel) => {
+    if (!me.id) return
+    const result = await commRequest("DELETE", `/api/chat/channels/${channel.id}/members/${me.id}`)
+    if (!result.ok) { setActionMessage(actionError(result.status, result.detail, "Leave channel")); return }
+    setChannelsReload((n) => n + 1)
+    setActionMessage(null)
   }
 
   const addReaction = (msgId: string, emoji: string) => {
@@ -1222,6 +1324,17 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     setReplyTo(msg)
     setActiveTab("chat")
     setTimeout(() => messageInputRef.current?.focus(), 50)
+  }
+
+  const pinMessage = async (message: Message) => {
+    if (!isUuid(message.id)) return
+    const generation = historyGeneration.current
+    const is_pinned = !(message.is_pinned ?? message.isPinned)
+    const result = await commRequest<Message>("PATCH", `/api/chat/messages/${message.id}/pin`, { is_pinned })
+    if (generation !== historyGeneration.current) return
+    if (!result.ok) { setActionMessage(actionError(result.status, result.detail, "Pin message")); return }
+    setMessages((prev) => prev.map((m) => m.id === message.id ? { ...m, isPinned: is_pinned, is_pinned } : m))
+    setActionMessage(null)
   }
 
   // ── @mention (team + agents) / /component / #channel autocomplete ──
@@ -1359,51 +1472,19 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     closePanel()
   }
 
-  const handleAddApproval = () => {
-    if (!approvalSubject.trim()) return
-    const contextId = contextMessageId && isUuid(contextMessageId) ? contextMessageId : null
-    const newApproval: AgentApproval = {
-      id: `approval-${Date.now()}`,
-      agent: currentUserName,
-      avatar: currentUserAvatar,
-      type: "override",
-      customer: approvalSubject.trim(),
-      amount: "Pending",
-      reason: approvalNotes || "Approval requested",
-      status: "pending",
-      time: "just now",
-    }
-    setApprovals((prev) => [newApproval, ...prev])
-    void (async () => {
-      const result = await postJson("/api/approvals", {
-        subject: approvalSubject.trim(),
-        type: newApproval.type,
-        status: newApproval.status,
-        amount: newApproval.amount,
-        reason: newApproval.reason,
-        timeline: approvalTimeline,
-        notes: approvalNotes,
-        source_message_id: contextId,
-      })
-      const created = result?.data?.[0]
-      if (created?.id) {
-        setApprovals((prev) =>
-          prev.map((approval) => (approval.id === newApproval.id ? { ...approval, id: created.id } : approval)),
-        )
-      }
-    })()
-    addActivity({
-      id: `activity-${Date.now()}-approval`,
-      type: "approval",
-      title: `Approval requested: ${approvalSubject.trim()}`,
-      actor: currentUserName,
-      time: "just now",
-      meta: approvalApprover || "Approver TBD",
+  const handleAddApproval = async () => {
+    if (!approvalSubject.trim() || !activeChannelId) return
+    const result = await commRequest<{ data: { id: string; status: AgentApproval["status"]; created_by: string; user_id: string }[] }>("POST", "/api/chat/approvals", {
+      channel_id: activeChannelId,
+      message_id: contextMessageId && isUuid(contextMessageId) ? contextMessageId : null,
+      title: approvalSubject.trim(), description: approvalNotes || null,
     })
+    const created = result.data?.data?.[0]
+    if (!result.ok || !created?.id) { setActionMessage(actionError(result.status, result.detail, "Request approval")); return }
+    setApprovals((prev) => [{ ...created, agent: currentUserName, avatar: currentUserAvatar, type: "override", customer: approvalSubject.trim(), amount: "Pending", reason: approvalNotes || "Approval requested", time: "just now" }, ...prev])
     setApprovalSubject("")
-    setApprovalApprover("")
-    setApprovalTimeline("")
     setApprovalNotes("")
+    setActionMessage(null)
     closePanel()
   }
 
@@ -1450,22 +1531,26 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
     closePanel()
   }
 
-  const handleApprovalAction = async (approvalId: string, action: "approve" | "reject") => {
-    const newStatus = action === "approve" ? "approved" : "rejected"
-    setApprovals((prev) =>
-      prev.map((a) => (a.id === approvalId ? { ...a, status: newStatus } : a)),
-    )
-    if (isUuid(approvalId)) {
-      await patchJson("/api/approvals", { id: approvalId, status: newStatus })
-    }
-    addActivity({
-      id: `activity-${Date.now()}-approval-${action}`,
-      type: "approval",
-      title: `Approval ${action}d`,
-      actor: currentUserName,
-      time: "just now",
-      meta: approvalId,
-    })
+  const [decisionPending, setDecisionPending] = useState<string | null>(null)
+  const canDecideApproval = (approval: AgentApproval) => approval.status === "pending" &&
+    isUuid(approval.id) && !!me.id && !!approval.created_by && !!approval.user_id &&
+    approval.created_by !== me.id && approval.user_id !== me.id && isManagerRole(roles)
+
+  const handleApprovalAction = async (approvalId: string, action: "approve" | "reject" | "cancel") => {
+    if (decisionPending || !isUuid(approvalId)) return
+    const approval = approvals.find((a) => a.id === approvalId)
+    if (!approval || approval.status !== "pending") return
+    if (action !== "cancel" && !canDecideApproval(approval)) return
+    if (action === "cancel" && approval.created_by !== me.id && approval.user_id !== me.id) return
+    setDecisionPending(approvalId)
+    const status = action === "approve" ? "approved" : action === "reject" ? "rejected" : "cancelled"
+    const result = await commRequest<{ data: { status: AgentApproval["status"] }[] }>("PATCH", "/api/chat/approvals", { id: approvalId, status })
+    const decided = result.data?.data?.[0]
+    if (result.ok && decided && APPROVAL_STATES.includes(decided.status)) {
+      setApprovals((prev) => prev.map((a) => a.id === approvalId ? { ...a, status: decided.status } : a))
+      setActionMessage(null)
+    } else setActionMessage(decisionError(result.status, result.detail))
+    setDecisionPending(null)
   }
 
   const handleKanbanDrop = (column: "upcoming" | "in-progress" | "completed", payload?: string) => {
@@ -1512,27 +1597,8 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
       return
     }
 
-    if (type === "approval") {
-      const statusMap = {
-        "upcoming": "pending",
-        "in-progress": "pending",
-        "completed": "approved",
-      } as const
-      setApprovals((prev) =>
-        prev.map((approval) => (approval.id === id ? { ...approval, status: statusMap[column] } : approval)),
-      )
-      if (isUuid(id)) {
-        void patchJson("/api/approvals", { id, status: statusMap[column] })
-      }
-      addActivity({
-        id: `activity-${Date.now()}-approval-move`,
-        type: "approval",
-        title: `Approval moved to ${column}`,
-        actor: currentUserName,
-        time: "just now",
-        meta: id,
-      })
-      return
+    if (type === "approval" && column === "completed") {
+      void handleApprovalAction(id, "approve")
     }
 
     if (type === "escalation") {
@@ -1777,6 +1843,11 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                               <MessageSquare className="h-4 w-4" />
                               Focus
                             </DropdownMenuItem>
+                            {managesChannel(channel) && <DropdownMenuItem onClick={() => { setManagedChannel(channel); setManagedName(channel.name); setManagedInvites(new Set()); setActionMessage(null) }}>Manage channel</DropdownMenuItem>}
+                            {managesChannel(channel) && <DropdownMenuItem onClick={() => void changePrivacy(channel)}>
+                              Make {(channel.is_private ?? channel.isPrivate) ? "public" : "private"}
+                            </DropdownMenuItem>}
+                            {(channel.is_private ?? channel.isPrivate) && channel.created_by !== me.id && <DropdownMenuItem onClick={() => void leaveChannel(channel)}>Leave channel</DropdownMenuItem>}
                             <DropdownMenuItem className="gap-2">
                               <Pin className="h-4 w-4" />
                               Details
@@ -2049,6 +2120,11 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
           <TabsContent value="chat" className="flex-1 flex flex-col min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
             <ScrollArea className="flex-1 min-h-0 p-4">
               <div className="space-y-4">
+                {actionMessage && <p role="alert" className="text-sm text-destructive">{actionMessage}</p>}
+                {historyError && <div role="alert" className="text-sm text-destructive">{historyError}
+                  <Button variant="ghost" size="sm" onClick={() => nextBefore ? void loadOlder() : setHistoryReload((n) => n + 1)}>Retry</Button>
+                </div>}
+                {nextBefore && <Button variant="outline" size="sm" disabled={loadingOlder} onClick={() => void loadOlder()}>{loadingOlder ? "Loading…" : "Load older messages"}</Button>}
                 {loadingMessages && (
                   <div className="text-xs text-muted-foreground">Loading messages...</div>
                 )}
@@ -2068,7 +2144,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                     </Button>
                   </div>
                 )}
-                {channelsState.state === "ready" && channels.length > 0 && !loadingMessages && messages.length === 0 && (
+                {channelsState.state === "ready" && channels.length > 0 && !loadingMessages && !historyError && messages.length === 0 && (
                   <div className="text-xs text-muted-foreground">No messages yet.</div>
                 )}
                 {messages.map((msg) => (
@@ -2095,7 +2171,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                             {authorLabel(msg.user_id, msg.author_name)}
                           </span>
                           <span className="text-xs text-muted-foreground">{formatTime(msg.created_at)}</span>
-                          {msg.isPinned && <Pin className="h-3 w-3 text-yellow-500" />}
+                          {(msg.is_pinned ?? msg.isPinned) && <Pin className="h-3 w-3 text-yellow-500" />}
                         </div>
                         {msg.content.startsWith("↳ @") ? (() => {
                           const newlineIdx = msg.content.indexOf("\n")
@@ -2116,6 +2192,10 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                         })() : (
                           <p className="text-sm text-foreground/90 mt-0.5">{msg.content}</p>
                         )}
+                        {msg.pending && <p className="text-xs text-muted-foreground">Sending…</p>}
+                        {msg.failed && <div role="alert" className="text-xs text-destructive">{msg.sendError}
+                          {msg.retryable && <Button variant="ghost" size="sm" onClick={() => void sendMessage(msg)}>Retry</Button>}
+                        </div>}
                         {(msg.reactions || msg.thread) && (
                           <div className="flex items-center gap-2 mt-2">
                             {msg.reactions?.map((reaction, i) => (
@@ -2220,22 +2300,11 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                       </DropdownMenuItem>
                       <DropdownMenuItem
                         className="gap-2"
-                        onClick={() =>
-                          {
-                            const nextPinned = !msg.isPinned
-                            setMessages((prev) =>
-                              prev.map((item) => (item.id === msg.id ? { ...item, isPinned: nextPinned } : item)),
-                            )
-                            void fetch(`/api/chat/messages/${msg.id}/pin`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ is_pinned: nextPinned }),
-                            })
-                          }
-                        }
+                        disabled={!isUuid(msg.id)}
+                        onClick={() => void pinMessage(msg)}
                       >
                         <Pin className="h-4 w-4" />
-                        {msg.isPinned ? "Unpin Message" : "Pin Message"}
+                        {(msg.is_pinned ?? msg.isPinned) ? "Unpin Message" : "Pin Message"}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -2402,7 +2471,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                     size="icon"
                     className="h-8 w-8 bg-primary hover:bg-primary/90"
                     onClick={handleSend}
-                    disabled={!messageInput.trim() || !activeChannelId}
+                    disabled={!messageInput.trim() || !activeChannelId || !me.id || loadingMessages}
                   >
                     <Send className="h-4 w-4" />
                   </Button>
@@ -2544,6 +2613,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
           </TabsContent>
 
           <TabsContent value="approvals" className="flex-1 min-h-0 m-0 overflow-hidden data-[state=inactive]:hidden">
+            {actionMessage && <p role="alert" className="px-4 text-sm text-destructive">{actionMessage}</p>}
             <ScrollArea className="h-full min-h-0">
               <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
@@ -2594,12 +2664,13 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                       <p className="text-sm text-muted-foreground mt-3 p-2 bg-secondary/50 rounded">
                         {approval.reason}
                       </p>
-                      {approval.status === "pending" && (
+                      {canDecideApproval(approval) && (
                         <div className="flex gap-2 mt-3">
                           <Button
                             size="sm"
                             className="flex-1 bg-green-600 hover:bg-green-700"
-                            onClick={() => handleApprovalAction(approval.id, "approve")}
+                            disabled={decisionPending !== null}
+                            onClick={() => void handleApprovalAction(approval.id, "approve")}
                           >
                             <CheckCircle2 className="h-4 w-4 mr-1" />
                             Approve
@@ -2608,13 +2679,15 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                             size="sm"
                             variant="destructive"
                             className="flex-1"
-                            onClick={() => handleApprovalAction(approval.id, "reject")}
+                            disabled={decisionPending !== null}
+                            onClick={() => void handleApprovalAction(approval.id, "reject")}
                           >
                             <AlertCircle className="h-4 w-4 mr-1" />
                             Reject
                           </Button>
                         </div>
                       )}
+                      {approval.status === "pending" && (approval.created_by === me.id || approval.user_id === me.id) && <Button variant="outline" disabled={decisionPending !== null} onClick={() => void handleApprovalAction(approval.id, "cancel")}>Cancel request</Button>}
                       {approval.status !== "pending" && (
                         <div className="flex items-center gap-2 mt-3">
                           <Badge
@@ -3232,6 +3305,28 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
         </Tabs>
       </div>
 
+      {managedChannel && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div role="dialog" aria-modal="true" aria-label="Manage channel" className="w-full max-w-md rounded-lg border border-border bg-background p-5 space-y-4">
+            <h3 className="font-semibold">Manage #{managedChannel.name}</h3>
+            {actionMessage && <p role="alert" className="text-sm text-destructive">{actionMessage}</p>}
+            <label className="block text-sm">Channel name<Input value={managedName} onChange={(e) => setManagedName(e.target.value)} /></label>
+            <Button disabled={managingChannel || !managedName.trim()} onClick={() => void manageChannel("rename")}>Save name</Button>
+            <div className="max-h-40 overflow-y-auto space-y-2">
+              {teamUsers.filter((u) => u.id !== me.id).map((u) => <label key={u.id} className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={managedInvites.has(u.id)} onChange={() => setManagedInvites((prev) => { const next = new Set(prev); if (next.has(u.id)) next.delete(u.id); else next.add(u.id); return next })} />{u.name}
+              </label>)}
+            </div>
+            <Button disabled={managingChannel || !managedInvites.size} onClick={() => void manageChannel("invite")}>Invite selected people</Button>
+            <p className="text-xs text-muted-foreground">Deleting this channel removes its messages and related channel items.</p>
+            <div className="flex justify-between gap-2">
+              <Button variant="destructive" disabled={managingChannel} onClick={() => void manageChannel("delete")}>Delete channel</Button>
+              <Button variant="outline" disabled={managingChannel} onClick={() => setManagedChannel(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {channelDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40" onClick={() => setChannelDialogOpen(false)} />
@@ -3242,6 +3337,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
                 <X className="h-4 w-4" />
               </Button>
             </div>
+            {actionMessage && <p role="alert" className="text-sm text-destructive">{actionMessage}</p>}
             <label className="text-xs text-muted-foreground">Channel name</label>
             <Input
               autoFocus
@@ -3365,6 +3461,7 @@ export function CommunicationModule({ initialTab }: { initialTab?: string } = {}
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+              {actionMessage && <p role="alert" className="text-sm text-destructive">{actionMessage}</p>}
               {panelType === "start-chat" && (
                 <>
                   <div className="flex items-center gap-2 bg-secondary rounded-lg p-1 w-fit">

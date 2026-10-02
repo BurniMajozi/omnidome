@@ -21,22 +21,37 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { DataTable, type DataColumn } from "@/components/ui/data-table"
+import { PurchasingSignature } from "./purchasing-signature"
 import {
-  type PurchaseOrder,
+  type PurchaseOrder as BasePurchaseOrder,
   type Supplier,
   type PurchaseOrderItemInput,
   listPurchaseOrders,
   listSuppliers,
   createSupplier,
   createPurchaseOrder,
-  submitPurchaseOrder,
-  approvePurchaseOrder,
-  createGoodsReceipt,
 } from "@/lib/inventory-api"
+
+type PurchaseOrder = Omit<BasePurchaseOrder, "status"> & {
+  status: BasePurchaseOrder["status"] | "pending_approval" | "rejected" | "sent"
+}
+
+async function purchasingRequest<T>(path: string, method = "GET", body?: unknown): Promise<T> {
+  const response = await fetch(`/svc/inventory${path}`, {
+    method, cache: "no-store", headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const payload = await response.json()
+  if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : payload.error || "Purchasing request failed")
+  return payload as T
+}
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
   draft: "outline",
   submitted: "secondary",
+  pending_approval: "secondary",
+  rejected: "destructive",
+  sent: "default",
   approved: "default",
   partially_received: "secondary",
   received: "default",
@@ -70,6 +85,13 @@ export function PurchasingSection() {
   const [newSupplierOpen, setNewSupplierOpen] = useState(false)
   const [receiveTarget, setReceiveTarget] = useState<PurchaseOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [error, setError] = useState("")
+  const [decisionTarget, setDecisionTarget] = useState<PurchaseOrder | null>(null)
+  const [signature, setSignature] = useState("")
+  const [signerName, setSignerName] = useState("")
+  const [comment, setComment] = useState("")
+  const [receiptRef, setReceiptRef] = useState("")
+  const [autoApproveLimit, setAutoApproveLimit] = useState("")
 
   const [supplierId, setSupplierId] = useState("")
   const [warehouseId, setWarehouseId] = useState("")
@@ -90,6 +112,9 @@ export function PurchasingSection() {
 
   useEffect(() => {
     refresh()
+    purchasingRequest<{ auto_approve_limit: string }>("/purchasing/settings")
+      .then((settings) => setAutoApproveLimit(settings.auto_approve_limit))
+      .catch((cause) => setError(String(cause.message || cause)))
   }, [])
 
   async function handleCreatePo() {
@@ -125,16 +150,44 @@ export function PurchasingSection() {
 
   async function handleSubmit(po: PurchaseOrder) {
     setBusyId(po.id)
-    await submitPurchaseOrder(po.id)
-    await refresh()
-    setBusyId(null)
+    setError("")
+    try {
+      await purchasingRequest(`/purchase-orders/${po.id}/submit`, "POST")
+      await refresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Submit failed") }
+    finally { setBusyId(null) }
   }
 
-  async function handleApprove(po: PurchaseOrder) {
+  async function handleDecision(decision: "approve" | "reject") {
+    if (!decisionTarget) return
+    setBusyId(decisionTarget.id)
+    setError("")
+    try {
+      await purchasingRequest(`/purchase-orders/${decisionTarget.id}/${decision}`, "POST", {
+        signer_name: signerName, signature_data: signature, comment: comment || null,
+      })
+      setDecisionTarget(null)
+      await refresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Decision failed") }
+    finally { setBusyId(null) }
+  }
+
+  async function handleCancel(po: PurchaseOrder) {
     setBusyId(po.id)
-    await approvePurchaseOrder(po.id)
-    await refresh()
-    setBusyId(null)
+    setError("")
+    try {
+      await purchasingRequest(`/purchase-orders/${po.id}/cancel`, "POST")
+      await refresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Cancel failed") }
+    finally { setBusyId(null) }
+  }
+
+  async function saveSettings() {
+    setError("")
+    try {
+      const settings = await purchasingRequest<{ auto_approve_limit: string }>("/purchasing/settings", "PUT", { auto_approve_limit: autoApproveLimit })
+      setAutoApproveLimit(settings.auto_approve_limit)
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Settings update failed") }
   }
 
   async function handleReceive() {
@@ -143,10 +196,16 @@ export function PurchasingSection() {
       .filter((i) => Number(receiveQty[i.id] || 0) > 0)
       .map((i) => ({ po_item_id: i.id, quantity_received: Number(receiveQty[i.id]) }))
     if (items.length === 0) return
-    await createGoodsReceipt(receiveTarget.id, { items })
-    setReceiveTarget(null)
-    setReceiveQty({})
-    await refresh()
+    setBusyId(receiveTarget.id)
+    setError("")
+    try {
+      await purchasingRequest(`/purchase-orders/${receiveTarget.id}/goods-receipts`, "POST", { receipt_ref: receiptRef, items })
+      setReceiveTarget(null)
+      setReceiveQty({})
+      setReceiptRef("")
+      await refresh()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Receipt failed") }
+    finally { setBusyId(null) }
   }
 
   const supplierName = (id: string) => suppliers.find((s) => s.id === id)?.name ?? id.slice(0, 8)
@@ -172,15 +231,18 @@ export function PurchasingSection() {
               <Send className="h-3.5 w-3.5 mr-1" /> Submit
             </Button>
           )}
-          {row.status === "submitted" && (
-            <Button size="sm" variant="outline" disabled={busyId === row.id} onClick={() => handleApprove(row)}>
-              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Approve
+          {(row.status === "submitted" || row.status === "pending_approval") && (
+            <Button size="sm" variant="outline" disabled={busyId === row.id} onClick={() => { setSignature(""); setComment(""); setDecisionTarget(row) }}>
+              <CheckCircle2 className="h-3.5 w-3.5 mr-1" /> Review
             </Button>
           )}
-          {(row.status === "approved" || row.status === "partially_received") && (
-            <Button size="sm" variant="outline" onClick={() => setReceiveTarget(row)}>
+          {(row.status === "approved" || row.status === "sent" || row.status === "partially_received") && (
+            <Button size="sm" variant="outline" onClick={() => { setReceiveQty({}); setReceiptRef(crypto.randomUUID()); setReceiveTarget(row) }}>
               <PackageCheck className="h-3.5 w-3.5 mr-1" /> Receive
             </Button>
+          )}
+          {["draft", "submitted", "pending_approval", "approved", "rejected", "sent"].includes(row.status) && (
+            <Button size="sm" variant="ghost" disabled={busyId === row.id} onClick={() => handleCancel(row)}>Cancel</Button>
           )}
         </div>
       ),
@@ -189,6 +251,14 @@ export function PurchasingSection() {
 
   return (
     <div className="surface-card p-6">
+      {error && <p role="alert" className="text-sm text-destructive mb-3">{error}</p>}
+      <p className="text-sm text-muted-foreground mb-3">PO email is unavailable: Communication does not yet support PDF attachments.</p>
+      <div className="flex items-end gap-2 mb-4">
+        <div><Label htmlFor="po-autoapprove">Autoapproval limit (ZAR including VAT; 0 disables)</Label>
+          <Input id="po-autoapprove" type="number" min="0" step="0.01" value={autoApproveLimit} onChange={(event) => setAutoApproveLimit(event.target.value)} />
+        </div>
+        <Button variant="outline" onClick={saveSettings}>Save limit</Button>
+      </div>
       <div className="flex items-center justify-between mb-4">
         <div>
           <h4 className="card-title">Purchase Orders</h4>
@@ -303,6 +373,8 @@ export function PurchasingSection() {
             <DialogTitle>Receive Goods — {receiveTarget?.po_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-2">
+            <Label htmlFor="receipt-reference">Delivery reference (keep the same reference when retrying)</Label>
+            <Input id="receipt-reference" value={receiptRef} maxLength={128} onChange={(event) => setReceiptRef(event.target.value)} />
             {receiveTarget?.items.map((item) => {
               const remaining = item.quantity_ordered - item.quantity_received
               return (
@@ -326,7 +398,26 @@ export function PurchasingSection() {
             })}
           </div>
           <DialogFooter>
-            <Button onClick={handleReceive}>Record Receipt</Button>
+            <Button disabled={!receiptRef.trim() || busyId === receiveTarget?.id} onClick={handleReceive}>Record Receipt</Button>
+          </DialogFooter>
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!decisionTarget} onOpenChange={(open) => !open && setDecisionTarget(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Review {decisionTarget?.po_number}</DialogTitle></DialogHeader>
+          <p>{decisionTarget && formatZar(decisionTarget.total_zar)} including VAT</p>
+          <Label htmlFor="po-signer">Signer name</Label>
+          <Input id="po-signer" value={signerName} onChange={(event) => setSignerName(event.target.value)} />
+          <Label>Draw signature</Label>
+          <PurchasingSignature onChange={setSignature} />
+          <Label htmlFor="po-decision-comment">Comment (required for rejection)</Label>
+          <Input id="po-decision-comment" value={comment} onChange={(event) => setComment(event.target.value)} />
+          {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+          <DialogFooter>
+            <Button variant="destructive" disabled={!signature || !signerName.trim() || !comment.trim() || busyId === decisionTarget?.id} onClick={() => handleDecision("reject")}>Reject</Button>
+            <Button disabled={!signature || !signerName.trim() || busyId === decisionTarget?.id} onClick={() => handleDecision("approve")}>Approve</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

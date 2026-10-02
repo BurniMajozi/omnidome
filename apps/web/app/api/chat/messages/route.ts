@@ -11,7 +11,7 @@ async function proxyGet(request: NextRequest) {
       return NextResponse.json({ error: "channel_id is required" }, { status: 400 })
     }
 
-    const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/messages`)
+    const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${encodeURIComponent(channelId)}/messages`)
     request.nextUrl.searchParams.forEach((value, key) => {
       if (key !== "channel_id") url.searchParams.set(key, value)
     })
@@ -26,11 +26,12 @@ async function proxyGet(request: NextRequest) {
     })
     if (!response.ok) {
       // Surface the real status so the UI can show "Service not running" instead of an empty list.
-      return NextResponse.json({ data: [], error: "upstream_error" }, { status: response.status })
+      const payload = await response.json().catch(() => null)
+      return NextResponse.json({ data: [], error: "upstream_error", detail: payload?.detail }, { status: response.status })
     }
     const payload = await response.json()
     const data = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : []
-    return NextResponse.json({ data }, { status: 200 })
+    return NextResponse.json({ data, next_before: payload?.next_before ?? null, has_more: payload?.has_more === true }, { status: 200 })
   } catch (error) {
     console.error("Error fetching messages from communication service:", error)
     return NextResponse.json({ data: [], error: "service_unreachable" }, { status: 503 })
@@ -45,7 +46,7 @@ async function proxyPost(request: NextRequest) {
       return NextResponse.json({ error: "channel_id is required" }, { status: 400 })
     }
 
-    const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${channelId}/messages`)
+    const url = new URL(`${COMMUNICATION_SERVICE_URL}/api/v1/channels/${encodeURIComponent(channelId)}/messages`)
     const { headers, identity } = await identityHeaders(request)
     if (!identity) return NextResponse.json({ data: [], error: "unauthenticated" }, { status: 401 })
 
@@ -55,18 +56,21 @@ async function proxyPost(request: NextRequest) {
       body: JSON.stringify({
         content: body?.content ?? "",
         thread_parent_id: body?.thread_parent_id ?? null,
+        client_msg_id: body?.client_msg_id ?? null,
       }),
     })
 
     if (!response.ok) {
-      return NextResponse.json({ data: [] }, { status: 200 })
+      const payload = await response.json().catch(() => null)
+      return NextResponse.json({ data: [], error: "upstream_error", detail: payload?.detail }, { status: response.status })
     }
 
     const payload = await response.json()
-    return NextResponse.json({ data: [payload] }, { status: 200 })
+    // The current MessageRead schema omits the stored key; preserve it for this caller's reconciliation.
+    return NextResponse.json({ data: [{ ...payload, client_msg_id: body?.client_msg_id ?? payload?.client_msg_id }] }, { status: response.status })
   } catch (error) {
     console.error("Error posting message to communication service:", error)
-    return NextResponse.json({ data: [] }, { status: 200 })
+    return NextResponse.json({ data: [], error: "service_unreachable" }, { status: 503 })
   }
 }
 

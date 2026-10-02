@@ -38,12 +38,12 @@ import {
     dataOr,
     fmtInt,
     healthBuckets,
-    mrrBySegment,
     normIssueStatus,
     normPriority,
     normSeverity,
     normTaskStatus,
     pct,
+    partialNote,
     statusCountsFromSummary,
     type CrmCustomerRow,
 } from "@/lib/ops-derive"
@@ -129,11 +129,16 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
     }
 
     const custRows: CrmCustomerRow[] = customers.value.state === "ready" ? customers.value.data.rows : []
-    const custTotal = customers.value.state === "ready" ? customers.value.data.total : 0
-    const truncated = custRows.length < custTotal
     const watch = atRiskCustomers(custRows)
+    const assessedHealth = custRows.filter((c) => ["Excellent", "Good", "At Risk", "Critical"].includes(c.health ?? ""))
     const buckets = healthBuckets(custRows)
-    const segments = mrrBySegment(custRows)
+    const revenueGroups = new Map<string, number[]>()
+    for (const customer of custRows) {
+        if (typeof customer.mrr !== "number" || !Number.isFinite(customer.mrr) || customer.mrr < 0) continue
+        const segment = customer.customer_type || "Unknown"
+        revenueGroups.set(segment, [...(revenueGroups.get(segment) ?? []), customer.mrr])
+    }
+    const segments = Array.from(revenueGroups, ([segment, values]) => ({ segment, avgMrr: Math.round(values.reduce((sum, value) => sum + value, 0) / values.length), customers: values.length }))
     const status = summary.value.state === "ready" ? statusCountsFromSummary(summary.value.data?.flashcardKPIs) : null
     const totalCustomers: number | null =
         summary.value.state === "ready" && typeof summary.value.data?.totalCustomers === "number"
@@ -144,7 +149,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
     const insightData = dataOr(insights.value, { aiRecommendations: [], issues: [] })
     const activityRows: any[] = dataOr(activities.value, [])
     const taskRows: any[] = dataOr(tasks.value, [])
-    const sampleNote = truncated ? `Based on the first ${fmtInt(custRows.length)} of ${fmtInt(custTotal)} customers.` : "Based on all customers."
+    const sampleNote = customers.value.state === "ready" ? partialNote(customers.value.data) ?? "Based on all customers." : "Customer health is unavailable."
 
     const flashcardKPIs = [
         {
@@ -167,13 +172,13 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
         {
             id: "2",
             title: "At-Risk Customers",
-            value: tile(customers.value, () => fmtInt(watch.length)),
+            value: tile(customers.value, () => assessedHealth.length === 0 ? "Not assessed" : fmtInt(watch.length)),
             change: "",
             changeType: "neutral" as const,
             iconKey: "risk",
             backTitle: "Health Distribution",
             backDetails: buckets.map((b) => ({ label: b.name, value: fmtInt(b.value) })),
-            backInsight: `Customers whose CRM health score is below 60. ${sampleNote}`,
+            backInsight: `Customers whose assessed CRM health score is below 60. ${sampleNote} ${fmtInt(custRows.length - assessedHealth.length)} customers have no health assessment.`,
         },
         {
             id: "3",
@@ -223,7 +228,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
             segment: c.customer_type ?? "—",
             health: c.health ?? "Unknown",
             status: c.status ?? "—",
-            mrr: Math.round(c.mrr ?? 0),
+            mrr: c.mrr == null ? "Not assessed" : Math.round(c.mrr),
         }))
 
     return (
@@ -272,6 +277,15 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
             }))}
             tableData={tableData}
             tableColumns={tableColumns}
+            readOnlyRecords
+            showTable={customers.value.state === "ready"}
+            hideHeaderExport={customers.value.state !== "ready"}
+            panelStates={{
+                activity: activities.value.state !== "ready" ? <NotConnected loadable={activities.value} service="CRM activities" onRetry={activities.reload} /> : undefined,
+                tasks: tasks.value.state !== "ready" ? <NotConnected loadable={tasks.value} service="CRM tasks" onRetry={tasks.reload} /> : undefined,
+                issues: insights.value.state !== "ready" ? <NotConnected loadable={insights.value} service="CRM insights" onRetry={insights.reload} /> : undefined,
+                recommendations: insights.value.state !== "ready" ? <NotConnected loadable={insights.value} service="CRM insights" onRetry={insights.reload} /> : undefined,
+            }}
         >
             <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
                 <TabsList className="bg-secondary">
@@ -344,7 +358,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                     {/* Churn reasons: no data source */}
                     <div className="surface-card p-5">
                         <h3 className="section-title mb-4">Churn Reasons Analysis</h3>
-                        <NoDataYet message="Not connected: churn reasons come from the Retention prediction service, which is not running." />
+                        <NoDataYet message="Churn reasons are unavailable from the current data sources. Prediction service availability has not been checked." />
                     </div>
 
                     {/* Revenue by segment */}
@@ -413,7 +427,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                         {customers.value.state !== "ready" ? (
                             <NotConnected loadable={customers.value} service="CRM" onRetry={customers.reload} />
                         ) : watch.length === 0 ? (
-                            <NoDataYet message="No customers are currently flagged at risk" />
+                            <NoDataYet message={assessedHealth.length === 0 ? "Customer health has not been assessed." : "No assessed customers are currently flagged at risk."} />
                         ) : (
                             <div className="space-y-3">
                                 {watch.slice(0, 50).map((c) => (
@@ -429,7 +443,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
                                             <div className="flex items-center gap-3 text-xs">
                                                 <Badge className="badge-warning">{c.health}</Badge>
                                                 <Badge variant="secondary" className="bg-secondary text-foreground">
-                                                    R {Math.round(c.mrr ?? 0).toLocaleString("en-ZA")} / month
+                                                    {c.mrr == null ? "MRR not assessed" : `R ${Math.round(c.mrr).toLocaleString("en-ZA")} / month`}
                                                 </Badge>
                                             </div>
                                         </div>

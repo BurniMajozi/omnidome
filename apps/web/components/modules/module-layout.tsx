@@ -20,6 +20,7 @@ import { useIsClient } from "@/lib/use-is-client"
 import { TableShell } from "@/components/ui/table-shell"
 import { cn } from "@/lib/utils"
 import { invokeAgent } from "@/lib/orchestrator-api"
+import { buildCsv } from "@/lib/csv"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +67,8 @@ interface ModuleLayoutProps {
   showTable?: boolean
   /** Whether to hide the header Export CSV button (defaults to false) */
   hideHeaderExport?: boolean
+  /** API-backed records without a persistence handler must remain read-only. */
+  readOnlyRecords?: boolean
   /**
    * Per-panel replacement content (loading skeleton, Not connected, Error + Retry).
    * When a key is set it is rendered instead of that panel's list, so a module with
@@ -129,6 +132,7 @@ export function ModuleLayout({
   headerActions,
   showTable = true,
   hideHeaderExport = false,
+  readOnlyRecords = false,
   panelStates,
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
@@ -136,6 +140,9 @@ export function ModuleLayout({
   const [localRecommendations, setLocalRecommendations] = useState<AIRecommendation[]>(aiRecommendations)
   const [actionFeedback, setActionFeedback] = useState<string | null>(null)
   const isClient = useIsClient()
+  useEffect(() => {
+    setLocalTableData(tableData)
+  }, [tableData])
   // Recommendations can arrive after mount (async data); follow the prop.
   useEffect(() => {
     setLocalRecommendations(aiRecommendations)
@@ -245,9 +252,12 @@ Format each proposal as a separate markdown code block with a clear title header
   }
 
   const handleExport = () => {
-    const headers = tableColumns.map((c) => c.label).join(",")
-    const rows = tableData.map((row) => tableColumns.map((c) => row[c.key]).join(",")).join("\n")
-    const blob = new Blob([`${headers}\n${rows}`], { type: "text/csv" })
+    // RFC 4180 quoting, BOM, and formula-cell neutralisation live in lib/csv.ts.
+    const csv = buildCsv(
+      tableColumns.map((c) => c.label),
+      tableData.map((row) => tableColumns.map((c) => row[c.key])),
+    )
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
     const url = URL.createObjectURL(blob)
     const a = Object.assign(document.createElement("a"), {
       href: url,
@@ -502,7 +512,14 @@ Format each proposal as a separate markdown code block with a clear title header
       {/* Data Table */}
       {showTable && (
         <section aria-label="Data export">
-          <TableShell
+          {readOnlyRecords ? <div className="surface-card overflow-x-auto p-4">
+            <h3 className="section-title mb-2">{title} Records</h3>
+            <p className="mb-3 text-xs text-muted-foreground">Records are read-only. Use CRM to create or update customers. Export CSV above downloads these records.</p>
+            <table className="w-full text-sm">
+              <thead><tr>{tableColumns.map((column) => <th key={column.key} className="p-2 text-left">{column.label}</th>)}</tr></thead>
+              <tbody>{tableData.map((row) => <tr key={row.id}>{tableColumns.map((column) => <td key={column.key} className="p-2">{row[column.key]}</td>)}</tr>)}</tbody>
+            </table>
+          </div> : <TableShell
             title={`${title} Records`}
             columns={tableColumns.map((c) => ({ ...c, inputType: "text" as const }))}
             data={localTableData}
@@ -512,7 +529,7 @@ Format each proposal as a separate markdown code block with a clear title header
             onEdit={(rec) => setLocalTableData((prev) => prev.map((r) => r.id === rec.id ? rec as TableRow : r))}
             onRefresh={() => setLocalTableData(tableData)}
             searchPlaceholder={`Search ${title.toLowerCase()}...`}
-          />
+          />}
         </section>
       )}
     </div>

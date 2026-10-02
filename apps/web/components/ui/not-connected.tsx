@@ -34,6 +34,7 @@ export function NotConnected({
   onRetry,
   className,
   emptyTitle,
+  deniedDetail,
 }: {
   loadable: Loadable<unknown>
   service?: string
@@ -41,11 +42,14 @@ export function NotConnected({
   className?: string
   /** Shown only for `state: "ready"` misuse; normally callers render their own empty state. */
   emptyTitle?: string
+  /** Replaces the generic "no access" copy for a 403, e.g. "Not permitted: requires finance admin". */
+  deniedDetail?: string
 }) {
   if (loadable.state === "loading") {
     return <div className={cn("h-24 animate-pulse rounded-lg bg-muted/50", className)} aria-label="Loading" />
   }
-  const copy = describeLoadable(loadable, service)
+  const base = describeLoadable(loadable, service)
+  const copy = base && loadable.state === "denied" && loadable.status === 403 && deniedDetail ? { title: "Not permitted", detail: deniedDetail } : base
   const Icon = loadable.state === "error" ? AlertTriangle : CloudOff
   return (
     <div

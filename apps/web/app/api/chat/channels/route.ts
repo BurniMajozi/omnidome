@@ -20,7 +20,8 @@ async function proxy(request: NextRequest) {
 
     if (!response.ok) {
       // Surface the real status so the UI can show "Service not running" instead of an empty list.
-      return NextResponse.json({ data: [], error: "upstream_error" }, { status: response.status })
+      const payload = await response.json().catch(() => null)
+      return NextResponse.json({ data: [], error: "upstream_error", detail: payload?.detail }, { status: response.status })
     }
 
     const payload = await response.json()
@@ -52,6 +53,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(payload ?? {}, { status: response.status })
   } catch (error) {
     console.error("Error creating channel:", error)
-    return NextResponse.json({ error: "failed to create channel" }, { status: 500 })
+    return NextResponse.json({ error: "service_unreachable" }, { status: 503 })
   }
 }

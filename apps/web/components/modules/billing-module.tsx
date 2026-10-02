@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,12 +14,6 @@ import {
   CheckCircle,
   Clock,
   Download,
-  Send,
-  MoreVertical,
-  Phone,
-  Mail,
-  Ban,
-  RefreshCcw,
   Plus,
 } from "lucide-react"
 import {
@@ -37,11 +31,16 @@ import {
   Bar,
   Legend,
 } from "recharts"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useIsClient } from "@/lib/use-is-client"
 import { useLoadable } from "@/lib/service-fetch"
-import { sumMoney, type Loadable } from "@/lib/service-state"
+import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet, StatValue } from "@/components/ui/not-connected"
+
+import { useBillingPages, fetchCustomerNames, type CollectionsReportRow } from "@/lib/billing-api"
+import { mapAgingBuckets, collectionRateText, customerLabel, invoiceStatusView, paymentMix, showingLabel, billingCsv, isBillingAdmin } from "@/lib/billing-derive"
+import { fmtMoney, sumCents } from "@/lib/money"
+import { downloadCsv } from "@/lib/export-csv"
+import { useRoles } from "@/lib/use-roles"
 
 // All figures come from the billing service (/svc/billing/...). Nothing is
 // hard-coded: when the service is down or returns no rows the UI says so.
@@ -82,20 +81,9 @@ interface PaymentRow {
   amount_zar: string | number
   status: string
 }
-interface Paginated<T> {
-  items: T[]
-  total: number
-}
-
-const AGING_LABELS: Record<string, string> = {
-  current: "Current",
-  "30_days": "1-30 Days",
-  "60_days": "31-60 Days",
-  "90_days_plus": "60+ Days",
-}
 const METHOD_COLORS = ["#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ef4444", "#14b8a6"]
 
-const formatCurrency = (value: number) => `R ${Math.round(value).toLocaleString("en-ZA")}`
+const formatCurrency = fmtMoney
 
 function mapLoadable<T, U>(l: Loadable<T>, fn: (d: T) => U): Loadable<U> {
   return l.state === "ready" ? { state: "ready", data: fn(l.data) } : (l as Loadable<U>)
@@ -105,9 +93,19 @@ export function BillingModule() {
   const revenue = useLoadable<RevenueRow[]>(`${BASE}/reports/revenue?months=6`)
   const aging = useLoadable<AgingRow[]>(`${BASE}/reports/aging`)
   const queue = useLoadable<QueueRow[]>(`${BASE}/collections/queue?min_days=1`)
-  const invoices = useLoadable<Paginated<InvoiceRow>>(`${BASE}/invoices?page_size=100`)
-  const payments = useLoadable<Paginated<PaymentRow>>(`${BASE}/payments?page_size=100`)
+  const invoices = useBillingPages<InvoiceRow>("/invoices")
+  const payments = useBillingPages<PaymentRow>("/payments")
 
+  const collections = useLoadable<CollectionsReportRow[]>(`${BASE}/reports/collections?months=6`)
+  const { roles } = useRoles()
+  const [names, setNames] = useState<Record<string, string>>({})
+  const [namesPartial, setNamesPartial] = useState(true)
+  useEffect(() => {
+    let cancelled = false
+    fetchCustomerNames().then(result => { if (!cancelled && result) { setNames(result.names); setNamesPartial(result.partial) } })
+    return () => { cancelled = true }
+  }, [])
+  const collectionMonth = mapLoadable(collections.value, rows => rows[0] ?? null)
   const [activeTab, setActiveTab] = useState("overview")
   const isClient = useIsClient()
 
@@ -124,59 +122,39 @@ export function BillingModule() {
 
   const thisMonth = mapLoadable(revenue.value, (rows) => rows[0] ?? null)
   const agingTotals = mapLoadable(aging.value, (rows) => {
-    const overdueRows = rows.filter((r) => r.bucket !== "current")
+    const distinct = mapAgingBuckets(rows)
+    const overdueRows = distinct.filter((r) => r.overdue)
     return {
-      total: sumMoney(rows.map((r) => r.total_zar)),
-      overdue: sumMoney(overdueRows.map((r) => r.total_zar)),
-      count: rows.reduce((a, r) => a + r.count, 0),
+      total: sumCents(distinct.map((r) => r.total)) / 100,
+      overdue: sumCents(overdueRows.map((r) => r.total)) / 100,
+      count: distinct.reduce((a, r) => a + r.count, 0),
       overdueCount: overdueRows.reduce((a, r) => a + r.count, 0),
     }
   })
 
   const agingSeries = mapLoadable(aging.value, (rows) =>
-    rows.map((r) => ({ range: AGING_LABELS[r.bucket] ?? r.bucket, amount: Number(r.total_zar), customers: r.count })),
+    mapAgingBuckets(rows).map((r) => ({ range: r.label, amount: Number(r.total), customers: r.count })),
   )
   const agingHasData = agingSeries.state === "ready" && agingSeries.data.some((r) => r.amount > 0 || r.customers > 0)
 
   const methodSeries = mapLoadable(payments.value, (p) => {
-    const totals = new Map<string, number>()
-    for (const pay of p.items) {
-      if (pay.status !== "completed") continue
-      totals.set(pay.method, (totals.get(pay.method) ?? 0) + Number(pay.amount_zar))
-    }
-    const sum = [...totals.values()].reduce((a, b) => a + b, 0)
-    return [...totals.entries()].map(([name, amt], i) => ({
-      name,
-      value: sum > 0 ? Math.round((amt / sum) * 1000) / 10 : 0,
-      color: METHOD_COLORS[i % METHOD_COLORS.length],
-    }))
+    return paymentMix(p.items).map((item, i) => ({ ...item, color: METHOD_COLORS[i % METHOD_COLORS.length] }))
   })
 
   const invoiceRows = mapLoadable(invoices.value, (p) =>
     p.items.map((i) => ({
       id: i.id,
       number: i.number,
-      customer: i.customer_id.slice(0, 8),
-      amount: Number(i.total_zar),
+      customer: customerLabel(names, i.customer_id),
+      amount: i.total_zar,
       date: i.due_date,
       status: i.status,
     })),
   )
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "paid":
-        return <Badge className="badge-success">Paid</Badge>
-      case "sent":
-      case "pending":
-      case "draft":
-      case "partially_paid":
-        return <Badge className="badge-warning">{status.replace("_", " ")}</Badge>
-      case "overdue":
-        return <Badge className="badge-danger">Overdue</Badge>
-      default:
-        return <Badge variant="secondary">{status}</Badge>
-    }
+    const view = invoiceStatusView(status)
+    return <Badge className={view.tone === "muted" ? "" : `badge-${view.tone}`}>{view.label}</Badge>
   }
 
   const stageBadge = (stage: string) => {
@@ -202,12 +180,17 @@ export function BillingModule() {
         subtitle="Revenue tracking, invoices, and collections management"
         actions={
           <>
-            <Button variant="outline" size="sm"><Download className="h-3.5 w-3.5" />Export</Button>
-            <Button variant="cta" size="sm"><Plus className="h-3.5 w-3.5" />New Invoice</Button>
+            <Button variant="outline" size="sm" disabled={invoices.value.state !== "ready"} onClick={() => {
+              if (invoices.value.state !== "ready") return
+              downloadCsv("billing-invoices.csv", billingCsv(["Invoice", "Customer", "Customer ID", "Total ZAR", "Paid ZAR", "Due date", "Status"], invoices.value.data.items.map(i => [i.number, customerLabel(names, i.customer_id), i.customer_id, i.total_zar, i.amount_paid_zar, i.due_date, i.status])))
+            }}><Download className="h-3.5 w-3.5" />Export CSV</Button>
+            <span title="Manual invoice creation is unsupported here; subscription invoices use the generation API."><Button variant="cta" size="sm" disabled><Plus className="h-3.5 w-3.5" />New Invoice</Button></span>
           </>
         }
       />
 
+      <p className="text-xs text-muted-foreground">Manual invoice creation is unavailable in this screen. {isBillingAdmin(roles) ? "Subscription billing uses the invoice generation API." : "Invoice generation requires a billing admin."} Export includes the loaded invoices only.</p>
+      {invoices.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(invoices.value.data.items.length, invoices.value.data.total)} invoices{invoices.value.data.truncated ? " — partial dataset" : ""}. {namesPartial ? "Customer directory is incomplete; unknown names use a short customer ID." : ""}</p>}
       {/* KPI Cards - real report data only */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="border-border bg-card">
@@ -217,12 +200,12 @@ export function BillingModule() {
                 <p className="text-sm text-muted-foreground">Collected This Month</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">
                   <StatValue loadable={thisMonth}>
-                    {(m) => (!isClient ? "R --" : formatCurrency(Number(m?.total_paid_zar ?? 0)))}
+                    {(m) => (!isClient ? "R --" : formatCurrency(m?.total_paid_zar))}
                   </StatValue>
                 </p>
                 <div className="mt-1 text-xs text-muted-foreground">
                   <StatValue loadable={thisMonth} className="text-xs">
-                    {(m) => `Invoiced ${formatCurrency(Number(m?.total_invoiced_zar ?? 0))}`}
+                    {(m) => `Invoiced ${formatCurrency(m?.total_invoiced_zar)}`}
                   </StatValue>
                 </div>
               </div>
@@ -239,14 +222,9 @@ export function BillingModule() {
               <div>
                 <p className="text-sm text-muted-foreground">Collection Rate</p>
                 <p className="mt-1 text-2xl font-bold text-foreground">
-                  <StatValue loadable={thisMonth}>
-                    {(m) => {
-                      const inv = Number(m?.total_invoiced_zar ?? 0)
-                      return inv > 0 ? `${((Number(m?.total_paid_zar ?? 0) / inv) * 100).toFixed(1)}%` : "No data yet"
-                    }}
-                  </StatValue>
+                  <StatValue loadable={collectionMonth}>{m => collectionRateText(m?.collection_rate)}</StatValue>
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">Paid / invoiced this month</p>
+                <p className="mt-1 text-xs text-muted-foreground">Completed payments on invoices issued this month (to date)</p>
               </div>
               <div className="rounded-lg bg-blue-500/20 p-2">
                 <CheckCircle className="h-5 w-5 text-blue-400" />
@@ -333,7 +311,7 @@ export function BillingModule() {
                           formatter={(value: number) => formatCurrency(value)}
                         />
                         <Area type="monotone" dataKey="collected" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.3} name="Collected" />
-                        <Area type="monotone" dataKey="outstanding" stackId="2" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.3} name="Outstanding" />
+                        <Area type="monotone" dataKey="outstanding" stackId="2" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.3} name="Invoiced less receipts (floor zero)" />
                       </AreaChart>
                     </ResponsiveContainer>
                   </div>
@@ -344,7 +322,8 @@ export function BillingModule() {
             {/* Payment Methods */}
             <Card className="border-border bg-card">
               <CardHeader>
-                <CardTitle className="text-base">Payment Methods</CardTitle>
+                <CardTitle className="text-base">Payment Methods (loaded completed payments)</CardTitle>
+                {payments.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(payments.value.data.items.length, payments.value.data.total)} payments{payments.value.data.truncated ? " — partial mix" : ""}</p>}
               </CardHeader>
               <CardContent>
                 {methodSeries.state !== "ready" ? (
@@ -394,7 +373,7 @@ export function BillingModule() {
               columns={[
                 { key: "number", label: "Invoice" },
                 { key: "customer", label: "Customer" },
-                { key: "amount", label: "Amount", render: (v) => formatCurrency(Number(v)) },
+                { key: "amount", label: "Amount", render: (v) => formatCurrency(v) },
                 { key: "date", label: "Due" },
                 { key: "status", label: "Status", render: (v) => getStatusBadge(String(v)) },
               ]}
@@ -431,48 +410,19 @@ export function BillingModule() {
                       className="flex flex-col gap-4 rounded-lg border border-border bg-secondary/30 p-4 sm:flex-row sm:items-center sm:justify-between"
                     >
                       <div>
-                        <p className="font-medium text-foreground">{item.customer_name ?? `Customer ${item.customer_id.slice(0, 8)}`}</p>
+                        <p className="font-medium text-foreground">{item.customer_name || customerLabel(names, item.customer_id)}</p>
                         <p className="text-sm text-muted-foreground">{item.invoice_count} overdue invoice{item.invoice_count === 1 ? "" : "s"}</p>
                       </div>
                       <div className="text-left sm:text-center">
-                        <p className="font-semibold text-foreground">{!isClient ? "R --" : formatCurrency(Number(item.total_overdue_zar))}</p>
+                        <p className="font-semibold text-foreground">{!isClient ? "R --" : formatCurrency(item.total_overdue_zar)}</p>
                         <p className="text-xs text-red-400">{item.days_overdue} days overdue</p>
                       </div>
                       <div className="text-left sm:text-center">
                         <p className="text-sm text-muted-foreground">Oldest due</p>
                         <p className="text-sm text-foreground">{item.oldest_overdue_date}</p>
                       </div>
-                      <div>{stageBadge(item.dunning_stage)}</div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button variant="outline" size="icon" className="h-8 w-8 bg-transparent">
-                          <Phone className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="icon" className="h-8 w-8 bg-transparent">
-                          <Mail className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="icon" className="h-8 w-8 bg-transparent">
-                          <Send className="h-4 w-4" />
-                        </Button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="h-8 w-8">
-                              <MoreVertical className="h-4 w-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem>Log Promise to Pay</DropdownMenuItem>
-                            <DropdownMenuItem>Escalate</DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <Ban className="mr-2 h-4 w-4" />
-                              Suspend Service
-                            </DropdownMenuItem>
-                            <DropdownMenuItem>
-                              <RefreshCcw className="mr-2 h-4 w-4" />
-                              Payment Arrangement
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
+                      <div><p className="text-xs text-muted-foreground">Dunning stage</p>{stageBadge(item.dunning_stage)}</div>
+                      <p className="text-xs text-muted-foreground">Contact and collection actions are unavailable in this screen.</p>
                     </div>
                   ))}
                 </div>
