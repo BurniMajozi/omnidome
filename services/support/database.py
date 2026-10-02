@@ -36,8 +36,10 @@ class Ticket(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Product/hardware link
+    # The physical FK is installed by the migration. Inventory uses separate
+    # ORM metadata; declaring its table here breaks SQLAlchemy mapper flushes.
     product_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("inventory_products.id", ondelete="SET NULL"), nullable=True
+        PG_UUID(as_uuid=True), nullable=True
     )
     serial_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
 
@@ -87,6 +89,9 @@ _SCHEMA_LOCK_KEY = 0x5_0_8_008
 # create_all cannot be used: tickets.product_id references inventory_products (another service's
 # table, created by config/master_schema.sql), so metadata alone raises NoReferencedTableError.
 ADDITIVE_COLUMNS = (
+    ("tickets", "resolution_notes", "TEXT"),
+    ("tickets", "product_id", "UUID REFERENCES inventory_products(id) ON DELETE SET NULL"),
+    ("tickets", "serial_number", "VARCHAR(100)"),
     ("tickets", "finance_status", "VARCHAR(20)"),
     ("tickets", "finance_error", "VARCHAR(500)"),
 )

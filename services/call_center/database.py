@@ -194,6 +194,13 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 _ALTERS = (
+    "ALTER TABLE call_center_agents ADD COLUMN IF NOT EXISTS skills JSON",
+    "ALTER TABLE call_center_agents ADD COLUMN IF NOT EXISTS max_concurrent_calls INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS direction VARCHAR(10) NOT NULL DEFAULT 'UNKNOWN'",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS queue_id UUID",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS live_transcript TEXT",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS outcome VARCHAR(50)",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS notes TEXT",
     "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS recording_consent VARCHAR(20) NOT NULL DEFAULT 'unknown'",
     "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS consent_recorded_at TIMESTAMPTZ",
     "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS retention_until TIMESTAMPTZ",
