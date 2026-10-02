@@ -13,6 +13,7 @@ from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
+from services.agent_orchestrator.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,12 @@ class Agent:
         started = time.perf_counter()
         turn = {"rounds": 0, "tokens": 0}
 
-        def done(content: str, stopped_by: Optional[str] = None, unavailable: bool = False) -> Dict[str, Any]:
+        def done(
+            content: str,
+            stopped_by: Optional[str] = None,
+            unavailable: bool = False,
+            verification: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
             # Usage tracing (spec A7): one agent_turns row per turn.
             usage.record_agent_turn(
                 tenant_id=tenant, agent_type=self.agent_type, channel=self.channel, rounds=turn["rounds"],
@@ -225,7 +231,26 @@ class Agent:
                 "unavailable": unavailable,
                 "stopped_by": stopped_by,
                 "status": hitl_status,
+                "verification": verification,
             }
+
+        async def verify_and_done(
+            content_str: str,
+            stopped_by: Optional[str] = None,
+            unavailable: bool = False,
+        ) -> Dict[str, Any]:
+            verif_data = None
+            is_mock_llm = hasattr(llm_client, "replies")
+            if not is_mock_llm and not unavailable and content_str.strip() and settings.jev_gate_enabled:
+                from services.agent_orchestrator.jev_gate import verify_agent_response
+                v = await verify_agent_response(
+                    customer_message=user_message,
+                    draft_response=content_str,
+                    tool_records=tool_call_log,
+                    agent_type=self.agent_type,
+                )
+                verif_data = v.to_dict()
+            return done(content_str, stopped_by=stopped_by, unavailable=unavailable, verification=verif_data)
 
         while tool_count < MAX_TOOL_CALLS:
             result = await llm_client.chat(
@@ -247,7 +272,7 @@ class Agent:
                     return done(content, unavailable=True)
                 cleaned = clean_response(content)
                 if cleaned.strip():
-                    return done(cleaned)
+                    return await verify_and_done(cleaned)
                 empty_retries += 1
                 if empty_retries > MAX_EMPTY_RETRIES:
                     return done(EMPTY_ANSWER_FALLBACK, stopped_by="empty")

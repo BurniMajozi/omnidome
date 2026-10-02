@@ -551,11 +551,18 @@ async def invoke_agent(
 
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
+    route_meta = None
     if effective_agent_type in ROUTER_AGENT_TYPES:
-        effective_agent_type = _classify_agent(body.message or "")
+        from services.agent_orchestrator.jev_gate import route_agent_intent
+        route_decision = await route_agent_intent(body.message or "", context=body.context)
+        effective_agent_type = route_decision.target_agent
+        route_meta = route_decision.to_dict()
         logger.info(
-            "Orchestrator auto-routed prompt to specialist agent '%s' for message: %s",
+            "Orchestrator auto-routed prompt to specialist agent '%s' (conf=%.2f, direct=%s, jev=%s) for message: %s",
             effective_agent_type,
+            route_decision.confidence,
+            route_decision.is_direct_lookup,
+            route_decision.evaluated_by_jev,
             (body.message or "")[:60],
         )
 
@@ -702,6 +709,8 @@ async def invoke_agent(
         agent_type=effective_agent_type,
         status=hitl_status,
         pending_approvals=pending if pending else None,
+        route_decision=route_meta,
+        verification=result.get("verification"),
     )
 
 

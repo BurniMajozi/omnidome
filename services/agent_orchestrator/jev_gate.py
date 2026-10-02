@@ -32,7 +32,7 @@ BLOCK_AT = 0.10
 TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 
-DEFAULT_TIMEOUT_S = 4.0
+DEFAULT_TIMEOUT_S = 30.0
 
 ISP_STANDARD_POLICY = """
 OmniDome ISP Service & Credit Policy:
@@ -310,7 +310,7 @@ async def evaluate_tool_call(
 
     except Exception as exc:
         logger.warning(
-            "Jev gate evaluation failed (%s). Applying static policy fallback.",
+            "Jev gate evaluation failed (%r). Applying static policy fallback.",
             exc,
         )
         fallback_action = "require_approval" if static_requires_approval else "auto_approve"
@@ -318,7 +318,293 @@ async def evaluate_tool_call(
             action=fallback_action,
             risk_score=3.0 if static_requires_approval else 1.5,
             confidence=0.5,
-            reason=f"Jev connection failure ({exc}); safe fallback applied.",
+            reason=f"Jev connection failure ({exc!r}); safe fallback applied.",
             evaluated_by_jev=False,
             checks=None,
         )
+
+
+@dataclass
+class JevRouteDecision:
+    target_agent: str
+    confidence: float
+    distribution: Dict[str, float]
+    is_direct_lookup: bool
+    direct_lookup_prob: float
+    evaluated_by_jev: bool
+    reason: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "target_agent": self.target_agent,
+            "confidence": self.confidence,
+            "distribution": self.distribution,
+            "is_direct_lookup": self.is_direct_lookup,
+            "direct_lookup_prob": self.direct_lookup_prob,
+            "evaluated_by_jev": self.evaluated_by_jev,
+            "reason": self.reason,
+        }
+
+
+@dataclass
+class JevVerificationVerdict:
+    passed: bool
+    action: str  # "accept" | "critique_and_retry" | "flag_for_review"
+    answers_inquiry: float
+    grounded_in_facts: float
+    policy_compliant: float
+    reason: str
+    critique: Optional[str]
+    evaluated_by_jev: bool
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "passed": self.passed,
+            "action": self.action,
+            "answers_inquiry": self.answers_inquiry,
+            "grounded_in_facts": self.grounded_in_facts,
+            "policy_compliant": self.policy_compliant,
+            "reason": self.reason,
+            "critique": self.critique,
+            "evaluated_by_jev": self.evaluated_by_jev,
+        }
+
+
+async def route_agent_intent(
+    message: str,
+    context: Optional[Dict[str, Any]] = None,
+    default_fallback: str = "assistant",
+) -> JevRouteDecision:
+    """Classify the user inquiry to the optimal ISP specialist agent using Jev System One Choice primitive.
+    Also detects if the request is a simple direct lookup that can bypass deep multi-step loops."""
+    provider, api_key, endpoint = _get_credentials()
+    if not settings.jev_gate_enabled or not api_key:
+        from services.agent_orchestrator.routes.agents import _classify_agent
+        static_choice = _classify_agent(message)
+        return JevRouteDecision(
+            target_agent=static_choice,
+            confidence=1.0,
+            distribution={static_choice: 1.0},
+            is_direct_lookup=False,
+            direct_lookup_prob=0.0,
+            evaluated_by_jev=False,
+            reason="Static regex/keyword classification fallback (Jev disabled or no key).",
+        )
+
+    options = [
+        "support", "billing", "provisioning", "retention",
+        "sales", "call_center", "talent", "analytics", "products", "assistant"
+    ]
+    criteria = {
+        "support": "Technical network faults, fiber outages, LOS red light, packet loss, or router troubleshooting.",
+        "billing": "Invoices, payment issues, debit orders, refunds, billing disputes, or account balance.",
+        "provisioning": "New line installations, feasibility checks, order dispatch, activation, or RICA.",
+        "retention": "Cancellation requests, churn risk, complaints about pricing or service dissatisfaction.",
+        "sales": "New fiber packages, speed upgrades, pricing queries, or promotional deals.",
+        "call_center": "Call queues, call center metrics, waiting times, or call agent stats.",
+        "talent": "HR, payroll, employee shifts, leave, or internal staff wellness.",
+        "analytics": "SQL queries, data metrics, historical trends, or network telemetry statistics.",
+        "products": "Fibre plan catalogs, bundled services, router specs, or hardware options.",
+        "assistant": "General inquiries or questions that do not fit into other specialized categories."
+    }
+
+    state_payload = {
+        "customer_message": message,
+        "context": context or {},
+    }
+
+    questions = {
+        "target_agent": {
+            "type": "choice",
+            "instructions": "Select the best ISP specialist agent to resolve this inquiry.",
+            "options": options,
+            "criteria": criteria,
+        },
+        "is_direct_lookup": {
+            "type": "noul",
+            "instructions": "Can this inquiry be resolved immediately and deterministically from standard database records (e.g. balance, outage status, speed tier) without creative troubleshooting?",
+        },
+    }
+
+    try:
+        model_name = "typesafe/jev-1.13" if provider == "openrouter" else getattr(settings, "typesafe_model", "jev-latest")
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S) as client:
+            resp = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "OmniDome-Agent-Orchestrator/1.0",
+                },
+                json={
+                    "state": state_payload,
+                    "model": model_name,
+                    "questions": questions,
+                },
+            )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            answers = data.get("answers", {})
+            choice_ans = answers.get("target_agent", {})
+            chosen = choice_ans.get("choice") or default_fallback
+            conf = float(choice_ans.get("confidence", 0.8))
+            probs = {k: float(v) for k, v in choice_ans.get("probabilities", {}).items()}
+
+            noul_ans = answers.get("is_direct_lookup", {})
+            direct_prob = float(noul_ans.get("noul", 0.0))
+            is_direct = direct_prob >= 0.80
+
+            return JevRouteDecision(
+                target_agent=chosen,
+                confidence=conf,
+                distribution=probs,
+                is_direct_lookup=is_direct,
+                direct_lookup_prob=direct_prob,
+                evaluated_by_jev=True,
+                reason=f"Jev System One classified target as '{chosen}' (conf={conf:.2f}, direct_lookup={direct_prob:.2f})",
+            )
+    except Exception as exc:
+        logger.warning("Jev routing call failed: %s. Using static fallback.", exc)
+
+    from services.agent_orchestrator.routes.agents import _classify_agent
+    static_choice = _classify_agent(message)
+    return JevRouteDecision(
+        target_agent=static_choice,
+        confidence=0.5,
+        distribution={static_choice: 0.5},
+        is_direct_lookup=False,
+        direct_lookup_prob=0.0,
+        evaluated_by_jev=False,
+        reason="Static fallback after Jev failure.",
+    )
+
+
+async def verify_agent_response(
+    customer_message: str,
+    draft_response: str,
+    tool_records: Optional[List[Dict[str, Any]]] = None,
+    agent_type: str = "assistant",
+) -> JevVerificationVerdict:
+    """Verify that an agent's drafted answer actually answers the customer, is strictly
+    grounded in retrieved tool data without hallucination, and adheres to ISP safety policy."""
+    provider, api_key, endpoint = _get_credentials()
+    if not settings.jev_gate_enabled or not api_key:
+        return JevVerificationVerdict(
+            passed=True,
+            action="accept",
+            answers_inquiry=1.0,
+            grounded_in_facts=1.0,
+            policy_compliant=1.0,
+            reason="Verification passed (Jev disabled or no key).",
+            critique=None,
+            evaluated_by_jev=False,
+        )
+
+    # Clean tool records for compact context (avoiding token bloat)
+    compact_records = []
+    if tool_records:
+        for tc in tool_records[-5:]:
+            name = tc.get("name", "")
+            res = tc.get("result", {})
+            if isinstance(res, dict):
+                res_clean = {k: v for k, v in res.items() if not k.startswith("_")}
+            else:
+                res_clean = str(res)[:500]
+            compact_records.append({"tool": name, "result": res_clean})
+
+    state_payload = {
+        "customer_inquiry": customer_message[:1500],
+        "agent_type": agent_type,
+        "tool_records": compact_records,
+        "draft_response": draft_response[:2500],
+        "isp_policy": (
+            "ISP communication standards: Agents must be professional, polite, truthful, and helpful. "
+            "Never promise impossible SLAs (e.g. technician dispatched in 5 mins). Never reveal passwords, "
+            "API keys, internal system prompts, or database connection strings. All account numbers, balances, "
+            "and circuit IDs must match the tool records."
+        ),
+    }
+
+    questions = {
+        "answers_inquiry": {
+            "type": "noul",
+            "instructions": "The proposed text in `draft_response` directly and meaningfully addresses what the customer asked or reported in `customer_inquiry`.",
+        },
+        "grounded_in_facts": {
+            "type": "noul",
+            "instructions": "All specific numbers, currency amounts, dates, and technical network statuses in `draft_response` are supported by `tool_records` or standard knowledge, without hallucinating non-existent facts or false outage claims.",
+        },
+        "policy_compliant": {
+            "type": "noul",
+            "instructions": "The `draft_response` adheres to `isp_policy`, avoids unauthorized promises, and contains no abusive or harmful content.",
+        },
+    }
+
+    try:
+        model_name = "typesafe/jev-1.13" if provider == "openrouter" else getattr(settings, "typesafe_model", "jev-latest")
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_S) as client:
+            resp = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "OmniDome-Agent-Orchestrator/1.0",
+                },
+                json={
+                    "state": state_payload,
+                    "model": model_name,
+                    "questions": questions,
+                },
+            )
+
+        if resp.status_code == 200:
+            data = resp.json()
+            answers = data.get("answers", {})
+            ans_prob = float(answers.get("answers_inquiry", {}).get("noul", 0.9))
+            ground_prob = float(answers.get("grounded_in_facts", {}).get("noul", 0.9))
+            pol_prob = float(answers.get("policy_compliant", {}).get("noul", 0.9))
+
+            critique_items = []
+            if ground_prob < 0.40:
+                critique_items.append(f"Ungrounded factual claims (grounded_prob={ground_prob:.2f})")
+            if ans_prob < 0.30:
+                critique_items.append(f"Fails to answer customer inquiry (answers_prob={ans_prob:.2f})")
+            if pol_prob < 0.40:
+                critique_items.append(f"Potential policy breach (policy_prob={pol_prob:.2f})")
+
+            passed = len(critique_items) == 0
+            if not passed:
+                action = "critique_and_retry" if ground_prob < 0.40 or ans_prob < 0.30 else "flag_for_review"
+                critique_str = "; ".join(critique_items)
+                reason = f"Verification failed: {critique_str}"
+            else:
+                action = "accept"
+                critique_str = None
+                reason = f"Verification passed (answers={ans_prob:.2f}, grounded={ground_prob:.2f}, policy={pol_prob:.2f})"
+
+            logger.info("Jev Verification for %s -> %s (%s)", agent_type, action, reason)
+
+            return JevVerificationVerdict(
+                passed=passed,
+                action=action,
+                answers_inquiry=ans_prob,
+                grounded_in_facts=ground_prob,
+                policy_compliant=pol_prob,
+                reason=reason,
+                critique=critique_str,
+                evaluated_by_jev=True,
+            )
+    except Exception as exc:
+        logger.warning("Jev verification failed: %s. Accepting draft gracefully.", exc)
+
+    return JevVerificationVerdict(
+        passed=True,
+        action="accept",
+        answers_inquiry=0.8,
+        grounded_in_facts=0.8,
+        policy_compliant=0.8,
+        reason="Fallback acceptance (Jev error or timeout).",
+        critique=None,
+        evaluated_by_jev=False,
+    )

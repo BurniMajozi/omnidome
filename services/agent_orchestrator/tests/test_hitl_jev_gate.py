@@ -15,7 +15,11 @@ sys.path.insert(0, REPO_ROOT)
 from services.agent_orchestrator.jev_gate import (
     evaluate_tool_call,
     _deterministic_pre_check,
+    route_agent_intent,
+    verify_agent_response,
     JevGateVerdict,
+    JevRouteDecision,
+    JevVerificationVerdict,
     APPROVE_AT,
     BLOCK_AT,
 )
@@ -184,5 +188,62 @@ def test_execute_approved_with_custom_output_override():
 
         assert result is not None
         assert result == custom_human_output
+
+    asyncio.run(_run())
+
+
+def test_route_agent_intent_fallback_when_disabled():
+    """When Jev is disabled, fallback cleanly to keyword classification."""
+    async def _run():
+        with patch("services.agent_orchestrator.jev_gate.settings.jev_gate_enabled", False):
+            res = await route_agent_intent("I need to troubleshoot a fault on my line")
+            assert res.target_agent == "support"
+            assert res.evaluated_by_jev is False
+
+    asyncio.run(_run())
+
+
+def test_route_agent_intent_live_evaluation():
+    """Live Jev Choice routing test if TYPESAFE_API_KEY is configured."""
+    async def _run():
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(REPO_ROOT, ".env"))
+
+        key = os.getenv("TYPESAFE_API_KEY", "").strip().strip("'\"")
+        if not key:
+            pytest.skip("TYPESAFE_API_KEY not configured")
+
+        res = await route_agent_intent("My router has a red flashing LOS optical light and zero internet connection.")
+        assert res.evaluated_by_jev is True
+        assert res.target_agent == "support"
+        assert res.confidence >= 0.70
+        assert "support" in res.distribution
+        assert res.distribution["support"] >= 0.70
+
+    asyncio.run(_run())
+
+
+def test_verify_agent_response_live_evaluation():
+    """Live Jev output verification test if TYPESAFE_API_KEY is configured."""
+    async def _run():
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(REPO_ROOT, ".env"))
+
+        key = os.getenv("TYPESAFE_API_KEY", "").strip().strip("'\"")
+        if not key:
+            pytest.skip("TYPESAFE_API_KEY not configured")
+
+        # Grounded and accurate draft
+        v_good = await verify_agent_response(
+            customer_message="What is my account balance?",
+            draft_response="According to our billing records, your current outstanding balance is R450.00.",
+            tool_records=[{"name": "billing_get_balance", "result": {"balance": 450.00, "status": "active"}}],
+            agent_type="billing",
+        )
+        assert v_good.evaluated_by_jev is True
+        assert v_good.passed is True
+        assert v_good.action == "accept"
+        assert v_good.answers_inquiry >= 0.70
+        assert v_good.grounded_in_facts >= 0.70
 
     asyncio.run(_run())

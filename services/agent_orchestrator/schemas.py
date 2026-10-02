@@ -54,6 +54,8 @@ class AgentInvokeResponse(BaseModel):
     agent_type: str
     status: Optional[str] = "completed"
     pending_approvals: Optional[List[Dict[str, Any]]] = None
+    route_decision: Optional[Dict[str, Any]] = None
+    verification: Optional[Dict[str, Any]] = None
 
 
 class ToolPolicyInfo(BaseModel):
