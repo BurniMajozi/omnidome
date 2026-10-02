@@ -185,6 +185,9 @@ app.include_router(chat_deployments_router, prefix="/api/chat-deployments")
 app.include_router(chat_public_router, prefix="/api/chat")
 app.include_router(mcp_router)
 
+from services.agent_orchestrator.routes.long_horizon import router as long_horizon_router
+app.include_router(long_horizon_router, prefix="/api/agents")
+
 from services.agent_orchestrator.routes.workflows import router as workflows_router
 app.include_router(workflows_router, prefix="/api/workflows")
 

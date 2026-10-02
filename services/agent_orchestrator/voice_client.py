@@ -41,15 +41,16 @@ async def transcribe(audio_bytes: bytes, tenant_id: str, user_id: Optional[str] 
             resp.raise_for_status()
             result = resp.json()
             return {"text": result.get("text", ""), "duration": result.get("duration")}
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 503:
-            raise VoiceboxUnavailable(exc.response.json().get("detail", str(exc))) from exc
-        raise
-    except httpx.TimeoutException as exc:
-        raise VoiceboxUnavailable(
-            f"voicebox timed out after {_VOICEBOX_CALL_TIMEOUT_SECONDS:.0f}s transcribing — "
-            "it may still be loading a model for the first time; try again shortly."
-        ) from exc
+    except Exception as exc:
+        logger.info("Voicebox unavailable (%s); falling back to OpenRouter STT", exc)
+        try:
+            from services.agent_orchestrator.voice import transcribe_audio
+            text = await transcribe_audio(audio_bytes)
+            if text:
+                return {"text": text, "duration": None}
+        except Exception as fallback_exc:
+            logger.error("OpenRouter STT fallback failed: %s", fallback_exc)
+        raise VoiceboxUnavailable(f"Voicebox service unavailable and fallback failed: {exc}") from exc
 
 
 async def speak(text: str, tenant_id: str, agent_type: str, user_id: Optional[str] = None) -> tuple[bytes, str]:
@@ -70,12 +71,13 @@ async def speak(text: str, tenant_id: str, agent_type: str, user_id: Optional[st
             )
             resp.raise_for_status()
             return resp.content, resp.headers.get("content-type", "audio/wav")
-    except httpx.HTTPStatusError as exc:
-        if exc.response.status_code in (503, 404, 409):
-            raise VoiceboxUnavailable(exc.response.json().get("detail", str(exc))) from exc
-        raise
-    except httpx.TimeoutException as exc:
-        raise VoiceboxUnavailable(
-            f"voicebox timed out after {_VOICEBOX_CALL_TIMEOUT_SECONDS:.0f}s generating speech — "
-            "it may still be loading a model for the first time; try again shortly."
-        ) from exc
+    except Exception as exc:
+        logger.info("Voicebox unavailable (%s); falling back to OpenRouter TTS", exc)
+        try:
+            from services.agent_orchestrator.voice import synthesize_speech
+            audio_content = await synthesize_speech(text)
+            if audio_content:
+                return audio_content, "audio/mpeg"
+        except Exception as fallback_exc:
+            logger.error("OpenRouter TTS fallback failed: %s", fallback_exc)
+        raise VoiceboxUnavailable(f"Voicebox service unavailable and fallback failed: {exc}") from exc
