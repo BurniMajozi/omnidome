@@ -37,6 +37,8 @@ import {
   Play,
   Pause,
   Sparkles,
+  Monitor,
+  Search,
 } from "lucide-react"
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -52,6 +54,8 @@ import { CommissionTiers } from "./commission-tiers"
 import { FieldSalesApp } from "./field-sales-app"
 import { TechnicianApp } from "./technician-app"
 import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
+import { DomeStudioWorkspace, DomeStudioLiveDualView } from "./portal/domestudio-workspace"
+import { OpenSeoAuditStudio } from "./portal/openseo-audit-studio"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -203,6 +207,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   const [localPages, setLocalPages] = useState<any[]>(() => landingPages)
   const [studioOpen, setStudioOpen] = useState(false)
   const [editingPage, setEditingPage] = useState<ImpeccablePage | null>(null)
+  const [websiteSubView, setWebsiteSubView] = useState<"builder" | "roster" | "seo">("builder")
 
   const handleSaveImpeccablePage = (page: ImpeccablePage) => {
     setLocalPages((prev) => {
@@ -235,6 +240,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               variant="outline"
               size="sm"
               onClick={() => {
+                setActiveTab("website")
                 setEditingPage(null)
                 setStudioOpen(true)
               }}
@@ -245,13 +251,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
             <Button
               size="sm"
               onClick={() => {
+                setActiveTab("website")
                 setEditingPage(null)
                 setStudioOpen(true)
               }}
               className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
             >
               <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-              Impeccable Studio
+              DomeStudio
             </Button>
           </>
         }
@@ -339,7 +346,10 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
           <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
-          <TabsTrigger value="analytics-custom">Custom Dashboards</TabsTrigger>
+          <TabsTrigger value="analytics-custom" className="flex items-center gap-1.5">
+            <Monitor className="h-3.5 w-3.5" />
+            Live Dual-View
+          </TabsTrigger>
           <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
           {AB_TESTING_ENABLED && <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>}
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
@@ -540,153 +550,239 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           </div>
         </TabsContent>
 
-        <TabsContent value="website" className="mt-4 space-y-4">
+        <TabsContent value="website" className="mt-4 space-y-5">
           <div id="portal-landing" />
 
-          {/* Impeccable AI Studio Quick Banner */}
-          <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0c121d] to-[#080d18] p-5 shadow-lg">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="border-cyan-500/40 bg-cyan-950/60 text-cyan-400 text-xs font-mono">
-                    <Sparkles className="h-3 w-3 mr-1" />
-                    IMPECCABLE STUDIO & MARKETING INTEGRATION
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">Obsidian Telecom Visual Standards</span>
-                </div>
-                <h3 className="text-lg font-bold text-foreground">High-Converting Landing Pages</h3>
-                <p className="text-xs text-muted-foreground max-w-2xl">
-                  Build responsive, accessible landing pages with integrated UTM campaign tracking, CRM webhook lead ingestion,
-                  Meta/GTM pixels, and automated retention journeys—crafted to Impeccable design standards with zero anti-patterns.
-                </p>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <Button
-                  onClick={() => {
-                    setEditingPage(null)
-                    setStudioOpen(true)
-                  }}
-                  className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs shadow-md shadow-cyan-500/20"
-                >
-                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                  Launch Impeccable Studio
-                </Button>
-              </div>
-            </div>
-          </div>
-
-          <TableShell
-            title="Landing Pages"
-            columns={[
-              {
-                key: "name",
-                label: "Page Name",
-                inputType: "text" as const,
-                render: (v, row: any) => (
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-foreground">{String(v)}</span>
-                    {row?.intent && (
-                      <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px] px-1.5 py-0">
-                        Impeccable
-                      </Badge>
-                    )}
-                  </div>
-                ),
-              },
-              { key: "url", label: "URL", inputType: "text" as const },
-              { key: "status", label: "Status", inputType: "select" as const, options: ["published", "draft"], render: (v) => (
-                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v === "published" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
-                  {String(v)}
-                </span>
-              )},
-              { key: "views", label: "Views", inputType: "number" as const, render: (v) => Number(v).toLocaleString() },
-              { key: "conversions", label: "Conversions", inputType: "number" as const },
-              { key: "rate", label: "Conv. Rate", inputType: "text" as const },
-              {
-                key: "studioAction",
-                label: "Studio",
-                render: (_v, row: any) => (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 px-2 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40"
-                    onClick={() => {
-                      setEditingPage(row)
-                      setStudioOpen(true)
-                    }}
-                  >
-                    <Sparkles className="h-3 w-3 mr-1" />
-                    Open Studio
-                  </Button>
-                ),
-              },
-            ]}
-            data={localPages}
-            addLabel="Create Page"
-            extraActions={
+          {/* Subview Navigation Header within Website Builder */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border/60 pb-3">
+            <div className="flex flex-wrap items-center gap-1.5 bg-secondary/80 p-1 rounded-lg border border-border/60">
               <Button
+                variant={websiteSubView === "builder" ? "secondary" : "ghost"}
                 size="sm"
+                className="text-xs h-7"
+                onClick={() => setWebsiteSubView("builder")}
+              >
+                <Sparkles className="h-3.5 w-3.5 mr-1 text-cyan-400" />
+                DomeStudio Workspace
+              </Button>
+              <Button
+                variant={websiteSubView === "roster" ? "secondary" : "ghost"}
+                size="sm"
+                className="text-xs h-7"
+                onClick={() => setWebsiteSubView("roster")}
+              >
+                <Layout className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                Landing Pages Roster ({localPages.length})
+              </Button>
+              <Button
+                variant={websiteSubView === "seo" ? "secondary" : "ghost"}
+                size="sm"
+                className="text-xs h-7"
+                onClick={() => setWebsiteSubView("seo")}
+              >
+                <Search className="h-3.5 w-3.5 mr-1 text-amber-400" />
+                OpenSEO & Jev Intelligence
+              </Button>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs h-7"
                 onClick={() => {
+                  setWebsiteSubView("builder")
                   setEditingPage(null)
                   setStudioOpen(true)
                 }}
-                className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
               >
-                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                Impeccable Studio
+                <Plus className="h-3.5 w-3.5 mr-1" />
+                New Page
               </Button>
-            }
-            onAdd={() => {
-              setEditingPage(null)
-              setStudioOpen(true)
-            }}
-            onDelete={(id) => setLocalPages((prev) => prev.filter((r) => r.id !== id))}
-            onEdit={(rec) => {
-              setEditingPage(rec as any)
-              setStudioOpen(true)
-            }}
-            searchPlaceholder="Search pages..."
-          />
-
-          {/* Website Builder Tools */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-            <Card className="cursor-pointer border-border bg-card transition-colors hover:border-primary/50">
-              <CardContent className="flex flex-col items-center p-6 text-center">
-                <div className="rounded-lg bg-emerald-500/20 p-3">
-                  <Palette className="h-6 w-6 text-emerald-400" />
-                </div>
-                <h4 className="mt-3 font-medium text-foreground">Theme Editor</h4>
-                <p className="mt-1 text-sm text-muted-foreground">Customize colors & fonts</p>
-              </CardContent>
-            </Card>
-            <Card className="cursor-pointer border-border bg-card transition-colors hover:border-primary/50">
-              <CardContent className="flex flex-col items-center p-6 text-center">
-                <div className="rounded-lg bg-blue-500/20 p-3">
-                  <Code className="h-6 w-6 text-blue-400" />
-                </div>
-                <h4 className="mt-3 font-medium text-foreground">Code Snippets</h4>
-                <p className="mt-1 text-sm text-muted-foreground">Add custom scripts</p>
-              </CardContent>
-            </Card>
-            <Card className="cursor-pointer border-border bg-card transition-colors hover:border-primary/50">
-              <CardContent className="flex flex-col items-center p-6 text-center">
-                <div className="rounded-lg bg-amber-500/20 p-3">
-                  <ImageIcon className="h-6 w-6 text-amber-400" />
-                </div>
-                <h4 className="mt-3 font-medium text-foreground">Media Library</h4>
-                <p className="mt-1 text-sm text-muted-foreground">Manage images & files</p>
-              </CardContent>
-            </Card>
-            <Card className="cursor-pointer border-border bg-card transition-colors hover:border-primary/50">
-              <CardContent className="flex flex-col items-center p-6 text-center">
-                <div className="rounded-lg bg-purple-500/20 p-3">
-                  <FileText className="h-6 w-6 text-purple-400" />
-                </div>
-                <h4 className="mt-3 font-medium text-foreground">SEO Settings</h4>
-                <p className="mt-1 text-sm text-muted-foreground">Optimize for search</p>
-              </CardContent>
-            </Card>
+              <Button
+                size="sm"
+                className="text-xs h-7 bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold"
+                onClick={() => {
+                  handleSaveImpeccablePage({
+                    id: `page-${Date.now()}`,
+                    name: "Gigabit Summer Sprint 2026",
+                    url: "/promo/summer-sprint",
+                    status: "published",
+                    views: 320,
+                    conversions: 14,
+                    rate: "4.3%",
+                  })
+                }}
+              >
+                <Globe className="h-3.5 w-3.5 mr-1" />
+                Publish Live
+              </Button>
+            </div>
           </div>
+
+          {/* Subview 1: DomeStudio Interactive Workspace */}
+          {websiteSubView === "builder" && (
+            <div className="space-y-6">
+              <DomeStudioWorkspace
+                initialPages={localPages}
+                onSavePage={handleSaveImpeccablePage}
+                defaultMode="inline-builder"
+              />
+
+              {/* Website Builder Quick Tools */}
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+                <Card
+                  onClick={() => setWebsiteSubView("builder")}
+                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
+                >
+                  <CardContent className="flex flex-col items-center p-6 text-center">
+                    <div className="rounded-lg bg-emerald-500/20 p-3">
+                      <Palette className="h-6 w-6 text-emerald-400" />
+                    </div>
+                    <h4 className="mt-3 font-medium text-foreground">Theme Editor</h4>
+                    <p className="mt-1 text-sm text-muted-foreground">Obsidian Telecom visual system</p>
+                  </CardContent>
+                </Card>
+                <Card
+                  onClick={() => setWebsiteSubView("builder")}
+                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
+                >
+                  <CardContent className="flex flex-col items-center p-6 text-center">
+                    <div className="rounded-lg bg-blue-500/20 p-3">
+                      <Code className="h-6 w-6 text-blue-400" />
+                    </div>
+                    <h4 className="mt-3 font-medium text-foreground">Code Snippets</h4>
+                    <p className="mt-1 text-sm text-muted-foreground">Meta Pixel & GTM tags</p>
+                  </CardContent>
+                </Card>
+                <Card
+                  onClick={() => setWebsiteSubView("builder")}
+                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
+                >
+                  <CardContent className="flex flex-col items-center p-6 text-center">
+                    <div className="rounded-lg bg-amber-500/20 p-3">
+                      <ImageIcon className="h-6 w-6 text-amber-400" />
+                    </div>
+                    <h4 className="mt-3 font-medium text-foreground">Media Library</h4>
+                    <p className="mt-1 text-sm text-muted-foreground">Logos & Fibre imagery</p>
+                  </CardContent>
+                </Card>
+                <Card
+                  onClick={() => setWebsiteSubView("seo")}
+                  className="cursor-pointer border-border bg-card transition-colors hover:border-amber-500/50 ring-1 ring-amber-500/20"
+                >
+                  <CardContent className="flex flex-col items-center p-6 text-center">
+                    <div className="rounded-lg bg-amber-500/20 p-3">
+                      <Search className="h-6 w-6 text-amber-400" />
+                    </div>
+                    <h4 className="mt-3 font-medium text-foreground">OpenSEO & Jev</h4>
+                    <p className="mt-1 text-sm text-muted-foreground">Firecrawl audit & SERP scoring</p>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          )}
+
+          {/* Subview 2: Landing Pages Directory Table */}
+          {websiteSubView === "roster" && (
+            <TableShell
+              title="Landing Pages"
+              columns={[
+                {
+                  key: "name",
+                  label: "Page Name",
+                  inputType: "text" as const,
+                  render: (v, row: any) => (
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-foreground">{String(v)}</span>
+                      {row?.intent && (
+                        <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px] px-1.5 py-0">
+                          DomeStudio
+                        </Badge>
+                      )}
+                    </div>
+                  ),
+                },
+                { key: "url", label: "URL", inputType: "text" as const },
+                {
+                  key: "status",
+                  label: "Status",
+                  inputType: "select" as const,
+                  options: ["published", "draft"],
+                  render: (v) => (
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        v === "published"
+                          ? "bg-emerald-500/20 text-emerald-400"
+                          : "bg-amber-500/20 text-amber-400"
+                      }`}
+                    >
+                      {String(v)}
+                    </span>
+                  ),
+                },
+                {
+                  key: "views",
+                  label: "Views",
+                  inputType: "number" as const,
+                  render: (v) => Number(v).toLocaleString(),
+                },
+                { key: "conversions", label: "Conversions", inputType: "number" as const },
+                { key: "rate", label: "Conv. Rate", inputType: "text" as const },
+                {
+                  key: "studioAction",
+                  label: "Studio",
+                  render: (_v, row: any) => (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40"
+                      onClick={() => {
+                        setEditingPage(row)
+                        setWebsiteSubView("builder")
+                      }}
+                    >
+                      <Sparkles className="h-3 w-3 mr-1" />
+                      Edit in Studio
+                    </Button>
+                  ),
+                },
+              ]}
+              data={localPages}
+              addLabel="Create Page"
+              extraActions={
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setEditingPage(null)
+                    setWebsiteSubView("builder")
+                  }}
+                  className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
+                >
+                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                  DomeStudio
+                </Button>
+              }
+              onAdd={() => {
+                setEditingPage(null)
+                setWebsiteSubView("builder")
+              }}
+              onDelete={(id) => setLocalPages((prev) => prev.filter((r) => r.id !== id))}
+              onEdit={(rec) => {
+                setEditingPage(rec as any)
+                setWebsiteSubView("builder")
+              }}
+              searchPlaceholder="Search pages..."
+            />
+          )}
+
+          {/* Subview 3: OpenSEO & Jev Intelligence */}
+          {websiteSubView === "seo" && (
+            <OpenSeoAuditStudio
+              currentUrl="https://connect.omnidome.io/promo/fibre-summer-sprint"
+              pageTitle="Gigabit Uncapped Fibre Deals • First Month Free | OmniDome"
+            />
+          )}
 
           <div className="grid gap-4 lg:grid-cols-3">
             {portalCapabilities.map((capability) => (
@@ -752,7 +848,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         </TabsContent>
 
         <TabsContent value="analytics-custom" className="mt-4">
-          <WebAnalyticsCustomDashboard />
+          <DomeStudioLiveDualView pages={localPages} />
         </TabsContent>
 
         <TabsContent value="journeys" className="mt-4">
