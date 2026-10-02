@@ -22,7 +22,7 @@ checks = {
  'finance': (8015, ['/overview','/journal-entries','/trial-balance','/statements','/periods']),
  'communication': (8020, ['/api/v1/channels','/api/v1/channels/summary','/api/v1/tasks','/api/v1/approvals']),
  'billing': (8003, ['/invoices','/payments','/reports/revenue','/reports/aging']),
- 'crm': (8001, ['/customers?page_size=1','/leads?status=NEW','/dashboard-summary']),
+ 'crm': (8001, ['/customers?page_size=1','/leads?status=NEW','/customers/dashboard-summary']),
  'sales': (8002, ['/deals/summary','/commissions/report','/leads/funnel']),
  'lifecycle': (8018, ['/lifecycle/dashboard','/lifecycle/stages']),
  'iot': (8006, ['/api/iot/devices','/api/iot/integrations']),

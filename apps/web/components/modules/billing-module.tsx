@@ -190,7 +190,7 @@ export function BillingModule() {
       />
 
       <p className="text-xs text-muted-foreground">Manual invoice creation is unavailable in this screen. {isBillingAdmin(roles) ? "Subscription billing uses the invoice generation API." : "Invoice generation requires a billing admin."} Export includes the loaded invoices only.</p>
-      {invoices.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(invoices.value.data.items.length, invoices.value.data.total)} invoices{invoices.value.data.truncated ? " — partial dataset" : ""}. {namesPartial ? "Customer directory is incomplete; unknown names use a short customer ID." : ""}</p>}
+      {invoices.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(invoices.value.data.items.length, invoices.value.data.total)} invoices{invoices.value.data.truncated ? " â€” partial dataset" : ""}. {namesPartial ? "Customer directory is incomplete; unknown names use a short customer ID." : ""}</p>}
       {/* KPI Cards - real report data only */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="border-border bg-card">
@@ -323,7 +323,7 @@ export function BillingModule() {
             <Card className="border-border bg-card">
               <CardHeader>
                 <CardTitle className="text-base">Payment Methods (loaded completed payments)</CardTitle>
-                {payments.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(payments.value.data.items.length, payments.value.data.total)} payments{payments.value.data.truncated ? " — partial mix" : ""}</p>}
+                {payments.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(payments.value.data.items.length, payments.value.data.total)} payments{payments.value.data.truncated ? " â€” partial mix" : ""}</p>}
               </CardHeader>
               <CardContent>
                 {methodSeries.state !== "ready" ? (
