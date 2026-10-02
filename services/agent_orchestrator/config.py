@@ -21,6 +21,16 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    # OpenRouter Server-Tool Subagent Delegation (Cookbook: Delegate Routine Work to Cheaper Models)
+    subagent_delegation_enabled: bool = True
+    subagent_worker_model: str = "~anthropic/claude-haiku-latest"
+    subagent_max_tokens: int = 1024
+    subagent_temperature: float = 0.2
+    subagent_reasoning_effort: str = "low"
+    subagent_enabled_agents: list[str] = [
+        "auto", "orchestrator", "executive", "analytics", "assistant"
+    ]
+
     # Jev / TypeSafe System One Tool Gating (HITL Recipe)
     typesafe_api_key: str = ""
     typesafe_base_url: str = "https://api.typesafe.ai/v1/systemone"

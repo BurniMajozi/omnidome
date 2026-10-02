@@ -177,6 +177,15 @@ class Agent:
                 history, compaction_state,
                 compaction.summariser_for(llm_client, self.agent_type, tenant, self.channel),
                 threshold_tokens=compaction.THRESHOLD_TOKENS, keep_tokens=compaction.KEEP_RECENT_TOKENS)
+
+        # OpenRouter Subagent Cookbook: Inject delegation guidance for orchestrators
+        from services.agent_orchestrator.subagent import is_delegation_enabled_for_agent, DELEGATION_SYSTEM_PROMPT, build_subagent_tool
+        if is_delegation_enabled_for_agent(self.agent_type):
+            if not self.skills_prompt:
+                self.skills_prompt = DELEGATION_SYSTEM_PROMPT
+            elif DELEGATION_SYSTEM_PROMPT not in self.skills_prompt:
+                self.skills_prompt = f"{self.skills_prompt}\n\n{DELEGATION_SYSTEM_PROMPT}"
+
         return self._build_messages(user_message, history, await self.recall_memory(user_message))
 
     async def run(
@@ -202,6 +211,12 @@ class Agent:
         truncated_rounds = 0
         call_counts: Dict[str, int] = {}
         tools_for_llm = tool_registry.to_openai_format(self.tools)
+
+        # OpenRouter Subagent Cookbook: Append openrouter:subagent server tool
+        from services.agent_orchestrator.subagent import is_delegation_enabled_for_agent, build_subagent_tool
+        if is_delegation_enabled_for_agent(self.agent_type):
+            needs_web = any(kw in user_message.lower() for kw in ("search", "competitor", "market", "research", "news", "fno"))
+            tools_for_llm.append(build_subagent_tool(include_web_search=needs_web))
         tenant = str(self.tenant_id) if self.tenant_id else None
         started = time.perf_counter()
         turn = {"rounds": 0, "tokens": 0}
@@ -372,6 +387,9 @@ class Agent:
 
         if tool_name in ("orchestrator_consult_specialist", "orchestrator.consult_specialist"):
             return tool_name, tool_args, await self._consult_specialist(tool_args)
+
+        if tool_name in ("openrouter:subagent", "openrouter_subagent"):
+            return tool_name, tool_args, {"success": True, "status": "ok", "outcome": "Server-side delegation completed."}
 
         tool = tool_registry.get(tool_name)
         if not tool:

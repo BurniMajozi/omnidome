@@ -276,17 +276,48 @@ class LLMClient:
         return self._ollama_available
 
     def _format_tools(self, tools: List[Dict[str, Any]]) -> List[Dict]:
-        """Convert tool definitions to Ollama tool format."""
+        """Convert tool definitions to OpenAI / OpenRouter format.
+        Preserves OpenRouter server tools (e.g. openrouter:subagent) directly.
+        """
         formatted = []
         for t in tools:
-            formatted.append({
-                "type": "function",
-                "function": {
-                    "name": t["name"],
-                    "description": t["description"],
-                    "parameters": t.get("parameters", {"type": "object", "properties": {}}),
-                },
-            })
+            if not isinstance(t, dict):
+                continue
+            tool_type = t.get("type", "")
+            if tool_type.startswith("openrouter:"):
+                formatted.append(t)
+            elif tool_type == "function":
+                formatted.append(t)
+            elif "name" in t:
+                formatted.append({
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t.get("parameters", {"type": "object", "properties": {}}),
+                    },
+                })
+        return formatted
+
+    def _format_ollama_tools(self, tools: List[Dict[str, Any]]) -> List[Dict]:
+        """Convert tool definitions to Ollama format, omitting cloud server tools."""
+        formatted = []
+        for t in tools:
+            if not isinstance(t, dict):
+                continue
+            if t.get("type", "").startswith("openrouter:"):
+                continue  # Local Ollama cannot parse cloud server tools
+            if t.get("type") == "function":
+                formatted.append(t)
+            elif "name" in t:
+                formatted.append({
+                    "type": "function",
+                    "function": {
+                        "name": t["name"],
+                        "description": t.get("description", ""),
+                        "parameters": t.get("parameters", {"type": "object", "properties": {}}),
+                    },
+                })
         return formatted
 
     async def chat(
@@ -328,7 +359,9 @@ class LLMClient:
 
         # Fallback to OpenRouter
         if OPENROUTER_API_KEY:
-            result = await self._openrouter_chat(fallback_model, full_messages, tools, tool_choice=tool_choice)
+            result = await self._openrouter_chat(
+                fallback_model, full_messages, tools, tool_choice=tool_choice, agent_type=agent_type
+            )
             if result:
                 return result
 
@@ -352,7 +385,7 @@ class LLMClient:
             "options": {"temperature": 0.1, "num_ctx": 8192},
         }
         if tools:
-            payload["tools"] = self._format_tools(tools)
+            payload["tools"] = self._format_ollama_tools(tools)
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -390,6 +423,7 @@ class LLMClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
+        agent_type: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call OpenRouter /api/v1/chat/completions endpoint with prompt caching optimizations."""
         # Prompt caching: Add cache_control to system message for prefix caching
@@ -406,8 +440,18 @@ class LLMClient:
             "max_tokens": 2048,
         }
         if tools:
-            # Deterministically sort tools by name so prefix remains stable across calls
-            sorted_tools = sorted(tools, key=lambda t: t.get("name", ""))
+            # Deterministically sort tools so prefix remains stable across calls
+            def _tool_key(t):
+                if isinstance(t, dict):
+                    if "name" in t:
+                        return t["name"]
+                    if "function" in t and isinstance(t["function"], dict) and "name" in t["function"]:
+                        return t["function"]["name"]
+                    if "type" in t:
+                        return t["type"]
+                return str(t)
+
+            sorted_tools = sorted(tools, key=_tool_key)
             formatted_tools = self._format_tools(sorted_tools)
             if formatted_tools:
                 formatted_tools[-1]["cache_control"] = {"type": "ephemeral"}
@@ -435,6 +479,27 @@ class LLMClient:
                 "usage": data.get("usage") or {},
                 "model": data.get("model") or model_used,
             }
+
+            # Telemetry logging when subagent server tool was configured
+            has_subagent = any(
+                isinstance(t, dict) and t.get("type") == "openrouter:subagent"
+                for t in (tools or [])
+            )
+            if has_subagent:
+                from services.agent_orchestrator.subagent import (
+                    extract_worker_model_from_tools,
+                    log_delegation_telemetry,
+                )
+                worker_model = extract_worker_model_from_tools(tools)
+                log_delegation_telemetry(
+                    orchestrator_model=model_used or model,
+                    worker_model=worker_model,
+                    did_enable_delegation=True,
+                    finish_reason=choice.get("finish_reason"),
+                    usage=data.get("usage"),
+                    route=agent_type or "delegated_analysis",
+                )
+
             raw_tool_calls = msg.get("tool_calls", [])
             for tc in raw_tool_calls:
                 if "function" in tc:
@@ -490,7 +555,7 @@ class LLMClient:
             "options": {"temperature": 0.1},
         }
         if tools:
-            payload["tools"] = self._format_tools(tools)
+            payload["tools"] = self._format_ollama_tools(tools)
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 async with client.stream("POST", f"{OLLAMA_BASE_URL}/api/chat", json=payload) as resp:
@@ -528,6 +593,9 @@ class LLMClient:
                             logger.warning("OpenRouter stream %s", last_error)
                             continue
                         async for line in resp.aiter_lines():
+                            # Skip SSE comments / heartbeats (e.g. ": OPENROUTER PROCESSING")
+                            if line.startswith(":"):
+                                continue
                             if not line.startswith("data: "):
                                 continue
                             data = line[6:]
