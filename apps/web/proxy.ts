@@ -33,6 +33,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { backendPathForSvc, signHeaders } from "@/lib/internal-identity"
 import { hasUnsafePath } from "@/lib/safe-path"
+import { singleFlight } from "@/lib/single-flight"
 import {
   POSITIVE_TTL_MS,
   STALE_ON_ERROR_MS,
@@ -128,7 +129,12 @@ async function lookupAdmin(email: string): Promise<AdminLookupResult> {
 
 /** Verified identity, "no-tenant" (valid user, no tenant), "inactive" (deactivated in the admin DB),
  * "unavailable" (admin service failing and no fresh cached identity: fail closed), or null (invalid token). */
-async function verify(token: string): Promise<Verified | "unavailable" | null> {
+const verifyInFlight = singleFlight<string, Verified | "unavailable" | null>()
+function verify(token: string): Promise<Verified | "unavailable" | null> {
+  return verifyInFlight(token, () => verifyIdentity(token))
+}
+
+async function verifyIdentity(token: string): Promise<Verified | "unavailable" | null> {
   const now = Date.now()
   const hit = cache.get(token)
   if (hit && now - hit.at <= POSITIVE_TTL_MS) return hit.value
