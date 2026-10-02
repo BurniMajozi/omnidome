@@ -78,6 +78,8 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   { methods: ["POST"], pattern: /^\/svc\/marketing\/email\/webhook$/ },
   // Paystack authenticates the exact raw body with its provider signature.
   { methods: ["POST"], pattern: /^\/svc\/billing\/payments\/paystack\/webhook$/ },
+  // Invite activation requires a code delivered to the invitee by AgentMail.
+  { methods: ["POST"], pattern: /^\/svc\/admin\/invites\/claim$/ },
   // Recipient unsubscribe page / one-click POST: authorised by an HMAC-signed token in `?t=`
   { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
 ]

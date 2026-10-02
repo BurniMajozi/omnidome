@@ -4,7 +4,7 @@
 
 - Tenant: backend `users` table (admin service, by email) else `app_metadata.tenant_id`.
 - Roles: only `app_metadata.roles`. None means `org_user`, read-only.
-- No tenant means HTTP 403 `tenant_unresolved`. This is what a brand-new signup gets.
+- No tenant means HTTP 403 `tenant_unresolved`. Accounts are created through invitations, not public signup.
 
 `app_metadata` is writable only with the service-role key, so users cannot grant
 themselves anything. Use `scripts/manage_users.py` (reads `.env`, never prints keys):
@@ -19,11 +19,11 @@ python scripts/manage_users.py link-employees --apply    # sets employees.user_i
 ```
 
 Steps for a new person:
-1. They sign up (Supabase). Until step 2 they get 403 `tenant_unresolved`.
-2. The owner runs `set-tenant`, then `set-roles`. Unknown roles are refused.
-   `platform_admin` needs `--i-know`. The user must sign in again for a new token.
-3. Make sure an `employees` row exists with the same email (case-insensitive),
-   then run `link-employees --apply`. This is what makes KPI self-approval blocking work.
+1. A tenant admin invites the person's email through Team. The admin service reserves a seat and AgentMail sends an eight-digit code and an invitation link. The API never returns the code.
+2. The invitee opens the link, enters their email and code, and sets a password. If they already have a confirmed account, they sign in with that email before entering the code. The admin service checks the code, tenant, seat and roles before activating the account. Codes expire with the invitation; resending rotates the code.
+3. Make sure an `employees` row exists with the same email (case-insensitive), then run `link-employees --apply` if HR self-service is needed.
+
+The invite flow uses `AGENTMAIL_API_KEY` for delivery and `INVITE_CODE_SECRET` (or `INTERNAL_AUTH_SECRET`) to hash codes. Never put either value in client-side environment variables. `scripts/manage_users.py` remains for maintenance and recovery, not routine onboarding. Existing token-link invitations can still be accepted through the legacy endpoint, but new invitations expose only the code-based flow.
 
 If the service-role key is rejected (401/403) the script prints the SQL to run in the
 Supabase SQL editor instead. Regenerate the key in the dashboard (Settings > API) and update `.env`.

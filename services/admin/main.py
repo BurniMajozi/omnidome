@@ -66,7 +66,7 @@ class AdminGuard(EntitlementGuard):
         return await super().middleware(request, call_next)
 
 
-guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept"})
+guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept", "/invites/claim"})
 
 configure_production(app)
 
@@ -310,6 +310,8 @@ async def create_tenant(
 
     owner_invite = None
     if payload.owner_email:
+        if payload.send_owner_invite_email and not iam.agentmail.is_configured():
+            raise HTTPException(status_code=503, detail="AgentMail is not configured for invitations")
         actor = await actor_info(ctx, session)
         inv = await iam.create_invite_row(session, ctx, actor, tenant_id, payload.owner_email, ["owner"])
         owner_invite = inv
@@ -330,7 +332,7 @@ async def create_tenant(
     response["seat_price"] = str(payload.seat_price) if payload.seat_price is not None else None
     if owner_invite:
         delivery = await iam.deliver_invite(
-            owner_invite["invite_id"], owner_invite["email"], owner_invite["token"], payload.send_owner_invite_email
+            owner_invite["invite_id"], owner_invite["email"], owner_invite["code"], payload.send_owner_invite_email
         )
         response["owner_invite"] = {"invite_id": str(owner_invite["invite_id"]), "email": owner_invite["email"], **delivery}
     return response

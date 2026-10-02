@@ -112,6 +112,9 @@ DDL: List[str] = [
         CHECK (status IN ('pending','accepted','revoked','expired'))
     )""",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_token_hash ON invites(token_hash)",
+    "ALTER TABLE invites ADD COLUMN IF NOT EXISTS code_hash text",
+    "ALTER TABLE invites ADD COLUMN IF NOT EXISTS code_attempts integer NOT NULL DEFAULT 0",
+    "ALTER TABLE invites ADD COLUMN IF NOT EXISTS code_locked_until timestamptz",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_invites_pending_email ON invites(tenant_id, lower(email)) WHERE status = 'pending'",
     "CREATE INDEX IF NOT EXISTS idx_invites_email ON invites(lower(email))",
     "CREATE INDEX IF NOT EXISTS idx_invites_tenant ON invites(tenant_id, status)",

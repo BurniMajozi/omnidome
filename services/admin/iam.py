@@ -8,6 +8,8 @@ row so concurrent requests cannot oversubscribe it.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import html
 import json
 import logging
 import os
@@ -25,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.admin import supabase_sync
+from services.common import agentmail
 from services.admin.migrations import ADMIN_CAPABLE_ROLES, DEFAULT_SEAT_LIMIT, ROLE_RANKS, ensure_tenant_roles
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
@@ -39,6 +42,7 @@ RESERVED_ROLE_NAMES = {"platform_admin", "owner", "org_admin", "org_user"}
 BILLING_STATUSES = {"active", "past_due", "suspended", "cancelled"}
 invite_limiter = RateLimiter(max_requests=30, window_seconds=60, key_func=identity_key)
 accept_limiter = RateLimiter(max_requests=20, window_seconds=60, key_func=identity_key)
+claim_limiter = RateLimiter(max_requests=10, window_seconds=900, key_func=identity_key)
 
 
 def app_public_url() -> str:
@@ -488,6 +492,18 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def invite_code_hash(invite_id: uuid.UUID, email: str, code: str) -> str:
+    secret = os.getenv("INVITE_CODE_SECRET") or os.getenv("INTERNAL_AUTH_SECRET")
+    if not secret:
+        raise HTTPException(status_code=503, detail="Invitation code signing is not configured")
+    message = f"invite-code-v1:{invite_id}:{email.lower()}:{code}".encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def new_invite_code() -> str:
+    return f"{secrets.randbelow(100_000_000):08d}"
+
+
 def _norm_email(email: str) -> str:
     e = (email or "").strip().lower()
     if "@" not in e or len(e) > 254 or " " in e:
@@ -521,46 +537,44 @@ async def create_invite_row(session, ctx, actor: Actor, tenant_id, email: str, r
         raise HTTPException(status_code=409, detail=generic)
     await require_seat(session, tenant_id)
 
-    token = secrets.token_urlsafe(32)
     invite_id = uuid.uuid4()
+    token = secrets.token_urlsafe(32)  # legacy links remain redeemable for older invitations
+    code = new_invite_code()
+    code_hash = invite_code_hash(invite_id, email, code)
     expires = datetime.now(timezone.utc) + INVITE_TTL
     await session.execute(
         text(
             """
-            INSERT INTO invites (id, tenant_id, email, role_names, token_hash, status, expires_at, invited_by)
-            VALUES (:id, :t, :e, :roles, :h, 'pending', :exp, :by)
+            INSERT INTO invites (id, tenant_id, email, role_names, token_hash, code_hash, status, expires_at, invited_by)
+            VALUES (:id, :t, :e, :roles, :h, :code_hash, 'pending', :exp, :by)
             """
         ),
-        {"id": str(invite_id), "t": str(tenant_id), "e": email, "roles": [r["name"] for r in roles], "h": hash_token(token), "exp": expires, "by": str(ctx.user_id)},
+        {"id": str(invite_id), "t": str(tenant_id), "e": email, "roles": [r["name"] for r in roles], "h": hash_token(token), "code_hash": code_hash, "exp": expires, "by": str(ctx.user_id)},
     )
     await record_seat_event(session, tenant_id, None, 1, "invite_created", ctx.user_id)
     await audit(session, ctx, "invite.create", "invite", invite_id, tenant_id, {"email": email, "roles": [r["name"] for r in roles]})
-    return {"invite_id": invite_id, "token": token, "expires_at": expires, "email": email, "roles": [r["name"] for r in roles]}
+    return {"invite_id": invite_id, "token": token, "code": code, "expires_at": expires, "email": email, "roles": [r["name"] for r in roles]}
 
 
-async def deliver_invite(invite_id: uuid.UUID, email: str, token: str, send_email: bool) -> Dict[str, Any]:
-    """After the invite transaction committed: ask Supabase to email it (best effort) and build the copyable link."""
-    from services.common.db import session_scope
-
-    link = f"{app_public_url()}/auth/accept?token={token}"
+async def deliver_invite(invite_id: uuid.UUID, email: str, code: str, send_email: bool) -> Dict[str, Any]:
+    """Send the one-time code through AgentMail; never return it to the inviter."""
+    link = f"{app_public_url()}/auth/claim?invite={invite_id}"
     result: Dict[str, Any] = {"accept_link": link, "email_requested": False, "email_error": None}
-    client = supabase_sync.get_client() if send_email else None
-    if send_email and client is None:
-        result["email_error"] = "supabase_not_configured"
-    if client is not None:
+    if send_email:
         try:
-            resp = await client.invite(email, link)
+            await agentmail.send_email(
+                email,
+                "Your OmniDome invitation code",
+                f"<p>You have been invited to OmniDome.</p><p>Your one-time code is "
+                f"<strong>{code}</strong>. It expires in 7 days.</p>"
+                f"<p><a href=\"{html.escape(link, quote=True)}\">Accept your invitation</a></p>"
+                "<p>If you did not expect this invitation, ignore this message.</p>",
+            )
             result["email_requested"] = True
-            async with session_scope() as s:
-                await s.execute(
-                    text("UPDATE invites SET supabase_user_id = :sid, supabase_created = true WHERE id = :i"),
-                    {"sid": resp.get("id"), "i": str(invite_id)},
-                )
-        except supabase_sync.SupabaseError as exc:
-            result["email_error"] = str(exc)
-        except Exception as exc:  # noqa: BLE001
-            result["email_error"] = f"{type(exc).__name__}: {exc}"[:200]
-    result["note"] = "Share accept_link with the invitee if email delivery is not configured (Supabase SMTP)."
+        except Exception:
+            logger.exception("AgentMail invite delivery failed for invite %s", invite_id)
+            result["email_error"] = "AgentMail delivery failed; resend the invitation"
+    result["note"] = "The code is sent only to the invitee's email address. The link alone cannot activate an account."
     return result
 
 
@@ -589,6 +603,13 @@ class InviteCreate(BaseModel):
 
 class InviteAccept(BaseModel):
     token: str = Field(..., min_length=10, max_length=200)
+
+
+class InviteClaim(BaseModel):
+    invite_id: uuid.UUID
+    email: str = Field(..., min_length=3, max_length=254)
+    code: str = Field(..., pattern=r"^[0-9]{8}$")
+    password: Optional[str] = Field(None, min_length=12, max_length=128)
 
 
 class MemberRoles(BaseModel):
@@ -723,11 +744,13 @@ async def create_invite(
     session: AsyncSession = Depends(get_async_session),
 ):
     await invite_limiter.check(request)
+    if payload.send_email and not agentmail.is_configured():
+        raise HTTPException(status_code=503, detail="AgentMail is not configured for invitations")
     await ensure_tenant_scope(ctx, tenant_id, session)
     actor = await actor_info(ctx, session)
     inv = await create_invite_row(session, ctx, actor, tenant_id, payload.email, payload.roles)
     await session.commit()
-    delivery = await deliver_invite(inv["invite_id"], inv["email"], inv["token"], payload.send_email)
+    delivery = await deliver_invite(inv["invite_id"], inv["email"], inv["code"], payload.send_email)
     return {"invite_id": str(inv["invite_id"]), "email": inv["email"], "roles": inv["roles"], "status": "pending", "expires_at": inv["expires_at"], **delivery}
 
 
@@ -821,6 +844,8 @@ async def resend_invite(
     session: AsyncSession = Depends(get_async_session),
 ):
     await invite_limiter.check(request)
+    if send_email and not agentmail.is_configured():
+        raise HTTPException(status_code=503, detail="AgentMail is not configured for invitations")
     inv = await _invite_for_admin(session, ctx, invite_id)
     tenant_id = inv["tenant_id"]
     await check_invite_rank(session, await actor_info(ctx, session), tenant_id, inv)
@@ -846,11 +871,12 @@ async def resend_invite(
             raise HTTPException(status_code=409, detail="This invite can no longer be revived; create a new one")
         await require_seat(session, tenant_id)  # reviving an expired invite takes a seat again
     token = secrets.token_urlsafe(32)
+    code = new_invite_code()
     expires = datetime.now(timezone.utc) + INVITE_TTL
     try:
         await session.execute(
-            text("UPDATE invites SET token_hash = :h, expires_at = :e, status = 'pending' WHERE id = :i"),
-            {"h": hash_token(token), "e": expires, "i": str(invite_id)},
+            text("UPDATE invites SET token_hash = :h, code_hash = :c, code_attempts = 0, code_locked_until = NULL, expires_at = :e, status = 'pending' WHERE id = :i"),
+            {"h": hash_token(token), "c": invite_code_hash(invite_id, inv["email"], code), "e": expires, "i": str(invite_id)},
         )
         if eff == "expired":
             await record_seat_event(session, tenant_id, None, 1, "invite_revived", ctx.user_id)
@@ -859,7 +885,7 @@ async def resend_invite(
     except IntegrityError:
         await session.rollback()
         raise HTTPException(status_code=409, detail="This invite can no longer be revived; create a new one")
-    delivery = await deliver_invite(invite_id, inv["email"], token, send_email)
+    delivery = await deliver_invite(invite_id, inv["email"], code, send_email)
     return {"invite_id": str(invite_id), "status": "pending", "expires_at": expires, **delivery}
 
 
@@ -878,6 +904,76 @@ async def verify_bearer(token: str) -> Dict[str, Any]:
         # an unconfirmed address proves nothing about who owns it
         raise HTTPException(status_code=401, detail="Email not confirmed")
     return {"id": u["id"], "email": u["email"], "name": (u.get("user_metadata") or {}).get("full_name") or (u.get("user_metadata") or {}).get("name")}
+
+
+@router.post("/invites/claim")
+async def claim_invite(
+    payload: InviteClaim,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Redeem an AgentMail-delivered code; a link without the code proves nothing."""
+    claim_limiter.check_key(identity_key(request))
+    email = _norm_email(payload.email)
+    row = (await session.execute(text("SELECT id, tenant_id FROM invites WHERE id = :i"), {"i": str(payload.invite_id)})).first()
+    if not row:
+        raise HTTPException(status_code=400, detail="Invalid invitation code")
+    await lock_tenant(session, row[1])
+    inv = (await session.execute(text("SELECT * FROM invites WHERE id = :i FOR UPDATE"), {"i": str(payload.invite_id)})).mappings().one()
+    if inv["status"] != "pending" or inv["expires_at"] <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Invitation expired or already used")
+    now = datetime.now(timezone.utc)
+    if inv["code_locked_until"] and inv["code_locked_until"] > now:
+        raise HTTPException(status_code=429, detail="Too many attempts. Ask your administrator to resend the invitation")
+    valid = bool(inv["code_hash"]) and hmac.compare_digest(
+        str(inv["code_hash"]), invite_code_hash(payload.invite_id, str(inv["email"]), payload.code)
+    ) and hmac.compare_digest(str(inv["email"]).lower(), email)
+    if not valid:
+        attempts = int(inv["code_attempts"] or 0) + 1
+        await session.execute(
+            text("UPDATE invites SET code_attempts = :n, code_locked_until = :until WHERE id = :i"),
+            {"n": attempts, "until": now + timedelta(minutes=15) if attempts >= 5 else None, "i": str(payload.invite_id)},
+        )
+        await session.commit()
+        raise HTTPException(status_code=400, detail="Invalid invitation code")
+
+    client = None
+    created_id = None
+    if authorization and authorization.lower().startswith("bearer "):
+        who = await verify_bearer(authorization[7:].strip())
+        if _norm_email(who["email"]) != email:
+            raise HTTPException(status_code=403, detail="Sign in with the invited email address")
+    else:
+        if not payload.password:
+            raise HTTPException(status_code=400, detail="Set a password to activate this invitation")
+        client = supabase_sync.get_client()
+        if client is None:
+            raise HTTPException(status_code=503, detail="Auth provider not configured")
+        try:
+            user = await client.create_confirmed_user(email, payload.password)
+        except supabase_sync.SupabaseError as exc:
+            if exc.status in (400, 409, 422):
+                raise HTTPException(status_code=409, detail="An account already exists. Sign in with this email, then enter the invitation code")
+            raise HTTPException(status_code=503, detail="Auth provider unavailable")
+        except Exception:
+            logger.exception("Auth provider unavailable during invite claim")
+            raise HTTPException(status_code=503, detail="Auth provider unavailable")
+        created_id = user.get("id")
+        if not created_id:
+            raise HTTPException(status_code=502, detail="Auth provider did not return a user id")
+        who = {"id": created_id, "email": email, "name": None}
+
+    try:
+        return await _activate_locked_invite(inv, who, session)
+    except Exception:
+        if created_id and session.in_transaction():
+            await session.rollback()
+            try:
+                await client.delete_user(str(created_id))
+            except Exception:
+                logger.exception("Could not remove unclaimed auth user after invitation failure")
+        raise
 
 
 @router.post("/invites/accept")
@@ -913,6 +1009,14 @@ async def _accept_invite(payload: InviteAccept, request: Request, authorization:
 
     await lock_tenant(session, tenant_id)  # serialisation point: seat check + insert happen under this lock
     inv = (await session.execute(text("SELECT * FROM invites WHERE id = :i FOR UPDATE"), {"i": str(row[0])})).mappings().one()
+    return await _activate_locked_invite(inv, who, session)
+
+
+async def _activate_locked_invite(inv: Dict[str, Any], who: Dict[str, Any], session: AsyncSession):
+    """Complete a code or legacy-link acceptance under the tenant and invite row locks."""
+    tenant_id = inv["tenant_id"]
+    sid = uuid.UUID(str(who["id"]))
+    email = _norm_email(who["email"])
     if inv["status"] == "accepted" and str(inv["accepted_user_id"]) == str(sid):
         return {"status": "already_accepted", "tenant_id": str(tenant_id), "user_id": str(sid)}
     if inv["status"] != "pending":

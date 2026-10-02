@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertCircle, CheckCircle2, Copy, Crown, Loader2, Lock, MailPlus, RefreshCw, RotateCcw, ShieldPlus, Trash2, UserCog, UserMinus, UserPlus, UserCheck } from "lucide-react"
+import { AlertCircle, CheckCircle2, Crown, Loader2, Lock, MailPlus, RefreshCw, RotateCcw, ShieldPlus, Trash2, UserCog, UserMinus, UserPlus, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -62,7 +62,6 @@ async function runInto<T>(setter: (l: Loadable<T>) => void, fn: () => Promise<T>
   }
 }
 
-const SMTP_NOTE = "Email delivery depends on SMTP being configured; copy this link to send it yourself."
 const NATIVE_SELECT =
   "h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
 
@@ -127,33 +126,6 @@ export function SeatMeter({ used, limit, pending }: { used: number; limit: numbe
   )
 }
 
-export function CopyLinkBox({ link, email }: { link: string; email?: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(link)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      setCopied(false)
-    }
-  }
-  return (
-    <div className="space-y-2 rounded-md border border-cyan-500/30 bg-cyan-500/5 p-3 text-sm">
-      <p className="font-medium">Invitation link{email ? ` for ${email}` : ""}</p>
-      <div className="flex gap-2">
-        <Input readOnly value={link} className="font-mono text-xs" onFocus={(e) => e.currentTarget.select()} aria-label="Invitation accept link" />
-        <Button type="button" size="sm" variant="outline" className="shrink-0 gap-1.5" onClick={() => void copy()}>
-          <Copy className="h-3.5 w-3.5" />
-          {copied ? "Copied" : "Copy"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">{SMTP_NOTE}</p>
-      <p className="text-xs text-muted-foreground">This link is shown only now; the server stores just a hash. Resend the invite to get a new one.</p>
-    </div>
-  )
-}
-
 const slug = (s: string) =>
   s
     .toLowerCase()
@@ -169,7 +141,6 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
   const [seatLimit, setSeatLimit] = useState("10")
   const [seatPrice, setSeatPrice] = useState("")
   const [ownerEmail, setOwnerEmail] = useState("")
-  const [sendEmail, setSendEmail] = useState(true)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [created, setCreated] = useState<{ name: string; link?: string; email?: string; emailError?: string | null } | null>(null)
@@ -189,7 +160,7 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
         seat_limit: limit,
         seat_price: seatPrice ? Number(seatPrice) : undefined,
         owner_email: ownerEmail.trim() || undefined,
-        send_owner_invite_email: sendEmail,
+        send_owner_invite_email: true,
       })
       setCreated({ name: res.name, link: res.owner_invite?.accept_link, email: res.owner_invite?.email, emailError: res.owner_invite?.email_error })
       setName("")
@@ -232,10 +203,6 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
             <Input id="ct-price" type="number" min={0} step="0.01" value={seatPrice} onChange={(e) => setSeatPrice(e.target.value)} placeholder="0.00" />
           </div>
           <div className="flex items-end gap-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
-              Email the owner invite
-            </label>
             <Button type="submit" disabled={busy} className="ml-auto gap-1.5">
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
               Create tenant
@@ -247,10 +214,7 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
           <div className="space-y-2">
             <InlineNotice message={`Tenant "${created.name}" created.`} onDismiss={() => setCreated(null)} />
             {created.link ? (
-              <>
-                <CopyLinkBox link={created.link} email={created.email} />
-                {created.emailError && <p className="text-xs text-amber-400">Email was not sent: {created.emailError}</p>}
-              </>
+              <p className="text-xs text-muted-foreground">{created.emailError ? `Invitation email failed: ${created.emailError}. Resend it from Team.` : `Invitation code sent to ${created.email}.`}</p>
             ) : (
               <p className="text-xs text-muted-foreground">No owner email was given, so no invite was created. Invite the owner from the Team tab.</p>
             )}
@@ -371,9 +335,7 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
 
   const [email, setEmail] = useState("")
   const [inviteRole, setInviteRole] = useState("org_user")
-  const [sendEmail, setSendEmail] = useState(true)
   const [inviting, setInviting] = useState(false)
-  const [links, setLinks] = useState<Record<string, string>>({})
   const [latest, setLatest] = useState<CreatedInvite | null>(null)
 
   const [roleTarget, setRoleTarget] = useState<TenantMember | null>(null)
@@ -403,7 +365,6 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
   }
 
   useEffect(() => {
-    setLinks({})
     setLatest(null)
     setSeats(LOADING)
     setInvites(LOADING)
@@ -422,10 +383,9 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
     setErr(null)
     setNotice(null)
     try {
-      const res = await adminApi.createInvite(tenantId, { email: email.trim(), roles: [effectiveRole], send_email: sendEmail })
+      const res = await adminApi.createInvite(tenantId, { email: email.trim(), roles: [effectiveRole], send_email: true })
       setLatest(res)
-      if (res.accept_link) setLinks((p) => ({ ...p, [res.invite_id]: res.accept_link! }))
-      setNotice(`Invitation created for ${res.email}. It holds a seat for 7 days.`)
+      setNotice(res.email_error ? `Invitation created, but AgentMail could not deliver it to ${res.email}. Resend from this page.` : `Invitation code emailed to ${res.email}. It holds a seat for 7 days.`)
       setEmail("")
       await load()
     } catch (e2) {
@@ -440,10 +400,9 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
     setRowBusy(inv.id)
     setErr(null)
     try {
-      const res = await adminApi.resendInvite(inv.id, sendEmail)
+      const res = await adminApi.resendInvite(inv.id, true)
       setLatest({ ...res, email: inv.email, roles: inv.roles })
-      if (res.accept_link) setLinks((p) => ({ ...p, [inv.id]: res.accept_link! }))
-      setNotice(`Invitation to ${inv.email} resent with a fresh 7 day expiry.`)
+      setNotice(res.email_error ? `New code created, but delivery to ${inv.email} failed. Try again.` : `A new code was emailed to ${inv.email}; the old one is invalid.`)
       await load()
     } catch (e) {
       setErr(adminErrorMessage(e))
@@ -460,10 +419,6 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
     try {
       await adminApi.revokeInvite(inv.id)
       setRevokeTarget(null)
-      setLinks((p) => {
-        const { [inv.id]: _drop, ...rest } = p
-        return rest
-      })
       if (latest?.invite_id === inv.id) setLatest(null)
       setNotice(`Invitation to ${inv.email} revoked; the seat is free again.`)
       await load()
@@ -472,15 +427,6 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
       setDialogErr(adminErrorMessage(e))
     } finally {
       setRowBusy(null)
-    }
-  }
-
-  const copyInviteLink = async (link: string) => {
-    try {
-      await navigator.clipboard.writeText(link)
-      setNotice("Link copied to clipboard.")
-    } catch {
-      setErr("Could not copy automatically; select and copy the link shown above.")
     }
   }
 
@@ -625,11 +571,7 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
                   </select>
                 </div>
               </div>
-              <div className="flex items-center justify-between gap-3">
-                <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} disabled={atLimit} />
-                  Email the invitation
-                </label>
+              <div className="flex items-center justify-end gap-3">
                 <Button type="submit" size="sm" disabled={!canInvite || inviting} className="gap-1.5">
                   {inviting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <MailPlus className="h-3.5 w-3.5" />}
                   Send invite
@@ -646,7 +588,6 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
         </Card>
       </div>
 
-      {latest?.accept_link && <CopyLinkBox link={latest.accept_link} email={latest.email} />}
       {latest && latest.email_error && <p className="text-xs text-amber-400">Email was not sent: {latest.email_error}</p>}
 
       <Card>
@@ -684,16 +625,6 @@ export function TeamTab({ identity, tenants, focusTenantId }: { identity: Whoami
                         <div className="flex justify-end gap-1.5">
                           <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" disabled={rowBusy !== null} onClick={() => void resend(inv)}>
                             <RotateCcw className="h-3 w-3" /> Resend
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 gap-1 text-xs"
-                            disabled={!links[inv.id]}
-                            title={links[inv.id] ? "Copy the invitation link" : "Only available right after create/resend; the server stores just a hash. Use Resend to get a new link."}
-                            onClick={() => void copyInviteLink(links[inv.id])}
-                          >
-                            <Copy className="h-3 w-3" /> Copy link
                           </Button>
                           <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs text-red-400" disabled={rowBusy !== null} onClick={() => { setDialogErr(null); setRevokeTarget(inv) }}>
                             <Trash2 className="h-3 w-3" /> Revoke

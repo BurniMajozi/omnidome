@@ -97,6 +97,13 @@ class SupabaseAdmin:
     async def invite(self, email: str, redirect_to: str) -> Dict[str, Any]:
         return await self._req("POST", "/invite", params={"redirect_to": redirect_to}, json={"email": email})
 
+    async def create_confirmed_user(self, email: str, password: str) -> Dict[str, Any]:
+        """Create an email-confirmed account only after our emailed invite code is verified.
+
+        Supabase's admin create endpoint does not send a second email.
+        """
+        return await self._req("POST", "/admin/users", json={"email": email, "password": password, "email_confirm": True})
+
     async def delete_user(self, user_id: str) -> None:
         await self._req("DELETE", f"/admin/users/{user_id}")
 

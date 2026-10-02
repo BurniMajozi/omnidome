@@ -80,6 +80,11 @@ class FakeSupabase:
         self.invited.append((email, redirect_to))
         return {"id": self.add(email)}
 
+    async def create_confirmed_user(self, email, password):
+        if await self.find_by_email(email):
+            raise supabase_sync.SupabaseError(422, "already registered")
+        return {"id": self.add(email)}
+
     async def delete_user(self, uid):
         self.deleted.append(uid)
         self.users.pop(uid, None)
@@ -90,6 +95,8 @@ def sb():
     fake = FakeSupabase()
     mp = pytest.MonkeyPatch()
     mp.setattr(supabase_sync, "get_client", lambda: fake)
+    mp.setattr(iam, "new_invite_code", lambda: "12345678")
+    mp.setenv("INVITE_CODE_SECRET", "test-invite-secret")
 
     async def verify(token):  # token format: "tok|<supabase-id>|<email>"
         _, uid, email = token.split("|", 2)
@@ -102,7 +109,7 @@ def sb():
 
 @pytest.fixture(scope="module")
 def client(sb):
-    for limiter in (admin_main._global_rate_limiter, admin_main._auth_rate_limiter, iam.invite_limiter, iam.accept_limiter):
+    for limiter in (admin_main._global_rate_limiter, admin_main._auth_rate_limiter, iam.invite_limiter, iam.accept_limiter, iam.claim_limiter):
         limiter.max_requests = 10**9
     with TestClient(app=admin_main.app, raise_server_exceptions=False) as c:
         yield c
@@ -162,10 +169,6 @@ def invite(client, tenant, email, roles=None, headers=None):
         json={"email": email, "roles": roles or ["org_user"], "send_email": False},
         headers=headers or platform(tenant),
     )
-
-
-def token_of(resp):
-    return resp.json()["accept_link"].split("token=")[1]
 
 
 def bearer(uid, email):
@@ -342,28 +345,75 @@ def test_accept_invite_end_to_end(client, sb):
     t = make_tenant(client, seat_limit=3)
     owner, _ = add_user(t, ["owner", "org_admin"])
     email = fresh_email()
-    sid = sb.add(email)
     r = invite(client, t, email, ["manager"], headers=as_user(t, owner))
     assert r.status_code == 201
-    assert r.json()["accept_link"].startswith("http://app.test/auth/accept?token=")
-    tok = token_of(r)
-    # only a hash is stored
-    assert q("SELECT count(*) FROM invites WHERE token_hash=:h", h=tok)[0][0] == 0
-    # someone else's identity cannot redeem it
-    wrong = client.post("/invites/accept", json={"token": tok}, headers=bearer(uuid.uuid4(), "mallory@example.test"))
-    assert wrong.status_code == 403
-    assert client.post("/invites/accept", json={"token": tok}).status_code == 401
-    ok = client.post("/invites/accept", json={"token": tok}, headers=bearer(sid, email))
+    assert r.json()["accept_link"] == f"http://app.test/auth/claim?invite={r.json()['invite_id']}"
+    assert "12345678" not in str(r.json())
+    claim = {"invite_id": r.json()["invite_id"], "email": email, "code": "12345678", "password": "a-long-test-password"}
+    wrong = client.post("/invites/claim", json={**claim, "code": "00000000"})
+    assert wrong.status_code == 400
+    assert q("SELECT code_attempts FROM invites WHERE id=:i", i=r.json()["invite_id"])[0][0] == 1
+    ok = client.post("/invites/claim", json=claim)
     assert ok.status_code == 200, ok.text
+    sid = ok.json()["user_id"]
     assert ok.json()["roles"] == ["manager"]
     s = seats(client, t)
     assert s["active_users"] == 2 and s["pending_invites"] == 0 and s["seats_used"] == 2
     assert sum(e["delta"] for e in s["events"]) == s["current_seats"]
     assert sb.users[sid]["app_metadata"]["tenant_id"] == str(t) and sb.users[sid]["app_metadata"]["roles"] == ["manager"]
-    assert client.post("/invites/accept", json={"token": tok}, headers=bearer(sid, email)).json()["status"] == "already_accepted"
+    assert client.post("/invites/claim", json=claim).status_code == 410
     assert q("SELECT count(*) FROM audit_logs WHERE tenant_id=:t AND action='invite.accept'", t=t)[0][0] == 1
     # one tenant per email
     assert invite(client, make_tenant(client), email).status_code == 409
+
+
+def test_invite_code_locks_after_five_failures_and_resend_resets(client):
+    t = make_tenant(client)
+    email = fresh_email()
+    created = invite(client, t, email)
+    invite_id = created.json()["invite_id"]
+    claim = {"invite_id": invite_id, "email": email, "code": "00000000", "password": "a-long-test-password"}
+    for _ in range(5):
+        assert client.post("/invites/claim", json=claim).status_code == 400
+    assert client.post("/invites/claim", json={**claim, "code": "12345678"}).status_code == 429
+    assert client.post(f"/invites/{invite_id}/resend?send_email=false", headers=platform(t)).status_code == 200
+    assert q("SELECT code_attempts FROM invites WHERE id=:i", i=invite_id)[0][0] == 0
+    assert client.post("/invites/claim", json={**claim, "code": "12345678"}).status_code == 200
+
+
+def test_agentmail_invite_and_existing_account_claim(client, sb, monkeypatch):
+    sent = []
+
+    async def send(to, subject, html):
+        sent.append((to, subject, html))
+        return "agentmail-message-id"
+
+    monkeypatch.setattr(iam.agentmail, "is_configured", lambda: True)
+    monkeypatch.setattr(iam.agentmail, "send_email", send)
+    t = make_tenant(client)
+    email = fresh_email()
+    sid = sb.add(email)
+    r = client.post(f"/tenants/{t}/invites", json={"email": email, "roles": ["org_user"]}, headers=platform(t))
+    assert r.status_code == 201, r.text
+    assert r.json()["email_requested"] is True
+    assert r.json()["accept_link"].endswith(f"invite={r.json()['invite_id']}")
+    assert "12345678" not in str(r.json())
+    assert sent[0][0] == email and "12345678" in sent[0][2]
+    assert sb.invited == []  # Supabase sends no invitation email.
+    claim = {"invite_id": r.json()["invite_id"], "email": email, "code": "12345678"}
+    wrong = client.post("/invites/claim", json=claim, headers=bearer(uuid.uuid4(), "other@example.test"))
+    assert wrong.status_code == 403
+    accepted = client.post("/invites/claim", json=claim, headers=bearer(sid, email))
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_invite_requires_configured_agentmail_before_reserving_seat(client, monkeypatch):
+    monkeypatch.setattr(iam.agentmail, "is_configured", lambda: False)
+    t = make_tenant(client)
+    email = fresh_email()
+    r = client.post(f"/tenants/{t}/invites", json={"email": email, "roles": ["org_user"]}, headers=platform(t))
+    assert r.status_code == 503
+    assert q("SELECT count(*) FROM invites WHERE tenant_id=:t", t=t)[0][0] == 0
 
 
 def test_accept_race_at_limit_has_exactly_one_winner(client, sb):
@@ -396,10 +446,11 @@ def test_accept_race_at_limit_has_exactly_one_winner(client, sb):
 def test_resend_rotates_token_and_expired_needs_seat(client):
     t = make_tenant(client, seat_limit=1)
     r = invite(client, t, fresh_email())
-    old = token_of(r)
+    old = q("SELECT token_hash, code_hash FROM invites WHERE id=:i", i=r.json()["invite_id"])[0]
     again = client.post(f"/invites/{r.json()['invite_id']}/resend?send_email=false", headers=platform(t))
-    assert again.status_code == 200 and token_of(again) != old
-    assert q("SELECT count(*) FROM invites WHERE token_hash=:h", h=iam.hash_token(old))[0][0] == 0
+    new = q("SELECT token_hash, code_hash FROM invites WHERE id=:i", i=r.json()["invite_id"])[0]
+    assert again.status_code == 200 and new[0] != old[0]
+    assert q("SELECT count(*) FROM invites WHERE token_hash=:h", h=old[0])[0][0] == 0
     # let it expire, another invite takes the seat, then reviving it must fail
     q("UPDATE invites SET expires_at = now() - interval '1 second' WHERE id=:i", i=r.json()["invite_id"])
     assert invite(client, t, fresh_email()).status_code == 201
@@ -430,8 +481,10 @@ def test_owner_email_on_tenant_create_and_by_email_lookup(client, sb):
     assert r.status_code == 201, r.text
     t = uuid.UUID(r.json()["id"])
     assert r.json()["owner_invite"]["accept_link"]
-    sid = sb.add(email)
-    assert client.post("/invites/accept", json={"token": token_of_link(r.json()["owner_invite"])}, headers=bearer(sid, email)).status_code == 200
+    claim = {"invite_id": r.json()["owner_invite"]["invite_id"], "email": email, "code": "12345678", "password": "another-long-test-password"}
+    accepted = client.post("/invites/claim", json=claim)
+    assert accepted.status_code == 200, accepted.text
+    sid = accepted.json()["user_id"]
     look = client.get("/internal/users/by-email", params={"email": email}, headers={"x-internal-key": "test-internal-key"})
     body = look.json()
     assert look.status_code == 200 and body["is_active"] is True and "owner" in body["roles"] and body["tenant_id"] == str(t)
@@ -441,10 +494,6 @@ def test_owner_email_on_tenant_create_and_by_email_lookup(client, sb):
     assert client.post(f"/tenants/{t}/members/{sid}/deactivate", headers=platform(t)).status_code == 409  # last owner
     assert client.post(f"/tenants/{t}/members/{sid}/deactivate", headers=as_user(t, other)).status_code == 403  # outranked
     assert seats(client, t)["seat_limit"] == 2
-
-
-def token_of_link(d):
-    return d["accept_link"].split("token=")[1]
 
 
 # --------------------------------------------------------------------------- supabase sync
