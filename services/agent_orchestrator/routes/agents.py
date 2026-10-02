@@ -552,17 +552,33 @@ async def invoke_agent(
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
     route_meta = None
+    triage_meta = None
     if effective_agent_type in ROUTER_AGENT_TYPES:
-        from services.agent_orchestrator.jev_gate import route_agent_intent
-        route_decision = await route_agent_intent(body.message or "", context=body.context)
-        effective_agent_type = route_decision.target_agent
-        route_meta = route_decision.to_dict()
+        from services.agent_orchestrator.jev_gate import triage_inbound_inquiry
+        triage_decision = await triage_inbound_inquiry(body.message or "", context=body.context)
+        effective_agent_type = triage_decision.target_agent
+        route_meta = triage_decision.to_dict()
+        triage_meta = triage_decision.to_dict()
+
+        # Enrich conversation context with triage metrics for specialist agent & audit
+        if body.context is None:
+            body.context = {}
+        body.context["inbound_triage"] = {
+            "frustration_score": triage_decision.frustration_score,
+            "churn_risk_score": triage_decision.churn_risk_score,
+            "requires_immediate_escalation": triage_decision.requires_immediate_escalation,
+            "confidence": triage_decision.confidence,
+        }
+
         logger.info(
-            "Orchestrator auto-routed prompt to specialist agent '%s' (conf=%.2f, direct=%s, jev=%s) for message: %s",
+            "Orchestrator inbound triage: agent='%s' (conf=%.2f, direct=%s, jev=%s, frust=%.1f, churn=%.1f, escal=%s) for message: %s",
             effective_agent_type,
-            route_decision.confidence,
-            route_decision.is_direct_lookup,
-            route_decision.evaluated_by_jev,
+            triage_decision.confidence,
+            triage_decision.is_direct_lookup,
+            triage_decision.evaluated_by_jev,
+            triage_decision.frustration_score or 0.0,
+            triage_decision.churn_risk_score or 0.0,
+            triage_decision.requires_immediate_escalation,
             (body.message or "")[:60],
         )
 
@@ -711,6 +727,7 @@ async def invoke_agent(
         pending_approvals=pending if pending else None,
         route_decision=route_meta,
         verification=result.get("verification"),
+        triage=triage_meta,
     )
 
 

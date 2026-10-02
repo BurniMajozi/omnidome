@@ -16,9 +16,11 @@ from services.agent_orchestrator.jev_gate import (
     evaluate_tool_call,
     _deterministic_pre_check,
     route_agent_intent,
+    triage_inbound_inquiry,
     verify_agent_response,
     JevGateVerdict,
     JevRouteDecision,
+    JevTriageDecision,
     JevVerificationVerdict,
     APPROVE_AT,
     BLOCK_AT,
@@ -245,5 +247,43 @@ def test_verify_agent_response_live_evaluation():
         assert v_good.action == "accept"
         assert v_good.answers_inquiry >= 0.70
         assert v_good.grounded_in_facts >= 0.70
+
+    asyncio.run(_run())
+
+
+def test_triage_inbound_inquiry_fallback_when_disabled():
+    """When Jev is disabled, triage falls back cleanly with 0.0 scores."""
+    async def _run():
+        with patch("services.agent_orchestrator.jev_gate.settings.jev_gate_enabled", False):
+            res = await triage_inbound_inquiry("I need to troubleshoot a fault on my line")
+            assert res.target_agent == "support"
+            assert res.evaluated_by_jev is False
+            assert res.frustration_score == 0.0
+            assert res.churn_risk_score == 0.0
+            assert res.requires_immediate_escalation is False
+
+    asyncio.run(_run())
+
+
+def test_triage_inbound_inquiry_live_evaluation():
+    """Live Jev triage testing Choice, Score, and Noul unified in one call."""
+    async def _run():
+        from dotenv import load_dotenv
+        load_dotenv(os.path.join(REPO_ROOT, ".env"))
+
+        key = os.getenv("TYPESAFE_API_KEY", "").strip().strip("'\"")
+        if not key:
+            pytest.skip("TYPESAFE_API_KEY not configured")
+
+        res = await triage_inbound_inquiry(
+            "This is the THIRD TIME this week my fiber died! Your service is absolute garbage. Cancel my subscription immediately, I am switching to Vodacom!"
+        )
+        assert res.evaluated_by_jev is True
+        assert res.target_agent in ("retention", "support")
+        assert res.frustration_score is not None
+        assert res.frustration_score >= 1.0  # Frustrated or extremely angry
+        assert res.churn_risk_score is not None
+        assert res.churn_risk_score >= 1.0  # Considering alternatives or explicit cancellation
+        assert res.requires_immediate_escalation is True
 
     asyncio.run(_run())

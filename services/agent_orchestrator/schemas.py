@@ -56,6 +56,7 @@ class AgentInvokeResponse(BaseModel):
     pending_approvals: Optional[List[Dict[str, Any]]] = None
     route_decision: Optional[Dict[str, Any]] = None
     verification: Optional[Dict[str, Any]] = None
+    triage: Optional[Dict[str, Any]] = None
 
 
 class ToolPolicyInfo(BaseModel):

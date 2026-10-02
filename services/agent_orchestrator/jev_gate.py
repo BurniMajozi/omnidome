@@ -325,25 +325,42 @@ async def evaluate_tool_call(
 
 
 @dataclass
-class JevRouteDecision:
+@dataclass
+class JevTriageDecision:
     target_agent: str
     confidence: float
     distribution: Dict[str, float]
-    is_direct_lookup: bool
-    direct_lookup_prob: float
-    evaluated_by_jev: bool
-    reason: str
+    frustration_score: float = 0.0
+    frustration_label: str = "Calm"
+    churn_risk_score: float = 0.0
+    churn_risk_label: str = "No churn intent"
+    requires_immediate_escalation: bool = False
+    escalation_prob: float = 0.0
+    is_direct_lookup: bool = False
+    direct_lookup_prob: float = 0.0
+    evaluated_by_jev: bool = False
+    reason: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "target_agent": self.target_agent,
             "confidence": self.confidence,
             "distribution": self.distribution,
+            "frustration_score": self.frustration_score,
+            "frustration_label": self.frustration_label,
+            "churn_risk_score": self.churn_risk_score,
+            "churn_risk_label": self.churn_risk_label,
+            "requires_immediate_escalation": self.requires_immediate_escalation,
+            "escalation_prob": self.escalation_prob,
             "is_direct_lookup": self.is_direct_lookup,
             "direct_lookup_prob": self.direct_lookup_prob,
             "evaluated_by_jev": self.evaluated_by_jev,
             "reason": self.reason,
         }
+
+
+# Backward-compatible alias for existing code
+JevRouteDecision = JevTriageDecision
 
 
 @dataclass
@@ -370,21 +387,27 @@ class JevVerificationVerdict:
         }
 
 
-async def route_agent_intent(
+async def triage_inbound_inquiry(
     message: str,
     context: Optional[Dict[str, Any]] = None,
     default_fallback: str = "assistant",
-) -> JevRouteDecision:
-    """Classify the user inquiry to the optimal ISP specialist agent using Jev System One Choice primitive.
-    Also detects if the request is a simple direct lookup that can bypass deep multi-step loops."""
+) -> JevTriageDecision:
+    """Unified inbound triage: combines Choice (agent routing), Score (frustration & churn risk),
+    and Noul (SLA escalation & direct lookup) into a single Jev System One evaluation."""
     provider, api_key, endpoint = _get_credentials()
     if not settings.jev_gate_enabled or not api_key:
         from services.agent_orchestrator.routes.agents import _classify_agent
         static_choice = _classify_agent(message)
-        return JevRouteDecision(
+        return JevTriageDecision(
             target_agent=static_choice,
             confidence=1.0,
             distribution={static_choice: 1.0},
+            frustration_score=0.0,
+            frustration_label="Calm (static fallback)",
+            churn_risk_score=0.0,
+            churn_risk_label="Unknown",
+            requires_immediate_escalation=False,
+            escalation_prob=0.0,
             is_direct_lookup=False,
             direct_lookup_prob=0.0,
             evaluated_by_jev=False,
@@ -420,6 +443,28 @@ async def route_agent_intent(
             "options": options,
             "criteria": criteria,
         },
+        "frustration_level": {
+            "type": "score",
+            "instructions": "Customer escalation and frustration intensity",
+            "criteria": [
+                "Calm, routine inquiry politely stating facts",
+                "Frustrated about downtime, slow service, or recurring billing, but civil",
+                "Extremely angry, aggressive, threatening legal action, cancellation, or regulator escalation",
+            ],
+        },
+        "churn_risk": {
+            "type": "score",
+            "instructions": "Likelihood of subscriber churn or contract cancellation",
+            "criteria": [
+                "No churn intent; standard account usage or general question",
+                "Considering competitor alternatives, unhappy with pricing or service reliability",
+                "Explicit intent to cancel fiber service, terminate contract, or stop debit order",
+            ],
+        },
+        "requires_immediate_escalation": {
+            "type": "noul",
+            "instructions": "The message indicates a severe emergency, multi-dwelling building outage, or VIP priority requiring immediate supervisor escalation",
+        },
         "is_direct_lookup": {
             "type": "noul",
             "instructions": "Can this inquiry be resolved immediately and deterministically from standard database records (e.g. balance, outage status, speed tier) without creative troubleshooting?",
@@ -446,38 +491,79 @@ async def route_agent_intent(
         if resp.status_code == 200:
             data = resp.json()
             answers = data.get("answers", {})
+
             choice_ans = answers.get("target_agent", {})
             chosen = choice_ans.get("choice") or default_fallback
             conf = float(choice_ans.get("confidence", 0.8))
             probs = {k: float(v) for k, v in choice_ans.get("probabilities", {}).items()}
 
+            frust_ans = answers.get("frustration_level", {})
+            frust_score = float(frust_ans.get("score", 0.0))
+            frust_legend = frust_ans.get("legend", {})
+            frust_label = frust_legend.get(str(int(frust_score)), "Calm")
+
+            churn_ans = answers.get("churn_risk", {})
+            churn_score = float(churn_ans.get("score", 0.0))
+            churn_legend = churn_ans.get("legend", {})
+            churn_label = churn_legend.get(str(int(churn_score)), "Low churn risk")
+
+            esc_ans = answers.get("requires_immediate_escalation", {})
+            esc_prob = float(esc_ans.get("noul", 0.0))
+            needs_esc = esc_prob >= 0.70 or frust_score >= 1.8
+
             noul_ans = answers.get("is_direct_lookup", {})
             direct_prob = float(noul_ans.get("noul", 0.0))
             is_direct = direct_prob >= 0.80
 
-            return JevRouteDecision(
+            logger.info(
+                "Jev Triage: agent=%s (conf=%.2f) | frustration=%.1f (%s) | churn=%.1f (%s) | escalate=%s",
+                chosen, conf, frust_score, frust_label, churn_score, churn_label, needs_esc,
+            )
+
+            return JevTriageDecision(
                 target_agent=chosen,
                 confidence=conf,
                 distribution=probs,
+                frustration_score=frust_score,
+                frustration_label=frust_label,
+                churn_risk_score=churn_score,
+                churn_risk_label=churn_label,
+                requires_immediate_escalation=needs_esc,
+                escalation_prob=esc_prob,
                 is_direct_lookup=is_direct,
                 direct_lookup_prob=direct_prob,
                 evaluated_by_jev=True,
-                reason=f"Jev System One classified target as '{chosen}' (conf={conf:.2f}, direct_lookup={direct_prob:.2f})",
+                reason=f"Jev classified target as '{chosen}', frustration={frust_score:.1f}, churn_risk={churn_score:.1f}",
             )
     except Exception as exc:
-        logger.warning("Jev routing call failed: %s. Using static fallback.", exc)
+        logger.warning("Jev triage call failed: %s. Using static fallback.", exc)
 
     from services.agent_orchestrator.routes.agents import _classify_agent
     static_choice = _classify_agent(message)
-    return JevRouteDecision(
+    return JevTriageDecision(
         target_agent=static_choice,
         confidence=0.5,
         distribution={static_choice: 0.5},
+        frustration_score=0.0,
+        frustration_label="Unknown",
+        churn_risk_score=0.0,
+        churn_risk_label="Unknown",
+        requires_immediate_escalation=False,
+        escalation_prob=0.0,
         is_direct_lookup=False,
         direct_lookup_prob=0.0,
         evaluated_by_jev=False,
         reason="Static fallback after Jev failure.",
     )
+
+
+async def route_agent_intent(
+    message: str,
+    context: Optional[Dict[str, Any]] = None,
+    default_fallback: str = "assistant",
+) -> JevTriageDecision:
+    """Convenience alias invoking unified triage."""
+    return await triage_inbound_inquiry(message, context=context, default_fallback=default_fallback)
 
 
 async def verify_agent_response(
