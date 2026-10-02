@@ -27,6 +27,7 @@ services:
     restart: "no"
   sales:
     restart: "no"
+    command: sh -c "uvicorn services.sales.main:app --host 0.0.0.0 --port 8002 --workers 1"
   billing:
     restart: "no"
     command: sh -c "uvicorn services.billing.main:app --host 0.0.0.0 --port 8003 --workers 1"
@@ -61,8 +62,19 @@ services:
     command: sh -c "uvicorn services.compliance.main:app --host 0.0.0.0 --port 8019 --workers 1"
   marketing:
     restart: "no"
+    command: sh -c "uvicorn services.marketing.main:app --host 0.0.0.0 --port 8014 --workers 1"
   admin:
     restart: "no"
+    command: sh -c "uvicorn services.admin.main:app --host 0.0.0.0 --port 8013 --workers 1"
+  hr:
+    restart: "no"
+    command: sh -c "uvicorn services.hr.main:app --host 0.0.0.0 --port 8009 --workers 1"
+  tenant_memory:
+    restart: "no"
+    command: sh -c "uvicorn services.tenant_memory.main:app --host 0.0.0.0 --port 8025 --workers 1"
+  fno_intelligence:
+    restart: "no"
+    command: sh -c "uvicorn services.fno_intelligence.main:app --host 0.0.0.0 --port 8024 --workers 1"
   gateway:
     restart: "no"
     command: sh -c "uvicorn services.gateway.main:app --host 0.0.0.0 --port 8000 --workers 1"
