@@ -57,7 +57,7 @@ for s in $SERVICES; do
   capacity=false
   for i in $(seq 1 18); do
     read -r current_load _ < /proc/loadavg
-    if awk -v load="$current_load" 'BEGIN {exit !(load < 6)}'; then capacity=true; break; fi
+    if awk -v current_load="$current_load" 'BEGIN {exit !(current_load < 6)}'; then capacity=true; break; fi
     sleep 5
   done
   if [ "$capacity" != true ]; then
