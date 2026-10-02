@@ -36,6 +36,7 @@ import {
   MoreVertical,
   Play,
   Pause,
+  Sparkles,
 } from "lucide-react"
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -50,6 +51,7 @@ import { AB_TESTING_ENABLED } from "@/lib/flags"
 import { CommissionTiers } from "./commission-tiers"
 import { FieldSalesApp } from "./field-sales-app"
 import { TechnicianApp } from "./technician-app"
+import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -137,7 +139,7 @@ const portalCapabilities = [
     title: "Custom Guest Sign-In",
     description: "Secure entry points for customers, vendors, and partners without full seats.",
     icon: Lock,
-    accent: "from-indigo-500 to-blue-500",
+    accent: "from-cyan-600 to-blue-600",
   },
   {
     title: "Granular Permissions",
@@ -198,7 +200,19 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   })
 
   const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats, retentionJourneys } = data
-  const [localPages, setLocalPages] = useState(() => landingPages)
+  const [localPages, setLocalPages] = useState<any[]>(() => landingPages)
+  const [studioOpen, setStudioOpen] = useState(false)
+  const [editingPage, setEditingPage] = useState<ImpeccablePage | null>(null)
+
+  const handleSaveImpeccablePage = (page: ImpeccablePage) => {
+    setLocalPages((prev) => {
+      const idx = prev.findIndex((p) => String(p.id) === String(page.id))
+      if (idx >= 0) {
+        return prev.map((p) => (String(p.id) === String(page.id) ? { ...p, ...page } : p))
+      }
+      return [page, ...prev]
+    })
+  }
 
   const [activeTab, setActiveTab] = useState("overview")
   const [cancelFlowOpen, setCancelFlowOpen] = useState(false)
@@ -217,8 +231,28 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         subtitle="Self-service portal, journey management, and customer engagement"
         actions={
           <>
-            <Button variant="outline" size="sm"><Plus className="h-3.5 w-3.5" />New Page</Button>
-            <Button variant="cta" size="sm"><Globe className="h-3.5 w-3.5" />Publish</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setEditingPage(null)
+                setStudioOpen(true)
+              }}
+            >
+              <Plus className="h-3.5 w-3.5 mr-1" />
+              New Page
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingPage(null)
+                setStudioOpen(true)
+              }}
+              className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
+            >
+              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+              Impeccable Studio
+            </Button>
           </>
         }
       />
@@ -508,10 +542,57 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
         <TabsContent value="website" className="mt-4 space-y-4">
           <div id="portal-landing" />
+
+          {/* Impeccable AI Studio Quick Banner */}
+          <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0c121d] to-[#080d18] p-5 shadow-lg">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="border-cyan-500/40 bg-cyan-950/60 text-cyan-400 text-xs font-mono">
+                    <Sparkles className="h-3 w-3 mr-1" />
+                    IMPECCABLE STUDIO & MARKETING INTEGRATION
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">Obsidian Telecom Visual Standards</span>
+                </div>
+                <h3 className="text-lg font-bold text-foreground">High-Converting Landing Pages</h3>
+                <p className="text-xs text-muted-foreground max-w-2xl">
+                  Build responsive, accessible landing pages with integrated UTM campaign tracking, CRM webhook lead ingestion,
+                  Meta/GTM pixels, and automated retention journeys—crafted to Impeccable design standards with zero anti-patterns.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <Button
+                  onClick={() => {
+                    setEditingPage(null)
+                    setStudioOpen(true)
+                  }}
+                  className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs shadow-md shadow-cyan-500/20"
+                >
+                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                  Launch Impeccable Studio
+                </Button>
+              </div>
+            </div>
+          </div>
+
           <TableShell
             title="Landing Pages"
             columns={[
-              { key: "name", label: "Page Name", inputType: "text" as const },
+              {
+                key: "name",
+                label: "Page Name",
+                inputType: "text" as const,
+                render: (v, row: any) => (
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-foreground">{String(v)}</span>
+                    {row?.intent && (
+                      <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px] px-1.5 py-0">
+                        Impeccable
+                      </Badge>
+                    )}
+                  </div>
+                ),
+              },
               { key: "url", label: "URL", inputType: "text" as const },
               { key: "status", label: "Status", inputType: "select" as const, options: ["published", "draft"], render: (v) => (
                 <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${v === "published" ? "bg-emerald-500/20 text-emerald-400" : "bg-amber-500/20 text-amber-400"}`}>
@@ -521,12 +602,49 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               { key: "views", label: "Views", inputType: "number" as const, render: (v) => Number(v).toLocaleString() },
               { key: "conversions", label: "Conversions", inputType: "number" as const },
               { key: "rate", label: "Conv. Rate", inputType: "text" as const },
+              {
+                key: "studioAction",
+                label: "Studio",
+                render: (_v, row: any) => (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 px-2 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40"
+                    onClick={() => {
+                      setEditingPage(row)
+                      setStudioOpen(true)
+                    }}
+                  >
+                    <Sparkles className="h-3 w-3 mr-1" />
+                    Open Studio
+                  </Button>
+                ),
+              },
             ]}
             data={localPages}
             addLabel="Create Page"
-            onAdd={(rec) => setLocalPages((prev) => [rec, ...prev])}
+            extraActions={
+              <Button
+                size="sm"
+                onClick={() => {
+                  setEditingPage(null)
+                  setStudioOpen(true)
+                }}
+                className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
+              >
+                <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                Impeccable Studio
+              </Button>
+            }
+            onAdd={() => {
+              setEditingPage(null)
+              setStudioOpen(true)
+            }}
             onDelete={(id) => setLocalPages((prev) => prev.filter((r) => r.id !== id))}
-            onEdit={(rec) => setLocalPages((prev) => prev.map((r) => r.id === rec.id ? rec : r))}
+            onEdit={(rec) => {
+              setEditingPage(rec as any)
+              setStudioOpen(true)
+            }}
             searchPlaceholder="Search pages..."
           />
 
@@ -667,6 +785,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         onOpenChange={setCancelFlowOpen}
         customerId="cust-demo-001"
         customerName="Demo Customer"
+      />
+
+      {/* Impeccable Landing Page & Marketing Studio */}
+      <ImpeccableLandingStudio
+        open={studioOpen}
+        onOpenChange={setStudioOpen}
+        initialPage={editingPage}
+        onSavePage={handleSaveImpeccablePage}
       />
     </div>
   )

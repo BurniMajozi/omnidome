@@ -73,6 +73,8 @@ class AgentInfo(BaseModel):
     description: str
     llm: str
     tools: List[str]
+    employee_id: Optional[str] = None
+    registration_status: Optional[str] = None
     tool_policies: List[ToolPolicyInfo] = []
     # Models used when this agent runs its own loop (MCP specialist, workflows):
     # OPENROUTER_MODEL then OPENROUTER_FALLBACK_MODELS.

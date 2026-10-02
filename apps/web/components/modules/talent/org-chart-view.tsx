@@ -54,7 +54,7 @@ import {
   Copy,
   Move,
 } from "lucide-react"
-import { updateReportingLine, createEmployee, type Employee, type EmployeeCreate } from "@/lib/hr-api"
+import { updateReportingLine, createEmployee, updateEmployee, type Employee, type EmployeeCreate } from "@/lib/hr-api"
 
 interface OrgChartViewProps {
   employees: Employee[]
@@ -101,14 +101,9 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
   const [showFinancialDoA, setShowFinancialDoA] = useState(true)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
-  // Keep localStaff in sync when parent employees list updates, while preserving local agents
+  // The server is the roster source of truth; temporary browser rows must not survive a refresh.
   useEffect(() => {
-    setLocalStaff((prevLocal) => {
-      const parentIds = new Set(employees.map((e) => e.id))
-      // Keep any local AI agents or temporary additions not in parent
-      const locallyAdded = prevLocal.filter((e) => !parentIds.has(e.id))
-      return [...employees, ...locallyAdded]
-    })
+    setLocalStaff(employees)
   }, [employees])
 
   // Canvas container ref for "Fit to Window" auto-scaling
@@ -151,25 +146,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     new Set(employees.map((e) => e.id))
   )
 
-  // Default financial authority limits if not specified
-  const getFinancialLimit = (emp: Employee): number => {
-    if (emp.financial_limit !== undefined && emp.financial_limit !== null) {
-      return emp.financial_limit
-    }
-    if (emp.job_title.toLowerCase().includes("chief executive officer") || emp.department === "Executive") {
-      return 5000000 // R5,000,000 Executive
-    }
-    if (emp.job_title.toLowerCase().includes("chief") || emp.job_title.toLowerCase().includes("head of")) {
-      return 500000 // R500,000 Tier 2
-    }
-    if (emp.job_title.toLowerCase().includes("lead") || emp.job_title.toLowerCase().includes("manager")) {
-      return 100000 // R100,000 Tier 3
-    }
-    if (emp.is_agent) {
-      return 10000 // R10,000 Autonomous credits/approvals
-    }
-    return 25000 // R25,000 Routine staff
-  }
+  const getFinancialLimit = (emp: Employee): number | null => emp.financial_limit ?? null
 
   // Build hierarchical tree from flat employees list with subordinate counts
   const orgTree = useMemo(() => {
@@ -366,57 +343,33 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     const assignedMgrId = newStaffReportingTo === "NONE" ? null : newStaffReportingTo
     const newEmpId = `EMP-${Date.now().toString().slice(-4)}`
 
-    const newRecord: Employee = {
-      id: `local-${Date.now()}`,
-      tenant_id: "00000000-0000-0000-0000-000000000001",
-      employee_id: newEmpId,
-      full_name: newStaffName.trim(),
-      job_title: newStaffTitle.trim(),
-      department: newStaffDept,
-      hire_date: new Date().toISOString().split("T")[0],
-      manager_id: assignedMgrId,
-      status: "ACTIVE",
-      created_at: new Date().toISOString(),
-      financial_limit: newStaffFinancialLimit,
-      is_agent: newStaffIsAgent,
-      llm_model: newStaffIsAgent ? newStaffLlmModel : undefined,
+    setIsUpdating(true)
+    try {
+      const saved = await createEmployee({
+        employee_id: newEmpId,
+        full_name: newStaffName.trim(),
+        job_title: newStaffTitle.trim(),
+        department: newStaffDept,
+        hire_date: new Date().toISOString().split("T")[0],
+        manager_id: assignedMgrId,
+        financial_limit: newStaffFinancialLimit,
+        is_agent: newStaffIsAgent || undefined,
+        llm_model: newStaffIsAgent ? newStaffLlmModel : undefined,
+        scope: newStaffIsAgent ? newStaffAgentScope : undefined,
+      })
+      await onRefresh()
+      if (assignedMgrId) setExpandedNodeIds((prev) => new Set([...prev, assignedMgrId]))
+      setToastMessage(newStaffIsAgent
+        ? saved.registration_status === "registered"
+          ? `Saved ${saved.full_name} and registered the agent. Assign work in Agent Manager.`
+          : `Saved ${saved.full_name}; agent registration failed. Retry from the roster.`
+        : `Saved staff member ${saved.full_name}.`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : "Could not save staff member")
+      return
+    } finally {
+      setIsUpdating(false)
     }
-
-    // Optimistically update local hierarchy immediately
-    setLocalStaff((prev) => [...prev, newRecord])
-
-    // Expand the manager so the new staff member is visible immediately
-    if (assignedMgrId) {
-      setExpandedNodeIds((prev) => new Set([...prev, assignedMgrId]))
-    }
-
-    // Call API in background — for BOTH agents and humans
-    createEmployee({
-      employee_id: newEmpId,
-      full_name: newRecord.full_name,
-      job_title: newRecord.job_title,
-      department: newRecord.department,
-      hire_date: newRecord.hire_date,
-      manager_id: assignedMgrId,
-      financial_limit: newStaffFinancialLimit,
-      is_agent: newStaffIsAgent || undefined,
-      llm_model: newStaffIsAgent ? newStaffLlmModel : undefined,
-    }).then((saved) => {
-      // Update local state with the real DB id so subsequent actions work
-      if (saved?.id) {
-        setLocalStaff((prev) =>
-          prev.map((s) => (s.id === newRecord.id ? { ...s, id: saved.id } : s))
-        )
-      }
-    }).catch(() => null)
-
-    setToastMessage(
-      newStaffIsAgent
-        ? `Deployed AI Agent "${newRecord.full_name}" reporting to ${
-            assignedMgrId ? localStaff.find((s) => s.id === assignedMgrId)?.full_name : "CEO"
-          }!`
-        : `Added staff member "${newRecord.full_name}" to the organizational hierarchy!`
-    )
     setTimeout(() => setToastMessage(null), 3500)
 
     // Reset and close
@@ -466,48 +419,40 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     }
   }
 
-  // Commit Bulk CSV to Local Hierarchy
-  const handleImportCsv = () => {
+  // Import sequentially so each row is confirmed by HR before it appears.
+  const handleImportCsv = async () => {
     if (csvPreviewRows.length === 0) return
-
-    // Map existing names to IDs
+    setIsUpdating(true)
     const nameToId = new Map<string, string>()
     localStaff.forEach((s) => nameToId.set(s.full_name.toLowerCase(), s.id))
-
-    const newStaffRecords: Employee[] = []
-
-    csvPreviewRows.forEach((row, idx) => {
-      const recordId = `csv-${Date.now()}-${idx}`
-      nameToId.set(row.name.toLowerCase(), recordId)
-
-      let resolvedMgrId: string | null = null
-      if (row.reportingToName && nameToId.has(row.reportingToName.toLowerCase())) {
-        resolvedMgrId = nameToId.get(row.reportingToName.toLowerCase())!
+    let savedCount = 0
+    let failed = ""
+    for (const [idx, row] of csvPreviewRows.entries()) {
+      try {
+        const saved = await createEmployee({
+          employee_id: `CSV-${Date.now()}-${idx}`,
+          full_name: row.name,
+          job_title: row.title,
+          department: row.department,
+          hire_date: new Date().toISOString().split("T")[0],
+          manager_id: nameToId.get(row.reportingToName.toLowerCase()) ?? null,
+          financial_limit: row.financialLimit,
+          is_agent: row.isAgent,
+          llm_model: row.llmModel,
+        })
+        savedCount++
+        nameToId.set(row.name.toLowerCase(), saved.id)
+      } catch (error) {
+        failed = `${row.name}: ${error instanceof Error ? error.message : "save failed"}`
+        break
       }
-
-      newStaffRecords.push({
-        id: recordId,
-        tenant_id: "00000000-0000-0000-0000-000000000001",
-        employee_id: `CSV-${100 + idx}`,
-        full_name: row.name,
-        job_title: row.title,
-        department: row.department,
-        hire_date: new Date().toISOString().split("T")[0],
-        manager_id: resolvedMgrId,
-        status: "ACTIVE",
-        created_at: new Date().toISOString(),
-        financial_limit: row.financialLimit,
-        is_agent: row.isAgent,
-        llm_model: row.llmModel,
-      })
-    })
-
-    setLocalStaff((prev) => [...prev, ...newStaffRecords])
-    setExpandedNodeIds(new Set([...Array.from(expandedNodeIds), ...newStaffRecords.map((r) => r.id)]))
+    }
+    await onRefresh()
+    setIsUpdating(false)
+    setToastMessage(failed ? `${savedCount} saved. Import stopped at ${failed}` : `${savedCount} staff records saved.`)
     setBulkCsvModalOpen(false)
     setCsvRawText("")
     setCsvPreviewRows([])
-    setToastMessage(`Bulk uploaded ${newStaffRecords.length} staff & agents into the org hierarchy!`)
     setTimeout(() => setToastMessage(null), 3500)
   }
 
@@ -589,57 +534,48 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
   }, [localStaff])
 
   // Deploy AI Agent from Optimizer recommendation
-  const handleDeployRecommendedAgent = (rec: OptimizerRecommendation) => {
-    const newRecord: Employee = {
-      id: `agent-${Date.now()}`,
-      tenant_id: "00000000-0000-0000-0000-000000000001",
-      employee_id: `AGT-${Date.now().toString().slice(-4)}`,
-      full_name: rec.proposedAgent.name,
-      job_title: rec.proposedAgent.title,
-      department: rec.proposedAgent.department,
-      hire_date: new Date().toISOString().split("T")[0],
-      manager_id: rec.proposedAgent.managerId,
-      status: "ACTIVE",
-      created_at: new Date().toISOString(),
-      financial_limit: rec.proposedAgent.financialLimit,
-      is_agent: true,
-      llm_model: rec.proposedAgent.llmModel,
+  const handleDeployRecommendedAgent = async (rec: OptimizerRecommendation) => {
+    setIsUpdating(true)
+    try {
+      const saved = await createEmployee({
+        employee_id: `AGT-${Date.now()}`,
+        full_name: rec.proposedAgent.name,
+        job_title: rec.proposedAgent.title,
+        department: rec.proposedAgent.department,
+        hire_date: new Date().toISOString().split("T")[0],
+        manager_id: rec.proposedAgent.managerId,
+        financial_limit: rec.proposedAgent.financialLimit,
+        is_agent: true,
+        llm_model: rec.proposedAgent.llmModel,
+        scope: rec.proposedAgent.scope,
+      })
+      await onRefresh()
+      setOptimizerModalOpen(false)
+      setToastMessage(saved.registration_status === "registered"
+        ? `Registered ${saved.full_name}. Assign work in Agent Manager.`
+        : `Saved ${saved.full_name}; registration failed. Retry from the roster.`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : "Could not save agent")
+    } finally {
+      setIsUpdating(false)
     }
-
-    setLocalStaff((prev) => [...prev, newRecord])
-    setExpandedNodeIds((prev) => new Set([...prev, rec.proposedAgent.managerId]))
-    setOptimizerModalOpen(false)
-    setToastMessage(`Deployed AI Agent "${newRecord.full_name}" reporting to ${rec.proposedAgent.managerName}!`)
-    setTimeout(() => setToastMessage(null), 3500)
-
-    // Persist to backend — triggers Orchestrator + Tenant Memory registration
-    createEmployee({
-      employee_id: newRecord.employee_id,
-      full_name: newRecord.full_name,
-      job_title: newRecord.job_title,
-      department: newRecord.department,
-      hire_date: newRecord.hire_date,
-      manager_id: rec.proposedAgent.managerId,
-      financial_limit: rec.proposedAgent.financialLimit,
-      is_agent: true,
-      llm_model: rec.proposedAgent.llmModel,
-    }).then((saved) => {
-      if (saved?.id) {
-        setLocalStaff((prev) =>
-          prev.map((s) => (s.id === newRecord.id ? { ...s, id: saved.id } : s))
-        )
-      }
-    }).catch(() => null)
   }
 
   // ── SAVE FINANCIAL DELEGATION LIMIT ───────────────────────────────────────
-  const handleSaveDoa = (e: React.FormEvent) => {
+  const handleSaveDoa = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingDoaEmp) return
-    setLocalStaff((prev) =>
-      prev.map((emp) => (emp.id === editingDoaEmp.id ? { ...emp, financial_limit: newDoaLimit } : emp))
-    )
-    setToastMessage(`Updated Financial Spend Authority for ${editingDoaEmp.full_name} to ${fmtZar(newDoaLimit)}`)
+    setIsUpdating(true)
+    try {
+      await updateEmployee(editingDoaEmp.id, { financial_limit: newDoaLimit })
+      await onRefresh()
+      setToastMessage(`Saved financial authority for ${editingDoaEmp.full_name}: ${fmtZar(newDoaLimit)}`)
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : "Could not save financial authority")
+      return
+    } finally {
+      setIsUpdating(false)
+    }
     setTimeout(() => setToastMessage(null), 3000)
     setEditDoaModalOpen(false)
     setEditingDoaEmp(null)
@@ -803,13 +739,13 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
                 type="button"
                 onClick={() => {
                   setEditingDoaEmp(employee)
-                  setNewDoaLimit(finLimit)
+                  setNewDoaLimit(finLimit ?? 0)
                   setEditDoaModalOpen(true)
                 }}
                 className="font-bold text-emerald-400 hover:underline flex items-center gap-1"
                 title="Edit Financial Authority Limit"
               >
-                {fmtZar(finLimit)}
+                {finLimit === null ? "Not set" : fmtZar(finLimit)}
                 <Edit3 className="h-2.5 w-2.5 text-muted-foreground" />
               </button>
             </div>

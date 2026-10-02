@@ -7,6 +7,7 @@
     "dev": "node scripts/dev-no-fork.js",
     "dev:next": "next dev",
     "lint": "eslint .",
+    "lint:ui": "npx impeccable detect components",
     "start": "next start"
   },
   "dependencies": {

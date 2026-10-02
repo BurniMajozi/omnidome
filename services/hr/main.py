@@ -8,7 +8,7 @@ import uuid
 
 import httpx
 from fastapi import FastAPI, Depends, Header, HTTPException, Request, status, Query, UploadFile, File
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, desc, and_, func, or_
 
 from services.common.entitlements import EntitlementGuard
@@ -139,6 +139,7 @@ class EmployeeUpdate(BaseModel):
     manager_id: Optional[uuid.UUID] = None
     call_center_agent_id: Optional[uuid.UUID] = None
     date_of_birth: Optional[date] = None
+    financial_limit: Optional[float] = Field(default=None, ge=0)
 
 
 async def _validate_manager(db, tenant_id: uuid.UUID, emp_id: Optional[uuid.UUID], manager_id: Optional[uuid.UUID]) -> None:
@@ -276,47 +277,52 @@ async def create_employee(
     await db.refresh(emp)
     logger.info("Employee created: id=%s code=%s", emp.id, data.employee_id)
 
-    # ── Side-effect: register AI agent with Orchestrator + Tenant Memory ──
+    # Commit the employee before calling another service. The registration endpoint
+    # is idempotent, so an interrupted request can be retried without a duplicate.
+    await db.commit()
+    await db.refresh(emp)
+    result = _emp_to_dict(emp)
     if data.is_agent:
-        _mem_url = os.environ.get("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")
-        _orch_url = os.environ.get("ORCHESTRATOR_URL", "http://agent-orchestrator:8021")
-        agent_entry = {
-            "employee_id": str(emp.id),
-            "employee_code": data.employee_id,
-            "full_name": data.full_name,
-            "job_title": data.job_title,
-            "department": data.department,
-            "agent_type": data.agent_type or "custom",
-            "llm_model": data.llm_model,
-            "financial_limit": data.financial_limit,
-            "scope": data.scope,
-            "is_subagent": data.is_subagent or False,
-            "parent_agent_id": str(data.parent_agent_id) if data.parent_agent_id else None,
-            "manager_id": str(data.manager_id) if data.manager_id else None,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=10) as _c:
-                await _c.post(
-                    f"{_mem_url}/api/v1/memories",
-                    json={
-                        "scope": "agent_roster",
-                        "content": f"AI Agent deployed: {data.full_name} ({data.agent_type or 'custom'}) "
-                                   f"in {data.department}, model={data.llm_model}, "
-                                   f"limit=R{data.financial_limit or 0}, scope={data.scope}",
-                        "metadata": agent_entry,
-                    },
-                    headers={"x-tenant-id": str(tenant_id)},
-                )
-                await _c.post(
-                    f"{_orch_url}/api/agents/register",
-                    json=agent_entry,
-                    headers={"x-tenant-id": str(tenant_id)},
-                )
-                logger.info("Agent registered with Orchestrator + Memory: employee=%s", emp.id)
-        except Exception as exc:
-            logger.warning(f"Agent registration side-effect failed (non-blocking): {exc}")
+        result.update(await _register_agent_employee(emp, tenant_id))
+    return result
 
-    return _emp_to_dict(emp)
+
+async def _register_agent_employee(emp: Employee, tenant_id: uuid.UUID) -> dict:
+    """Report the real registration state; saving an HR row is not deployment."""
+    orch_url = os.environ.get("ORCHESTRATOR_URL", "http://agent-orchestrator:8021")
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                f"{orch_url}/api/agents/register",
+                json={
+                    "employee_id": str(emp.id),
+                    "full_name": emp.full_name,
+                    "job_title": emp.job_title,
+                    "department": emp.department,
+                    "llm_model": emp.llm_model,
+                    "financial_limit": emp.financial_limit,
+                    "scope": emp.scope,
+                },
+                headers={"x-tenant-id": str(tenant_id)},
+            )
+            response.raise_for_status()
+            return {"registration_status": "registered", "agent_type": response.json()["agent_type"]}
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        logger.warning("Agent registration failed for employee=%s: %s", emp.id, type(exc).__name__)
+        return {"registration_status": "failed", "registration_error": "Agent registration unavailable; retry from the roster."}
+
+
+@app.post("/employees/{emp_id}/register-agent")
+async def retry_agent_registration(
+    emp_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    _admin: AuthContext = Depends(require_hr_admin),
+    db=Depends(get_session),
+):
+    emp = await _get_employee_or_404(emp_id, tenant_id, db)
+    if not emp.is_agent:
+        raise HTTPException(status_code=409, detail="Employee is not an AI agent")
+    return await _register_agent_employee(emp, tenant_id)
 
 
 @app.get("/employees/{emp_id}")
@@ -346,7 +352,11 @@ async def update_employee(
         setattr(emp, key, value)
     await db.flush()
     await db.refresh(emp)
-    return _emp_to_dict(emp)
+    result = _emp_to_dict(emp)
+    if emp.is_agent and "financial_limit" in update_data:
+        await db.commit()
+        result.update(await _register_agent_employee(emp, tenant_id))
+    return result
 
 
 @app.delete("/employees/{emp_id}", status_code=status.HTTP_204_NO_CONTENT)

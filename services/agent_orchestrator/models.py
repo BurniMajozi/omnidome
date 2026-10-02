@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -70,6 +70,65 @@ class AgentAction(Base):
     __table_args__ = (
         Index("ix_agent_action_conversation", "conversation_id"),
     )
+
+
+class RegisteredAgent(Base):
+    """Tenant-owned roster entry linked to an HR employee, not a running process."""
+
+    __tablename__ = "registered_agents"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    employee_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    role: Mapped[str] = mapped_column(String(200), nullable=False, default="AI agent")
+    department: Mapped[str] = mapped_column(String(120), nullable=False, default="General")
+    llm_model: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    financial_limit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    monthly_budget_usd: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False, default=25)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="registered")
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "employee_id", name="uq_registered_agent_employee"),
+        UniqueConstraint("tenant_id", "agent_type", name="uq_registered_agent_type"),
+    )
+
+
+class AgentJob(Base):
+    """Durable work item. A worker claims and checkpoints one run at a time."""
+
+    __tablename__ = "agent_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    objective: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    checkpoint: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    max_cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False, default=5)
+    estimated_cost_usd: Mapped[float] = mapped_column(Numeric(12, 4), nullable=False, default=0)
+    actual_cost_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+    cost_source: Mapped[str] = mapped_column(String(24), nullable=False, default="estimated")
+    max_iterations: Mapped[int] = mapped_column(nullable=False, default=10)
+    max_steps: Mapped[int] = mapped_column(nullable=False, default=25)
+    total_steps: Mapped[int] = mapped_column(nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    iteration_history: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_agent_jobs_tenant_status", "tenant_id", "status", "created_at"),)
 
 
 # ── Native workflow / DAG runner (Phase A) ─────────────────────────────────

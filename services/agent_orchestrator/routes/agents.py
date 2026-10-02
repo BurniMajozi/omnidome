@@ -13,6 +13,7 @@ from sqlalchemy import select
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope as get_session
 from services.agent_orchestrator.agents import Agent
+from services.agent_orchestrator.models import RegisteredAgent
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.config import settings
 from services.agent_orchestrator.hermes_client import hermes_client
@@ -266,31 +267,50 @@ async def _load_compaction_state(conversation_id: Optional[uuid.UUID], tenant_id
 
 
 # ---------------------------------------------------------------------------
-# In-memory registry of custom HR-created agents
+# Tenant-scoped, durable roster of HR-created agents
 # ---------------------------------------------------------------------------
-_custom_agents: dict[str, dict] = {}
+
+class AgentRegistration(BaseModel):
+    employee_id: uuid.UUID
+    full_name: str = Field(min_length=1, max_length=200)
+    job_title: str = Field(default="AI agent", max_length=200)
+    department: str = Field(default="General", max_length=120)
+    llm_model: Optional[str] = Field(default=None, max_length=160)
+    scope: Optional[str] = None
+    financial_limit: Optional[float] = Field(default=None, ge=0)
+
+
+def _may_manage_agents(ctx: AuthContext) -> bool:
+    roles = {role.lower() for role in ctx.roles}
+    permissions = {permission.lower() for permission in ctx.permissions}
+    return ctx.is_platform_admin or bool(roles & {"admin", "tenant_admin", "owner", "hr", "hr_admin", "hr_manager"}) or "hr.admin" in permissions
 
 
 @router.post("/register")
-async def register_custom_agent(body: dict = Body(...)):
-    """Register an HR-created AI agent so it appears in list_agents and Agent Manager."""
-    emp_id = body.get("employee_id", "")
-    agent_key = body.get("agent_type") or f"custom_{emp_id[:8]}"
-    _custom_agents[agent_key] = {
-        "agent_type": agent_key,
-        "name": body.get("full_name", agent_key),
-        "role": body.get("job_title", "Custom AI Agent"),
-        "department": body.get("department", "General"),
-        "llm_model": body.get("llm_model", "qwen2.5:7b"),
-        "financial_limit": body.get("financial_limit", 0),
-        "scope": body.get("scope", ""),
-        "is_subagent": body.get("is_subagent", False),
-        "parent_agent_id": body.get("parent_agent_id"),
-        "employee_id": emp_id,
-        "employee_code": body.get("employee_code", ""),
-    }
-    logger.info(f"Registered custom agent: {agent_key} ({body.get('full_name')})")
-    return {"status": "registered", "agent_type": agent_key}
+async def register_custom_agent(body: AgentRegistration, ctx: AuthContext = Depends(get_auth_context)):
+    """Upsert an HR agent for this signed tenant; registration alone does not run it."""
+    if not _may_manage_agents(ctx):
+        raise HTTPException(status_code=403, detail="HR admin role required")
+    agent_key = f"custom_{body.employee_id.hex}"
+    async with get_session(ctx.tenant_id) as session:
+        row = (await session.execute(select(RegisteredAgent).where(
+            RegisteredAgent.tenant_id == ctx.tenant_id,
+            RegisteredAgent.employee_id == body.employee_id,
+        ))).scalar_one_or_none()
+        if row is None:
+            row = RegisteredAgent(tenant_id=ctx.tenant_id, employee_id=body.employee_id, agent_type=agent_key)
+            session.add(row)
+        row.name = body.full_name
+        row.role = body.job_title
+        row.department = body.department
+        row.llm_model = body.llm_model
+        row.scope = body.scope
+        row.financial_limit = body.financial_limit
+        row.status = "registered"
+        row.last_error = None
+        await session.flush()
+    logger.info("Registered agent %s for tenant %s", agent_key, ctx.tenant_id)
+    return {"status": "registered", "agent_type": agent_key, "employee_id": str(body.employee_id)}
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +318,7 @@ async def register_custom_agent(body: dict = Body(...)):
 # ---------------------------------------------------------------------------
 
 @router.get("", response_model=list[AgentInfo])
-async def list_agents():
+async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
     """List all available agents and their tool sets."""
     legacy_llm = {
         "customer_facing": "qwen2.5:7b",
@@ -350,15 +370,21 @@ async def list_agents():
     ]
 
     # ── Append HR-created custom agents ──────────────────────────────
-    for key, meta in _custom_agents.items():
+    async with get_session(ctx.tenant_id) as session:
+        custom_agents = (await session.execute(select(RegisteredAgent).where(
+            RegisteredAgent.tenant_id == ctx.tenant_id,
+        ).order_by(RegisteredAgent.name))).scalars().all()
+    for meta in custom_agents:
         agents.append(AgentInfo(
-            agent_type=key,
-            description=f"{meta['name']} — {meta.get('role', 'Custom AI Agent')} ({meta.get('department', '')})",
-            llm=meta.get("llm_model", "qwen2.5:7b"),
+            agent_type=meta.agent_type,
+            description=f"{meta.name} — {meta.role} ({meta.department})",
+            llm=meta.llm_model or "Not configured",
             tools=[],
             tool_policies=[],
             specialist_models=[],
             sql_table_allowlist=[],
+            employee_id=str(meta.employee_id),
+            registration_status=meta.status,
         ))
 
     return agents

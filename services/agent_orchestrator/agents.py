@@ -194,6 +194,7 @@ class Agent:
         history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[uuid.UUID] = None,
         compaction_state: Optional[Dict[str, Any]] = None,
+        max_tool_calls: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Execute the agent reasoning loop.
 
@@ -205,6 +206,11 @@ class Agent:
           "step_limit" | "empty" | "truncated"
         """
         messages = await self.prepare_turn(user_message, history, compaction_state)
+        if self.context.get("draft_only"):
+            # HR-registered agents start with read-only capabilities. The gate is
+            # also enforced in _execute_call, including hallucinated tool names.
+            self.tools = [tool for tool in self.tools if not tool.mutates]
+            self.available_tool_names = [tool.name for tool in self.tools]
         tool_call_log: List[Dict[str, Any]] = []
         tool_count = 0
         empty_retries = 0
@@ -219,7 +225,9 @@ class Agent:
             tools_for_llm.append(build_subagent_tool(include_web_search=needs_web))
         tenant = str(self.tenant_id) if self.tenant_id else None
         started = time.perf_counter()
-        turn = {"rounds": 0, "tokens": 0}
+        turn = {"rounds": 0, "tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
+                "actual_cost_usd": 0.0, "cost_reported": False}
+        tool_limit = min(MAX_TOOL_CALLS, max_tool_calls) if max_tool_calls is not None else MAX_TOOL_CALLS
 
         def done(
             content: str,
@@ -247,6 +255,12 @@ class Agent:
                 "stopped_by": stopped_by,
                 "status": hitl_status,
                 "verification": verification,
+                "usage": {
+                    "prompt_tokens": turn["prompt_tokens"],
+                    "completion_tokens": turn["completion_tokens"],
+                    "total_tokens": turn["tokens"],
+                    "cost": turn["actual_cost_usd"] if turn["cost_reported"] else None,
+                },
             }
 
         async def verify_and_done(
@@ -267,17 +281,27 @@ class Agent:
                 verif_data = v.to_dict()
             return done(content_str, stopped_by=stopped_by, unavailable=unavailable, verification=verif_data)
 
-        while tool_count < MAX_TOOL_CALLS:
+        while tool_count < tool_limit:
             result = await llm_client.chat(
                 agent_type=self.agent_type,
                 messages=messages,
                 tools=tools_for_llm,
                 tenant_id=tenant,
                 channel=self.channel,
-                system_extra=self.skills_prompt,
+                system_extra="\n".join(filter(None, [self.skills_prompt, self.context.get("roster_mandate", "")])),
             )
             turn["rounds"] += 1
-            turn["tokens"] += usage.tokens_from(result)[2]
+            p_tokens, c_tokens, total_tokens = usage.tokens_from(result)
+            turn["tokens"] += total_tokens
+            turn["prompt_tokens"] += p_tokens
+            turn["completion_tokens"] += c_tokens
+            provider_cost = (result.get("usage") or {}).get("cost")
+            if provider_cost is not None:
+                try:
+                    turn["actual_cost_usd"] += float(provider_cost)
+                    turn["cost_reported"] = True
+                except (TypeError, ValueError):
+                    pass
             content = result.get("content") or ""
             raw_tool_calls = result.get("tool_calls", [])
 
@@ -319,7 +343,7 @@ class Agent:
             else:
                 truncated_rounds = 0
 
-        logger.warning("Agent %s reached the step limit (%d)", self.agent_type, MAX_TOOL_CALLS)
+        logger.warning("Agent %s reached the step limit (%d)", self.agent_type, tool_limit)
         return await self._final_answer(messages, tools_for_llm, tenant, done, "step_limit")
 
     @staticmethod
@@ -364,6 +388,8 @@ class Agent:
     ):
         """Run one tool call with the A1/A2 guards. Returns (name, args, result)."""
         tool_name = tc.get("name", "")
+        if self.context.get("draft_only") and tool_name not in self.available_tool_names:
+            return tool_name, {}, {"success": False, "refused": True, "error": "This registered agent is limited to read-only tools."}
         # Spec A1: repaired arguments only. A call whose arguments could not be
         # repaired or were cut off is refused (never run with {}); the error goes
         # back to the model so it re-issues the call.

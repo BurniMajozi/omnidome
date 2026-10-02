@@ -117,6 +117,8 @@ export interface Employee {
   financial_limit?: number
   is_agent?: boolean
   llm_model?: string
+  registration_status?: "registered" | "failed"
+  registration_error?: string
 }
 
 export interface EmployeeCreate {
@@ -134,6 +136,7 @@ export interface EmployeeCreate {
   financial_limit?: number
   is_agent?: boolean
   llm_model?: string
+  scope?: string
 }
 
 export interface LeaveRequest {

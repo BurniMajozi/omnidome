@@ -16,7 +16,7 @@ import os
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import httpx
 
@@ -53,6 +53,7 @@ class LongHorizonJobResult:
     total_steps: int
     total_tokens: int
     estimated_cost_usd: float
+    actual_cost_usd: Optional[float] = None
     stopped_by: Optional[str] = None
     iteration_history: List[Dict[str, Any]] = field(default_factory=list)
     checkpoint: Dict[str, Any] = field(default_factory=dict)
@@ -67,6 +68,8 @@ class LongHorizonJobResult:
             "total_steps": self.total_steps,
             "total_tokens": self.total_tokens,
             "estimated_cost_usd": round(self.estimated_cost_usd, 4),
+            "actual_cost_usd": round(self.actual_cost_usd, 4) if self.actual_cost_usd is not None else None,
+            "cost_source": "provider" if self.actual_cost_usd is not None else "estimated",
             "stopped_by": self.stopped_by,
             "iteration_history": self.iteration_history,
         }
@@ -213,9 +216,10 @@ async def run_long_horizon_agent(
     webhook_url: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     resume_from_checkpoint: Optional[Dict[str, Any]] = None,
+    checkpoint_callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[None]]] = None,
 ) -> LongHorizonJobResult:
     """Execute a self-ask, multi-hour resilient long-horizon agent run with strict cost/step ceilings."""
-    job_id = f"lh_{uuid.uuid4().hex[:12]}"
+    job_id = str((resume_from_checkpoint or {}).get("job_id") or f"lh_{uuid.uuid4().hex[:12]}")
     conv_id = conversation_id or uuid.uuid4()
     t_id = str(tenant_id) if tenant_id else "00000000-0000-0000-0000-000000000001"
 
@@ -233,10 +237,13 @@ async def run_long_horizon_agent(
     total_steps = checkpoint.get("total_steps", 0)
     total_tokens = checkpoint.get("total_tokens", 0)
     accumulated_cost = checkpoint.get("accumulated_cost_usd", 0.0)
+    estimated_cost = float(checkpoint.get("estimated_cost_usd", 0.0))
+    provider_cost = float(checkpoint.get("provider_cost_usd", 0.0))
+    provider_cost_complete = bool(checkpoint.get("provider_cost_complete", True))
     history = list(checkpoint.get("history", []))
     iteration_history: List[Dict[str, Any]] = []
 
-    current_input = prompt
+    current_input = checkpoint.get("next_input") or prompt
     final_output = ""
     status = "completed"
     stopped_by = None
@@ -256,6 +263,7 @@ async def run_long_horizon_agent(
             cost_usd=accumulated_cost,
             tokens_used=total_tokens,
             max_cost_usd=max_cost_usd,
+            max_steps=max_steps_per_iteration * max_iterations,
         )
         if ceiling_breach:
             logger.warning("Job %s halted by ceiling before iteration %d: %s", job_id, i + 1, ceiling_breach)
@@ -268,6 +276,7 @@ async def run_long_horizon_agent(
             turn_result = await agent.run(
                 user_message=current_input,
                 history=history,
+                max_tool_calls=max_steps_per_iteration,
             )
         except Exception as exc:
             logger.exception("Iteration %d of job %s failed: %s", i + 1, job_id, exc)
@@ -288,13 +297,24 @@ async def run_long_horizon_agent(
         p_tok, c_tok, tot_tok = usage.tokens_from(turn_result)
         total_tokens += tot_tok
         turn_cost = estimate_token_cost(p_tok, c_tok)
-        accumulated_cost += turn_cost
+        estimated_cost += turn_cost
+        reported_cost = (turn_result.get("usage") or {}).get("cost")
+        try:
+            reported_cost = float(reported_cost) if reported_cost is not None else None
+        except (TypeError, ValueError):
+            reported_cost = None
+        if reported_cost is None:
+            provider_cost_complete = False
+        else:
+            provider_cost += reported_cost
+        accumulated_cost += reported_cost if reported_cost is not None else turn_cost
 
         iteration_record = {
             "iteration": i + 1,
             "steps": turn_steps,
             "tokens": tot_tok,
             "cost_usd": turn_cost,
+            "provider_cost_usd": reported_cost,
             "content_preview": turn_content[:180],
             "status": turn_status,
         }
@@ -305,8 +325,15 @@ async def run_long_horizon_agent(
             "total_steps": total_steps,
             "total_tokens": total_tokens,
             "accumulated_cost_usd": accumulated_cost,
+            "estimated_cost_usd": estimated_cost,
+            "provider_cost_usd": provider_cost,
+            "provider_cost_complete": provider_cost_complete,
             "last_output": turn_content,
+            "history": [*history, {"role": "user", "content": current_input}, {"role": "assistant", "content": turn_content}],
+            "next_input": DEFAULT_ADVERSARIAL_REVIEW_PROMPT,
         })
+        if checkpoint_callback:
+            await checkpoint_callback(dict(checkpoint), dict(iteration_record))
 
         # 3. Check for Human-In-The-Loop pause
         if turn_status == "awaiting_hitl":
@@ -337,6 +364,7 @@ async def run_long_horizon_agent(
             cost_usd=accumulated_cost,
             tokens_used=total_tokens,
             max_cost_usd=max_cost_usd,
+            max_steps=max_steps_per_iteration * max_iterations,
         )
         if ceiling_breach:
             logger.warning("Job %s halted by ceiling after iteration %d: %s", job_id, i + 1, ceiling_breach)
@@ -355,6 +383,7 @@ async def run_long_horizon_agent(
             "accumulated_cost_usd": accumulated_cost,
             "history": history,
             "last_output": turn_content,
+            "next_input": current_input,
         })
 
         # Next prompt: adversarial review prompt enriched with critique if available
@@ -362,8 +391,10 @@ async def run_long_horizon_agent(
             current_input = f"{DEFAULT_ADVERSARIAL_REVIEW_PROMPT}\n\nSpecific findings to investigate:\n{critique}"
         else:
             current_input = DEFAULT_ADVERSARIAL_REVIEW_PROMPT
+        checkpoint["next_input"] = current_input
 
     if status == "completed" and not stopped_by:
+        status = "max_iterations"
         stopped_by = "max_iterations"
 
     result = LongHorizonJobResult(
@@ -374,7 +405,8 @@ async def run_long_horizon_agent(
         iterations=len(iteration_history),
         total_steps=total_steps,
         total_tokens=total_tokens,
-        estimated_cost_usd=accumulated_cost,
+        estimated_cost_usd=estimated_cost,
+        actual_cost_usd=provider_cost if provider_cost_complete and iteration_history else None,
         stopped_by=stopped_by,
         iteration_history=iteration_history,
         checkpoint=checkpoint,
