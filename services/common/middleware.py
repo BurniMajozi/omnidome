@@ -70,6 +70,14 @@ def add_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(404)
     async def not_found_handler(request: Request, exc):
+        # Keep the authenticated internal lookup's "user absent" response
+        # distinct from an unknown route, so the web gate can classify it.
+        if request.url.path == "/internal/users/by-email" and getattr(exc, "detail", None) == "User not found":
+            return Response(
+                content='{"detail": "User not found"}',
+                status_code=404,
+                media_type="application/json",
+            )
         return Response(
             content='{"detail": "Not found"}',
             status_code=404,

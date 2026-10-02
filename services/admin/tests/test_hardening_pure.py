@@ -33,6 +33,21 @@ def test_limiter_exempts_only_internal_paths_with_valid_key():
     assert limiter_exempt(req("/tenants", ok)) is False  # the key does not exempt other routes
 
 
+def test_internal_identity_404_keeps_its_specific_contract():
+    from fastapi import FastAPI
+    from services.common.middleware import add_exception_handlers
+
+    app = FastAPI()
+    add_exception_handlers(app)
+    handler = app.exception_handlers[404]
+    missing_user = asyncio.run(handler(req("/internal/users/by-email"), HTTPException(404, "User not found")))
+    missing_route = asyncio.run(handler(req("/internal/users/by-email"), HTTPException(404, "Not Found")))
+    public_route = asyncio.run(handler(req("/other"), HTTPException(404, "User not found")))
+    assert missing_user.body == b'{"detail": "User not found"}'
+    assert missing_route.body == b'{"detail": "Not found"}'
+    assert public_route.body == b'{"detail": "Not found"}'
+
+
 def test_merge_platform_admin_is_read_modify_write():
     assert supabase_sync.merge_platform_admin(["org_admin"], ["platform_admin", "x"]) == ["org_admin", "platform_admin"]
     assert supabase_sync.merge_platform_admin(["org_admin"], None) == ["org_admin"]
