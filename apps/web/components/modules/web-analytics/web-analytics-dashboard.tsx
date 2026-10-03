@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { analyticsApi } from "@/lib/analytics/api"
+import { OpenSeoAuditStudio } from "../portal/openseo-audit-studio"
 import type {
   OverviewData, TrafficPoint, PageStat, DeviceData, LocationData,
   FormsData, RealtimeData,
@@ -202,6 +203,7 @@ export function WebAnalyticsDashboard() {
           <TabsTrigger value="devices">Devices & Browsers</TabsTrigger>
           <TabsTrigger value="locations">Locations</TabsTrigger>
           <TabsTrigger value="forms">Forms</TabsTrigger>
+          <TabsTrigger value="domeseo" className="text-cyan-400 font-medium">DomeSEO & Jev</TabsTrigger>
         </TabsList>
 
         {/* --- TRAFFIC OVERVIEW --- */}
@@ -561,6 +563,14 @@ export function WebAnalyticsDashboard() {
               )}
             </>
           )}
+        </TabsContent>
+
+        {/* --- DOMESEO & JEV INTELLIGENCE --- */}
+        <TabsContent value="domeseo" className="space-y-6 mt-4">
+          <OpenSeoAuditStudio
+            currentUrl="https://connect.omnidome.io/promo/fibre-summer-sprint"
+            pageTitle="Gigabit Uncapped Fibre Deals • First Month Free | OmniDome"
+          />
         </TabsContent>
       </Tabs>
     </div>

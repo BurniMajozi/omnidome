@@ -55,6 +55,7 @@ import { FieldSalesApp } from "./field-sales-app"
 import { TechnicianApp } from "./technician-app"
 import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
 import { DomeStudioWorkspace, DomeStudioLiveDualView } from "./portal/domestudio-workspace"
+import { DomeDesignStudio } from "./portal/domedesign-studio"
 import { OpenSeoAuditStudio } from "./portal/openseo-audit-studio"
 import {
   fetchPortalPages,
@@ -86,7 +87,7 @@ const defaultVisitorData = [
   { day: "Sun", website: 1500, customerPortal: 1100, fieldApp: 220, techApp: 120 },
 ]
 
-const defaultLandingPages = [
+const defaultLandingPages: PortalLandingPage[] = [
   {
     id: 1,
     name: "Fibre Promo Q1",
@@ -109,7 +110,7 @@ const defaultLandingPages = [
   { id: 4, name: "Referral Program", url: "/refer", status: "published", views: 5640, conversions: 89, rate: "1.6%" },
 ]
 
-const defaultAiAgents = [
+const defaultAiAgents: PortalAiAgent[] = [
   { id: 1, name: "Customer Support Bot", status: "active", conversations: 4250, resolution: "78%", avgTime: "2.3 min" },
   { id: 2, name: "Sales Assistant", status: "active", conversations: 1820, resolution: "65%", avgTime: "4.1 min" },
   { id: 3, name: "Technical Help Bot", status: "active", conversations: 2340, resolution: "82%", avgTime: "3.5 min" },
@@ -662,7 +663,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                 onClick={() => setWebsiteSubView("builder")}
               >
                 <Sparkles className="h-3.5 w-3.5 mr-1 text-cyan-400" />
-                DomeStudio Workspace
+                DomeDesign Studio
               </Button>
               <Button
                 variant={websiteSubView === "roster" ? "secondary" : "ghost"}
@@ -680,7 +681,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                 onClick={() => setWebsiteSubView("seo")}
               >
                 <Search className="h-3.5 w-3.5 mr-1 text-amber-400" />
-                OpenSEO & Jev Intelligence
+                DomeSEO & Jev Intelligence
               </Button>
             </div>
 
@@ -719,13 +720,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
             </div>
           </div>
 
-          {/* Subview 1: DomeStudio Interactive Workspace */}
+          {/* Subview 1: DomeDesign Studio (Claude Design Conversational Canvas) */}
           {websiteSubView === "builder" && (
             <div className="space-y-6">
-              <DomeStudioWorkspace
+              <DomeDesignStudio
                 initialPages={localPages}
                 onSavePage={handleSavePage}
-                defaultMode="inline-builder"
+                onDeletePage={handleDeletePage}
+                defaultMode="discovery"
               />
 
               {/* Website Builder Quick Tools */}
@@ -774,7 +776,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                     <div className="rounded-lg bg-amber-500/20 p-3">
                       <Search className="h-6 w-6 text-amber-400" />
                     </div>
-                    <h4 className="mt-3 font-medium text-foreground">OpenSEO & Jev</h4>
+                    <h4 className="mt-3 font-medium text-foreground">DomeSEO & Jev</h4>
                     <p className="mt-1 text-sm text-muted-foreground">Firecrawl audit & SERP scoring</p>
                   </CardContent>
                 </Card>
