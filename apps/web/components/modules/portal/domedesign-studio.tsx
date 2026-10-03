@@ -313,7 +313,7 @@ export function DomeDesignStudio({
       id: `agent-${Date.now()}`,
       role: "assistant",
       content: `I scraped the layout from ${scraped.url}. Extracted headline "${scraped.heroHeadline}" and generated matching fiber packages. You can now edit each block directly on the canvas!`,
-      toolCall: `[Tool: firecrawl_dom_ingest] -> Recreated structure with ${scraped.detectedPackages.length} packages`,
+      toolCall: `[Tool: domecrawl_dom_ingest] -> Recreated structure with ${scraped.detectedPackages.length} packages`,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }
     setMessages((prev) => [...prev, agentMsg])
@@ -351,7 +351,7 @@ export function DomeDesignStudio({
   // =========================================================================
   if (activeStudioView === "discovery") {
     return (
-      <div className="min-h-[750px] rounded-xl border border-border bg-[#0b0f17] p-6 lg:p-10 space-y-8 text-foreground">
+      <div className="min-h-[750px] rounded-xl border border-border bg-card p-6 lg:p-10 space-y-8 text-foreground shadow-sm">
         {/* Top Header */}
         <div className="flex items-center justify-between border-b border-border/40 pb-4">
           <div className="flex items-center gap-2.5">
@@ -621,9 +621,9 @@ export function DomeDesignStudio({
   // VIEW 2: DUAL-PANE CHAT & LIVE EDITABLE ARTBOARD CANVAS (Matches Screenshot 1 & 3)
   // =========================================================================
   return (
-    <div className="flex flex-col h-[850px] rounded-xl border border-border bg-[#090d16] text-foreground overflow-hidden">
+    <div className="flex flex-col h-[850px] rounded-xl border border-border bg-card text-foreground overflow-hidden shadow-sm">
       {/* Studio Top Bar */}
-      <header className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-[#0d121f]">
+      <header className="flex items-center justify-between px-4 py-2.5 border-b border-border bg-muted/30">
         <div className="flex items-center gap-3">
           <Button
             variant="ghost"
@@ -719,7 +719,7 @@ export function DomeDesignStudio({
         {/* =================================================================== */}
         {/* LEFT PANE: Conversational AI Agent Assistant (Matches Screenshot 1) */}
         {/* =================================================================== */}
-        <div className="w-80 lg:w-96 flex flex-col border-r border-border bg-[#0d121f]">
+        <div className="w-80 lg:w-96 flex flex-col border-r border-border bg-card">
           {/* Agent Persona Header */}
           <div className="p-3 border-b border-border/50 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -784,7 +784,7 @@ export function DomeDesignStudio({
           </div>
 
           {/* Quick Action Prompt Chips */}
-          <div className="p-2 border-t border-border/40 flex flex-wrap gap-1 bg-[#0b0e17]">
+          <div className="p-2 border-t border-border/40 flex flex-wrap gap-1 bg-muted/20">
             <button
               onClick={() => handleSendChatMessage("Add Cape Town Northern Suburbs LM fiber map and sync product table")}
               className="rounded bg-secondary/50 px-2 py-0.5 text-[10px] text-muted-foreground hover:text-cyan-400 transition-colors"
@@ -806,7 +806,7 @@ export function DomeDesignStudio({
           </div>
 
           {/* Message Input Box */}
-          <div className="p-3 border-t border-border bg-[#0a0d16]">
+          <div className="p-3 border-t border-border bg-card">
             <form
               onSubmit={(e) => {
                 e.preventDefault()
@@ -835,9 +835,9 @@ export function DomeDesignStudio({
         {/* =================================================================== */}
         {/* RIGHT PANE: Live Interactive Editable Artboard (Matches Screenshot 1 & 4) */}
         {/* =================================================================== */}
-        <div className="flex-1 flex flex-col bg-[#06080e] overflow-hidden">
+        <div className="flex-1 flex flex-col bg-background overflow-hidden">
           {/* Canvas Toolbar */}
-          <div className="h-10 px-4 border-b border-border/50 flex items-center justify-between bg-[#0b0e17] text-xs">
+          <div className="h-10 px-4 border-b border-border/50 flex items-center justify-between bg-card text-xs">
             {/* Tool selectors */}
             <div className="flex items-center gap-1">
               <button
@@ -905,11 +905,11 @@ export function DomeDesignStudio({
           </div>
 
           {/* Canvas Scrollable Area */}
-          <div className="flex-1 overflow-auto p-4 sm:p-8 flex justify-center items-start bg-[#05070c]">
+          <div className="flex-1 overflow-auto p-4 sm:p-8 flex justify-center items-start bg-muted/20">
             {/* The Actual Rendered Artboard */}
             <div
               style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: "top center" }}
-              className={`transition-transform duration-200 bg-[#090d16] rounded-xl border border-border shadow-2xl overflow-hidden ${
+              className={`transition-transform duration-200 bg-card rounded-xl border border-border shadow-2xl overflow-hidden ${
                 viewportMode === "mobile"
                   ? "w-[375px]"
                   : viewportMode === "dual"
@@ -987,7 +987,7 @@ export function DomeDesignStudio({
                   </div>
 
                   {/* Interactive Visual Map Simulation */}
-                  <div className="relative rounded-lg border border-border bg-[#03060c] p-4 overflow-hidden min-h-[200px] flex flex-col justify-between">
+                  <div className="relative rounded-lg border border-border bg-muted/40 p-4 overflow-hidden min-h-[200px] flex flex-col justify-between">
                     {/* SVG Fiber Trench Lines */}
                     <div className="absolute inset-0 pointer-events-none opacity-40">
                       <svg className="w-full h-full">
@@ -1018,7 +1018,7 @@ export function DomeDesignStudio({
                     </div>
 
                     {/* Coverage Details Card on Map */}
-                    <div className="relative z-10 mt-6 grid grid-cols-1 sm:grid-cols-3 gap-2 bg-black/70 backdrop-blur rounded-lg p-2.5 border border-border/50 text-xs">
+                    <div className="relative z-10 mt-6 grid grid-cols-1 sm:grid-cols-3 gap-2 bg-card/90 backdrop-blur rounded-lg p-2.5 border border-border/50 text-xs">
                       <div>
                         <span className="text-[10px] text-muted-foreground block">Network Splitter</span>
                         <span className="font-semibold text-emerald-400">{selectedZone.splitterCapacity}</span>

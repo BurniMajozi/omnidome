@@ -183,32 +183,32 @@ export function DomeStudioWorkspace({
   // Render the simulated interactive landing page content
   const renderSimulatedLanding = (viewport: "desktop" | "mobile") => (
     <div
-      className={`bg-[#060911] text-foreground rounded-lg border border-border/80 overflow-hidden flex flex-col transition-all duration-300 ${
+      className={`bg-card text-foreground rounded-lg border border-border overflow-hidden flex flex-col transition-all duration-300 shadow-sm ${
         viewport === "mobile"
-          ? "max-w-[360px] mx-auto min-h-[580px] shadow-2xl ring-1 ring-border"
-          : "w-full min-h-[580px] shadow-xl"
+          ? "max-w-[360px] mx-auto min-h-[580px] shadow-lg ring-1 ring-border"
+          : "w-full min-h-[580px] shadow-md"
       }`}
     >
       {/* Browser / Device Chrome */}
-      <div className="bg-[#0b101c] px-3.5 py-2 border-b border-border/60 flex items-center justify-between text-xs text-muted-foreground select-none">
+      <div className="bg-muted/40 px-3.5 py-2 border-b border-border flex items-center justify-between text-xs text-muted-foreground select-none">
         <div className="flex items-center gap-1.5">
           <div className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
           <div className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
           <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
         </div>
-        <div className="flex items-center gap-1.5 bg-[#121929] px-2.5 py-0.5 rounded text-[11px] font-mono text-cyan-400 truncate max-w-[200px]">
+        <div className="flex items-center gap-1.5 bg-secondary px-2.5 py-0.5 rounded text-[11px] font-mono text-cyan-500 dark:text-cyan-400 truncate max-w-[200px]">
           <Globe className="h-3 w-3 shrink-0" />
           <span>connect.omnidome.io/{pageSlug}</span>
         </div>
         <div className="flex items-center gap-1">
-          <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-500/40 text-emerald-400">
+          <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-500/40 text-emerald-500 dark:text-emerald-400">
             SSL Live
           </Badge>
         </div>
       </div>
 
       {/* Hero Section */}
-      <div className="p-5 md:p-7 flex-1 flex flex-col justify-between space-y-6 bg-gradient-to-b from-[#09101e] to-[#05070d]">
+      <div className="p-5 md:p-7 flex-1 flex flex-col justify-between space-y-6 bg-card">
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <span
@@ -282,25 +282,25 @@ export function DomeStudioWorkspace({
                 onClick={() => setSelectedSpeed(pkg.mbps)}
                 className={`p-2 rounded border text-left transition-all ${
                   selectedSpeed === pkg.mbps
-                    ? `border-cyan-500/70 bg-cyan-950/40 text-white shadow-sm`
-                    : "border-border/60 bg-[#0d1424] text-muted-foreground hover:border-border"
+                    ? `border-cyan-500/70 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 shadow-sm`
+                    : "border-border bg-secondary/40 text-muted-foreground hover:border-border hover:text-foreground"
                 }`}
               >
-                <div className="text-xs font-bold text-white">{pkg.mbps} Mbps</div>
-                <div className="text-[10px] text-cyan-400 font-mono">{pkg.price}</div>
+                <div className="text-xs font-bold text-foreground">{pkg.mbps} Mbps</div>
+                <div className="text-[10px] text-cyan-600 dark:text-cyan-400 font-mono">{pkg.price}</div>
               </button>
             ))}
           </div>
         </div>
 
         {/* Interactive Lead / Feasibility Form */}
-        <div className="p-4 rounded-lg border border-border/80 bg-[#0c1220]/90 space-y-3">
+        <div className="p-4 rounded-lg border border-border bg-card space-y-3">
           <div className="flex items-center justify-between text-xs font-medium text-foreground">
             <span className="flex items-center gap-1.5">
-              <MapPin className="h-3.5 w-3.5 text-cyan-400" />
+              <MapPin className="h-3.5 w-3.5 text-cyan-500" />
               Check Address Feasibility
             </span>
-            <span className="text-[10px] text-emerald-400 font-mono">POPIA Compliant</span>
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">POPIA Compliant</span>
           </div>
 
           <div className="space-y-2">
@@ -308,20 +308,20 @@ export function DomeStudioWorkspace({
               value={simulatedAddress}
               onChange={(e) => setSimulatedAddress(e.target.value)}
               placeholder="Enter Street Address & Suburb"
-              className="h-8 text-xs bg-[#12192c] border-border text-foreground"
+              className="h-8 text-xs bg-background border-border text-foreground"
             />
             <div className="grid grid-cols-2 gap-2">
               <Input
                 value={leadName}
                 onChange={(e) => setLeadName(e.target.value)}
                 placeholder="Full Name"
-                className="h-8 text-xs bg-[#12192c] border-border text-foreground"
+                className="h-8 text-xs bg-background border-border text-foreground"
               />
               <Input
                 value={leadPhone}
                 onChange={(e) => setLeadPhone(e.target.value)}
                 placeholder="Cell Number"
-                className="h-8 text-xs bg-[#12192c] border-border text-foreground"
+                className="h-8 text-xs bg-background border-border text-foreground"
               />
             </div>
           </div>
@@ -718,12 +718,12 @@ export function DomeStudioLiveDualView({
   pages?: LandingPageRecord[]
 }) {
   return (
-    <div className="space-y-6">
-      <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0c1322] to-[#080d18] p-5 shadow-lg">
+    <div className="space-y-6 text-foreground">
+      <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <Badge variant="outline" className="border-cyan-500/40 bg-cyan-950/60 text-cyan-400 text-xs font-mono">
+              <Badge variant="outline" className="border-cyan-500/40 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 text-xs font-mono">
                 <Monitor className="h-3 w-3 mr-1" />
                 LIVE DUAL-VIEWPORT STUDIO
               </Badge>
@@ -735,7 +735,7 @@ export function DomeStudioLiveDualView({
               devices simultaneously with live lead submission and attribution testing.
             </p>
           </div>
-          <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs px-3 py-1">
+          <Badge className="bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 text-xs px-3 py-1">
             <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
             Interactive Test Active
           </Badge>
@@ -747,12 +747,12 @@ export function DomeStudioLiveDualView({
         <div className="xl:col-span-7 space-y-2">
           <div className="flex items-center justify-between text-xs px-1 text-muted-foreground">
             <span className="font-semibold text-foreground flex items-center gap-1.5">
-              <Monitor className="h-3.5 w-3.5 text-cyan-400" />
+              <Monitor className="h-3.5 w-3.5 text-cyan-500" />
               Desktop Viewport (1280px)
             </span>
-            <span className="font-mono text-[11px] text-cyan-400">100% Symmetrical Scale</span>
+            <span className="font-mono text-[11px] text-cyan-500 dark:text-cyan-400">100% Symmetrical Scale</span>
           </div>
-          <div className="rounded-xl border border-border/80 bg-[#070b14] p-3 shadow-xl">
+          <div className="rounded-xl border border-border bg-card p-3 shadow-md">
             <DomeStudioWorkspace initialPages={pages} defaultMode="inline-builder" />
           </div>
         </div>
@@ -761,12 +761,12 @@ export function DomeStudioLiveDualView({
         <div className="xl:col-span-5 space-y-2">
           <div className="flex items-center justify-between text-xs px-1 text-muted-foreground">
             <span className="font-semibold text-foreground flex items-center gap-1.5">
-              <Smartphone className="h-3.5 w-3.5 text-cyan-400" />
+              <Smartphone className="h-3.5 w-3.5 text-cyan-500" />
               Mobile Device Simulation (375px)
             </span>
-            <span className="font-mono text-[11px] text-emerald-400">Touch & WhatsApp Ready</span>
+            <span className="font-mono text-[11px] text-emerald-600 dark:text-emerald-400">Touch & WhatsApp Ready</span>
           </div>
-          <div className="rounded-xl border border-border/80 bg-[#070b14] p-4 flex justify-center shadow-xl min-h-[640px]">
+          <div className="rounded-xl border border-border bg-card p-4 flex justify-center shadow-md min-h-[640px]">
             <div className="w-full max-w-[360px] my-auto">
               <DomeStudioWorkspace initialPages={pages} defaultMode="dual-view" />
             </div>

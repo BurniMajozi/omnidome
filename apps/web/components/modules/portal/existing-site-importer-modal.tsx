@@ -63,7 +63,7 @@ export function ExistingSiteImporterModal({
     if (!targetUrl.trim()) return
     setIsCrawling(true)
 
-    // Simulate headless DOM parsing via Firecrawl
+    // Simulate headless DOM parsing via Domecrawl Engine
     setTimeout(() => {
       let isCompetitor = targetUrl.toLowerCase().includes("cool") || targetUrl.toLowerCase().includes("afrihost")
       const result: ScrapedSitePayload = {
@@ -114,7 +114,7 @@ export function ExistingSiteImporterModal({
                 Import & Recreate Existing Website
               </DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
-                Enter an existing ISP URL or competitor site. Firecrawl extracts layout, color palette,
+                Enter an existing ISP URL or competitor site. Domecrawl extracts layout, color palette,
                 and pricing tiers into an editable DomeDesign artboard.
               </DialogDescription>
             </div>

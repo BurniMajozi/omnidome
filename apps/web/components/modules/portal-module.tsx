@@ -7,8 +7,6 @@ import { Badge } from "@/components/ui/badge"
 import { PageHeader } from "@/components/ui/page-header"
 import { TableShell } from "@/components/ui/table-shell"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Switch } from "@/components/ui/switch"
-import { Label } from "@/components/ui/label"
 import {
   Globe,
   Smartphone,
@@ -17,21 +15,10 @@ import {
   Wrench,
   Users,
   Settings,
-  ShieldCheck,
-  Lock,
-  Handshake,
-  Package,
-  Headset,
   Eye,
-  Edit,
   TrendingUp,
   Activity,
   MapPin,
-  Palette,
-  Code,
-  FileText,
-  ImageIcon,
-  ExternalLink,
   Plus,
   MoreVertical,
   Play,
@@ -56,7 +43,7 @@ import { TechnicianApp } from "./technician-app"
 import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
 import { DomeStudioWorkspace, DomeStudioLiveDualView } from "./portal/domestudio-workspace"
 import { DomeDesignStudio } from "./portal/domedesign-studio"
-import { OpenSeoAuditStudio } from "./portal/openseo-audit-studio"
+import { DomeSeoStudio } from "./portal/domeseo-studio"
 import {
   fetchPortalPages,
   createPortalPage,
@@ -70,12 +57,7 @@ import {
   type PortalAiAgent,
   type PortalStats,
 } from "@/lib/portal-api"
-import {
-  ThemeEditorModal,
-  CodeSnippetsModal,
-  MediaLibraryModal,
-  CreateAiAgentModal,
-} from "./portal/portal-interactive-modals"
+import { CreateAiAgentModal } from "./portal/portal-interactive-modals"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -158,61 +140,6 @@ const defaultRetentionJourneys = [
   },
 ]
 
-const portalCapabilities = [
-  {
-    title: "Custom Guest Sign-In",
-    description: "Secure entry points for customers, vendors, and partners without full seats.",
-    icon: Lock,
-    accent: "from-cyan-600 to-blue-600",
-  },
-  {
-    title: "Granular Permissions",
-    description: "Control exactly what each user can see and do with role-based access.",
-    icon: ShieldCheck,
-    accent: "from-emerald-500 to-teal-500",
-  },
-  {
-    title: "White-Label Experience",
-    description: "Match your brand with custom domains, colors, and branded portal pages.",
-    icon: Palette,
-    accent: "from-fuchsia-500 to-purple-500",
-  },
-]
-
-const portalUseCases = [
-  {
-    title: "Client Portals",
-    description: "Share project updates, invoices, and service status in one place.",
-    icon: Layout,
-  },
-  {
-    title: "Vendor Management",
-    description: "Collect documents, SLAs, and delivery milestones from suppliers.",
-    icon: Package,
-  },
-  {
-    title: "Customer Support",
-    description: "Give customers ticket views, FAQs, and real-time status updates.",
-    icon: Headset,
-  },
-  {
-    title: "Partner Programs",
-    description: "Enable resellers with enablement assets, dashboards, and deal reg.",
-    icon: Handshake,
-  },
-]
-
-const portalIntegrations = [
-  "Salesforce",
-  "HubSpot",
-  "Zendesk",
-  "Google Drive",
-  "Slack",
-  "Stripe",
-  "Twilio",
-  "Outlook",
-]
-
 export function PortalModule({ activeTabOverride }: { activeTabOverride?: string }) {
   const { data } = useModuleData("portal", {
     visitorData: defaultVisitorData,
@@ -229,15 +156,10 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   const [portalStats, setPortalStats] = useState<PortalStats | null>(null)
   const [isLoadingPortal, setIsLoadingPortal] = useState(true)
 
-  // Interactive Tools Modals
-  const [themeModalOpen, setThemeModalOpen] = useState(false)
-  const [snippetsModalOpen, setSnippetsModalOpen] = useState(false)
-  const [mediaModalOpen, setMediaModalOpen] = useState(false)
   const [createAgentModalOpen, setCreateAgentModalOpen] = useState(false)
-
   const [studioOpen, setStudioOpen] = useState(false)
   const [editingPage, setEditingPage] = useState<ImpeccablePage | null>(null)
-  const [websiteSubView, setWebsiteSubView] = useState<"builder" | "roster" | "seo">("builder")
+  const [websiteSubView, setWebsiteSubView] = useState<"builder" | "roster">("builder")
 
   useEffect(() => {
     let mounted = true
@@ -443,14 +365,18 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList className="bg-secondary">
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
-          <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
           <TabsTrigger value="analytics-custom" className="flex items-center gap-1.5">
             <Monitor className="h-3.5 w-3.5" />
             Live Dual-View
           </TabsTrigger>
+          <TabsTrigger value="domeseo" className="flex items-center gap-1.5">
+            <Search className="h-3.5 w-3.5 text-cyan-400" />
+            DomeSEO
+          </TabsTrigger>
+          <TabsTrigger value="web-analytics">Website Analytics</TabsTrigger>
           <TabsTrigger value="journeys">Retention Journeys</TabsTrigger>
+          <TabsTrigger value="ai-apps">AI Apps</TabsTrigger>
           {AB_TESTING_ENABLED && <TabsTrigger value="ab-testing">A/B Testing</TabsTrigger>}
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
@@ -573,83 +499,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           </div>
         </TabsContent>
 
-        <TabsContent value="ai-apps" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="section-title">AI Agents & Chatbots</h3>
-            <Button variant="cta" size="sm" onClick={() => setCreateAgentModalOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create AI Agent
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {aiAgentList.map((agent) => (
-              <Card key={agent.id} className="border-border bg-card">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-blue-500/20 p-2">
-                        <Bot className="h-5 w-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-foreground">{agent.name}</h4>
-                        <Badge
-                          className={
-                            agent.status === "active"
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-amber-500/20 text-amber-400"
-                          }
-                        >
-                          {agent.status === "active" ? "Active" : "Paused"}
-                        </Badge>
-                      </div>
-                    </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setCreateAgentModalOpen(true)}>
-                          <Settings className="mr-2 h-4 w-4" />
-                          Configure
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <Eye className="mr-2 h-4 w-4" />
-                          View Logs
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleToggleAgentStatus(agent)}>
-                          {agent.status === "active" ? (
-                            <Pause className="mr-2 h-4 w-4" />
-                          ) : (
-                            <Play className="mr-2 h-4 w-4" />
-                          )}
-                          {agent.status === "active" ? "Pause" : "Resume"}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <p className="section-title">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
-                      <p className="text-xs text-muted-foreground">Conversations</p>
-                    </div>
-                    <div>
-                      <p className="section-title">{agent.resolution}</p>
-                      <p className="text-xs text-muted-foreground">Resolution</p>
-                    </div>
-                    <div>
-                      <p className="section-title">{agent.avgTime}</p>
-                      <p className="text-xs text-muted-foreground">Avg Time</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </TabsContent>
-
         <TabsContent value="website" className="mt-4 space-y-5">
           <div id="portal-landing" />
 
@@ -673,15 +522,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               >
                 <Layout className="h-3.5 w-3.5 mr-1 text-emerald-400" />
                 Landing Pages Roster ({localPages.length})
-              </Button>
-              <Button
-                variant={websiteSubView === "seo" ? "secondary" : "ghost"}
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => setWebsiteSubView("seo")}
-              >
-                <Search className="h-3.5 w-3.5 mr-1 text-amber-400" />
-                DomeSEO & Jev Intelligence
               </Button>
             </div>
 
@@ -729,58 +569,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                 onDeletePage={handleDeletePage}
                 defaultMode="discovery"
               />
-
-              {/* Website Builder Quick Tools */}
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-                <Card
-                  onClick={() => setThemeModalOpen(true)}
-                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
-                >
-                  <CardContent className="flex flex-col items-center p-6 text-center">
-                    <div className="rounded-lg bg-emerald-500/20 p-3">
-                      <Palette className="h-6 w-6 text-emerald-400" />
-                    </div>
-                    <h4 className="mt-3 font-medium text-foreground">Theme Editor</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Obsidian Telecom visual system</p>
-                  </CardContent>
-                </Card>
-                <Card
-                  onClick={() => setSnippetsModalOpen(true)}
-                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
-                >
-                  <CardContent className="flex flex-col items-center p-6 text-center">
-                    <div className="rounded-lg bg-blue-500/20 p-3">
-                      <Code className="h-6 w-6 text-blue-400" />
-                    </div>
-                    <h4 className="mt-3 font-medium text-foreground">Code Snippets</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Meta Pixel & GTM tags</p>
-                  </CardContent>
-                </Card>
-                <Card
-                  onClick={() => setMediaModalOpen(true)}
-                  className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
-                >
-                  <CardContent className="flex flex-col items-center p-6 text-center">
-                    <div className="rounded-lg bg-amber-500/20 p-3">
-                      <ImageIcon className="h-6 w-6 text-amber-400" />
-                    </div>
-                    <h4 className="mt-3 font-medium text-foreground">Media Library</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Logos & Fibre imagery</p>
-                  </CardContent>
-                </Card>
-                <Card
-                  onClick={() => setWebsiteSubView("seo")}
-                  className="cursor-pointer border-border bg-card transition-colors hover:border-amber-500/50 ring-1 ring-amber-500/20"
-                >
-                  <CardContent className="flex flex-col items-center p-6 text-center">
-                    <div className="rounded-lg bg-amber-500/20 p-3">
-                      <Search className="h-6 w-6 text-amber-400" />
-                    </div>
-                    <h4 className="mt-3 font-medium text-foreground">DomeSEO & Jev</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Firecrawl audit & SERP scoring</p>
-                  </CardContent>
-                </Card>
-              </div>
             </div>
           )}
 
@@ -876,84 +664,99 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
               searchPlaceholder="Search pages..."
             />
           )}
-
-          {/* Subview 3: OpenSEO & Jev Intelligence */}
-          {websiteSubView === "seo" && (
-            <OpenSeoAuditStudio
-              currentUrl="https://connect.omnidome.io/promo/fibre-summer-sprint"
-              pageTitle="Gigabit Uncapped Fibre Deals • First Month Free | OmniDome"
-            />
-          )}
-
-          <div className="grid gap-4 lg:grid-cols-3">
-            {portalCapabilities.map((capability) => (
-              <Card key={capability.title} className="border-border bg-card">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="text-base font-semibold text-foreground">{capability.title}</p>
-                      <p className="mt-2 text-sm text-muted-foreground">{capability.description}</p>
-                    </div>
-                    <div className={`rounded-lg bg-gradient-to-br ${capability.accent} p-2`}>
-                      <capability.icon className="h-5 w-5 text-white" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base">Portal Use Cases</CardTitle>
-              <CardDescription>Design experiences for every external audience.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {portalUseCases.map((useCase) => (
-                  <div key={useCase.title} className="rounded-lg border border-border bg-secondary/30 p-4">
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-secondary p-2">
-                        <useCase.icon className="h-5 w-5 text-muted-foreground" />
-                      </div>
-                      <div>
-                        <p className="card-title">{useCase.title}</p>
-                        <p className="text-xs text-muted-foreground">{useCase.description}</p>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="border-border bg-card">
-            <CardHeader>
-              <CardTitle className="text-base">Integrations</CardTitle>
-              <CardDescription>Connect portals to the tools your teams already use.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2">
-                {portalIntegrations.map((integration) => (
-                  <Badge key={integration} variant="secondary" className="bg-secondary text-foreground">
-                    {integration}
-                  </Badge>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="web-analytics" className="mt-4">
-          <WebAnalyticsDashboard />
         </TabsContent>
 
         <TabsContent value="analytics-custom" className="mt-4">
           <DomeStudioLiveDualView pages={localPages} />
         </TabsContent>
 
+        <TabsContent value="domeseo" className="mt-4">
+          <DomeSeoStudio />
+        </TabsContent>
+
+        <TabsContent value="web-analytics" className="mt-4">
+          <WebAnalyticsDashboard />
+        </TabsContent>
+
         <TabsContent value="journeys" className="mt-4">
           <JourneyBuilderDashboard />
+        </TabsContent>
+
+        <TabsContent value="ai-apps" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="section-title">AI Agents & Chatbots</h3>
+            <Button variant="cta" size="sm" onClick={() => setCreateAgentModalOpen(true)}>
+              <Plus className="mr-2 h-4 w-4" />
+              Create AI Agent
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {aiAgentList.map((agent) => (
+              <Card key={agent.id} className="border-border bg-card">
+                <CardContent className="p-5">
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="rounded-lg bg-blue-500/20 p-2">
+                        <Bot className="h-5 w-5 text-blue-400" />
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-foreground">{agent.name}</h4>
+                        <Badge
+                          className={
+                            agent.status === "active"
+                              ? "bg-emerald-500/20 text-emerald-400"
+                              : "bg-amber-500/20 text-amber-400"
+                          }
+                        >
+                          {agent.status === "active" ? "Active" : "Paused"}
+                        </Badge>
+                      </div>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => setCreateAgentModalOpen(true)}>
+                          <Settings className="mr-2 h-4 w-4" />
+                          Configure
+                        </DropdownMenuItem>
+                        <DropdownMenuItem>
+                          <Eye className="mr-2 h-4 w-4" />
+                          View Logs
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleToggleAgentStatus(agent)}>
+                          {agent.status === "active" ? (
+                            <Pause className="mr-2 h-4 w-4" />
+                          ) : (
+                            <Play className="mr-2 h-4 w-4" />
+                          )}
+                          {agent.status === "active" ? "Pause" : "Resume"}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  <div className="mt-4 grid grid-cols-3 gap-4 text-center">
+                    <div>
+                      <p className="section-title">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
+                      <p className="text-xs text-muted-foreground">Conversations</p>
+                    </div>
+                    <div>
+                      <p className="section-title">{agent.resolution}</p>
+                      <p className="text-xs text-muted-foreground">Resolution</p>
+                    </div>
+                    <div>
+                      <p className="section-title">{agent.avgTime}</p>
+                      <p className="text-xs text-muted-foreground">Avg Time</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
         </TabsContent>
 
         {/* A/B Testing is mock-only (no backend) — feature-flagged off for v1. */}
@@ -990,22 +793,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         onOpenChange={setStudioOpen}
         initialPage={editingPage}
         onSavePage={handleSavePage}
-      />
-
-      {/* Interactive Tool Modals */}
-      <ThemeEditorModal
-        open={themeModalOpen}
-        onOpenChange={setThemeModalOpen}
-      />
-
-      <CodeSnippetsModal
-        open={snippetsModalOpen}
-        onOpenChange={setSnippetsModalOpen}
-      />
-
-      <MediaLibraryModal
-        open={mediaModalOpen}
-        onOpenChange={setMediaModalOpen}
       />
 
       <CreateAiAgentModal

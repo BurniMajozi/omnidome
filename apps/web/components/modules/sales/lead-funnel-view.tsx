@@ -134,7 +134,7 @@ const CHANNEL_METADATA: Record<
     label: "Tenders & RFQs",
     icon: FileText,
     color: "#f59e0b",
-    desc: "Public sector & enterprise tenders scanned via Firecrawl",
+    desc: "Public sector & enterprise tenders scanned via Domecrawl",
   },
   OTHER: {
     label: "Direct / Other",

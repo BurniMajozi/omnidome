@@ -1726,11 +1726,11 @@ export function AgentMailView({
                       <Badge className="text-[9px] h-3.5 bg-muted text-foreground/80">beta</Badge>
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                      AgentID lets your agents sign into websites like Firecrawl, Keenetic, and Turso. Let them build without giving up your password.
+                      AgentID lets your agents sign into websites like Domecrawl, Keenetic, and Turso. Let them build without giving up your password.
                     </p>
                   </div>
                   <button
-                    onClick={() => showNotification("AgentID beta credentials active for Firecrawl MCP")}
+                    onClick={() => showNotification("AgentID beta credentials active for Domecrawl MCP")}
                     className="text-xs text-foreground hover:underline flex items-center gap-1 font-medium"
                   >
                     <span>Explore AgentID</span>
@@ -1898,7 +1898,7 @@ export function AgentMailView({
                         </Avatar>
                         <div className="min-w-0">
                           <p className="font-semibold text-foreground truncate">Alex Nurzi</p>
-                          <p className="text-muted-foreground truncate">Get the most out of Firecrawl</p>
+                          <p className="text-muted-foreground truncate">Get the most out of Domecrawl</p>
                         </div>
                       </div>
                       <div className="text-right shrink-0">

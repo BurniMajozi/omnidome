@@ -74,8 +74,8 @@ export function OpenSeoAuditStudio({
     recommendation: "Add geo-target ('Cape Town' or 'South Africa') in meta description to capture high-intent local queries.",
   })
 
-  // Firecrawl Scraper Telemetry State
-  const [firecrawlTelemetry, setFirecrawlTelemetry] = useState({
+  // Domecrawl Scraper Telemetry State
+  const [domecrawlTelemetry, setDomecrawlTelemetry] = useState({
     status: 200,
     timeMs: 138,
     markdownLength: 2480,
@@ -86,12 +86,12 @@ export function OpenSeoAuditStudio({
     jsonLdDetected: true,
   })
 
-  const handleRunFirecrawl = () => {
+  const handleRunDomecrawl = () => {
     setIsCrawling(true)
     setTimeout(() => {
       setIsCrawling(false)
       setCrawlComplete(true)
-      setFirecrawlTelemetry({
+      setDomecrawlTelemetry({
         status: 200,
         timeMs: Math.floor(Math.random() * 50) + 120,
         markdownLength: 2540,
@@ -124,20 +124,20 @@ export function OpenSeoAuditStudio({
 
   return (
     <div className="space-y-6">
-      {/* OpenSEO Header with Firecrawl & Jev branding */}
+      {/* DomeSEO Header with Domecrawl & Jev branding */}
       <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-r from-cyan-950/40 via-[#0c1322] to-[#080d18] p-5 shadow-lg">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
               <Badge variant="outline" className="border-cyan-500/40 bg-cyan-950/60 text-cyan-400 text-xs font-mono">
                 <Search className="h-3 w-3 mr-1" />
-                OPENSEO SUITE • FIRECRAWL & JEV
+                DOMESEO SUITE • DOMECRAWL & JEV
               </Badge>
               <span className="text-xs text-muted-foreground">Autonomous Search Optimization</span>
             </div>
             <h3 className="text-lg font-bold text-foreground">Technical SEO & SERP Intelligence</h3>
             <p className="text-xs text-muted-foreground max-w-2xl">
-              Audit DOM structure and schema via Firecrawl headless scraper, then score search intent, click-through potential,
+              Audit DOM structure and schema via Domecrawl headless crawler, then score search intent, click-through potential,
               and CTR copy with Jev System One typed judgments.
             </p>
           </div>
@@ -146,12 +146,12 @@ export function OpenSeoAuditStudio({
             <Button
               variant="outline"
               size="sm"
-              onClick={handleRunFirecrawl}
+              onClick={handleRunDomecrawl}
               disabled={isCrawling}
               className="text-xs border-border/80 bg-secondary/50"
             >
               <Flame className={`h-3.5 w-3.5 mr-1.5 text-amber-400 ${isCrawling ? "animate-spin" : ""}`} />
-              {isCrawling ? "Crawling DOM..." : "Run Firecrawl Audit"}
+              {isCrawling ? "Crawling DOM..." : "Run Domecrawl Audit"}
             </Button>
             <Button
               size="sm"
@@ -238,9 +238,9 @@ export function OpenSeoAuditStudio({
         <Card className="border-border bg-card">
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground font-medium">Firecrawl Scrape Speed</span>
+              <span className="text-xs text-muted-foreground font-medium">Domecrawl Scrape Speed</span>
               <Badge className="bg-amber-500/20 text-amber-400 border-amber-500/30 text-xs font-mono">
-                {firecrawlTelemetry.timeMs}ms
+                {domecrawlTelemetry.timeMs}ms
               </Badge>
             </div>
             <div className="text-2xl font-bold text-foreground">Clean DOM</div>
@@ -324,15 +324,15 @@ export function OpenSeoAuditStudio({
                 </div>
               </div>
 
-              {/* Firecrawl Crawler Signals */}
+              {/* Domecrawl Crawler Signals */}
               <div className="rounded-lg border border-border bg-secondary/20 p-3.5 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-foreground flex items-center gap-1.5">
                     <Flame className="h-3.5 w-3.5 text-amber-400" />
-                    Firecrawl Headless Inspection
+                    Domecrawl Headless Inspection
                   </span>
                   <Badge variant="outline" className="border-emerald-500/40 text-emerald-400 text-[10px]">
-                    200 OK • {firecrawlTelemetry.timeMs}ms
+                    200 OK • {domecrawlTelemetry.timeMs}ms
                   </Badge>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-[11px]">
@@ -350,7 +350,7 @@ export function OpenSeoAuditStudio({
                   </div>
                   <div className="flex items-center gap-1.5 text-muted-foreground">
                     <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                    <span>Image Alt Tags ({firecrawlTelemetry.imagesWithAlt}/7)</span>
+                    <span>Image Alt Tags ({domecrawlTelemetry.imagesWithAlt}/7)</span>
                   </div>
                 </div>
               </div>
