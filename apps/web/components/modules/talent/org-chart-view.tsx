@@ -54,7 +54,7 @@ import {
   Copy,
   Move,
 } from "lucide-react"
-import { updateReportingLine, createEmployee, updateEmployee, type Employee, type EmployeeCreate } from "@/lib/hr-api"
+import { updateReportingLine, createEmployee, updateEmployee, registerEmployeeAgent, type Employee, type EmployeeCreate } from "@/lib/hr-api"
 
 interface OrgChartViewProps {
   employees: Employee[]
@@ -70,8 +70,7 @@ interface OrgTreeNode {
 interface OptimizerRecommendation {
   id: string
   title: string
-  category: "Span of Control" | "24/7 Coverage Gap" | "Regulatory Compliance"
-  severity: "High" | "Medium" | "Low"
+  category: "Field Operations" | "Network Operations" | "Finance"
   description: string
   proposedAgent: {
     name: string
@@ -100,6 +99,21 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
   const [autoFitEnabled, setAutoFitEnabled] = useState(true)
   const [showFinancialDoA, setShowFinancialDoA] = useState(true)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [registeringAgentId, setRegisteringAgentId] = useState<string | null>(null)
+
+  const retryRegistration = async (employee: Employee) => {
+    setRegisteringAgentId(employee.id)
+    try {
+      const result = await registerEmployeeAgent(employee.id)
+      setToastMessage(result.registration_status === "registered"
+        ? `${employee.full_name} is registered in Agent Manager.`
+        : result.registration_error || "Agent registration failed. Try again later.")
+    } catch (error) {
+      setToastMessage(error instanceof Error ? error.message : "Agent registration failed. Try again later.")
+    } finally {
+      setRegisteringAgentId(null)
+    }
+  }
 
   // The server is the roster source of truth; temporary browser rows must not survive a refresh.
   useEffect(() => {
@@ -456,7 +470,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     setTimeout(() => setToastMessage(null), 3500)
   }
 
-  // ── AI STRUCTURAL OPTIMIZER RECOMMENDATIONS ────────────────────────────────
+  // Curated role templates. Department presence is not evidence of a staffing gap.
   const optimizerRecommendations: OptimizerRecommendation[] = useMemo(() => {
     const list: OptimizerRecommendation[] = []
 
@@ -467,19 +481,18 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     if (fieldHead) {
       list.push({
         id: "REC-01",
-        title: "Deploy Field Dispatch Optimization Agent",
-        category: "Span of Control",
-        severity: "High",
-        description: `${fieldHead.full_name} manages direct field technicians. Deploying an autonomous dispatch copilot absorbs route planning and same-week installation booking.`,
+        title: "Field operations drafting agent",
+        category: "Field Operations",
+        description: `Attach a read-only drafting role to ${fieldHead.full_name}'s team. Assign a bounded summary or planning task in Agent Manager when needed.`,
         proposedAgent: {
           name: "Field-DispatchBot",
-          title: "Autonomous Van Routing & Dispatch Copilot",
+          title: "Field Operations Drafting Assistant",
           department: "Field Operations",
           managerId: fieldHead.id,
           managerName: fieldHead.full_name,
-          llmModel: "Llama 3.3 70B",
-          financialLimit: 15000,
-          scope: "Automated technician GPS dispatch, route scheduling & customer ETA updates",
+          llmModel: "assistant",
+          financialLimit: 0,
+          scope: "Read-only operations summaries and draft dispatch plans for human review",
         },
       })
     }
@@ -491,19 +504,18 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     if (nocLead) {
       list.push({
         id: "REC-02",
-        title: "Deploy 24/7 Autonomous NOC Triage Agent",
-        category: "24/7 Coverage Gap",
-        severity: "High",
-        description: `Eliminate midnight standby fatigue for NOC engineers during Stage 6 loadshedding by deploying a 24/7 optical line incident triage agent.`,
+        title: "Network incident summary agent",
+        category: "Network Operations",
+        description: `Attach a read-only drafting role to ${nocLead.full_name}'s team for incident summaries and proposed next steps.`,
         proposedAgent: {
           name: "NOC-AutoTriage",
-          title: "24/7 Autonomous Incident Triage Agent",
+          title: "Network Incident Drafting Assistant",
           department: "Network Operations",
           managerId: nocLead.id,
           managerName: nocLead.full_name,
-          llmModel: "Qwen 2.5 7B",
-          financialLimit: 10000,
-          scope: "Hermes telemetry optical loss monitoring, BGP route flap dampening & instant failover",
+          llmModel: "assistant",
+          financialLimit: 0,
+          scope: "Read-only incident summaries and proposed responses for human review",
         },
       })
     }
@@ -513,19 +525,18 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
     if (financeStaff) {
       list.push({
         id: "REC-03",
-        title: "Deploy Splynx Billing Reconciliation Subagent",
-        category: "Regulatory Compliance",
-        severity: "Medium",
-        description: `Automate monthly debit order reconciliations and credit note dispute verifications under ${financeStaff.full_name}.`,
+        title: "Billing review drafting agent",
+        category: "Finance",
+        description: `Attach a read-only review role to ${financeStaff.full_name}'s team for draft reconciliation notes and exception summaries.`,
         proposedAgent: {
           name: "Billing-AuditorBot",
-          title: "Splynx Billing & Revenue Assurance Copilot",
+          title: "Billing Review Drafting Assistant",
           department: "Finance",
           managerId: financeStaff.id,
           managerName: financeStaff.full_name,
-          llmModel: "Qwen 2.5 7B",
-          financialLimit: 5000,
-          scope: "Automated invoice dispute auditing and SARS VAT/PAYE reconciliation",
+          llmModel: "assistant",
+          financialLimit: 0,
+          scope: "Read-only billing exception summaries and draft reconciliation notes for human review",
         },
       })
     }
@@ -728,6 +739,11 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
             ) : null}
           </div>
 
+          {employee.is_agent && <button type="button" className="mt-2 text-[10px] text-violet-400 underline underline-offset-2 disabled:opacity-50"
+            disabled={registeringAgentId === employee.id} onClick={() => void retryRegistration(employee)}>
+            {registeringAgentId === employee.id ? "Registering…" : "Register or retry in Agent Manager"}
+          </button>}
+
           {/* Financial Delegation of Authority (DoA) Bar */}
           {showFinancialDoA && (
             <div className="mt-2 rounded-md border border-border/60 bg-muted/20 px-2.5 py-1.5 flex items-center justify-between text-[10px]">
@@ -867,7 +883,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
               className="gap-1.5 text-xs h-8 border-violet-500/40 text-violet-300 hover:bg-violet-950/20"
             >
               <Brain className="h-3.5 w-3.5 text-violet-400" />
-              AI Org Optimizer
+              Agent role templates
             </Button>
 
             <Button variant="outline" size="sm" onClick={expandAll} className="h-8 text-xs px-2.5">
@@ -1378,7 +1394,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
         </div>
       )}
 
-      {/* ── MODAL 3: AI STRUCTURAL OPTIMIZER & SKILL GAP ADVISOR ────────── */}
+      {/* ── Curated agent role templates ───────────────────────────────── */}
       {optimizerModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm animate-in fade-in">
           <Card className="w-full max-w-2xl border-violet-500/40 shadow-2xl">
@@ -1386,9 +1402,9 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
               <div className="flex items-center gap-2">
                 <Brain className="h-5 w-5 text-violet-400" />
                 <div>
-                  <CardTitle className="text-base font-bold">Orchestrator Structural Optimization Advisor</CardTitle>
+                  <CardTitle className="text-base font-bold">Agent role templates</CardTitle>
                   <CardDescription className="text-xs">
-                    Identifies management bottlenecks and skill gaps; deploy autonomous AI agents where humans are unavailable.
+                    Add a read-only drafting role to a team, then assign bounded work in Agent Manager.
                   </CardDescription>
                 </div>
               </div>
@@ -1402,7 +1418,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
             </CardHeader>
             <CardContent className="space-y-4 pt-4 text-xs">
               <p className="text-muted-foreground">
-                The Orchestrator evaluated your company structure against current operational workload and telemetry. Here are 3 recommended agent deployments:
+                These are curated templates shown for departments in your roster. They do not assess workload, coverage or readiness.
               </p>
 
               <div className="space-y-3">
@@ -1410,14 +1426,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
                   <div key={rec.id} className="rounded-xl border border-border bg-card p-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Badge
-                          variant="outline"
-                          className={
-                            rec.severity === "High"
-                              ? "border-red-500/40 text-red-400 bg-red-950/20"
-                              : "border-amber-500/40 text-amber-400 bg-amber-950/20"
-                          }
-                        >
+                        <Badge variant="outline" className="border-violet-500/40 text-violet-300 bg-violet-950/20">
                           {rec.category}
                         </Badge>
                         <h4 className="font-bold text-foreground text-xs">{rec.title}</h4>
@@ -1435,7 +1444,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
                           <span className="text-[10px] text-muted-foreground font-normal">({rec.proposedAgent.title})</span>
                         </div>
                         <p className="text-[10px] text-muted-foreground">
-                          Reports to: <span className="text-foreground font-semibold">{rec.proposedAgent.managerName}</span> • DoA Limit: {fmtZar(rec.proposedAgent.financialLimit)}
+                          Reports to: <span className="text-foreground font-semibold">{rec.proposedAgent.managerName}</span> • Delegated spend: none
                         </p>
                       </div>
 
@@ -1446,7 +1455,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
                         onClick={() => handleDeployRecommendedAgent(rec)}
                       >
                         <UserPlus className="h-3 w-3" />
-                        Deploy Agent Here
+                        Add to roster
                       </Button>
                     </div>
                   </div>
@@ -1455,7 +1464,7 @@ Ayesha Patel,HR & Payroll Specialist,Human Resources,Pieter van Wyk,50000,false,
             </CardContent>
             <div className="flex items-center justify-end border-t border-border p-3 bg-muted/10">
               <Button size="sm" variant="ghost" onClick={() => setOptimizerModalOpen(false)}>
-                Close Advisor
+                Close
               </Button>
             </div>
           </Card>

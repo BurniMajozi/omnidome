@@ -33,6 +33,10 @@ export interface AgentInfo {
   description: string
   llm: string
   tools: string[]
+  name?: string | null
+  requested_model?: string | null
+  employee_id?: string | null
+  registration_status?: string | null
   /** Per-tool policy (spec A6): reads vs changes data, approval, timeout, output cap. */
   tool_policies?: ToolPolicyInfo[]
   /** Models the agent's own loop uses (MCP specialist, workflows): primary then fallbacks. */

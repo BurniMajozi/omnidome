@@ -283,7 +283,7 @@ class AgentRegistration(BaseModel):
 def _may_manage_agents(ctx: AuthContext) -> bool:
     roles = {role.lower() for role in ctx.roles}
     permissions = {permission.lower() for permission in ctx.permissions}
-    return ctx.is_platform_admin or bool(roles & {"admin", "tenant_admin", "owner", "hr", "hr_admin", "hr_manager"}) or "hr.admin" in permissions
+    return ctx.is_platform_admin or bool(roles & {"admin", "org_admin", "tenant_admin", "owner", "hr", "hr_admin", "hr_manager"}) or "agents.manage" in permissions or "hr.admin" in permissions
 
 
 @router.post("/register")
@@ -317,9 +317,8 @@ async def register_custom_agent(body: AgentRegistration, ctx: AuthContext = Depe
 # GET /api/agents — List agents
 # ---------------------------------------------------------------------------
 
-@router.get("", response_model=list[AgentInfo])
-async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
-    """List all available agents and their tool sets."""
+def list_builtin_agents() -> list[AgentInfo]:
+    """Describe available runtimes without consulting tenant state."""
     legacy_llm = {
         "customer_facing": "qwen2.5:7b",
         "retention": "llama3.1:70b",
@@ -368,7 +367,13 @@ async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
         _info("products", "ProductBot — fibre plans, bundles and pricing"),
         _info("talent", "StaffBot — HR rosters, attrition risk and leave"),
     ]
+    return agents
 
+
+@router.get("", response_model=list[AgentInfo])
+async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
+    """List built-in runtimes and this tenant's HR-registered agents."""
+    agents = list_builtin_agents()
     # ── Append HR-created custom agents ──────────────────────────────
     async with get_session(ctx.tenant_id) as session:
         custom_agents = (await session.execute(select(RegisteredAgent).where(
@@ -378,7 +383,9 @@ async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
         agents.append(AgentInfo(
             agent_type=meta.agent_type,
             description=f"{meta.name} — {meta.role} ({meta.department})",
-            llm=meta.llm_model or "Not configured",
+            llm="Assistant runtime (draft only)",
+            name=meta.name,
+            requested_model=meta.llm_model,
             tools=[],
             tool_policies=[],
             specialist_models=[],

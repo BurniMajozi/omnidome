@@ -283,11 +283,11 @@ async def create_employee(
     await db.refresh(emp)
     result = _emp_to_dict(emp)
     if data.is_agent:
-        result.update(await _register_agent_employee(emp, tenant_id))
+        result.update(await _register_agent_employee(emp, tenant_id, _admin))
     return result
 
 
-async def _register_agent_employee(emp: Employee, tenant_id: uuid.UUID) -> dict:
+async def _register_agent_employee(emp: Employee, tenant_id: uuid.UUID, caller: AuthContext) -> dict:
     """Report the real registration state; saving an HR row is not deployment."""
     orch_url = os.environ.get("ORCHESTRATOR_URL", "http://agent-orchestrator:8021")
     try:
@@ -303,7 +303,12 @@ async def _register_agent_employee(emp: Employee, tenant_id: uuid.UUID) -> dict:
                     "financial_limit": emp.financial_limit,
                     "scope": emp.scope,
                 },
-                headers={"x-tenant-id": str(tenant_id)},
+                headers={
+                    "x-tenant-id": str(tenant_id),
+                    "x-user-id": str(caller.user_id),
+                    "x-roles": ",".join(caller.roles),
+                    "x-permissions": ",".join(caller.permissions),
+                },
             )
             response.raise_for_status()
             return {"registration_status": "registered", "agent_type": response.json()["agent_type"]}
@@ -322,7 +327,7 @@ async def retry_agent_registration(
     emp = await _get_employee_or_404(emp_id, tenant_id, db)
     if not emp.is_agent:
         raise HTTPException(status_code=409, detail="Employee is not an AI agent")
-    return await _register_agent_employee(emp, tenant_id)
+    return await _register_agent_employee(emp, tenant_id, _admin)
 
 
 @app.get("/employees/{emp_id}")
@@ -355,7 +360,7 @@ async def update_employee(
     result = _emp_to_dict(emp)
     if emp.is_agent and "financial_limit" in update_data:
         await db.commit()
-        result.update(await _register_agent_employee(emp, tenant_id))
+        result.update(await _register_agent_employee(emp, tenant_id, _admin))
     return result
 
 

@@ -99,6 +99,14 @@ class RegisteredAgent(Base):
     )
 
 
+class AgentTenantBudget(Base):
+    __tablename__ = "agent_tenant_budgets"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    monthly_budget_usd: Mapped[Optional[float]] = mapped_column(Numeric(12, 4), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class AgentJob(Base):
     """Durable work item. A worker claims and checkpoints one run at a time."""
 
@@ -109,6 +117,7 @@ class AgentJob(Base):
     agent_type: Mapped[str] = mapped_column(String(80), nullable=False)
     employee_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     objective: Mapped[str] = mapped_column(Text, nullable=False)
+    goal_label: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
     checkpoint: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     result: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
@@ -127,6 +136,8 @@ class AgentJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_agent_jobs_tenant_status", "tenant_id", "status", "created_at"),)
 

@@ -462,6 +462,11 @@ export const createEmployee = (data: EmployeeCreate) =>
     body: JSON.stringify(data),
   })
 
+export const registerEmployeeAgent = (id: string) =>
+  fetchHR<{ registration_status: "registered" | "failed"; registration_error?: string }>(
+    `/employees/${encodeURIComponent(id)}/register-agent`, { method: "POST" },
+  )
+
 export const getEmployee = (id: string) =>
   fetchHR<Employee>(`/employees/${id}`)
 

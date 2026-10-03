@@ -18,6 +18,7 @@ import {
   useLlmUsage,
 } from "@/components/admin/agent-insights"
 import type { AgentInfo } from "@/lib/orchestrator-api"
+import { AgentWorkView } from "@/components/admin/agent-work-view"
 
 // ─── Display-name map ────────────────────────────────────────────────────────
 
@@ -171,7 +172,7 @@ export default function AgentsPage() {
         </Link>
         <Badge variant="outline" className="gap-1 border-primary/30 text-primary">
           <ShieldCheck className="h-3 w-3" />
-          Multi-Agent Runtime Active
+          {error ? "Agent directory unavailable" : loading ? "Checking agents" : "Agent directory loaded"}
         </Badge>
       </div>
 
@@ -185,14 +186,19 @@ export default function AgentsPage() {
             Agent Manager
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Orchestrated fleet of specialized autonomous agents, tenant memory, and runtime OKF skills.
+            Assign bounded work, review runs and approvals, and manage each agent’s budget.
           </p>
         </div>
       </div>
 
-      <Tabs defaultValue="agents" className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-3">
-          <TabsList className="bg-muted/60">
+      <Tabs defaultValue="work" className="space-y-6">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-border pb-3">
+          <div className="min-w-0 max-w-full overflow-x-auto pb-1">
+          <TabsList className="w-max justify-start bg-muted/60">
+            <TabsTrigger value="work" className="gap-1.5 text-xs">
+              <Zap className="h-4 w-4" />
+              Work &amp; Budgets
+            </TabsTrigger>
             <TabsTrigger value="agents" className="gap-1.5 text-xs">
               <Bot className="h-4 w-4" />
               Agents &amp; Models
@@ -210,6 +216,7 @@ export default function AgentsPage() {
               Pending Approvals
             </TabsTrigger>
           </TabsList>
+          </div>
 
           <div className="flex items-center gap-2">
             <input
@@ -217,10 +224,14 @@ export default function AgentsPage() {
               placeholder="Search agents or capabilities..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 w-64 rounded-lg border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              className="h-9 w-full sm:w-64 rounded-lg border border-border bg-background px-3 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
             />
           </div>
         </div>
+
+        <TabsContent value="work" className="space-y-6">
+          <AgentWorkView agents={agents} />
+        </TabsContent>
 
         <TabsContent value="agents" className="space-y-6">
 
@@ -254,7 +265,7 @@ export default function AgentsPage() {
                         </div>
                         <div>
                           <CardTitle className="text-base font-bold text-foreground">
-                            {meta.name}
+                            {agent.name || meta.name}
                           </CardTitle>
                           <div className="font-mono text-[11px] text-muted-foreground">
                             {agent.agent_type}
@@ -262,7 +273,7 @@ export default function AgentsPage() {
                         </div>
                       </div>
                       <Badge variant="outline" className="text-[10px] bg-background/60 font-normal">
-                        {meta.badge}
+                        {agent.registration_status ? "Registered · draft-only" : meta.badge}
                       </Badge>
                     </div>
                     <CardDescription className="text-xs text-muted-foreground line-clamp-2 mt-2 leading-relaxed">
@@ -277,7 +288,7 @@ export default function AgentsPage() {
                       <div className="flex items-center justify-between gap-2">
                         <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
                           <Cpu className="h-3.5 w-3.5 text-primary" />
-                          Chat
+                          {agent.registration_status ? "Runtime" : "Chat"}
                         </span>
                         <span className="font-mono font-medium text-foreground text-[11px] truncate">{agent.llm}</span>
                       </div>
@@ -290,6 +301,7 @@ export default function AgentsPage() {
                         </div>
                       )}
                     </div>
+                    {agent.registration_status && <p className="text-[11px] text-muted-foreground">HR roster entry. Its assigned work uses a read-only assistant runtime. Requested model: {agent.requested_model || "not set"}.</p>}
 
                     {/* Usage, last 7 days (spec A7) */}
                     <AgentUsageStats usage={usage?.agents.find((u) => u.agent_type === agent.agent_type)} compact />

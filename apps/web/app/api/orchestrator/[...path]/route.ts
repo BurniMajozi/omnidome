@@ -76,6 +76,13 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     headers.set("x-user-id", u)
   }
 
+  // proxy.ts strips client identity headers and injects these roles after
+  // verifying the token. Re-sign them for the orchestrator's operator gate.
+  for (const name of ["x-roles", "x-permissions"]) {
+    const value = request.headers.get(name)
+    if (value) headers.set(name, value)
+  }
+
   try {
     const body = request.method !== "GET" ? await request.text() : undefined
     const res = await signedFetch(url.toString(), {

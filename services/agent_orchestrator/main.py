@@ -99,6 +99,20 @@ async def startup() -> None:
         await run_with_db_retry(lambda: asyncio.to_thread(_create_tables), logger=logger)
         logger.info("Agent orchestrator conversation + protocol tables ensured")
 
+    if not skip_db:
+        import asyncio
+        from services.common.db import get_engine, run_with_db_retry
+        from services.agent_orchestrator.models import Base as MainBase, AgentJob, AgentTenantBudget, RegisteredAgent
+
+        def _ensure_control_plane() -> None:
+            MainBase.metadata.create_all(bind=get_engine(), tables=[RegisteredAgent.__table__, AgentTenantBudget.__table__, AgentJob.__table__])
+
+        await run_with_db_retry(lambda: asyncio.to_thread(_ensure_control_plane), logger=logger)
+        if os.getenv("AGENT_JOB_WORKER_ENABLED", "true").lower() == "true":
+            from services.agent_orchestrator.control_plane import worker_loop
+            app.state.job_worker = asyncio.create_task(worker_loop())
+            logger.info("Agent job worker started")
+
     # Workflow cron scheduler. Every worker starts the loop, but each tick grabs
     # a Postgres advisory lock so scheduled workflows fire exactly once.
     if not skip_db and os.getenv("WORKFLOW_SCHEDULER_ENABLED", "true").lower() == "true":
@@ -187,6 +201,9 @@ app.include_router(mcp_router)
 
 from services.agent_orchestrator.routes.long_horizon import router as long_horizon_router
 app.include_router(long_horizon_router, prefix="/api/agents")
+
+from services.agent_orchestrator.routes.jobs import router as jobs_router
+app.include_router(jobs_router, prefix="/api/agents")
 
 from services.agent_orchestrator.routes.workflows import router as workflows_router
 app.include_router(workflows_router, prefix="/api/workflows")

@@ -109,6 +109,41 @@ def test_jev_gate_fallback_when_disabled():
     asyncio.run(_run())
 
 
+def test_high_confidence_jev_remains_human_review_until_opted_in(monkeypatch):
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"answers": {name: {"noul": 0.98} for name in
+                    ("customer_asked", "right_target", "policy_covers")}}
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, *args, **kwargs):
+            return Response()
+
+    monkeypatch.setenv("JEV_AUTO_APPROVAL_ENABLED", "false")
+    with patch("services.agent_orchestrator.jev_gate.settings.jev_gate_enabled", True), \
+         patch("services.agent_orchestrator.jev_gate._get_credentials", return_value=("typesafe", "test-key", "https://example.invalid")), \
+         patch("services.agent_orchestrator.jev_gate.httpx.AsyncClient", Client):
+        kwargs = {"agent_type": "billing", "tool_name": "billing_issue_credit",
+                  "arguments": {"amount": 75}, "tool": DummyCreditTool()}
+        shadow = asyncio.run(evaluate_tool_call(**kwargs))
+        assert shadow.action == "require_approval"
+        assert shadow.evaluated_by_jev is True
+        monkeypatch.setenv("JEV_AUTO_APPROVAL_ENABLED", "true")
+        enabled = asyncio.run(evaluate_tool_call(**kwargs))
+        assert enabled.action == "auto_approve"
+
+
 def test_jev_gate_live_evaluation_3_noul_propositions():
     """If TYPESAFE_API_KEY is configured in .env, verify live evaluation against TypeSafe System One."""
     async def _run():

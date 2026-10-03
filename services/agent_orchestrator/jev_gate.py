@@ -273,8 +273,12 @@ async def evaluate_tool_call(
         values = list(checks.values())
 
         if all(p >= APPROVE_AT for p in values):
-            outcome = "auto_approve"
-            reason = "every check clear (>= 0.90)"
+            # Collect local outcomes before allowing a semantic probability to
+            # waive a declared human approval. Operators can explicitly enable
+            # automatic decisions after evaluating a labelled case set.
+            auto_enabled = os.getenv("JEV_AUTO_APPROVAL_ENABLED", "false").lower() == "true"
+            outcome = "auto_approve" if auto_enabled else "require_approval"
+            reason = "every check clear (>= 0.90)" if auto_enabled else "Jev shadow mode: high-confidence suggestion sent for human approval"
             risk_score = 1.5
             confidence = min(values)
         else:

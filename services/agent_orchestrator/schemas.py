@@ -73,6 +73,8 @@ class AgentInfo(BaseModel):
     description: str
     llm: str
     tools: List[str]
+    name: Optional[str] = None
+    requested_model: Optional[str] = None
     employee_id: Optional[str] = None
     registration_status: Optional[str] = None
     tool_policies: List[ToolPolicyInfo] = []

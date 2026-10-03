@@ -216,7 +216,7 @@ async def run_long_horizon_agent(
     webhook_url: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     resume_from_checkpoint: Optional[Dict[str, Any]] = None,
-    checkpoint_callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[None]]] = None,
+    checkpoint_callback: Optional[Callable[[Dict[str, Any], Optional[Dict[str, Any]]], Awaitable[None]]] = None,
 ) -> LongHorizonJobResult:
     """Execute a self-ask, multi-hour resilient long-horizon agent run with strict cost/step ceilings."""
     job_id = str((resume_from_checkpoint or {}).get("job_id") or f"lh_{uuid.uuid4().hex[:12]}")
@@ -233,6 +233,8 @@ async def run_long_horizon_agent(
         "accumulated_cost_usd": 0.0,
         "history": [],
     }
+    if conversation_id is None and checkpoint.get("conversation_id"):
+        conv_id = uuid.UUID(str(checkpoint["conversation_id"]))
 
     total_steps = checkpoint.get("total_steps", 0)
     total_tokens = checkpoint.get("total_tokens", 0)
@@ -317,6 +319,11 @@ async def run_long_horizon_agent(
             "provider_cost_usd": reported_cost,
             "content_preview": turn_content[:180],
             "status": turn_status,
+            "verification": turn_result.get("verification"),
+            "jev_decisions": [
+                {"tool": call.get("name"), "decision": (call.get("result") or {}).get("jev_gate")}
+                for call in tool_calls if isinstance(call.get("result"), dict) and (call.get("result") or {}).get("jev_gate")
+            ],
         }
         iteration_history.append(iteration_record)
 
@@ -334,6 +341,11 @@ async def run_long_horizon_agent(
         })
         if checkpoint_callback:
             await checkpoint_callback(dict(checkpoint), dict(iteration_record))
+
+        if turn_result.get("unavailable"):
+            status = "failed"
+            stopped_by = "model_unavailable"
+            break
 
         # 3. Check for Human-In-The-Loop pause
         if turn_status == "awaiting_hitl":
@@ -392,6 +404,11 @@ async def run_long_horizon_agent(
         else:
             current_input = DEFAULT_ADVERSARIAL_REVIEW_PROMPT
         checkpoint["next_input"] = current_input
+        if checkpoint_callback:
+            # The first save protects against replaying tools after a crash;
+            # this save keeps Jev's critique for the next turn without adding
+            # a second iteration to the operator timeline.
+            await checkpoint_callback(dict(checkpoint), None)
 
     if status == "completed" and not stopped_by:
         status = "max_iterations"

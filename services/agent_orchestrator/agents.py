@@ -206,6 +206,7 @@ class Agent:
           "step_limit" | "empty" | "truncated"
         """
         messages = await self.prepare_turn(user_message, history, compaction_state)
+        self.context["_current_user_message"] = user_message
         if self.context.get("draft_only"):
             # HR-registered agents start with read-only capabilities. The gate is
             # also enforced in _execute_call, including hallucinated tool names.
@@ -226,7 +227,7 @@ class Agent:
         tenant = str(self.tenant_id) if self.tenant_id else None
         started = time.perf_counter()
         turn = {"rounds": 0, "tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                "actual_cost_usd": 0.0, "cost_reported": False}
+                "actual_cost_usd": 0.0, "provider_cost_complete": True}
         tool_limit = min(MAX_TOOL_CALLS, max_tool_calls) if max_tool_calls is not None else MAX_TOOL_CALLS
 
         def done(
@@ -259,7 +260,7 @@ class Agent:
                     "prompt_tokens": turn["prompt_tokens"],
                     "completion_tokens": turn["completion_tokens"],
                     "total_tokens": turn["tokens"],
-                    "cost": turn["actual_cost_usd"] if turn["cost_reported"] else None,
+                    "cost": turn["actual_cost_usd"] if turn["rounds"] and turn["provider_cost_complete"] else None,
                 },
             }
 
@@ -299,9 +300,10 @@ class Agent:
             if provider_cost is not None:
                 try:
                     turn["actual_cost_usd"] += float(provider_cost)
-                    turn["cost_reported"] = True
                 except (TypeError, ValueError):
-                    pass
+                    turn["provider_cost_complete"] = False
+            else:
+                turn["provider_cost_complete"] = False
             content = result.get("content") or ""
             raw_tool_calls = result.get("tool_calls", [])
 
@@ -435,6 +437,7 @@ class Agent:
             tool=tool,
             tenant_id=tenant,
             channel=self.channel,
+            customer_message=self.context.get("_current_user_message"),
         )
 
         if verdict.action == "block":
@@ -499,6 +502,8 @@ class Agent:
         if getattr(tool, "mutates", False):
             await memory_capture.request(
                 tenant, memory_capture.tool_entry(self.agent_type, self.channel, tool_name, tool_args, result))
+        if isinstance(result, dict) and (getattr(tool, "mutates", False) or verdict.evaluated_by_jev):
+            result = {**result, "jev_gate": verdict.to_dict()}
         return tool_name, tool_args, result
 
     async def _consult_specialist(self, tool_args: Dict[str, Any]) -> Dict[str, Any]:

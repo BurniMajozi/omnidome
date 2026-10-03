@@ -4,6 +4,7 @@ GET-never-writes, cascade, validation, manager cycles, performance summary.
 Run from the repo root:  PYTHONPATH=. python -m pytest services/hr/tests -q
 """
 import dataclasses
+import asyncio
 import json
 import uuid
 from datetime import date, datetime
@@ -25,6 +26,39 @@ from services.hr.tests.fakes import (
 HR_ADMIN = ("hr_admin",)
 MANAGER = ("manager",)
 STAFF = ("org_user",)
+
+
+def test_agent_registration_forwards_signed_caller_identity(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"agent_type": "custom_test"}
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, **kwargs):
+            captured.update(kwargs["headers"])
+            return Response()
+
+    monkeypatch.setattr(hr.httpx, "AsyncClient", Client)
+    caller = ctx(HR_ADMIN)
+    result = asyncio.run(hr._register_agent_employee(employee(), TENANT, caller))
+    assert result["registration_status"] == "registered"
+    assert captured["x-tenant-id"] == str(TENANT)
+    assert captured["x-user-id"] == str(caller.user_id)
+    assert "hr_admin" in captured["x-roles"]
 
 
 @pytest.fixture
