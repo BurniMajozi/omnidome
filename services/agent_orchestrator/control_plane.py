@@ -45,6 +45,12 @@ def job_dict(row: AgentJob) -> dict:
         "cost_source": row.cost_source, "max_iterations": row.max_iterations,
         "max_steps": row.max_steps, "total_steps": row.total_steps,
         "total_tokens": row.total_tokens, "iteration_history": row.iteration_history or [],
+        "model_calls": (row.checkpoint or {}).get("model_calls", []),
+        "jev_usage": {"tokens": (row.checkpoint or {}).get("jev_tokens", 0),
+                      "reported_cost_usd": (row.checkpoint or {}).get("jev_cost_usd") if (row.checkpoint or {}).get("jev_cost_complete", True) else None,
+                      "cost_reported": (row.checkpoint or {}).get("jev_cost_complete", True)},
+        "context_used": (row.checkpoint or {}).get("context_used", {}),
+        "parent_job_id": (row.checkpoint or {}).get("parent_job_id"),
         "result": row.result, "error": row.error,
         "reviewed_by": str(row.reviewed_by) if row.reviewed_by else None,
         "reviewed_at": row.reviewed_at.isoformat() if row.reviewed_at else None,
@@ -120,6 +126,8 @@ class PauseRequested(Exception):
 
 async def execute_job(job_id: uuid.UUID) -> None:
     from services.agent_orchestrator.long_horizon import run_long_horizon_agent
+    from services.agent_orchestrator.architecture_context import component_hints, briefing
+    from services.agent_orchestrator.kpi_context import approved_kpi_briefing
 
     async with session_scope() as session:
         job = (await session.execute(select(AgentJob).where(AgentJob.id == job_id))).scalar_one()
@@ -154,6 +162,7 @@ async def execute_job(job_id: uuid.UUID) -> None:
             max_cost = min(max_cost, float(checkpoint.get("accumulated_cost_usd", 0)) + remaining)
             context = {
                 "draft_only": True,
+                "requested_model": registered.llm_model,
                 "roster_mandate": f"You are {registered.name}, {registered.role}. Assigned scope: {registered.scope or 'Draft and analyse only'}. Do not take external actions.",
             }
             runtime_type = "assistant"
@@ -161,6 +170,20 @@ async def execute_job(job_id: uuid.UUID) -> None:
             context = {}
             runtime_type = agent_type
         context["run_id"] = str(job_id)
+        hints = component_hints(objective)
+        context["architecture_hints"] = hints
+        context["architecture_briefing"] = briefing(hints)
+        if checkpoint.get("actor_id"):
+            context["user_id"] = checkpoint["actor_id"]
+        if registered:
+            context["skill_agent_type"] = registered.agent_type
+            context["memory_agent_type"] = registered.agent_type
+
+    if employee_id:
+        kpi_briefing, kpi_status = await approved_kpi_briefing(tenant_id, employee_id,
+                                                               context.get("user_id"))
+        context["kpi_briefing"] = kpi_briefing
+        context["kpi_status"] = kpi_status
 
     async def save_checkpoint(state: dict, iteration: dict | None) -> None:
         pause_requested = False
@@ -171,7 +194,7 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row.checkpoint = state
             row.estimated_cost_usd = Decimal(str(state.get("estimated_cost_usd", 0)))
             if state.get("provider_cost_complete"):
-                row.actual_cost_usd = Decimal(str(state.get("provider_cost_usd", 0)))
+                row.actual_cost_usd = Decimal(str(float(state.get("provider_cost_usd", 0)) + float(state.get("jev_cost_usd", 0))))
                 row.cost_source = "provider"
             else:
                 row.actual_cost_usd = None
@@ -180,6 +203,10 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row.total_tokens = int(state.get("total_tokens", 0))
             if iteration is not None:
                 row.iteration_history = [*(row.iteration_history or []), iteration]
+            elif state.get("last_jev_review") and row.iteration_history:
+                revised = list(row.iteration_history)
+                revised[-1] = {**revised[-1], "jev_review": state["last_jev_review"]}
+                row.iteration_history = revised
             row.lease_expires_at = datetime.now(timezone.utc) + LEASE
             pause_requested = row.status == "pause_requested"
         if pause_requested:

@@ -43,6 +43,8 @@ from services.agent_orchestrator.conversation.models import AgentConversation
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.hermes_client import hermes_client
 from services.agent_orchestrator.routes.agents import _hermes_system_note, _persist_messages
+from services.agent_orchestrator.models import RegisteredAgent
+from services.agent_orchestrator.kpi_context import approved_kpi_briefing
 
 router = APIRouter(tags=["Agent Protocols"])
 
@@ -175,6 +177,29 @@ async def a2a_message(body: A2AMessage, ctx: AuthContext = Depends(get_auth_cont
 
 @router.post("/api/protocols/ag-ui/run")
 async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_context)):
+    runtime_type = body.agent_type
+    safe_context = {**body.context, "user_id": str(ctx.user_id)}
+    if body.agent_type.startswith("custom_"):
+        async with get_session(ctx.tenant_id) as session:
+            registered = (await session.execute(select(RegisteredAgent).where(
+                RegisteredAgent.tenant_id == ctx.tenant_id,
+                RegisteredAgent.agent_type == body.agent_type,
+                RegisteredAgent.status == "registered",
+            ))).scalar_one_or_none()
+        if registered is None:
+            raise HTTPException(status_code=404, detail="Registered agent not found")
+        kpi_briefing, kpi_status = await approved_kpi_briefing(
+            ctx.tenant_id, registered.employee_id, str(ctx.user_id))
+        runtime_type = "assistant"
+        safe_context.update({
+            "draft_only": True,
+            "requested_model": registered.llm_model,
+            "roster_mandate": f"You are {registered.name}, {registered.role}. Assigned scope: {registered.scope or 'Draft and analyse only'}. Do not take external actions.",
+            "skill_agent_type": registered.agent_type,
+            "memory_agent_type": registered.agent_type,
+            "kpi_briefing": kpi_briefing,
+            "kpi_status": kpi_status,
+        })
     run_id = uuid.uuid4()
     correlation = _correlation_id()
 
@@ -200,9 +225,9 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 data={"agent_type": body.agent_type, "correlation_id": correlation},
             ))
             agent = Agent(
-                agent_type=body.agent_type,
+                agent_type=runtime_type,
                 tenant_id=ctx.tenant_id,
-                context={**body.context, "user_id": str(ctx.user_id)},
+                context=safe_context,
             )
             history = body.context.get("history", [])
 
@@ -210,7 +235,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
             full_content = ""
             if settings.chat_backend == "hermes":
                 messages = await agent.prepare_turn(body.message, history)
-                messages.insert(0, {"role": "system", "content": _hermes_system_note(body.agent_type, ctx.tenant_id, body.context, agent.skills_prompt)})
+                messages.insert(0, {"role": "system", "content": _hermes_system_note(runtime_type, ctx.tenant_id, safe_context, agent.skills_prompt)})
                 async for token in hermes_client.chat_stream(messages):
                     full_content += token
                     yield await emit(AGUIEvent(
@@ -225,7 +250,8 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 # agent's tools, executes them (CRM/billing/support/etc.) against
                 # OmniDome services, and loops to a final answer. Non-streaming, so
                 # we emit each tool call + the final text as AG-UI events.
-                run_result = await agent.run(body.message, history)
+                run_result = await agent.run(body.message, history,
+                                             max_tool_calls=5 if body.agent_type.startswith("custom_") else None)
                 for tc in run_result.get("tool_calls", []):
                     yield await emit(AGUIEvent(
                         type="TOOL_CALL_START",

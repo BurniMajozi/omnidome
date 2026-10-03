@@ -68,16 +68,36 @@ def test_recall_queries_module_area_and_any_word_match(monkeypatch):
     async def fake(_client, headers, params):
         seen.append((headers, params))
         if "q" in params:
-            return {"summaries": [], "entries": [entry(1, "Thandi: 10% agreed", 20)]}
+            return {"summaries": [], "entries": [{**entry(1, "Thandi: 10% agreed", 20),
+                "source_type": "agent_job", "tags": ["human_reviewed"],
+                "metadata": {"reviewed_by": T}}]}
         return {"summaries": [{"module": "retention", "title": "Retention", "summary": "Two saves this week."}],
                 "entries": []}
     monkeypatch.setattr(mc, "_recall", fake)
     block = asyncio.run(mc.recall_block(T, "retention", "what did we agree with Thandi?"))
-    assert "Thandi: 10% agreed" in block and "Two saves this week." in block
-    area, match = sorted(seen, key=lambda s: "q" in s[1])
+    assert "Thandi: 10% agreed" in block and "Two saves this week." not in block
+    area = next(item for item in seen if item[1].get("module") == "retention")
+    match = next(item for item in seen if "q" in item[1])
     assert area[1]["module"] == "retention"
     assert match[1]["match"] == "any" and "Thandi" in match[1]["q"]
     assert area[0] == {"X-Tenant-Id": T, "X-User-Id": T}
+    strategy_scopes = {params["scope_key"] for _, params in seen if params.get("module") == "strategy"}
+    assert strategy_scopes == {"tenant:strategy", "agent:retention"}
+
+
+def test_unreviewed_agent_transcripts_never_brief_new_agents(monkeypatch):
+    async def fake(_client, _headers, _params):
+        return {"summaries": [{"summary": "Fake target R3.5M"}], "entries": [
+            {**entry(1, "Fake target R3.5M", 20), "source_type": "agent_protocol"},
+            {**entry(2, "Operator policy", 21), "source_type": "operator_strategy",
+             "tags": ["strategy", "operator_approved"], "metadata": {"approved_by": T}},
+        ]}
+    monkeypatch.setattr(mc, "_recall", fake)
+    diagnostics = {}
+    block = asyncio.run(mc.recall_block(T, "retention", "policy", diagnostics=diagnostics))
+    assert "Operator policy" in block
+    assert "Fake target" not in block
+    assert diagnostics["status"] == "ready"
 
 
 def test_no_tenant_or_disabled_means_no_recall(monkeypatch):

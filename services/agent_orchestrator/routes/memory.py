@@ -58,6 +58,46 @@ class MemoryEntryUpdateRequest(BaseModel):
     importance: Optional[str] = None
 
 
+class StrategyEntryRequest(BaseModel):
+    title: str = Field(..., min_length=3, max_length=240)
+    content: str = Field(..., min_length=10, max_length=8000)
+    agent_type: Optional[str] = Field(default=None, max_length=80)
+
+
+@router.post("/strategy", status_code=status.HTTP_201_CREATED)
+async def create_strategy_entry(
+    payload: StrategyEntryRequest,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Publish an operator-authored strategy note for tenant agent briefings."""
+    roles = {role.lower() for role in ctx.roles}
+    permissions = {permission.lower() for permission in ctx.permissions}
+    if not (ctx.is_platform_admin or roles & {"admin", "org_admin", "tenant_admin", "owner"}
+            or "agents.manage" in permissions):
+        raise HTTPException(status_code=403, detail="Agent admin role required")
+    headers = {"X-Tenant-Id": str(ctx.tenant_id), "X-User-Id": str(ctx.user_id or ctx.tenant_id)}
+    body = {
+        "source_type": "operator_strategy",
+        "module": "strategy",
+        "scope_key": f"agent:{payload.agent_type}" if payload.agent_type else "tenant:strategy",
+        "title": payload.title.strip(),
+        "content": payload.content.strip(),
+        "summary": payload.content.strip()[:1000],
+        "visibility": "tenant",
+        "importance": "high",
+        "tags": ["strategy", "operator_approved"],
+        "metadata": {"approved_by": str(ctx.user_id or ctx.tenant_id)},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.post(f"{MEMORY_URL}/api/v1/memories", headers=headers, json=body)
+            resp.raise_for_status()
+            return resp.json()
+    except httpx.HTTPError as exc:
+        logger.error("Strategy memory write failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Memory service unavailable") from exc
+
+
 # ── Housekeeping (M5) ────────────────────────────────────────────────────────
 
 @router.post("/housekeeping/dry-run")
@@ -123,7 +163,7 @@ async def memory_recall(
             return resp.json()
     except Exception as exc:
         logger.warning("Memory recall proxy error: %s", exc)
-        return {"summaries": [], "entries": []}
+        raise HTTPException(status_code=503, detail="Memory service unavailable") from exc
 
 
 @router.get("/entries")
@@ -152,7 +192,7 @@ async def list_entries(
             return resp.json()
     except Exception as exc:
         logger.warning("List entries proxy error: %s", exc)
-        return {"items": [], "limit": limit}
+        raise HTTPException(status_code=503, detail="Memory service unavailable") from exc
 
 
 @router.patch("/entries/{entry_id}")

@@ -268,10 +268,12 @@ def tenant_agent(harness, monkeypatch, replies, recalled):
     llm, _ = harness(replies)
     seen = []
 
-    async def fake_recall(tenant_id, agent_type, query, actor_id=None):
+    async def fake_recall(tenant_id, agent_type, query, actor_id=None, diagnostics=None):
         seen.append((tenant_id, agent_type, query))
         if isinstance(recalled, Exception):
             raise recalled
+        if diagnostics is not None:
+            diagnostics["status"] = "ready" if recalled else "empty"
         return recalled
     monkeypatch.setattr(agents.memory_context, "recall_block", fake_recall)
 
@@ -288,7 +290,7 @@ def test_recalled_memory_is_given_to_the_model_as_reference_before_the_question(
     assert out["content"] == "You agreed 10% off."
     assert seen == [(TENANT, "retention", "What did we agree with Thandi?")]
     last = llm.requests[0]["messages"][-1]["content"]
-    assert last.index("Thandi: 10% agreed") < last.index("<untrusted_user_input>")
+    assert last.index("Thandi: 10% agreed") < last.index("<user_request>")
 
 
 def test_agent_still_answers_when_recall_breaks(harness, monkeypatch):

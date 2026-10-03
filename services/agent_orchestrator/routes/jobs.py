@@ -13,6 +13,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
 from services.agent_orchestrator.control_plane import job_dict, monthly_spend, registered_dict, tenant_budget_limit
 from services.agent_orchestrator.models import AgentApproval, AgentJob, AgentTenantBudget, RegisteredAgent
+from services.agent_orchestrator import memory_capture
 from services.agent_orchestrator.routes.agents import _may_manage_agents
 
 router = APIRouter(tags=["agent-work"])
@@ -34,6 +35,14 @@ class CreateJob(BaseModel):
     max_cost_usd: float = Field(default=5, gt=0, le=100)
     max_iterations: int = Field(default=10, ge=1, le=25)
     max_steps: int = Field(default=10, ge=1, le=10)
+
+
+class ReviseJob(BaseModel):
+    objective: str = Field(min_length=10, max_length=4000)
+
+
+class RetryJob(ReviseJob):
+    max_cost_usd: float = Field(default=2, gt=0, le=100)
 
 
 class BudgetUpdate(BaseModel):
@@ -100,6 +109,36 @@ async def set_agent_budget(employee_id: uuid.UUID, body: BudgetUpdate,
         return result
 
 
+@router.get("/registered/{employee_id}/readiness")
+async def agent_readiness(employee_id: uuid.UUID, ctx: AuthContext = Depends(require_operator)):
+    """Read-only preflight: disclose missing context before an expensive run."""
+    from services.agent_orchestrator.agents import Agent
+    from services.agent_orchestrator import memory_context, skills_runtime
+    from services.agent_orchestrator.kpi_context import approved_kpi_briefing
+
+    async with session_scope(ctx.tenant_id) as session:
+        row = (await session.execute(select(RegisteredAgent).where(
+            RegisteredAgent.tenant_id == ctx.tenant_id,
+            RegisteredAgent.employee_id == employee_id,
+        ))).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Registered agent not found")
+        agent_type, scope, model, role = row.agent_type, row.scope, row.llm_model, row.role
+
+    diagnostics: dict = {}
+    await memory_context.recall_block(str(ctx.tenant_id), agent_type, scope or role,
+                                      actor_id=str(ctx.user_id), diagnostics=diagnostics)
+    skills = await skills_runtime.skills_for(str(ctx.tenant_id), agent_type, actor_id=str(ctx.user_id))
+    _, kpi_status = await approved_kpi_briefing(ctx.tenant_id, employee_id, str(ctx.user_id))
+    tools = [tool.name for tool in Agent("assistant").tools if not tool.mutates]
+    return {"agent_type": agent_type, "memory_status": diagnostics.get("status", "unknown"),
+            "memory_entries": diagnostics.get("entries", 0),
+            "skills": [skill.get("skill_name") for skill in skills],
+            "kpi_status": kpi_status, "scope_configured": bool(scope and scope.strip()),
+            "requested_model": model, "read_only_tools": tools,
+            "guardrails": ["draft_only", "read_only_tools", "human_approval_for_actions", "monthly_budget"]}
+
+
 @router.post("/jobs", status_code=201)
 async def create_job(body: CreateJob, ctx: AuthContext = Depends(require_operator)):
     async with session_scope(ctx.tenant_id) as session:
@@ -128,6 +167,7 @@ async def create_job(body: CreateJob, ctx: AuthContext = Depends(require_operato
             objective=body.objective.strip(), goal_label=body.goal_label,
             max_cost_usd=Decimal(str(body.max_cost_usd)), max_iterations=body.max_iterations,
             max_steps=body.max_steps, status="queued",
+            checkpoint={"actor_id": str(ctx.user_id)},
         )
         session.add(job)
         await session.flush()
@@ -171,6 +211,62 @@ async def pause_job(job_id: uuid.UUID, ctx: AuthContext = Depends(require_operat
         return job_dict(row)
 
 
+@router.patch("/jobs/{job_id}")
+async def revise_queued_job(job_id: uuid.UUID, body: ReviseJob,
+                            ctx: AuthContext = Depends(require_operator)):
+    """Edit an objective only before the worker has made a model call."""
+    async with session_scope(ctx.tenant_id) as session:
+        row = (await session.execute(select(AgentJob).where(
+            AgentJob.id == job_id, AgentJob.tenant_id == ctx.tenant_id,
+        ).with_for_update())).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if row.status not in {"queued", "paused"} or row.total_tokens or row.iteration_history:
+            raise HTTPException(status_code=409, detail="A started run cannot be edited; retry it as new work")
+        row.objective = body.objective.strip()
+        return job_dict(row)
+
+
+@router.post("/jobs/{job_id}/retry", status_code=201)
+async def retry_job(job_id: uuid.UUID, body: RetryJob,
+                    ctx: AuthContext = Depends(require_operator)):
+    """Create a bounded new run. Never replay a tool call from the old checkpoint."""
+    async with session_scope(ctx.tenant_id) as session:
+        prior = (await session.execute(select(AgentJob).where(
+            AgentJob.id == job_id, AgentJob.tenant_id == ctx.tenant_id,
+        ).with_for_update())).scalar_one_or_none()
+        if prior is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if prior.status not in {"awaiting_review", "max_iterations", "failed", "stopped_by_ceiling", "completed"}:
+            raise HTTPException(status_code=409, detail="This run is still active; pause or finish it first")
+        if prior.employee_id:
+            registered = (await session.execute(select(RegisteredAgent).where(
+                RegisteredAgent.tenant_id == ctx.tenant_id,
+                RegisteredAgent.employee_id == prior.employee_id,
+                RegisteredAgent.status == "registered",
+            ))).scalar_one_or_none()
+            if registered is None:
+                raise HTTPException(status_code=409, detail="Agent is no longer registered")
+            if await monthly_spend(session, ctx.tenant_id, prior.agent_type) >= float(registered.monthly_budget_usd):
+                raise HTTPException(status_code=409, detail="Monthly agent budget reached")
+        tenant_budget = (await session.execute(select(AgentTenantBudget).where(
+            AgentTenantBudget.tenant_id == ctx.tenant_id,
+        ))).scalar_one_or_none()
+        limit = tenant_budget_limit(tenant_budget)
+        if limit is not None and await monthly_spend(session, ctx.tenant_id) >= limit:
+            raise HTTPException(status_code=409, detail="Tenant monthly agent budget reached")
+        new_job = AgentJob(
+            tenant_id=ctx.tenant_id, agent_type=prior.agent_type, employee_id=prior.employee_id,
+            objective=body.objective.strip(), goal_label=prior.goal_label,
+            max_cost_usd=Decimal(str(body.max_cost_usd)), max_iterations=min(prior.max_iterations, 3),
+            max_steps=min(prior.max_steps, 5), status="queued",
+            checkpoint={"parent_job_id": str(prior.id), "actor_id": str(ctx.user_id)},
+        )
+        session.add(new_job)
+        await session.flush()
+        return job_dict(new_job)
+
+
 @router.post("/jobs/{job_id}/resume")
 async def resume_job(job_id: uuid.UUID, ctx: AuthContext = Depends(require_operator)):
     async with session_scope(ctx.tenant_id) as session:
@@ -208,4 +304,13 @@ async def accept_job_output(job_id: uuid.UUID, ctx: AuthContext = Depends(requir
         row.status = "completed"
         row.reviewed_by = ctx.user_id
         row.reviewed_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        output = (row.result or {}).get("final_output") or (row.checkpoint or {}).get("last_output") or ""
+        if output.strip():
+            await memory_capture.request_in(session, ctx.tenant_id, {
+                "source_type": "agent_job", "source_id": str(row.id),
+                "module": row.agent_type, "title": f"Reviewed agent work: {row.goal_label or row.objective[:80]}",
+                "content": output[:1500], "summary": output[:400], "importance": "normal",
+                "tags": ["agent_job", row.agent_type, "human_reviewed"],
+                "metadata": {"job_id": str(row.id), "reviewed_by": str(ctx.user_id)},
+            }, key=f"accepted-job:{row.id}")
         return job_dict(row)

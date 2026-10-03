@@ -67,6 +67,23 @@ def _clip(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _reviewed_entry(entry: dict) -> bool:
+    """Only curated or deterministic records may brief a new agent.
+
+    Historical AG-UI transcripts and model-authored memory contain unverified
+    claims, including obsolete targets. Keep those records in the UI for audit,
+    but do not promote them into future agent context.
+    """
+    kind = entry.get("source_type")
+    tags = set(entry.get("tags") or [])
+    metadata = entry.get("metadata") or {}
+    if kind == "operator_strategy":
+        return "operator_approved" in tags and bool(metadata.get("approved_by"))
+    if kind == "agent_job":
+        return "human_reviewed" in tags and bool(metadata.get("reviewed_by"))
+    return kind in {"workflow_run", "approval", "skill_transfer"}
+
+
 def format_block(summaries: List[dict], entries: List[dict], max_chars: int = MAX_BLOCK_CHARS) -> str:
     """Summaries first, then entries newest first; stop adding lines at max_chars.
     Returns "" when there is nothing to recall."""
@@ -103,10 +120,12 @@ async def _recall(client: httpx.AsyncClient, headers: dict, params: dict) -> dic
 
 
 async def recall_block(tenant_id: Optional[str], agent_type: str, query: str,
-                       actor_id: Optional[str] = None) -> str:
+                       actor_id: Optional[str] = None, diagnostics: Optional[dict] = None) -> str:
     """The formatted memory block for this turn, or "" (disabled, nothing found,
     or memory unavailable)."""
     if not RECALL_ENABLED or not tenant_id:
+        if diagnostics is not None:
+            diagnostics["status"] = "disabled"
         return ""
     headers = {"X-Tenant-Id": str(tenant_id), "X-User-Id": str(actor_id or tenant_id)}
     module = module_for(agent_type)
@@ -115,12 +134,20 @@ async def recall_block(tenant_id: Optional[str], agent_type: str, query: str,
     try:
         async with httpx.AsyncClient(timeout=RECALL_TIMEOUT_S) as client:
             calls = [_recall(client, headers, area)]
+            calls.append(_recall(client, headers, {"module": "strategy", "scope_key": "tenant:strategy", "limit": 3}))
+            calls.append(_recall(client, headers, {"module": "strategy", "scope_key": f"agent:{agent_type}", "limit": 3}))
             if len(words) >= 2:
                 calls.append(_recall(client, headers, {"q": words, "match": "any", "limit": MATCHED_ENTRIES}))
             results = await asyncio.wait_for(asyncio.gather(*calls), timeout=RECALL_TIMEOUT_S + 0.5)
     except Exception as exc:  # fail open (spec M1)
         logger.warning("Memory recall skipped for %s (%s): %s", agent_type, type(exc).__name__, exc)
+        if diagnostics is not None:
+            diagnostics["status"] = "unavailable"
         return ""
-    summaries = results[0].get("summaries", [])
-    entries = [e for r in results for e in r.get("entries", [])]
-    return format_block(summaries, entries)
+    entries = [e for r in results for e in r.get("entries", []) if _reviewed_entry(e)]
+    # Legacy rollups do not retain a reliable approval provenance.
+    block = format_block([], entries)
+    if diagnostics is not None:
+        diagnostics["status"] = "ready" if block else "no_reviewed_context"
+        diagnostics["entries"] = len(entries)
+    return block

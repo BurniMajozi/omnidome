@@ -811,6 +811,12 @@ export const listMemoryEntries = (module?: string, includeArchived = false) => {
   return getJson<{ items: MemoryEntry[] }>(`/memory/entries?${params.toString()}`).then((r) => r.items ?? [])
 }
 
+export const createStrategyEntry = (entry: { title: string; content: string; agent_type?: string }) =>
+  getJson<MemoryEntry>("/memory/strategy", {
+    method: "POST",
+    body: JSON.stringify(entry),
+  })
+
 export const archiveMemoryEntry = (id: string, archived = true) =>
   getJson<MemoryEntry>(`/memory/entries/${id}`, {
     method: "PATCH",

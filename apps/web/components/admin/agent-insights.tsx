@@ -36,6 +36,7 @@ import {
   archiveMemoryEntry,
   approveApproval,
   createOKFSkill,
+  createStrategyEntry,
   deactivateOKFSkill,
   dryRunHousekeeping,
   getCompactionStats,
@@ -316,8 +317,13 @@ export function WorkflowRunHistory({ workflowId, refreshKey = 0 }: { workflowId:
 
 export function MemoryManagementView() {
   const [query, setQuery] = useState("")
+  const [strategyTitle, setStrategyTitle] = useState("")
+  const [strategyContent, setStrategyContent] = useState("")
+  const [strategyAgent, setStrategyAgent] = useState("")
+  const [strategyBusy, setStrategyBusy] = useState(false)
   const [selectedModule, setSelectedModule] = useState<string>("all")
   const [loading, setLoading] = useState(false)
+  const [memoryError, setMemoryError] = useState<string | null>(null)
   const [recallData, setRecallData] = useState<MemoryRecallResult | null>(null)
   const [entries, setEntries] = useState<MemoryEntry[]>([])
   const [compactionStats, setCompactionStats] = useState<CompactionStats | null>(null)
@@ -328,10 +334,11 @@ export function MemoryManagementView() {
 
   const loadData = useCallback(async () => {
     setLoading(true)
+    setMemoryError(null)
     try {
       const [rec, ents, comp, hk] = await Promise.all([
-        recallMemory(query.trim() || undefined, selectedModule === "all" ? undefined : selectedModule).catch(() => ({ summaries: [], entries: [] })),
-        listMemoryEntries(selectedModule === "all" ? undefined : selectedModule, false).catch(() => []),
+        recallMemory(query.trim() || undefined, selectedModule === "all" ? undefined : selectedModule),
+        listMemoryEntries(selectedModule === "all" ? undefined : selectedModule, false),
         getCompactionStats().catch(() => null),
         getHousekeepingStatus().catch(() => null),
       ])
@@ -339,6 +346,8 @@ export function MemoryManagementView() {
       setEntries(ents)
       setCompactionStats(comp)
       setHkStatus(hk)
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : "Memory service unavailable")
     } finally {
       setLoading(false)
     }
@@ -356,6 +365,26 @@ export function MemoryManagementView() {
       setTimeout(() => setActionMsg(null), 3000)
     } catch (err) {
       setActionMsg(err instanceof Error ? err.message : "Archive failed")
+    }
+  }
+
+  const handleCreateStrategy = async () => {
+    setStrategyBusy(true)
+    try {
+      await createStrategyEntry({
+        title: strategyTitle.trim(),
+        content: strategyContent.trim(),
+        ...(strategyAgent.trim() ? { agent_type: strategyAgent.trim() } : {}),
+      })
+      setStrategyTitle("")
+      setStrategyContent("")
+      setStrategyAgent("")
+      setActionMsg("Approved strategy saved for agent briefings")
+      await loadData()
+    } catch (err) {
+      setActionMsg(err instanceof Error ? err.message : "Strategy save failed")
+    } finally {
+      setStrategyBusy(false)
     }
   }
 
@@ -383,6 +412,21 @@ export function MemoryManagementView() {
           <button type="button" onClick={() => setActionMsg(null)} className="text-muted-foreground hover:text-foreground">✕</button>
         </div>
       )}
+
+      <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold">Approved agent strategy</h3>
+          <p className="text-xs text-muted-foreground">Record verified tenant goals and guardrails. Leave agent type blank to brief every agent.</p>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <Input aria-label="Strategy title" placeholder="Strategy title" value={strategyTitle} onChange={(event) => setStrategyTitle(event.target.value)} maxLength={240} />
+          <Input aria-label="Agent type" placeholder="Agent type (optional)" value={strategyAgent} onChange={(event) => setStrategyAgent(event.target.value)} maxLength={80} />
+        </div>
+        <textarea aria-label="Verified strategy and guardrails" className="w-full min-h-28 rounded-md border border-input bg-background px-3 py-2 text-sm" placeholder="Verified strategy, success criteria, and boundaries" value={strategyContent} onChange={(event) => setStrategyContent(event.target.value)} maxLength={8000} />
+        <Button size="sm" disabled={strategyBusy || strategyTitle.trim().length < 3 || strategyContent.trim().length < 10} onClick={() => void handleCreateStrategy()}>
+          {strategyBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null} Save approved strategy
+        </Button>
+      </div>
 
       {/* Metrics Row: Compaction & Housekeeping */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -468,6 +512,7 @@ export function MemoryManagementView() {
       )}
 
       {/* Search & Filters */}
+      {memoryError && <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between gap-2"><span>Memory service unavailable: {memoryError}</span><Button size="sm" variant="outline" onClick={() => void loadData()}>Retry</Button></div>}
       <div className="flex flex-col sm:flex-row gap-3 items-center justify-between">
         <div className="relative w-full sm:w-96">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -479,7 +524,7 @@ export function MemoryManagementView() {
           />
         </div>
         <div className="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto">
-          {["all", "sales", "support", "retention", "billing", "general"].map((m) => (
+          {["all", "strategy", "sales", "support", "retention", "billing", "general"].map((m) => (
             <Button
               key={m}
               size="sm"
@@ -530,7 +575,7 @@ export function MemoryManagementView() {
           <div className="flex items-center justify-center py-10">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
-        ) : entries.length === 0 ? (
+        ) : memoryError ? null : entries.length === 0 ? (
           <p className="text-xs text-muted-foreground py-6 text-center border rounded-lg">No memory entries found.</p>
         ) : (
           <div className="divide-y divide-border rounded-lg border border-border">

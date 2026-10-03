@@ -59,6 +59,9 @@ def test_registered_agents_are_tenant_scoped_and_survive_new_requests(client):
     assert client.get(f"/api/agents/jobs/{job_id}", headers=headers(two)).status_code == 404
     assert client.post(f"/api/agents/jobs/{job_id}/pause", headers=headers(one)).json()["status"] == "paused"
     assert client.post(f"/api/agents/jobs/{job_id}/resume", headers=headers(one)).json()["status"] == "queued"
+    revised = client.patch(f"/api/agents/jobs/{job_id}", json={"objective": "Inspect the Sales AI Lead Warmers component and report evidence."}, headers=headers(one))
+    assert revised.status_code == 200, revised.text
+    assert "Sales AI Lead Warmers" in revised.json()["objective"]
 
     with testdb.sync_engine().begin() as conn:
         conn.execute(text("UPDATE agent_jobs SET status='awaiting_review' WHERE id=:id"), {"id": job_id})
@@ -66,6 +69,18 @@ def test_registered_agents_are_tenant_scoped_and_survive_new_requests(client):
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["status"] == "completed"
     assert accepted.json()["reviewed_by"] == str(one)
+    retry = client.post(f"/api/agents/jobs/{job_id}/retry", json={
+        "objective": "Inspect the Sales AI Lead Warmers UI with source context and report gaps.",
+        "max_cost_usd": 1.5,
+    }, headers=headers(one))
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] != job_id
+    assert retry.json()["parent_job_id"] == job_id
+    assert retry.json()["max_iterations"] <= 3
+    assert retry.json()["total_tokens"] == 0
+    assert client.post(f"/api/agents/jobs/{job_id}/retry", json={
+        "objective": "Read the source and report findings.", "max_cost_usd": 1,
+    }, headers=headers(two)).status_code == 404
 
 
 def test_agent_budget_blocks_new_work(client):

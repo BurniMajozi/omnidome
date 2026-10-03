@@ -122,8 +122,9 @@ class Agent:
                 content = msg.get("content", "")
                 if role in ("user", "assistant"):
                     messages.append({"role": role, "content": content})
-        # Enclose user query in untrusted boundary delimiters
-        bounded_user_message = f"<untrusted_user_input>\n{user_message}\n</untrusted_user_input>"
+        # The user's task is an instruction at user priority. Retrieved memory
+        # is reference data; it must not be promoted into a system instruction.
+        bounded_user_message = f"<user_request>\n{user_message}\n</user_request>"
         if memory_block:
             bounded_user_message = f"{memory_block}\n\n{bounded_user_message}"
         messages.append({"role": "user", "content": bounded_user_message})
@@ -135,8 +136,11 @@ class Agent:
         if not self.tenant_id:
             return ""
         try:
+            diagnostics: dict = {}
+            self.context["_memory_diagnostics"] = diagnostics
             return await memory_context.recall_block(
-                str(self.tenant_id), self.agent_type, user_message, actor_id=self.context.get("user_id"))
+                str(self.tenant_id), self.context.get("memory_agent_type", self.agent_type),
+                user_message, actor_id=self.context.get("user_id"), diagnostics=diagnostics)
         except Exception as exc:
             logger.warning("Memory recall failed for %s: %s", self.agent_type, exc)
             return ""
@@ -148,7 +152,8 @@ class Agent:
             return
         self._skills_loaded = True
         try:
-            skills = await skills_runtime.skills_for(str(self.tenant_id), self.agent_type,
+            skills = await skills_runtime.skills_for(str(self.tenant_id),
+                                                     self.context.get("skill_agent_type", self.agent_type),
                                                      actor_id=self.context.get("user_id"))
         except Exception as exc:
             logger.warning("OKF skills failed for %s: %s", self.agent_type, exc)
@@ -186,7 +191,9 @@ class Agent:
             elif DELEGATION_SYSTEM_PROMPT not in self.skills_prompt:
                 self.skills_prompt = f"{self.skills_prompt}\n\n{DELEGATION_SYSTEM_PROMPT}"
 
-        return self._build_messages(user_message, history, await self.recall_memory(user_message))
+        memory_block = await self.recall_memory(user_message)
+        self.context["_memory_recalled"] = bool(memory_block)
+        return self._build_messages(user_message, history, memory_block)
 
     async def run(
         self,
@@ -221,13 +228,13 @@ class Agent:
 
         # OpenRouter Subagent Cookbook: Append openrouter:subagent server tool
         from services.agent_orchestrator.subagent import is_delegation_enabled_for_agent, build_subagent_tool
-        if is_delegation_enabled_for_agent(self.agent_type):
+        if is_delegation_enabled_for_agent(self.agent_type) and not self.context.get("draft_only"):
             needs_web = any(kw in user_message.lower() for kw in ("search", "competitor", "market", "research", "news", "fno"))
             tools_for_llm.append(build_subagent_tool(include_web_search=needs_web))
         tenant = str(self.tenant_id) if self.tenant_id else None
         started = time.perf_counter()
         turn = {"rounds": 0, "tokens": 0, "prompt_tokens": 0, "completion_tokens": 0,
-                "actual_cost_usd": 0.0, "provider_cost_complete": True}
+                "actual_cost_usd": 0.0, "provider_cost_complete": True, "model_calls": []}
         tool_limit = min(MAX_TOOL_CALLS, max_tool_calls) if max_tool_calls is not None else MAX_TOOL_CALLS
 
         def done(
@@ -248,6 +255,12 @@ class Agent:
                 for tc in tool_call_log
             )
             hitl_status = "awaiting_hitl" if has_pending else "completed"
+            jev_calls = [tc["result"]["jev_gate"]["usage"] for tc in tool_call_log
+                         if isinstance(tc.get("result"), dict)
+                         and isinstance(tc["result"].get("jev_gate"), dict)
+                         and tc["result"]["jev_gate"].get("usage")]
+            if verification and verification.get("usage"):
+                jev_calls.append(verification["usage"])
             return {
                 "content": content,
                 "tool_calls": tool_call_log,
@@ -256,6 +269,13 @@ class Agent:
                 "stopped_by": stopped_by,
                 "status": hitl_status,
                 "verification": verification,
+                "model_calls": turn["model_calls"],
+                "jev_calls": jev_calls,
+                "context_used": {"memory_recalled": bool(self.context.get("_memory_recalled")),
+                                 "memory_status": self.context.get("_memory_diagnostics", {}).get("status", "unknown"),
+                                 "skills": list(self.skill_names), "tools_available": list(self.available_tool_names),
+                                 "architecture_hints": list(self.context.get("architecture_hints") or []),
+                                 "kpi_status": self.context.get("kpi_status", "not_linked")},
                 "usage": {
                     "prompt_tokens": turn["prompt_tokens"],
                     "completion_tokens": turn["completion_tokens"],
@@ -289,7 +309,11 @@ class Agent:
                 tools=tools_for_llm,
                 tenant_id=tenant,
                 channel=self.channel,
-                system_extra="\n".join(filter(None, [self.skills_prompt, self.context.get("roster_mandate", "")])),
+                requested_model=self.context.get("requested_model"),
+                system_extra="\n".join(filter(None, [self.skills_prompt, self.context.get("roster_mandate", ""),
+                                                    self.context.get("run_guidance", ""),
+                                                    self.context.get("architecture_briefing", ""),
+                                                    self.context.get("kpi_briefing", "")])),
             )
             turn["rounds"] += 1
             p_tokens, c_tokens, total_tokens = usage.tokens_from(result)
@@ -297,6 +321,12 @@ class Agent:
             turn["prompt_tokens"] += p_tokens
             turn["completion_tokens"] += c_tokens
             provider_cost = (result.get("usage") or {}).get("cost")
+            turn["model_calls"].append({
+                "model": result.get("model") or "unreported",
+                "provider": result.get("provider") or ("OpenRouter" if result.get("model") else "unreported"),
+                "prompt_tokens": p_tokens, "completion_tokens": c_tokens,
+                "cost_usd": provider_cost,
+            })
             if provider_cost is not None:
                 try:
                     turn["actual_cost_usd"] += float(provider_cost)

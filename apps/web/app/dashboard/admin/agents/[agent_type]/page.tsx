@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown, ClipboardList } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -55,6 +55,25 @@ interface ConversationItem {
   context: unknown
   created_at: string
   updated_at: string
+}
+
+function ManagedRunsTab({ agentType }: { agentType: string }) {
+  const [runs, setRuns] = useState<Array<{ id: string; objective: string; status: string; total_tokens: number; actual_cost_usd: number | null; estimated_cost_usd: number; model_calls?: Array<{ model: string; provider: string }> }>>([])
+  const [error, setError] = useState("")
+  useEffect(() => {
+    let cancelled = false
+    fetch("/api/orchestrator/agents/jobs", { cache: "no-store" })
+      .then(async (response) => { if (!response.ok) throw new Error(`Runs unavailable (HTTP ${response.status})`); return response.json() })
+      .then((items) => { if (!cancelled) setRuns((Array.isArray(items) ? items : []).filter((item) => item.agent_type === agentType)) })
+      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : "Runs unavailable") })
+    return () => { cancelled = true }
+  }, [agentType])
+  if (error) return <p role="alert" className="rounded-md border p-4 text-sm">{error}</p>
+  return <Card><CardHeader><CardTitle className="text-base">Managed work</CardTitle></CardHeader><CardContent className="space-y-3 text-sm">
+    <p className="text-xs text-muted-foreground">Durable operator jobs appear here. Action Trail records tool actions; a draft-only run with no tool call has no action to record. Chat uses a separate AG-UI stream.</p>
+    {runs.length === 0 ? <p className="text-muted-foreground">No managed runs recorded for this agent.</p> : runs.map((run) => <div key={run.id} className="rounded-md border p-3"><p className="font-medium">{run.objective}</p><p className="mt-1 text-xs text-muted-foreground">{run.status} · {run.total_tokens.toLocaleString("en-ZA")} tokens · {run.actual_cost_usd == null ? "provider cost incomplete" : `US$${run.actual_cost_usd.toFixed(4)} reported`} · {[...new Set((run.model_calls || []).map((call) => `${call.provider} ${call.model}`))].join(", ") || "model not recorded"}</p></div>)}
+    <Link href="/dashboard/admin/agents" className="text-primary hover:underline">Open Work &amp; Budgets</Link>
+  </CardContent></Card>
 }
 
 // ─── Display-name map (copied from sibling agents/page.tsx) ─────────────────
@@ -855,7 +874,7 @@ export default function AgentDetailPage() {
           <div>
             <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
               <Bot className="h-6 w-6" />
-              {displayName(agent.agent_type)}
+              {agent.name || displayName(agent.agent_type)}
             </h1>
             <p className="mt-1 font-mono text-xs text-muted-foreground">{agent.agent_type}</p>
             <p className="mt-1 text-sm text-muted-foreground">{agent.description}</p>
@@ -940,12 +959,13 @@ export default function AgentDetailPage() {
           </Card>
 
           {/* Tabs */}
-          <Tabs defaultValue="trail">
+          <Tabs defaultValue={agent.employee_id ? "runs" : "trail"}>
             <TabsList className="w-full sm:w-auto">
               <TabsTrigger value="trail" className="gap-2">
                 <ListOrdered className="h-4 w-4" />
                 Action Trail
               </TabsTrigger>
+              <TabsTrigger value="runs" className="gap-2"><ClipboardList className="h-4 w-4" />Managed runs</TabsTrigger>
               <TabsTrigger value="conversations" className="gap-2">
                 <Activity className="h-4 w-4" />
                 Conversations
@@ -964,6 +984,7 @@ export default function AgentDetailPage() {
               <TabsContent value="trail">
                 <ActionTrailTab agentType={agent.agent_type} />
               </TabsContent>
+              <TabsContent value="runs"><ManagedRunsTab agentType={agent.agent_type} /></TabsContent>
               <TabsContent value="conversations">
                 <ConversationsTab agentType={agent.agent_type} />
               </TabsContent>

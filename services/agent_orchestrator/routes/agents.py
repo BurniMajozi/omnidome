@@ -380,14 +380,17 @@ async def list_agents(ctx: AuthContext = Depends(get_auth_context)):
             RegisteredAgent.tenant_id == ctx.tenant_id,
         ).order_by(RegisteredAgent.name))).scalars().all()
     for meta in custom_agents:
+        runtime_tools = [tool for tool in Agent("assistant").tools if not tool.mutates]
         agents.append(AgentInfo(
             agent_type=meta.agent_type,
             description=f"{meta.name} — {meta.role} ({meta.department})",
-            llm="Assistant runtime (draft only)",
+            llm="Assistant runtime · provider selected per call (draft only)",
             name=meta.name,
             requested_model=meta.llm_model,
-            tools=[],
-            tool_policies=[],
+            tools=[tool.name for tool in runtime_tools],
+            tool_policies=[ToolPolicyInfo(name=t.name, mutates=False, requires_approval=t.requires_approval,
+                                          timeout_s=t.timeout_s, max_output_chars=t.max_output_chars)
+                           for t in runtime_tools],
             specialist_models=[],
             sql_table_allowlist=[],
             employee_id=str(meta.employee_id),

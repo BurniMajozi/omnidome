@@ -57,6 +57,7 @@ class JevGateVerdict:
     reason: str
     evaluated_by_jev: bool
     checks: Optional[Dict[str, float]] = None
+    usage: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -66,6 +67,7 @@ class JevGateVerdict:
             "reason": self.reason,
             "evaluated_by_jev": self.evaluated_by_jev,
             "checks": self.checks,
+            "usage": self.usage,
         }
 
 
@@ -310,6 +312,9 @@ async def evaluate_tool_call(
             reason=reason,
             evaluated_by_jev=True,
             checks=checks,
+            usage={"provider": provider, "model": body.get("model") or model_name,
+                   "total_tokens": (body.get("usage") or {}).get("total_tokens"),
+                   "cost_usd": (body.get("usage") or {}).get("cost")},
         )
 
     except Exception as exc:
@@ -377,6 +382,7 @@ class JevVerificationVerdict:
     reason: str
     critique: Optional[str]
     evaluated_by_jev: bool
+    usage: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -388,6 +394,7 @@ class JevVerificationVerdict:
             "reason": self.reason,
             "critique": self.critique,
             "evaluated_by_jev": self.evaluated_by_jev,
+            "usage": self.usage,
         }
 
 
@@ -684,17 +691,20 @@ async def verify_agent_response(
                 reason=reason,
                 critique=critique_str,
                 evaluated_by_jev=True,
+                usage={"provider": provider, "model": data.get("model") or model_name,
+                       "total_tokens": (data.get("usage") or {}).get("total_tokens"),
+                       "cost_usd": (data.get("usage") or {}).get("cost")},
             )
     except Exception as exc:
         logger.warning("Jev verification failed: %s. Accepting draft gracefully.", exc)
 
     return JevVerificationVerdict(
-        passed=True,
-        action="accept",
-        answers_inquiry=0.8,
-        grounded_in_facts=0.8,
-        policy_compliant=0.8,
-        reason="Fallback acceptance (Jev error or timeout).",
+        passed=False,
+        action="flag_for_review",
+        answers_inquiry=0.0,
+        grounded_in_facts=0.0,
+        policy_compliant=0.0,
+        reason="Jev unavailable; draft requires human review.",
         critique=None,
         evaluated_by_jev=False,
     )

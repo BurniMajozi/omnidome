@@ -115,6 +115,31 @@ def test_long_horizon_resumable_checkpoint():
     asyncio.run(_run())
 
 
+def test_no_evidence_progress_stops_after_one_turn_and_preserves_cost_metadata():
+    async def _run():
+        turn = {"content": "I cannot inspect this component with my current tools.",
+                "tool_calls": [], "status": "completed",
+                "model_calls": [{"model": "free/example", "provider": "OpenRouter", "cost_usd": 0,
+                                 "prompt_tokens": 1200, "completion_tokens": 200}],
+                "usage": {"prompt_tokens": 1200, "completion_tokens": 200,
+                          "total_tokens": 1400, "cost": 0.0}}
+        agent_run = AsyncMock(return_value=turn)
+        with patch("services.agent_orchestrator.long_horizon.Agent.run", agent_run), \
+             patch("services.agent_orchestrator.long_horizon.evaluate_adversarial_jev",
+                   AsyncMock(return_value=(False, "Missing source evidence", {
+                       "provider": "typesafe", "model": "jev-latest", "total_tokens": 80,
+                       "cost_usd": None}))), \
+             patch("services.agent_orchestrator.long_horizon.dispatch_completion_notification", AsyncMock()):
+            result = await run_long_horizon_agent("Inspect the Sales AI Lead Warmers component.", max_iterations=10)
+        assert agent_run.await_count == 1
+        assert result.status == "awaiting_review"
+        assert result.stopped_by == "no_evidence_progress"
+        assert result.total_tokens == 1480
+        assert result.to_dict()["model_calls"][0]["model"] == "free/example"
+        assert result.to_dict()["jev_usage"]["cost_reported"] is False
+    asyncio.run(_run())
+
+
 def test_voice_stt_transcription_mock():
     """Cookbook step 5: Voice audio translates to transcribed text."""
     async def _run():

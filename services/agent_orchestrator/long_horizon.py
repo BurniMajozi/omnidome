@@ -72,6 +72,10 @@ class LongHorizonJobResult:
             "cost_source": "provider" if self.actual_cost_usd is not None else "estimated",
             "stopped_by": self.stopped_by,
             "iteration_history": self.iteration_history,
+            "model_calls": self.checkpoint.get("model_calls", []),
+            "jev_usage": {"tokens": self.checkpoint.get("jev_tokens", 0),
+                          "reported_cost_usd": self.checkpoint.get("jev_cost_usd") if self.checkpoint.get("jev_cost_complete", True) else None,
+                          "cost_reported": self.checkpoint.get("jev_cost_complete", True)},
         }
 
 
@@ -101,16 +105,16 @@ async def evaluate_adversarial_jev(
     objective: str,
     draft_output: str,
     iteration: int,
-) -> tuple[bool, Optional[str]]:
+) -> tuple[bool, Optional[str], dict]:
     """Use Jev System One to adversarially evaluate whether a long-horizon task is complete.
-    Returns (is_complete, critique_or_none)."""
+    Returns (is_complete, critique_or_none, reported_usage)."""
     if not settings.jev_gate_enabled:
-        return False, None
+        return False, None, {}
 
     from services.agent_orchestrator.jev_gate import _get_credentials, DEFAULT_TIMEOUT_S
     provider, api_key, endpoint = _get_credentials()
     if not api_key:
-        return False, None
+        return False, None, {}
 
     state_payload = {
         "primary_objective": objective[:2000],
@@ -153,21 +157,28 @@ async def evaluate_adversarial_jev(
             )
 
         if resp.status_code == 200:
-            answers = resp.json().get("answers", {})
+            body = resp.json()
+            answers = body.get("answers", {})
+            raw_usage = body.get("usage") or {}
+            jev_usage = {
+                "provider": provider, "model": body.get("model") or model_name,
+                "total_tokens": raw_usage.get("total_tokens") or raw_usage.get("tokens") or 0,
+                "cost_usd": raw_usage.get("cost"),
+            }
             complete_prob = float(answers.get("is_task_complete", {}).get("noul", 0.5))
             gaps_prob = float(answers.get("has_unresolved_gaps", {}).get("noul", 0.5))
 
             logger.info("Jev Adversarial Review (iter %d): complete=%.2f, gaps=%.2f", iteration, complete_prob, gaps_prob)
 
             if complete_prob >= 0.85 and gaps_prob <= 0.15:
-                return True, None
+                return True, None, jev_usage
 
             critique = f"Jev identified unresolved gaps (complete_prob={complete_prob:.2f}, gaps_prob={gaps_prob:.2f})."
-            return False, critique
+            return False, critique, jev_usage
     except Exception as exc:
         logger.warning("Jev adversarial review failed (%r). Falling back to sentinel.", exc)
 
-    return False, None
+    return False, None, {}
 
 
 async def dispatch_completion_notification(
@@ -213,6 +224,7 @@ async def run_long_horizon_agent(
     max_cost_usd: float = 5.00,
     max_iterations: int = 10,
     max_steps_per_iteration: int = 25,
+    max_tokens: int = 20000,
     webhook_url: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
     resume_from_checkpoint: Optional[Dict[str, Any]] = None,
@@ -242,10 +254,14 @@ async def run_long_horizon_agent(
     estimated_cost = float(checkpoint.get("estimated_cost_usd", 0.0))
     provider_cost = float(checkpoint.get("provider_cost_usd", 0.0))
     provider_cost_complete = bool(checkpoint.get("provider_cost_complete", True))
+    jev_cost = float(checkpoint.get("jev_cost_usd", 0.0))
+    jev_cost_complete = bool(checkpoint.get("jev_cost_complete", True))
+    jev_tokens = int(checkpoint.get("jev_tokens", 0))
+    model_calls = list(checkpoint.get("model_calls", []))
     history = list(checkpoint.get("history", []))
     iteration_history: List[Dict[str, Any]] = []
 
-    current_input = checkpoint.get("next_input") or prompt
+    current_input = prompt
     final_output = ""
     status = "completed"
     stopped_by = None
@@ -255,6 +271,8 @@ async def run_long_horizon_agent(
         tenant_id=uuid.UUID(t_id),
         context=context or {},
     )
+    if checkpoint.get("run_guidance"):
+        agent.context["run_guidance"] = checkpoint["run_guidance"]
 
     logger.info("Starting Long-Horizon job %s for agent '%s' (max_cost=$%.2f, max_iter=%d)", job_id, agent_type, max_cost_usd, max_iterations)
 
@@ -266,6 +284,7 @@ async def run_long_horizon_agent(
             tokens_used=total_tokens,
             max_cost_usd=max_cost_usd,
             max_steps=max_steps_per_iteration * max_iterations,
+            max_tokens=max_tokens,
         )
         if ceiling_breach:
             logger.warning("Job %s halted by ceiling before iteration %d: %s", job_id, i + 1, ceiling_breach)
@@ -299,6 +318,7 @@ async def run_long_horizon_agent(
         p_tok, c_tok, tot_tok = usage.tokens_from(turn_result)
         total_tokens += tot_tok
         turn_cost = estimate_token_cost(p_tok, c_tok)
+        model_calls.extend(turn_result.get("model_calls") or [])
         estimated_cost += turn_cost
         reported_cost = (turn_result.get("usage") or {}).get("cost")
         try:
@@ -310,6 +330,18 @@ async def run_long_horizon_agent(
         else:
             provider_cost += reported_cost
         accumulated_cost += reported_cost if reported_cost is not None else turn_cost
+        turn_jev_calls = turn_result.get("jev_calls") or []
+        for call in turn_jev_calls:
+            tokens = int(call.get("total_tokens") or 0)
+            jev_tokens += tokens
+            total_tokens += tokens
+            charge = call.get("cost_usd")
+            if charge is None:
+                jev_cost_complete = False
+                provider_cost_complete = False
+            else:
+                jev_cost += float(charge)
+                accumulated_cost += float(charge)
 
         iteration_record = {
             "iteration": i + 1,
@@ -324,6 +356,9 @@ async def run_long_horizon_agent(
                 {"tool": call.get("name"), "decision": (call.get("result") or {}).get("jev_gate")}
                 for call in tool_calls if isinstance(call.get("result"), dict) and (call.get("result") or {}).get("jev_gate")
             ],
+            "model_calls": turn_result.get("model_calls") or [],
+            "jev_calls": turn_jev_calls,
+            "context_used": turn_result.get("context_used") or {},
         }
         iteration_history.append(iteration_record)
 
@@ -335,9 +370,14 @@ async def run_long_horizon_agent(
             "estimated_cost_usd": estimated_cost,
             "provider_cost_usd": provider_cost,
             "provider_cost_complete": provider_cost_complete,
+            "jev_tokens": jev_tokens,
+            "jev_cost_usd": jev_cost,
+            "jev_cost_complete": jev_cost_complete,
+            "model_calls": model_calls[-100:],
+            "context_used": turn_result.get("context_used") or {},
             "last_output": turn_content,
             "history": [*history, {"role": "user", "content": current_input}, {"role": "assistant", "content": turn_content}],
-            "next_input": DEFAULT_ADVERSARIAL_REVIEW_PROMPT,
+            "next_input": prompt,
         })
         if checkpoint_callback:
             await checkpoint_callback(dict(checkpoint), dict(iteration_record))
@@ -363,11 +403,38 @@ async def run_long_horizon_agent(
             break
 
         # 5. Adversarial Self-Review check (via Jev)
-        is_complete, critique = await evaluate_adversarial_jev(prompt, turn_content, i + 1)
+        is_complete, critique, jev_usage = await evaluate_adversarial_jev(prompt, turn_content, i + 1)
+        if jev_usage:
+            review_tokens = int(jev_usage.get("total_tokens") or 0)
+            jev_tokens += review_tokens
+            total_tokens += review_tokens
+            jev_reported_cost = jev_usage.get("cost_usd")
+            if jev_reported_cost is None:
+                jev_cost_complete = False
+                provider_cost_complete = False
+            else:
+                jev_cost += float(jev_reported_cost)
+                accumulated_cost += float(jev_reported_cost)
+            iteration_record["jev_review"] = jev_usage
+            checkpoint.update({"jev_tokens": jev_tokens, "total_tokens": total_tokens,
+                               "jev_cost_usd": jev_cost,
+                               "jev_cost_complete": jev_cost_complete,
+                               "last_jev_review": jev_usage,
+                               "provider_cost_complete": provider_cost_complete,
+                               "accumulated_cost_usd": accumulated_cost})
+            if checkpoint_callback:
+                await checkpoint_callback(dict(checkpoint), None)
         if is_complete:
             logger.info("Job %s confirmed complete by Jev adversarial gate on iteration %d", job_id, i + 1)
             status = "completed"
             stopped_by = "jev_complete"
+            break
+
+        # A text-only turn did not gather new evidence. Asking the same model
+        # to review itself again only repeats its context and burns tokens.
+        if not turn_steps:
+            status = "awaiting_review"
+            stopped_by = "no_evidence_progress"
             break
 
         # 6. Post-turn Ceiling Check
@@ -377,6 +444,7 @@ async def run_long_horizon_agent(
             tokens_used=total_tokens,
             max_cost_usd=max_cost_usd,
             max_steps=max_steps_per_iteration * max_iterations,
+            max_tokens=max_tokens,
         )
         if ceiling_breach:
             logger.warning("Job %s halted by ceiling after iteration %d: %s", job_id, i + 1, ceiling_breach)
@@ -400,10 +468,17 @@ async def run_long_horizon_agent(
 
         # Next prompt: adversarial review prompt enriched with critique if available
         if critique:
-            current_input = f"{DEFAULT_ADVERSARIAL_REVIEW_PROMPT}\n\nSpecific findings to investigate:\n{critique}"
+            agent.context["run_guidance"] = (
+                "Continue the original operator request. Gather missing evidence with your authorized "
+                f"read-only tools before answering. Verification finding: {critique[:500]}"
+            )
         else:
-            current_input = DEFAULT_ADVERSARIAL_REVIEW_PROMPT
-        checkpoint["next_input"] = current_input
+            agent.context["run_guidance"] = (
+                "Continue the original operator request and verify missing evidence with authorized tools."
+            )
+        current_input = prompt
+        checkpoint["next_input"] = prompt
+        checkpoint["run_guidance"] = agent.context["run_guidance"]
         if checkpoint_callback:
             # The first save protects against replaying tools after a crash;
             # this save keeps Jev's critique for the next turn without adding
@@ -423,7 +498,7 @@ async def run_long_horizon_agent(
         total_steps=total_steps,
         total_tokens=total_tokens,
         estimated_cost_usd=estimated_cost,
-        actual_cost_usd=provider_cost if provider_cost_complete and iteration_history else None,
+        actual_cost_usd=provider_cost + jev_cost if provider_cost_complete and iteration_history else None,
         stopped_by=stopped_by,
         iteration_history=iteration_history,
         checkpoint=checkpoint,
