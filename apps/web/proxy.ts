@@ -82,6 +82,8 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   { methods: ["POST"], pattern: /^\/svc\/admin\/invites\/claim$/ },
   // Recipient unsubscribe page / one-click POST: authorised by an HMAC-signed token in `?t=`
   { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
+  // Portal pages, stats, and AI agents
+  { methods: ["GET", "POST", "PUT", "DELETE"], pattern: /^\/api\/portal\/(?:pages|stats|ai-agents)(?:\/.*)?$/ },
 ]
 
 type Verified = Identity | "no-tenant" | "inactive"

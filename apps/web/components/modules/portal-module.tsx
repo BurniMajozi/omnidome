@@ -56,6 +56,25 @@ import { TechnicianApp } from "./technician-app"
 import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
 import { DomeStudioWorkspace, DomeStudioLiveDualView } from "./portal/domestudio-workspace"
 import { OpenSeoAuditStudio } from "./portal/openseo-audit-studio"
+import {
+  fetchPortalPages,
+  createPortalPage,
+  updatePortalPage,
+  deletePortalPage,
+  fetchPortalStats,
+  fetchAiAgents,
+  createAiAgent,
+  toggleAiAgentStatus,
+  type PortalLandingPage,
+  type PortalAiAgent,
+  type PortalStats,
+} from "@/lib/portal-api"
+import {
+  ThemeEditorModal,
+  CodeSnippetsModal,
+  MediaLibraryModal,
+  CreateAiAgentModal,
+} from "./portal/portal-interactive-modals"
 
 const defaultVisitorData = [
   { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
@@ -204,12 +223,50 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
   })
 
   const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats, retentionJourneys } = data
-  const [localPages, setLocalPages] = useState<any[]>(() => landingPages)
+  const [localPages, setLocalPages] = useState<PortalLandingPage[]>(() => landingPages)
+  const [aiAgentList, setAiAgentList] = useState<PortalAiAgent[]>(() => aiAgents)
+  const [portalStats, setPortalStats] = useState<PortalStats | null>(null)
+  const [isLoadingPortal, setIsLoadingPortal] = useState(true)
+
+  // Interactive Tools Modals
+  const [themeModalOpen, setThemeModalOpen] = useState(false)
+  const [snippetsModalOpen, setSnippetsModalOpen] = useState(false)
+  const [mediaModalOpen, setMediaModalOpen] = useState(false)
+  const [createAgentModalOpen, setCreateAgentModalOpen] = useState(false)
+
   const [studioOpen, setStudioOpen] = useState(false)
   const [editingPage, setEditingPage] = useState<ImpeccablePage | null>(null)
   const [websiteSubView, setWebsiteSubView] = useState<"builder" | "roster" | "seo">("builder")
 
-  const handleSaveImpeccablePage = (page: ImpeccablePage) => {
+  useEffect(() => {
+    let mounted = true
+    async function loadPortalData() {
+      setIsLoadingPortal(true)
+      try {
+        const [pages, agents, stats] = await Promise.all([
+          fetchPortalPages(),
+          fetchAiAgents(),
+          fetchPortalStats(),
+        ])
+        if (mounted) {
+          if (pages && pages.length > 0) setLocalPages(pages)
+          if (agents && agents.length > 0) setAiAgentList(agents)
+          if (stats) setPortalStats(stats)
+        }
+      } catch (err) {
+        console.warn("[PortalModule] API fetch error, retaining initial state:", err)
+      } finally {
+        if (mounted) setIsLoadingPortal(false)
+      }
+    }
+    loadPortalData()
+    return () => {
+      mounted = false
+    }
+  }, [])
+
+  const handleSavePage = async (page: any) => {
+    // Optimistic UI update
     setLocalPages((prev) => {
       const idx = prev.findIndex((p) => String(p.id) === String(page.id))
       if (idx >= 0) {
@@ -217,6 +274,48 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
       }
       return [page, ...prev]
     })
+
+    try {
+      const exists = localPages.some((p) => String(p.id) === String(page.id))
+      if (exists) {
+        await updatePortalPage(page.id, page)
+      } else {
+        const created = await createPortalPage(page)
+        setLocalPages((prev) => prev.map((p) => (p.id === page.id ? created : p)))
+      }
+    } catch (err) {
+      console.error("[PortalModule] Failed to persist page to API:", err)
+    }
+  }
+
+  const handleDeletePage = async (id: string | number) => {
+    setLocalPages((prev) => prev.filter((p) => String(p.id) !== String(id)))
+    try {
+      await deletePortalPage(id)
+    } catch (err) {
+      console.error("[PortalModule] Failed to delete page via API:", err)
+    }
+  }
+
+  const handleCreateAgent = async (agent: { name: string; department: string; model: string }) => {
+    try {
+      const created = await createAiAgent(agent)
+      setAiAgentList((prev) => [created, ...prev])
+    } catch (err) {
+      console.error("[PortalModule] Failed to deploy AI agent:", err)
+    }
+  }
+
+  const handleToggleAgentStatus = async (agent: PortalAiAgent) => {
+    const nextStatus = agent.status === "active" ? "paused" : "active"
+    setAiAgentList((prev) =>
+      prev.map((a) => (a.id === agent.id ? { ...a, status: nextStatus } : a))
+    )
+    try {
+      await toggleAiAgentStatus(agent.id, nextStatus)
+    } catch (err) {
+      console.error("[PortalModule] Failed to toggle agent status:", err)
+    }
   }
 
   const [activeTab, setActiveTab] = useState("overview")
@@ -476,14 +575,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         <TabsContent value="ai-apps" className="mt-4 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="section-title">AI Agents & Chatbots</h3>
-            <Button variant="cta" size="sm">
+            <Button variant="cta" size="sm" onClick={() => setCreateAgentModalOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />
               Create AI Agent
             </Button>
           </div>
 
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {aiAgents.map((agent) => (
+            {aiAgentList.map((agent) => (
               <Card key={agent.id} className="border-border bg-card">
                 <CardContent className="p-5">
                   <div className="flex items-start justify-between">
@@ -511,7 +610,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => setCreateAgentModalOpen(true)}>
                           <Settings className="mr-2 h-4 w-4" />
                           Configure
                         </DropdownMenuItem>
@@ -519,7 +618,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                           <Eye className="mr-2 h-4 w-4" />
                           View Logs
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleToggleAgentStatus(agent)}>
                           {agent.status === "active" ? (
                             <Pause className="mr-2 h-4 w-4" />
                           ) : (
@@ -603,7 +702,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                 size="sm"
                 className="text-xs h-7 bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold"
                 onClick={() => {
-                  handleSaveImpeccablePage({
+                  handleSavePage({
                     id: `page-${Date.now()}`,
                     name: "Gigabit Summer Sprint 2026",
                     url: "/promo/summer-sprint",
@@ -625,14 +724,14 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
             <div className="space-y-6">
               <DomeStudioWorkspace
                 initialPages={localPages}
-                onSavePage={handleSaveImpeccablePage}
+                onSavePage={handleSavePage}
                 defaultMode="inline-builder"
               />
 
               {/* Website Builder Quick Tools */}
               <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
                 <Card
-                  onClick={() => setWebsiteSubView("builder")}
+                  onClick={() => setThemeModalOpen(true)}
                   className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
                 >
                   <CardContent className="flex flex-col items-center p-6 text-center">
@@ -644,7 +743,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                   </CardContent>
                 </Card>
                 <Card
-                  onClick={() => setWebsiteSubView("builder")}
+                  onClick={() => setSnippetsModalOpen(true)}
                   className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
                 >
                   <CardContent className="flex flex-col items-center p-6 text-center">
@@ -656,7 +755,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                   </CardContent>
                 </Card>
                 <Card
-                  onClick={() => setWebsiteSubView("builder")}
+                  onClick={() => setMediaModalOpen(true)}
                   className="cursor-pointer border-border bg-card transition-colors hover:border-cyan-500/50"
                 >
                   <CardContent className="flex flex-col items-center p-6 text-center">
@@ -767,7 +866,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
                 setEditingPage(null)
                 setWebsiteSubView("builder")
               }}
-              onDelete={(id) => setLocalPages((prev) => prev.filter((r) => r.id !== id))}
+              onDelete={(id) => handleDeletePage(id)}
               onEdit={(rec) => {
                 setEditingPage(rec as any)
                 setWebsiteSubView("builder")
@@ -888,7 +987,29 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         open={studioOpen}
         onOpenChange={setStudioOpen}
         initialPage={editingPage}
-        onSavePage={handleSaveImpeccablePage}
+        onSavePage={handleSavePage}
+      />
+
+      {/* Interactive Tool Modals */}
+      <ThemeEditorModal
+        open={themeModalOpen}
+        onOpenChange={setThemeModalOpen}
+      />
+
+      <CodeSnippetsModal
+        open={snippetsModalOpen}
+        onOpenChange={setSnippetsModalOpen}
+      />
+
+      <MediaLibraryModal
+        open={mediaModalOpen}
+        onOpenChange={setMediaModalOpen}
+      />
+
+      <CreateAiAgentModal
+        open={createAgentModalOpen}
+        onOpenChange={setCreateAgentModalOpen}
+        onCreateAgent={handleCreateAgent}
       />
     </div>
   )
