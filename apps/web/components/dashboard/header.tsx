@@ -1,7 +1,8 @@
 "use client"
 
 import React from "react"
-import { Search, Sun, Moon, Menu } from "lucide-react"
+import Link from "next/link"
+import { Search, Sun, Moon, Menu, DoorOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useTheme } from "next-themes"
@@ -61,6 +62,19 @@ export function Header({ title, onMenuToggle }: HeaderProps) {
             <Moon className="h-5 w-5 transition-all text-indigo-500" />
           )}
           <span className="sr-only">Toggle theme</span>
+        </Button>
+
+        <Button
+          asChild
+          variant="ghost"
+          size="icon"
+          className="text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+          title="Exit to website"
+        >
+          <Link href="/" aria-label="Exit to website">
+            <DoorOpen className="h-5 w-5" />
+            <span className="sr-only">Exit to website</span>
+          </Link>
         </Button>
 
         <NotificationsBell />
