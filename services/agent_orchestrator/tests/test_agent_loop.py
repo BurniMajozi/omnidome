@@ -302,31 +302,36 @@ def test_agent_still_answers_when_recall_breaks(harness, monkeypatch):
 
 # ── M2 okf-skills-runtime ───────────────────────────────────────────────────
 
-def test_okf_skill_guidance_reaches_the_prompt_and_its_tool_becomes_callable(harness, monkeypatch):
+def test_okf_guidance_uses_assigned_tools_and_cannot_grant_new_tools(harness, monkeypatch):
     import uuid
     balance = FakeTool("billing_get_balance", result={"success": True, "data": {"owed": 0}})
     llm, _ = harness([
-        reply(tool_calls=[call("billing_get_balance", {"customer_id": "c1"})]),
-        reply("Offered the win-back discount."),
+        reply(tool_calls=[call("retention_get_cases", {"customer_id": "c1"})]),
+        reply("Reviewed the case."),
     ], FakeTool("retention_get_cases"), balance)
-    # the agent's own tools come from filter_for_agent; the skill's tool only via the registry
+    # A registry tool is not automatically an assigned agent tool.
     monkeypatch.setattr(agents.tool_registry, "filter_for_agent", lambda _t: [agents.tool_registry.get("retention_get_cases")])
 
     async def recall(*_a, **_k):
         return ""
 
     async def skills(tenant_id, agent_type, actor_id=None):
-        return [{"skill_name": "Win-back offer", "guidance_prompt": "Always check the balance before offering 15%.",
-                 "tools_required": ["billing_get_balance", "no_such_tool"], "target_agent_types": ["retention"]}]
+        return [
+            {"skill_name": "Case review", "guidance_prompt": "Review the case first.",
+             "tools_required": ["retention_get_cases"], "target_agent_types": ["retention"]},
+            {"skill_name": "Win-back offer", "guidance_prompt": "Always check the balance before offering 15%.",
+             "tools_required": ["billing_get_balance"], "target_agent_types": ["retention"]},
+        ]
     monkeypatch.setattr(agents.memory_context, "recall_block", recall)
     monkeypatch.setattr(agents.skills_runtime, "skills_for", skills)
     agent = agents.Agent("retention", tenant_id=uuid.UUID(TENANT))
     out = asyncio.run(agent.run("Customer c1 wants to leave."))
-    assert "Always check the balance before offering 15%." in llm.requests[0]["system_extra"]
-    assert {t["function"]["name"] for t in llm.requests[0]["tools"]} == {"retention_get_cases", "billing_get_balance"}
-    assert balance.calls == [{"customer_id": "c1"}]
-    assert out["content"] == "Offered the win-back discount."
-    assert agent.skill_names == ["Win-back offer"]
+    assert "Review the case first." in llm.requests[0]["system_extra"]
+    assert "Always check the balance" not in llm.requests[0]["system_extra"]
+    assert {t["function"]["name"] for t in llm.requests[0]["tools"]} == {"retention_get_cases"}
+    assert balance.calls == []
+    assert out["content"] == "Reviewed the case."
+    assert agent.skill_names == ["Case review"]
 
 
 # ── M3 memory-capture ───────────────────────────────────────────────────────

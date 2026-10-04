@@ -39,8 +39,9 @@ MEMORY_URL = os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")
 
 
 class SkillCreateRequest(BaseModel):
-    name: str
-    description: str
+    name: str = Field(..., min_length=1, max_length=120)
+    description: str = Field(..., min_length=1)
+    source_agent_type: str = Field(..., min_length=1, max_length=80)
     target_agent_types: List[str] = Field(default_factory=list)
     guidance_prompt: str
     tools_required: List[str] = Field(default_factory=list)
@@ -62,6 +63,27 @@ class StrategyEntryRequest(BaseModel):
     title: str = Field(..., min_length=3, max_length=240)
     content: str = Field(..., min_length=10, max_length=8000)
     agent_type: Optional[str] = Field(default=None, max_length=80)
+
+
+def require_skill_admin(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
+    roles = {role.lower() for role in ctx.roles}
+    permissions = {permission.lower() for permission in ctx.permissions}
+    if not (ctx.is_platform_admin or roles & {"admin", "org_admin", "tenant_admin", "owner"}
+            or "agents.manage" in permissions):
+        raise HTTPException(status_code=403, detail="Agent admin role required")
+    return ctx
+
+
+def skill_forward_headers(ctx: AuthContext) -> Dict[str, str]:
+    roles = set(ctx.roles)
+    if ctx.is_platform_admin:
+        roles.add("platform_admin")
+    return {
+        "X-Tenant-Id": str(ctx.tenant_id),
+        "X-User-Id": str(ctx.user_id or ctx.tenant_id),
+        "X-Roles": ",".join(sorted(roles)),
+        "X-Permissions": ",".join(ctx.permissions),
+    }
 
 
 @router.post("/strategy", status_code=status.HTTP_201_CREATED)
@@ -238,20 +260,21 @@ async def list_skills(
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
-        logger.warning("List skills error: %s", exc)
-        return {"items": []}
+        logger.warning("List skills error: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Skill service unavailable") from exc
 
 
 @router.post("/skills", status_code=status.HTTP_201_CREATED)
 async def create_skill(
     payload: SkillCreateRequest,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
 ):
     """Register a new OKF skill for this tenant."""
-    headers = {"X-Tenant-Id": str(ctx.tenant_id), "X-User-Id": str(ctx.user_id or ctx.tenant_id)}
+    headers = skill_forward_headers(ctx)
     body = {
         "skill_name": payload.name,
         "description": payload.description,
+        "source_agent_type": payload.source_agent_type,
         "target_agent_types": payload.target_agent_types,
         "guidance_prompt": payload.guidance_prompt,
         "tools_required": payload.tools_required,
@@ -271,10 +294,10 @@ async def create_skill(
 @router.post("/skills/{skill_id}/deactivate")
 async def deactivate_skill(
     skill_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
 ):
     """Deactivate an OKF skill so agents stop loading it."""
-    headers = {"X-Tenant-Id": str(ctx.tenant_id), "X-User-Id": str(ctx.user_id or ctx.tenant_id)}
+    headers = skill_forward_headers(ctx)
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(f"{MEMORY_URL}/api/v1/skills/{skill_id}/deactivate", headers=headers)
@@ -293,10 +316,10 @@ async def deactivate_skill(
 async def transfer_skill(
     skill_id: uuid.UUID,
     payload: SkillTransferRequest,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
 ):
     """Transfer or assign an OKF skill to another agent type."""
-    headers = {"X-Tenant-Id": str(ctx.tenant_id), "X-User-Id": str(ctx.user_id or ctx.tenant_id)}
+    headers = skill_forward_headers(ctx)
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(

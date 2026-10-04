@@ -35,6 +35,14 @@ MODEL_ROUTES: Dict[str, tuple] = {
     "assistant": ("qwen2.5:7b", OPENROUTER_MODEL),
 }
 
+# Earlier HR forms saved a display label instead of an executable model id.
+# Keep existing hired agents usable while new forms store the exact route id.
+MODEL_LABEL_ALIASES = {"Qwen 2.5 7B": "qwen2.5:7b"}
+
+
+def canonical_requested_model(requested_model: Optional[str]) -> str:
+    return MODEL_LABEL_ALIASES.get(requested_model or "", requested_model or "")
+
 # Agent system prompts
 SECURITY_DELIMITER_NOTICE = (
     "\n\nSECURITY PROTOCOL: The user's task appears in <user_request> tags. "
@@ -283,8 +291,9 @@ class LLMClient:
 
         # HR's model preference is honored for hired agents. The actual model
         # and provider are recorded from the response, including any fallback.
-        if requested_model and re.fullmatch(r"[A-Za-z0-9._:/~-]{1,160}", requested_model):
-            chosen = requested_model.removeprefix("openrouter/")
+        canonical_model = canonical_requested_model(requested_model)
+        if canonical_model and re.fullmatch(r"[A-Za-z0-9._:/~-]{1,160}", canonical_model):
+            chosen = canonical_model.removeprefix("openrouter/")
             if "/" in chosen and OPENROUTER_API_KEY:
                 selected = await self._openrouter_chat(chosen, full_messages, tools,
                                                         tool_choice=tool_choice, agent_type=agent_type)

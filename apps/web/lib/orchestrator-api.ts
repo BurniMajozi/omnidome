@@ -761,6 +761,7 @@ export interface OKFSkill {
   id: string
   skill_name: string
   description: string
+  source_agent_type: string
   target_agent_types: string[]
   guidance_prompt: string
   tools_required: string[]
@@ -828,7 +829,7 @@ export const listOKFSkills = (agentType?: string) => {
   return getJson<{ items: OKFSkill[] }>(`/memory/skills${p}`).then((r) => r.items ?? [])
 }
 
-export const createOKFSkill = (skill: { name: string; description: string; target_agent_types: string[]; guidance_prompt: string; tools_required: string[] }) =>
+export const createOKFSkill = (skill: { name: string; description: string; source_agent_type: string; target_agent_types: string[]; guidance_prompt: string; tools_required: string[] }) =>
   getJson<OKFSkill>("/memory/skills", { method: "POST", body: JSON.stringify(skill) })
 
 export const deactivateOKFSkill = (skillId: string) =>

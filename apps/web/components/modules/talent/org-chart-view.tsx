@@ -139,7 +139,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
   const [newStaffReportingTo, setNewStaffReportingTo] = useState<string>("NONE")
   const [newStaffFinancialLimit, setNewStaffFinancialLimit] = useState<number>(50000)
   const [newStaffIsAgent, setNewStaffIsAgent] = useState(false)
-  const [newStaffLlmModel, setNewStaffLlmModel] = useState("Qwen 2.5 7B")
+  const [newStaffLlmModel, setNewStaffLlmModel] = useState("qwen2.5:7b")
   const [newStaffAgentScope, setNewStaffAgentScope] = useState("Autonomous NOC Incident Triage")
 
   // Bulk CSV state
@@ -423,7 +423,7 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
             reportingToName: cols[3] || "",
             financialLimit: cols[4] ? Number(cols[4]) : 50000,
             isAgent: cols[5] ? cols[5].toLowerCase() === "true" || cols[5].toLowerCase() === "yes" : false,
-            llmModel: cols[6] || (cols[5]?.toLowerCase() === "true" ? "Qwen 2.5 7B" : undefined),
+            llmModel: cols[6] || (cols[5]?.toLowerCase() === "true" ? "qwen2.5:7b" : undefined),
           })
         }
       }
@@ -1241,10 +1241,8 @@ export function OrgChartView({ employees, onRefresh }: OrgChartViewProps) {
                           onChange={(e) => setNewStaffLlmModel(e.target.value)}
                           className="w-full h-7 rounded border border-border bg-background px-2 text-[11px]"
                         >
-                          <option value="Qwen 2.5 7B">Qwen 2.5 7B (Fast, Zero-Latency)</option>
-                          <option value="Llama 3.3 70B">Llama 3.3 70B (Complex Reasoning)</option>
-                          <option value="Claude 3.5 Sonnet">Claude 3.5 Sonnet (Executive)</option>
-                          <option value="DeepSeek-R1">DeepSeek-R1 (Diagnostic Reasoning)</option>
+                          <option value="qwen2.5:7b">Qwen 2.5 7B (local route)</option>
+                          <option value="llama3.1:70b">Llama 3.1 70B (local route)</option>
                         </select>
                       </div>
                       <div className="space-y-1">

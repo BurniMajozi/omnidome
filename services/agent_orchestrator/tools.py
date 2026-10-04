@@ -1,5 +1,6 @@
 """Tool registry — wraps OmniDome microservice APIs as agent tools."""
 
+import json
 import os
 import re
 import logging
@@ -181,6 +182,21 @@ class Tool:
 
         url = f"{base_url}{self.endpoint}"
         request_input = dict(tool_input)
+        if self.name in {"memory.write_entry", "memory.upsert_summary"}:
+            metadata = request_input.get("metadata")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    return {"success": False, "error": "Memory metadata must be a JSON object"}
+                if not isinstance(metadata, dict):
+                    return {"success": False, "error": "Memory metadata must be a JSON object"}
+                request_input["metadata"] = metadata
+        if self.name == "memory.recall" and "limit" in request_input:
+            try:
+                request_input["limit"] = max(1, min(50, int(request_input["limit"])))
+            except (TypeError, ValueError):
+                return {"success": False, "error": "Memory recall limit must be an integer"}
         for key, value in list(request_input.items()):
             placeholder = "{" + key + "}"
             if placeholder in url:

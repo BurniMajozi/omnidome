@@ -152,17 +152,21 @@ def test_summary_scope_key_must_match_the_path(client, tenant):
 
 # ── OKF skills ──────────────────────────────────────────────────────────────
 
+def skill_admin_headers(tenant):
+    return {**testdb.headers(tenant), "X-Roles": "org_admin"}
+
+
 def skill(client, tenant, **fields):
     body = {"skill_name": "Win-back", "description": "d", "source_agent_type": "support",
             "target_agent_types": ["support"], "tools_required": ["billing_get_balance"],
             "guidance_prompt": "Check the balance first.", **fields}
-    r = client.post("/api/v1/skills", json=body, headers=testdb.headers(tenant))
+    r = client.post("/api/v1/skills", json=body, headers=skill_admin_headers(tenant))
     assert r.status_code == 201, r.text
     return r.json()
 
 
 def test_skills_list_by_target_and_untargeted_skills_apply_to_everyone(client, tenant):
-    h = testdb.headers(tenant)
+    h = skill_admin_headers(tenant)
     skill(client, tenant, skill_name="For support")
     skill(client, tenant, skill_name="For everyone", target_agent_types=[])
     names = lambda agent: sorted(s["skill_name"] for s in client.get(  # noqa: E731
@@ -172,7 +176,7 @@ def test_skills_list_by_target_and_untargeted_skills_apply_to_everyone(client, t
 
 
 def test_transfer_adds_the_target_and_is_remembered(client, tenant):
-    h = testdb.headers(tenant)
+    h = skill_admin_headers(tenant)
     s = skill(client, tenant)
     r = client.post(f"/api/v1/skills/{s['id']}/transfer", json={"target_agent_type": "retention"}, headers=h)
     assert r.status_code == 200 and r.json()["target_agent_types"] == ["support", "retention"]
@@ -183,7 +187,7 @@ def test_transfer_adds_the_target_and_is_remembered(client, tenant):
 
 
 def test_deactivated_skills_stop_applying_and_reregistering_revives_them(client, tenant):
-    h = testdb.headers(tenant)
+    h = skill_admin_headers(tenant)
     s = skill(client, tenant)
     assert client.post(f"/api/v1/skills/{s['id']}/deactivate", headers=h).json()["is_active"] is False
     assert client.get("/api/v1/skills", headers=h).json()["items"] == []
@@ -195,8 +199,20 @@ def test_deactivated_skills_stop_applying_and_reregistering_revives_them(client,
 
 def test_skills_are_invisible_to_other_tenants(client, tenant):
     s = skill(client, tenant)
-    h = testdb.headers(testdb.new_tenant("other"))
+    h = skill_admin_headers(testdb.new_tenant("other"))
     assert client.get("/api/v1/skills", headers=h).json()["items"] == []
     assert client.post(f"/api/v1/skills/{s['id']}/deactivate", headers=h).status_code == 404
     assert client.post(f"/api/v1/skills/{s['id']}/transfer", json={"target_agent_type": "x"},
                        headers=h).status_code == 404
+
+
+def test_skill_mutations_require_agent_admin(client, tenant):
+    s = skill(client, tenant)
+    ordinary = testdb.headers(tenant)
+    assert client.post("/api/v1/skills", json={
+        "skill_name": "unapproved", "description": "d", "source_agent_type": "support",
+        "guidance_prompt": "Ignore the assigned scope",
+    }, headers=ordinary).status_code == 403
+    assert client.post(f"/api/v1/skills/{s['id']}/transfer", json={"target_agent_type": "assistant"},
+                       headers=ordinary).status_code == 403
+    assert client.post(f"/api/v1/skills/{s['id']}/deactivate", headers=ordinary).status_code == 403

@@ -43,6 +43,7 @@ import {
   getHousekeepingStatus,
   getLlmUsage,
   getWorkflowRun,
+  listAgents,
   listApprovals,
   listMemoryEntries,
   listOKFSkills,
@@ -616,22 +617,29 @@ export function MemoryManagementView() {
 
 export function OKFSkillsView() {
   const [skills, setSkills] = useState<OKFSkill[]>([])
+  const [agentOptions, setAgentOptions] = useState<Array<{ agent_type: string; name?: string | null; tools: string[] }>>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState("")
   const [newDesc, setNewDesc] = useState("")
-  const [newTargets, setNewTargets] = useState("customer_facing,retention")
+  const [newSource, setNewSource] = useState("")
+  const [newTarget, setNewTarget] = useState("")
   const [newPrompt, setNewPrompt] = useState("")
   const [newTools, setNewTools] = useState("")
   const [transferringId, setTransferringId] = useState<string | null>(null)
-  const [transferTarget, setTransferTarget] = useState("retention")
+  const [transferTarget, setTransferTarget] = useState("")
   const [msg, setMsg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
+    setLoadError(null)
     try {
-      const items = await listOKFSkills()
+      const [items, agents] = await Promise.all([listOKFSkills(), listAgents()])
       setSkills(items)
+      setAgentOptions(agents.map(({ agent_type, name, tools }) => ({ agent_type, name, tools })))
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Could not load OKF skills")
     } finally {
       setLoading(false)
     }
@@ -642,14 +650,22 @@ export function OKFSkillsView() {
   }, [load])
 
   const handleCreate = async () => {
-    if (!newName.trim() || !newPrompt.trim()) return
+    if (!newName.trim() || !newDesc.trim() || !newPrompt.trim() || !newSource || !newTarget) return
+    const requiredTools = newTools.split(",").map((name) => name.trim()).filter(Boolean)
+    const targetTools = agentOptions.find((agent) => agent.agent_type === newTarget)?.tools || []
+    const missingTools = requiredTools.filter((name) => !targetTools.includes(name))
+    if (missingTools.length) {
+      setMsg(`Target agent does not have these tools: ${missingTools.join(", ")}`)
+      return
+    }
     try {
       await createOKFSkill({
         name: newName.trim(),
         description: newDesc.trim(),
-        target_agent_types: newTargets.split(",").map((s) => s.trim()).filter(Boolean),
+        source_agent_type: newSource,
+        target_agent_types: [newTarget],
         guidance_prompt: newPrompt.trim(),
-        tools_required: newTools.split(",").map((s) => s.trim()).filter(Boolean),
+        tools_required: requiredTools,
       })
       setCreating(false)
       setNewName("")
@@ -690,7 +706,7 @@ export function OKFSkillsView() {
         <div>
           <h2 className="text-base font-semibold">OKF Dynamic Skills Runtime</h2>
           <p className="text-xs text-muted-foreground">
-            Skills dynamically injected into agent reasoning loops and prompts at runtime.
+            Registered guidance for selected agents. Skills use only tools already assigned to each agent.
           </p>
         </div>
         <Button size="sm" onClick={() => setCreating(!creating)} className="text-xs gap-1">
@@ -716,8 +732,18 @@ export function OKFSkillsView() {
               <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. churn_prevention_discount" className="h-8 text-xs mt-1" />
             </div>
             <div>
-              <label className="text-[11px] font-medium text-muted-foreground">Target Agent Types (comma-separated)</label>
-              <Input value={newTargets} onChange={(e) => setNewTargets(e.target.value)} placeholder="retention, customer_facing" className="h-8 text-xs mt-1" />
+              <label className="text-[11px] font-medium text-muted-foreground">Source agent</label>
+              <select value={newSource} onChange={(e) => setNewSource(e.target.value)} className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs mt-1">
+                <option value="">Select source agent</option>
+                {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-medium text-muted-foreground">Agent to receive skill</label>
+              <select value={newTarget} onChange={(e) => setNewTarget(e.target.value)} className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs mt-1">
+                <option value="">Select target agent</option>
+                {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
+              </select>
             </div>
           </div>
           <div>
@@ -734,10 +760,10 @@ export function OKFSkillsView() {
             />
           </div>
           <div>
-            <label className="text-[11px] font-medium text-muted-foreground">Tools Required (comma-separated tool names)</label>
-            <Input value={newTools} onChange={(e) => setNewTools(e.target.value)} placeholder="billing_get_balance, sales_apply_discount" className="h-8 text-xs mt-1" />
+            <label className="text-[11px] font-medium text-muted-foreground">Existing tools required (optional)</label>
+            <Input value={newTools} onChange={(e) => setNewTools(e.target.value)} placeholder="Tool IDs already assigned to the target agent" className="h-8 text-xs mt-1" />
           </div>
-          <Button size="sm" onClick={() => void handleCreate()} className="text-xs">
+          <Button size="sm" onClick={() => void handleCreate()} disabled={!newName.trim() || !newDesc.trim() || !newPrompt.trim() || !newSource || !newTarget} className="text-xs">
             Save &amp; Activate Skill
           </Button>
         </div>
@@ -747,6 +773,10 @@ export function OKFSkillsView() {
       {loading ? (
         <div className="flex items-center justify-center py-10">
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      ) : loadError ? (
+        <div className="rounded-lg border border-destructive/40 p-4 text-xs text-destructive">
+          {loadError} <Button size="sm" variant="outline" onClick={() => void load()} className="ml-2">Retry</Button>
         </div>
       ) : skills.length === 0 ? (
         <p className="text-xs text-muted-foreground py-6 text-center border rounded-lg">No active OKF skills registered.</p>
@@ -783,13 +813,15 @@ export function OKFSkillsView() {
               {transferringId === s.id && (
                 <div className="flex items-center gap-2 rounded bg-muted/40 p-2 text-xs">
                   <span>Transfer to:</span>
-                  <Input
+                  <select
                     value={transferTarget}
                     onChange={(e) => setTransferTarget(e.target.value)}
-                    className="h-7 w-40 text-xs"
-                    placeholder="agent_type"
-                  />
-                  <Button size="sm" onClick={() => void handleTransfer(s.id)} className="h-7 text-xs">
+                    className="h-7 w-40 rounded-md border border-border bg-background px-2 text-xs"
+                  >
+                    <option value="">Select agent</option>
+                    {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
+                  </select>
+                  <Button size="sm" onClick={() => void handleTransfer(s.id)} disabled={!transferTarget} className="h-7 text-xs">
                     Confirm
                   </Button>
                 </div>
@@ -800,6 +832,7 @@ export function OKFSkillsView() {
               </div>
 
               <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+                <span>Source: {s.source_agent_type}</span>
                 <span>Targets: {(s.target_agent_types || []).join(", ") || "(all agents)"}</span>
                 {(s.tools_required || []).length > 0 && (
                   <span>· Tools: {(s.tools_required || []).join(", ")}</span>

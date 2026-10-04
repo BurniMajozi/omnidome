@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, Optional
 
@@ -47,6 +48,7 @@ from services.agent_orchestrator.models import RegisteredAgent
 from services.agent_orchestrator.kpi_context import approved_kpi_briefing
 
 router = APIRouter(tags=["Agent Protocols"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -68,10 +70,10 @@ async def _write_protocol_memory(
     metadata: dict[str, Any],
     correlation_id: str,
     session=None,
-) -> None:
+) -> bool:
     """Write protocol event to tenant memory with correlation ID.
 
-    Uses the tenant_memory service HTTP API (fire-and-forget).
+    Uses the tenant_memory service HTTP API and reports whether it accepted the write.
     The correlation_id links the protocol action to its memory entry.
     """
     url = f"{settings.tenant_memory_service_url.rstrip('/')}/api/v1/memories"
@@ -90,10 +92,13 @@ async def _write_protocol_memory(
     }
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
-            await client.post(url, json=payload, headers=headers)
-    except Exception:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            return True
+    except Exception as exc:
         # Memory write must not block the protocol action.
-        return
+        logger.warning("Protocol memory write failed (%s)", type(exc).__name__)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +185,11 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
     runtime_type = body.agent_type
     safe_context = {**body.context, "user_id": str(ctx.user_id)}
     if body.agent_type.startswith("custom_"):
+        roles = {role.lower() for role in ctx.roles}
+        permissions = {permission.lower() for permission in ctx.permissions}
+        if not (ctx.is_platform_admin or roles & {"admin", "org_admin", "tenant_admin", "owner"}
+                or "agents.manage" in permissions):
+            raise HTTPException(status_code=403, detail="Agent manager role required")
         async with get_session(ctx.tenant_id) as session:
             registered = (await session.execute(select(RegisteredAgent).where(
                 RegisteredAgent.tenant_id == ctx.tenant_id,
@@ -222,7 +232,8 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
                 conversation_id=str(conv_uuid),
-                data={"agent_type": body.agent_type, "correlation_id": correlation},
+                data={"agent_type": body.agent_type, "correlation_id": correlation,
+                      "kpi_status": safe_context.get("kpi_status", "not_linked")},
             ))
             agent = Agent(
                 agent_type=runtime_type,
@@ -233,6 +244,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
 
             # Stream tokens and emit AG-UI events
             full_content = ""
+            run_result: dict[str, Any] = {}
             if settings.chat_backend == "hermes":
                 messages = await agent.prepare_turn(body.message, history)
                 messages.insert(0, {"role": "system", "content": _hermes_system_note(runtime_type, ctx.tenant_id, safe_context, agent.skills_prompt)})
@@ -278,7 +290,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                     ))
 
             # Write memory with correlation
-            await _write_protocol_memory(
+            memory_written = await _write_protocol_memory(
                 ctx,
                 f"AG-UI run: {body.agent_type}",
                 full_content[:2000],
@@ -296,7 +308,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
                 conversation_id=str(conv_uuid),
-                data={"correlation_id": correlation, "status": "written"},
+                data={"correlation_id": correlation, "status": "written" if memory_written else "failed"},
             ))
             # Persist messages & actions to AgentConversation / AgentMessage / AgentAction
             try:
@@ -323,18 +335,25 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                         agent_type=body.agent_type,
                         user_message=body.message,
                         assistant_content=full_content,
-                        tool_calls=run_result.get("tool_calls", []) if "run_result" in locals() else [],
+                        tool_calls=run_result.get("tool_calls", []),
                     )
                     await session.flush()
             except Exception as persist_err:
                 # DB persistence failure shouldn't crash the AG-UI stream
-                pass
+                logger.warning("AG-UI conversation persistence failed (%s)", type(persist_err).__name__)
 
             yield await emit(AGUIEvent(
                 type="RUN_FINISHED",
                 run_id=run_id,
                 tenant_id=ctx.tenant_id,
                 conversation_id=str(conv_uuid),
+                data={
+                    "usage": run_result.get("usage", {}),
+                    "model_calls": run_result.get("model_calls", []),
+                    "jev_calls": run_result.get("jev_calls", []),
+                    "context_used": run_result.get("context_used", {}),
+                    "stopped_by": run_result.get("stopped_by"),
+                },
             ))
         except Exception as exc:
             yield await emit(AGUIEvent(

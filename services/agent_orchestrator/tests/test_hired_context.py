@@ -74,6 +74,22 @@ def test_ui_component_hint_is_a_location_not_a_false_inspection():
     assert "code is not mounted" in briefing(matches)
 
 
+def test_hired_agent_chat_requires_agent_manager_role():
+    import asyncio
+    import uuid
+    import pytest
+    from fastapi import HTTPException
+    from services.agent_orchestrator.routes import protocols
+    from services.agent_orchestrator.protocols import AGUIRunRequest
+    from services.common.auth import AuthContext
+
+    ctx = AuthContext(user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), roles=["org_user"])
+    with pytest.raises(HTTPException) as rejected:
+        asyncio.run(protocols.ag_ui_run(
+            AGUIRunRequest(agent_type="custom_engineer", message="Inspect Sales"), ctx))
+    assert rejected.value.status_code == 403
+
+
 def test_operator_request_is_not_labelled_as_untrusted_instruction():
     messages = Agent("assistant")._build_messages("Inspect the failing UI component")
     assert "<user_request>" in messages[-1]["content"]

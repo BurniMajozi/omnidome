@@ -1,9 +1,8 @@
 """OKF skills at run time (SPEC-orchestrator-memory-hardening.md, M2).
 
-Skills registered in tenant memory (`/api/v1/skills`) change what an agent
-does: an agent's active skills — it is a target, the source, or the skill has
-no targets — add their guidance to its system prompt and their
-`tools_required` (those that exist in the registry) to its tool list.
+Skills registered in tenant memory (`/api/v1/skills`) add guidance to an
+agent's system prompt when that agent has every tool the skill requires.
+They never grant tools or override an agent's assigned tool policy.
 
 Skills are fetched once per tenant and cached for CACHE_TTL_S. Like memory
 recall this fails open: no skills service, no extra guidance.

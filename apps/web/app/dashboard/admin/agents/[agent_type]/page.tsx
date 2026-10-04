@@ -21,7 +21,9 @@ import {
   listConversations,
   listAgents,
   listWorkflows,
+  invokeAgentAGUI,
   workflowsUsingAgent,
+  type AGUIEvent,
   type AgentActionAuditItem,
   type AgentInfo,
   type Workflow,
@@ -344,6 +346,129 @@ interface ChatReply {
 interface ChatBubble {
   role: "user" | "assistant"
   text: string
+}
+
+interface HiredRunInfo {
+  provider: string
+  model: string
+  requestedModel: string | null
+  tokens: number | null
+  providerCost: number | null
+  jevCost: number | null
+  skills: string[]
+  memory: string
+  kpi: string
+  stoppedBy: string | null
+}
+
+function hiredRunInfo(data: Record<string, unknown>): HiredRunInfo {
+  const calls = Array.isArray(data.model_calls) ? data.model_calls : []
+  const first = calls.find((call): call is Record<string, unknown> => typeof call === "object" && call !== null) || {}
+  const usage = typeof data.usage === "object" && data.usage !== null ? data.usage as Record<string, unknown> : {}
+  const context = typeof data.context_used === "object" && data.context_used !== null ? data.context_used as Record<string, unknown> : {}
+  const jevCalls = Array.isArray(data.jev_calls) ? data.jev_calls : []
+  const jevCost = jevCalls.every((call) => typeof call === "object" && call !== null && typeof call.cost_usd === "number")
+    ? jevCalls.reduce((total: number, call: { cost_usd: number }) => total + call.cost_usd, 0)
+    : null
+  return {
+    provider: typeof first.provider === "string" ? first.provider : "Provider not reported",
+    model: typeof first.model === "string" ? first.model : "Model not reported",
+    requestedModel: typeof context.requested_model === "string" ? context.requested_model : null,
+    tokens: typeof usage.total_tokens === "number" ? usage.total_tokens : null,
+    providerCost: typeof usage.cost === "number" ? usage.cost : null,
+    jevCost,
+    skills: Array.isArray(context.skills) ? context.skills.filter((item): item is string => typeof item === "string") : [],
+    memory: typeof context.memory_status === "string" ? context.memory_status : "unknown",
+    kpi: typeof context.kpi_status === "string" ? context.kpi_status : "not linked",
+    stoppedBy: typeof data.stopped_by === "string" ? data.stopped_by : null,
+  }
+}
+
+function HiredAgentChatTab({ agent }: { agent: AgentInfo }) {
+  const [messages, setMessages] = useState<ChatBubble[]>([])
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [draft, setDraft] = useState("")
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [memoryStatus, setMemoryStatus] = useState<string | null>(null)
+  const [toolNames, setToolNames] = useState<string[]>([])
+  const [runInfo, setRunInfo] = useState<HiredRunInfo | null>(null)
+
+  async function send() {
+    const question = draft.trim()
+    if (!question || sending) return
+    const history = messages.map((message) => ({ role: message.role, content: message.text }))
+    setMessages((current) => [...current, { role: "user", text: question }, { role: "assistant", text: "" }])
+    setDraft("")
+    setError(null)
+    setMemoryStatus(null)
+    setToolNames([])
+    setRunInfo(null)
+    setSending(true)
+    let answer = ""
+    let runError: string | null = null
+    try {
+      await invokeAgentAGUI({
+        agent_type: agent.agent_type,
+        message: question,
+        conversation_id: conversationId || undefined,
+        context: { history },
+      }, (event: AGUIEvent) => {
+        if (event.conversation_id) setConversationId(event.conversation_id)
+        if (event.type === "TEXT_MESSAGE_CONTENT") {
+          const delta = event.data.delta
+          if (typeof delta === "string") {
+            answer += delta
+            setMessages((current) => current.map((message, index) => index === current.length - 1 ? { role: "assistant", text: answer } : message))
+          }
+        } else if (event.type === "TOOL_CALL_START") {
+          const name = event.data.name
+          if (typeof name === "string") setToolNames((current) => [...current, name])
+        } else if (event.type === "MEMORY_WRITE") {
+          setMemoryStatus(event.data.status === "written" ? "Run note saved to memory" : "Run note was not saved to memory")
+        } else if (event.type === "RUN_FINISHED") {
+          setRunInfo(hiredRunInfo(event.data))
+        } else if (event.type === "RUN_ERROR") {
+          runError = typeof event.data.error === "string" ? event.data.error : "Agent run failed"
+        }
+      })
+      if (runError) throw new Error(runError)
+      if (!answer) throw new Error("Agent returned no answer. Review the run logs and try a narrower request.")
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Agent chat failed")
+      if (!answer) setMessages((current) => current.slice(0, -1))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return <Card className="border-border bg-card">
+    <CardHeader><CardTitle className="text-base">Chat with {agent.name || agent.agent_type}</CardTitle></CardHeader>
+    <CardContent className="space-y-4">
+      <p className="text-xs text-muted-foreground">Authenticated, draft-only chat. This agent can use assigned read tools; it cannot change platform code or execute business writes. Ask for evidence, a diagnosis, and next steps.</p>
+      <div className="max-h-[28rem] space-y-3 overflow-y-auto rounded-md border border-border p-3" aria-live="polite">
+        {messages.length === 0 && <p className="text-sm text-muted-foreground">Describe the component, desired result, and what you observed. The agent will identify evidence it can inspect and disclose gaps.</p>}
+        {messages.map((message, index) => <div key={index} className={`rounded-md p-3 text-sm whitespace-pre-wrap ${message.role === "user" ? "bg-primary/10" : "bg-muted/50"}`}>
+          <span className="mb-1 block text-xs font-medium">{message.role === "user" ? "You" : agent.name || "Agent"}</span>
+          {message.text || (sending ? "Working…" : "")}
+        </div>)}
+      </div>
+      {toolNames.length > 0 && <p className="text-xs text-muted-foreground">Read tools called: {toolNames.join(", ")}</p>}
+      {memoryStatus && <p className="text-xs text-muted-foreground">{memoryStatus}</p>}
+      {runInfo && <div className="rounded-md border border-border p-3 text-xs text-muted-foreground space-y-1">
+        <p>Provider: {runInfo.provider} · Actual model: {runInfo.model} · Requested: {runInfo.requestedModel || "runtime default"} · Tokens: {runInfo.tokens?.toLocaleString("en-ZA") ?? "not reported"}</p>
+        <p>Cost: {runInfo.providerCost == null ? "provider not reported" : `US$${runInfo.providerCost.toFixed(5)} provider`} · {runInfo.jevCost == null ? "JEV not reported" : `US$${runInfo.jevCost.toFixed(5)} JEV`}</p>
+        <p>Context: {runInfo.skills.length ? `${runInfo.skills.length} OKF skill(s)` : "no applicable OKF skills"} · memory {runInfo.memory} · KPI {runInfo.kpi}</p>
+        {runInfo.stoppedBy && <p>Run stopped by: {runInfo.stoppedBy}</p>}
+      </div>}
+      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      <textarea value={draft} onChange={(event) => setDraft(event.target.value)} disabled={sending} placeholder="Ask this agent to investigate…" className="min-h-24 w-full rounded-md border border-border bg-background p-3 text-sm" />
+      <div className="flex gap-2">
+        <button type="button" onClick={() => void send()} disabled={!draft.trim() || sending} className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50">{sending ? "Working…" : "Send"}</button>
+        <button type="button" onClick={() => { setMessages([]); setConversationId(null); setToolNames([]); setMemoryStatus(null); setRunInfo(null); setError(null) }} disabled={sending} className="rounded-md border border-border px-4 py-2 text-sm">New conversation</button>
+      </div>
+    </CardContent>
+  </Card>
 }
 
 function escapeSnippetAttr(s: string): string {
@@ -989,7 +1114,7 @@ export default function AgentDetailPage() {
                 <ConversationsTab agentType={agent.agent_type} />
               </TabsContent>
               <TabsContent value="chat">
-                <DeploymentChatTab agentType={agent.agent_type} />
+                {agent.employee_id ? <HiredAgentChatTab agent={agent} /> : <DeploymentChatTab agentType={agent.agent_type} />}
               </TabsContent>
               <TabsContent value="usage">
                 <Card className="border-border bg-card">

@@ -43,6 +43,15 @@ guard = EntitlementGuard(module_id="memory")
 configure_production(app)
 
 
+def require_skill_admin(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
+    roles = {role.lower() for role in ctx.roles}
+    permissions = {permission.lower() for permission in ctx.permissions}
+    if not (ctx.is_platform_admin or roles & {"admin", "org_admin", "tenant_admin", "owner"}
+            or "agents.manage" in permissions):
+        raise HTTPException(status_code=403, detail="Agent admin role required")
+    return ctx
+
+
 @app.on_event("startup")
 async def startup() -> None:
     guard.ensure_startup()
@@ -406,7 +415,7 @@ async def recall(
 @app.post("/api/v1/skills", response_model=AgentSkillRead, status_code=status.HTTP_201_CREATED)
 async def create_agent_skill(
     payload: AgentSkillCreate,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     skill_id = uuid.uuid4()
@@ -504,7 +513,7 @@ async def list_agent_skills(
 async def transfer_agent_skill(
     skill_id: uuid.UUID,
     payload: AgentSkillTransferRequest,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """
@@ -591,7 +600,7 @@ async def transfer_agent_skill(
 @app.post("/api/v1/skills/{skill_id}/deactivate", response_model=AgentSkillRead)
 async def deactivate_agent_skill(
     skill_id: uuid.UUID,
-    ctx: AuthContext = Depends(get_auth_context),
+    ctx: AuthContext = Depends(require_skill_admin),
     session: AsyncSession = Depends(get_async_session),
 ):
     """Stop a skill applying to any agent (the Agent Manager's OKF skills tab).

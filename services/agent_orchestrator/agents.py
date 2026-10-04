@@ -146,8 +146,10 @@ class Agent:
             return ""
 
     async def load_skills(self) -> None:
-        """Apply this agent's OKF skills (spec M2): their guidance goes into the
-        system prompt, their required tools (if registered) into the tool list."""
+        """Apply guidance only when all of a skill's required tools are assigned.
+
+        Skills are tenant-authored instructions, never a way to grant tools.
+        """
         if self._skills_loaded or not self.tenant_id:
             return
         self._skills_loaded = True
@@ -158,13 +160,12 @@ class Agent:
         except Exception as exc:
             logger.warning("OKF skills failed for %s: %s", self.agent_type, exc)
             return
-        wanted = [n for s in skills for n in (s.get("tools_required") or [])]
-        known = [n for n in wanted if tool_registry.get(n)]
-        for name in skills_runtime.extra_tool_names(skills, self.available_tool_names, known):
-            self.tools.append(tool_registry.get(name))
-            self.available_tool_names.append(name)
-        self.skill_names = [s.get("skill_name", "") for s in skills]
-        self.skills_prompt = skills_runtime.skills_prompt(skills)
+        allowed = {tool.name for tool in self.tools
+                   if not (self.context.get("draft_only") and tool.mutates)}
+        usable = [skill for skill in skills
+                  if all(name in allowed for name in (skill.get("tools_required") or []))]
+        self.skill_names = [skill.get("skill_name", "") for skill in usable]
+        self.skills_prompt = skills_runtime.skills_prompt(usable)
 
     async def prepare_turn(
         self,
@@ -275,6 +276,7 @@ class Agent:
                                  "memory_status": self.context.get("_memory_diagnostics", {}).get("status", "unknown"),
                                  "skills": list(self.skill_names), "tools_available": list(self.available_tool_names),
                                  "architecture_hints": list(self.context.get("architecture_hints") or []),
+                                 "requested_model": self.context.get("requested_model"),
                                  "kpi_status": self.context.get("kpi_status", "not_linked")},
                 "usage": {
                     "prompt_tokens": turn["prompt_tokens"],
