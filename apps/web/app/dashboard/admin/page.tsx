@@ -8,7 +8,8 @@
  */
 
 import Link from "next/link"
-import { Bot, GitBranch, Shield, ArrowRight } from "lucide-react"
+import { Bot, GitBranch, Shield, ArrowRight, ArrowLeft } from "lucide-react"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 
 const adminSections = [
@@ -42,12 +43,21 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-background p-6 md:p-10">
       <div className="max-w-4xl mx-auto space-y-8">
-        {/* Header */}
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Admin Console</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Manage AI agents, workflows, and platform governance.
-          </p>
+        {/* Back navigation & Header */}
+        <div className="space-y-4">
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Link href="/dashboard">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Dashboard
+            </Link>
+          </Button>
+
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Admin Console</h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Manage AI agents, workflows, and platform governance.
+            </p>
+          </div>
         </div>
 
         {/* Section Cards */}

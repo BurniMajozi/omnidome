@@ -6,6 +6,7 @@ import { useParams } from "next/navigation"
 import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown, ClipboardList } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
@@ -973,14 +974,21 @@ export default function AgentDetailPage() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      {/* Back link */}
-      <Link
-        href="/dashboard/admin/agents"
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        Back to Agents
-      </Link>
+      {/* Back links */}
+      <div className="flex items-center gap-2">
+        <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+          <Link href="/dashboard">
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Back to Dashboard
+          </Link>
+        </Button>
+        <span className="text-muted-foreground/40">/</span>
+        <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
+          <Link href="/dashboard/admin/agents">
+            Agent Manager
+          </Link>
+        </Button>
+      </div>
 
       {loading ? (
         <TabLoader />

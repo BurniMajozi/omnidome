@@ -161,15 +161,22 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-6 p-4 sm:p-6">
-      {/* Top Breadcrumb / Back Link */}
-      <div className="flex items-center justify-between">
-        <Link
-          href="/dashboard/admin"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Back to Admin Console
-        </Link>
+      {/* Top Breadcrumb / Back Links */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Link href="/dashboard">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Dashboard
+            </Link>
+          </Button>
+          <span className="text-muted-foreground/40">/</span>
+          <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
+            <Link href="/dashboard/admin">
+              Admin Console
+            </Link>
+          </Button>
+        </div>
         <Badge variant="outline" className="gap-1 border-primary/30 text-primary">
           <ShieldCheck className="h-3 w-3" />
           {error ? "Agent directory unavailable" : loading ? "Checking agents" : "Agent directory loaded"}
