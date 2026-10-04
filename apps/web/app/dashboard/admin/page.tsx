@@ -8,7 +8,7 @@
  */
 
 import Link from "next/link"
-import { Bot, GitBranch, Shield, ArrowRight, ArrowLeft } from "lucide-react"
+import { Bot, GitBranch, Shield, ArrowRight, ArrowLeft, DoorOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 
@@ -45,12 +45,20 @@ export default function AdminPage() {
       <div className="max-w-4xl mx-auto space-y-8">
         {/* Back navigation & Header */}
         <div className="space-y-4">
-          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-            <Link href="/dashboard">
-              <ArrowLeft className="h-3.5 w-3.5" />
-              Back to Dashboard
-            </Link>
-          </Button>
+          <div className="flex items-center justify-between">
+            <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+              <Link href="/dashboard">
+                <ArrowLeft className="h-3.5 w-3.5" />
+                Back to Dashboard
+              </Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+              <Link href="/" title="Exit to website">
+                <DoorOpen className="h-3.5 w-3.5" />
+                Exit to Website
+              </Link>
+            </Button>
+          </div>
 
           <div>
             <h1 className="text-2xl font-bold text-foreground">Admin Console</h1>

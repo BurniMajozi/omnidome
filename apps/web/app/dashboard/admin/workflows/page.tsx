@@ -10,7 +10,7 @@
 import { Suspense, useEffect, useState, useCallback } from "react"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
-import { Play, Plus, Save, Loader2, RefreshCw, Clock, Zap, History, ArrowLeft } from "lucide-react"
+import { Play, Plus, Save, Loader2, RefreshCw, Clock, Zap, History, ArrowLeft, DoorOpen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FlowCanvas } from "@/components/workflows/flow-canvas"
@@ -248,17 +248,26 @@ function WorkflowsView() {
   return (
     <div className="space-y-4 p-4 sm:p-6">
       {/* Top Breadcrumb / Back Link */}
-      <div className="flex items-center gap-2">
-        <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-          <Link href="/dashboard">
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Dashboard
-          </Link>
-        </Button>
-        <span className="text-muted-foreground/40">/</span>
-        <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
-          <Link href="/dashboard/admin">
-            Admin Console
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Link href="/dashboard">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Dashboard
+            </Link>
+          </Button>
+          <span className="text-muted-foreground/40">/</span>
+          <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
+            <Link href="/dashboard/admin">
+              Admin Console
+            </Link>
+          </Button>
+        </div>
+
+        <Button asChild variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <Link href="/" title="Exit to website">
+            <DoorOpen className="h-3.5 w-3.5" />
+            Exit to Website
           </Link>
         </Button>
       </div>

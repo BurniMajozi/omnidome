@@ -64,18 +64,15 @@ export function Header({ title, onMenuToggle }: HeaderProps) {
           <span className="sr-only">Toggle theme</span>
         </Button>
 
-        <Button
-          asChild
-          variant="ghost"
-          size="icon"
-          className="text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+        <Link
+          href="/"
+          className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           title="Exit to website"
+          aria-label="Exit to website"
         >
-          <Link href="/" aria-label="Exit to website">
-            <DoorOpen className="h-5 w-5" />
-            <span className="sr-only">Exit to website</span>
-          </Link>
-        </Button>
+          <DoorOpen className="size-5 transition-transform hover:scale-105" />
+          <span className="sr-only">Exit to website</span>
+        </Link>
 
         <NotificationsBell />
       </div>

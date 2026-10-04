@@ -2,8 +2,10 @@
 
 import { useState } from "react"
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { cn } from "@/lib/utils"
 import {
+  DoorOpen,
   LayoutDashboard,
   DollarSign,
   Users,
@@ -314,6 +316,17 @@ export function Sidebar({
             title="Settings"
           >
             <Settings className="h-4 w-4" />
+          </Button>
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            title="Exit to website"
+          >
+            <Link href="/" aria-label="Exit to website">
+              <DoorOpen className="h-4 w-4" />
+            </Link>
           </Button>
           {!isCollapsed && (
             <span className="text-xs text-muted-foreground flex-1 truncate">Admin</span>

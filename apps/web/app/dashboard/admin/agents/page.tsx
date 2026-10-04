@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, ShieldAlert, Zap, Database, Sparkles } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, Wrench, MessageSquare, ExternalLink, ShieldCheck, ShieldAlert, Zap, Database, Sparkles, DoorOpen } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -177,10 +177,18 @@ export default function AgentsPage() {
             </Link>
           </Button>
         </div>
-        <Badge variant="outline" className="gap-1 border-primary/30 text-primary">
-          <ShieldCheck className="h-3 w-3" />
-          {error ? "Agent directory unavailable" : loading ? "Checking agents" : "Agent directory loaded"}
-        </Badge>
+        <div className="flex items-center gap-2">
+          <Button asChild variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+            <Link href="/" title="Exit to website">
+              <DoorOpen className="h-3.5 w-3.5" />
+              Exit to Website
+            </Link>
+          </Button>
+          <Badge variant="outline" className="gap-1 border-primary/30 text-primary">
+            <ShieldCheck className="h-3 w-3" />
+            {error ? "Agent directory unavailable" : loading ? "Checking agents" : "Agent directory loaded"}
+          </Badge>
+        </div>
       </div>
 
       {/* Header */}

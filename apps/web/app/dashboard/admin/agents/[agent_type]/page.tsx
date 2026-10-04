@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown, ClipboardList } from "lucide-react"
+import { ArrowLeft, Bot, Cpu, Loader2, AlertCircle, MessageSquare, ListOrdered, Activity, ThumbsUp, ThumbsDown, ClipboardList, DoorOpen } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -975,17 +975,26 @@ export default function AgentDetailPage() {
   return (
     <div className="space-y-6 p-4 sm:p-6">
       {/* Back links */}
-      <div className="flex items-center gap-2">
-        <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-          <Link href="/dashboard">
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Back to Dashboard
-          </Link>
-        </Button>
-        <span className="text-muted-foreground/40">/</span>
-        <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
-          <Link href="/dashboard/admin/agents">
-            Agent Manager
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button asChild variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
+            <Link href="/dashboard">
+              <ArrowLeft className="h-3.5 w-3.5" />
+              Back to Dashboard
+            </Link>
+          </Button>
+          <span className="text-muted-foreground/40">/</span>
+          <Button asChild variant="ghost" size="sm" className="h-8 text-xs text-muted-foreground hover:text-foreground">
+            <Link href="/dashboard/admin/agents">
+              Agent Manager
+            </Link>
+          </Button>
+        </div>
+
+        <Button asChild variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+          <Link href="/" title="Exit to website">
+            <DoorOpen className="h-3.5 w-3.5" />
+            Exit to Website
           </Link>
         </Button>
       </div>
