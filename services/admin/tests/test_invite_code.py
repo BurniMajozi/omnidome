@@ -44,3 +44,32 @@ def test_supabase_create_is_confirmed_and_does_not_invoke_invite(monkeypatch):
     monkeypatch.setattr(admin, "_req", request)
     asyncio.run(admin.create_confirmed_user("person@example.test", "long-password-123"))
     assert sent == [("POST", "/admin/users", {"json": {"email": "person@example.test", "password": "long-password-123", "email_confirm": True}})]
+
+
+def test_code_hash_fails_closed_without_dedicated_secret(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("INVITE_CODE_SECRET", raising=False)
+    monkeypatch.setenv("INTERNAL_AUTH_SECRET", "some-internal-secret")  # must NOT be used as a fallback
+    with pytest.raises(HTTPException) as exc:
+        iam.invite_code_hash(uuid.uuid4(), "p@example.test", "12345678")
+    assert exc.value.status_code == 503
+
+
+def test_trusted_client_ip_uses_rightmost_hop_and_falls_back(monkeypatch):
+    from types import SimpleNamespace
+    from services.common.rate_limiter import trusted_client_ip
+
+    def req(xff=None, peer="10.0.0.9"):
+        return SimpleNamespace(headers={"x-forwarded-for": xff} if xff else {}, client=SimpleNamespace(host=peer))
+
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "1")
+    # attacker-supplied leftmost entries are ignored; proxy appended the real peer
+    assert trusted_client_ip(req("1.1.1.1, 2.2.2.2, 203.0.113.7")) == "203.0.113.7"
+    assert trusted_client_ip(req()) == "10.0.0.9"
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "2")
+    assert trusted_client_ip(req("1.1.1.1, 203.0.113.7, 10.1.1.1")) == "203.0.113.7"
+    assert trusted_client_ip(req("203.0.113.7")) == "10.0.0.9"  # fewer entries than hops -> peer
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", "0")
+    assert trusted_client_ip(req("203.0.113.7")) == "10.0.0.9"

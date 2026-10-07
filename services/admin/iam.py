@@ -31,7 +31,7 @@ from services.common import agentmail
 from services.admin.migrations import ADMIN_CAPABLE_ROLES, DEFAULT_SEAT_LIMIT, ROLE_RANKS, ensure_tenant_roles
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
-from services.common.rate_limiter import RateLimiter, identity_key
+from services.common.rate_limiter import RateLimiter, identity_key, trusted_client_ip
 from services.common.rbac import has_permission, has_role
 
 logger = logging.getLogger("admin.iam")
@@ -42,7 +42,16 @@ RESERVED_ROLE_NAMES = {"platform_admin", "owner", "org_admin", "org_user"}
 BILLING_STATUSES = {"active", "past_due", "suspended", "cancelled"}
 invite_limiter = RateLimiter(max_requests=30, window_seconds=60, key_func=identity_key)
 accept_limiter = RateLimiter(max_requests=20, window_seconds=60, key_func=identity_key)
-claim_limiter = RateLimiter(max_requests=10, window_seconds=900, key_func=identity_key)
+# Claim is unauthenticated: never key on the (unverified) Authorization header. Two buckets, both on the
+# trusted client IP: one overall, one per (ip, invite) so a single source cannot hammer one invite.
+claim_limiter = RateLimiter(max_requests=30, window_seconds=900, key_func=trusted_client_ip)
+claim_invite_limiter = RateLimiter(max_requests=10, window_seconds=900)
+# Mail-bombing guard for resend: at most one delivery per recipient per cooldown, and a daily cap.
+RESEND_COOLDOWN_SECONDS = 60
+RESEND_DAILY_CAP = 5
+# Invite code lockout is per invite and short (the 8-digit code is also bounded by the per-IP buckets above).
+CODE_LOCK_SHORT = timedelta(seconds=60)
+CODE_LOCK_LONG = timedelta(minutes=15)
 
 
 def app_public_url() -> str:
@@ -492,10 +501,17 @@ def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def invite_code_hash(invite_id: uuid.UUID, email: str, code: str) -> str:
-    secret = os.getenv("INVITE_CODE_SECRET") or os.getenv("INTERNAL_AUTH_SECRET")
+def invite_code_secret() -> str:
+    """Dedicated secret only (no fallback to INTERNAL_AUTH_SECRET): fail closed with 503 if missing."""
+    secret = (os.getenv("INVITE_CODE_SECRET") or "").strip()
     if not secret:
-        raise HTTPException(status_code=503, detail="Invitation code signing is not configured")
+        logger.error("INVITE_CODE_SECRET is not set: refusing to issue or verify invitation codes")
+        raise HTTPException(status_code=503, detail="Invitation codes are not configured")
+    return secret
+
+
+def invite_code_hash(invite_id: uuid.UUID, email: str, code: str) -> str:
+    secret = invite_code_secret()
     message = f"invite-code-v1:{invite_id}:{email.lower()}:{code}".encode()
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
@@ -744,6 +760,7 @@ async def create_invite(
     session: AsyncSession = Depends(get_async_session),
 ):
     await invite_limiter.check(request)
+    invite_code_secret()
     if payload.send_email and not agentmail.is_configured():
         raise HTTPException(status_code=503, detail="AgentMail is not configured for invitations")
     await ensure_tenant_scope(ctx, tenant_id, session)
@@ -835,6 +852,31 @@ async def _cleanup_supabase_invitee(inv: Dict[str, Any]) -> None:
         logger.info("invitee cleanup skipped: %s", exc)
 
 
+async def _check_resend_budget(session, email: str) -> None:
+    """429 if this recipient was mailed a resend within the cooldown, or hit the daily cap.
+
+    Counted from the append-only audit log (shared by all workers, survives restarts), per recipient
+    address across tenants and inviters. Runs under the tenant lock, after authorization."""
+    row = (
+        await session.execute(
+            text(
+                """SELECT count(*) AS n, max(created_at) AS last,
+                          coalesce(extract(epoch FROM (now() - max(created_at))), 1e9) AS since
+                   FROM audit_logs
+                   WHERE action = 'invite.resend' AND resource_type = 'invite'
+                     AND lower(metadata->>'email') = lower(:e) AND metadata->>'mailed' = 'true'
+                     AND created_at > now() - interval '24 hours'"""
+            ),
+            {"e": email},
+        )
+    ).mappings().one()
+    if int(row["n"]) >= RESEND_DAILY_CAP:
+        raise HTTPException(status_code=429, detail="Daily resend limit reached for this recipient", headers={"Retry-After": "3600"})
+    if float(row["since"]) < RESEND_COOLDOWN_SECONDS:
+        wait = max(1, int(RESEND_COOLDOWN_SECONDS - float(row["since"])) + 1)
+        raise HTTPException(status_code=429, detail="Invitation was just sent; wait before resending", headers={"Retry-After": str(wait)})
+
+
 @router.post("/invites/{invite_id}/resend")
 async def resend_invite(
     invite_id: uuid.UUID,
@@ -844,12 +886,15 @@ async def resend_invite(
     session: AsyncSession = Depends(get_async_session),
 ):
     await invite_limiter.check(request)
+    invite_code_secret()
     if send_email and not agentmail.is_configured():
         raise HTTPException(status_code=503, detail="AgentMail is not configured for invitations")
     inv = await _invite_for_admin(session, ctx, invite_id)
     tenant_id = inv["tenant_id"]
     await check_invite_rank(session, await actor_info(ctx, session), tenant_id, inv)
     await lock_tenant(session, tenant_id)
+    if send_email:
+        await _check_resend_budget(session, inv["email"])
     await sweep_expired_invites(session, tenant_id)  # records the -1 for an invite that lapsed unseen
     cur = (await session.execute(text("SELECT status, expires_at FROM invites WHERE id = :i FOR UPDATE"), {"i": str(invite_id)})).mappings().one()
     eff = _effective_status(cur)
@@ -880,7 +925,7 @@ async def resend_invite(
         )
         if eff == "expired":
             await record_seat_event(session, tenant_id, None, 1, "invite_revived", ctx.user_id)
-        await audit(session, ctx, "invite.resend", "invite", invite_id, tenant_id, {"email": inv["email"]})
+        await audit(session, ctx, "invite.resend", "invite", invite_id, tenant_id, {"email": inv["email"], "mailed": bool(send_email)})
         await session.commit()
     except IntegrityError:
         await session.rollback()
@@ -914,7 +959,10 @@ async def claim_invite(
     session: AsyncSession = Depends(get_async_session),
 ):
     """Redeem an AgentMail-delivered code; a link without the code proves nothing."""
-    claim_limiter.check_key(identity_key(request))
+    invite_code_secret()
+    ip = trusted_client_ip(request)
+    claim_limiter.check_key(f"ip:{ip}")
+    claim_invite_limiter.check_key(f"{ip}|{payload.invite_id}")
     email = _norm_email(payload.email)
     row = (await session.execute(text("SELECT id, tenant_id FROM invites WHERE id = :i"), {"i": str(payload.invite_id)})).first()
     if not row:
@@ -925,7 +973,7 @@ async def claim_invite(
         raise HTTPException(status_code=410, detail="Invitation expired or already used")
     now = datetime.now(timezone.utc)
     if inv["code_locked_until"] and inv["code_locked_until"] > now:
-        raise HTTPException(status_code=429, detail="Too many attempts. Ask your administrator to resend the invitation")
+        raise HTTPException(status_code=429, detail="Too many attempts. Wait a minute and try again, or ask your administrator to resend the invitation")
     valid = bool(inv["code_hash"]) and hmac.compare_digest(
         str(inv["code_hash"]), invite_code_hash(payload.invite_id, str(inv["email"]), payload.code)
     ) and hmac.compare_digest(str(inv["email"]).lower(), email)
@@ -933,7 +981,7 @@ async def claim_invite(
         attempts = int(inv["code_attempts"] or 0) + 1
         await session.execute(
             text("UPDATE invites SET code_attempts = :n, code_locked_until = :until WHERE id = :i"),
-            {"n": attempts, "until": now + timedelta(minutes=15) if attempts >= 5 else None, "i": str(payload.invite_id)},
+            {"n": attempts, "until": (now + (CODE_LOCK_LONG if attempts >= 20 else CODE_LOCK_SHORT)) if attempts >= 5 else None, "i": str(payload.invite_id)},
         )
         await session.commit()
         raise HTTPException(status_code=400, detail="Invalid invitation code")

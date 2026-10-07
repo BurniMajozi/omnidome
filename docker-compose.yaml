@@ -661,8 +661,8 @@ services:
     build:
       context: .
       dockerfile: services/lifecycle/Dockerfile
-    env_file:
-      - .env
+    # No env_file: lifecycle gets only what services/lifecycle + services/common (auth, db, entitlements,
+    # license, middleware) read. Deliberately NOT passed: INVITE_CODE_SECRET, provider/API keys, Supabase keys.
     ports:
       - "127.0.0.1:8018:8018"
     environment:
@@ -670,6 +670,18 @@ services:
       - LIFECYCLE_SERVICE_URL=http://lifecycle:8018
       - AUTH_MODE=${AUTH_MODE:-signed}
       - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
+      - AUTH_JWT_VERIFY=${AUTH_JWT_VERIFY:-true}
+      - AUTH_JWT_ALGORITHM=${AUTH_JWT_ALGORITHM:-HS256}
+      - AUTH_JWT_SECRET=${AUTH_JWT_SECRET:-}
+      - AUTH_JWT_PUBLIC_KEY=${AUTH_JWT_PUBLIC_KEY:-}
+      - AUTH_ALLOW_ANONYMOUS=${AUTH_ALLOW_ANONYMOUS:-false}
+      - AUTH_DB_ENFORCE=${AUTH_DB_ENFORCE:-true}
+      - AUTH_ENFORCE_MODULES=${AUTH_ENFORCE_MODULES:-true}
+      - AUTH_ENFORCE_RBAC=${AUTH_ENFORCE_RBAC:-true}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - LICENSE_PATH=${LICENSE_PATH:-}
+      - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY:-}
+      - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT:-warn}
     depends_on:
       db:
         condition: service_healthy

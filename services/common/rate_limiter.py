@@ -47,6 +47,28 @@ def identity_key(request: Request) -> str:
     return "ip:" + (request.client.host if request.client else "unknown")
 
 
+def trusted_client_ip(request: Request) -> str:
+    """Client IP that a caller cannot choose.
+
+    X-Forwarded-For is client-controlled on its left side; every trusted proxy APPENDS the peer address
+    it saw. With TRUSTED_PROXY_HOPS=N (default 1: the web tier/edge in front of this service) the Nth
+    entry from the RIGHT is the address our outermost trusted proxy observed. If the header is absent
+    or shorter than N, or N=0, fall back to the socket peer. Never reads the leftmost entry."""
+    import os
+
+    peer = request.client.host if request.client else "unknown"
+    try:
+        hops = int(os.getenv("TRUSTED_PROXY_HOPS", "1"))
+    except ValueError:
+        hops = 1
+    if hops <= 0:
+        return peer
+    parts = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
+    if len(parts) < hops:
+        return peer
+    return parts[-hops][:64]
+
+
 def internal_key_exempt(request: Request, prefix: str = "/internal/") -> bool:
     """True for service-to-service requests under `prefix` that carry the valid INTERNAL_SERVICE_KEY.
 

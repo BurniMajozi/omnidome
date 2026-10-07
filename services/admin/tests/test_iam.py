@@ -109,7 +109,7 @@ def sb():
 
 @pytest.fixture(scope="module")
 def client(sb):
-    for limiter in (admin_main._global_rate_limiter, admin_main._auth_rate_limiter, iam.invite_limiter, iam.accept_limiter, iam.claim_limiter):
+    for limiter in (admin_main._global_rate_limiter, admin_main._auth_rate_limiter, iam.invite_limiter, iam.accept_limiter, iam.claim_limiter, iam.claim_invite_limiter):
         limiter.max_requests = 10**9
     with TestClient(app=admin_main.app, raise_server_exceptions=False) as c:
         yield c

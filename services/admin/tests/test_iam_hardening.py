@@ -300,3 +300,78 @@ def test_internal_lookup_is_not_rate_limited(client):
     finally:
         limiter.max_requests = old
         limiter._requests.clear()
+
+
+def _fwd(ip):
+    return {"x-forwarded-for": f"9.9.9.9, {ip}"}
+
+
+def test_invite_issue_and_claim_fail_closed_without_secret(client, monkeypatch):
+    t = make_tenant(client)
+    monkeypatch.delenv("INVITE_CODE_SECRET", raising=False)
+    r = invite(client, t, fresh_email())
+    assert r.status_code == 503
+    r = client.post("/invites/claim", json={"invite_id": str(uuid.uuid4()), "email": "a@example.test", "code": "12345678", "password": "a-long-test-password"})
+    assert r.status_code == 503
+
+
+def test_claim_lockout_is_per_invite_and_short_and_bearer_not_a_key(client):
+    t = make_tenant(client)
+    email = fresh_email()
+    invite_id = invite(client, t, email).json()["invite_id"]
+    claim = {"invite_id": invite_id, "email": email, "code": "00000000", "password": "a-long-test-password"}
+    for _ in range(5):
+        assert client.post("/invites/claim", json=claim, headers=_fwd("198.51.100.1")).status_code == 400
+    assert client.post("/invites/claim", json=claim, headers=_fwd("198.51.100.1")).status_code == 429
+    # lock is short (60s), not 15 minutes
+    until = q("SELECT code_locked_until - now() FROM invites WHERE id=:i", i=invite_id)[0][0]
+    assert until.total_seconds() <= 61
+    # another invite is unaffected by the attacker's lock
+    other = fresh_email()
+    other_id = invite(client, make_tenant(client), other).json()["invite_id"]
+    assert client.post("/invites/claim", json={**claim, "invite_id": other_id, "email": other}, headers=_fwd("198.51.100.1")).status_code == 400
+
+
+def test_claim_ip_bucket_ignores_rotating_bearer_and_spoofed_xff_prefix(client):
+    from services.admin import iam as _iam
+
+    _iam.claim_invite_limiter.max_requests = 3
+    _iam.claim_invite_limiter._requests.clear()
+    try:
+        iid = str(uuid.uuid4())
+        codes = []
+        for i in range(5):
+            h = {"authorization": f"Bearer rotating-{i}", "x-forwarded-for": f"7.7.7.{i}, 203.0.113.50"}
+            codes.append(client.post("/invites/claim", json={"invite_id": iid, "email": "x@example.test", "code": "00000000"}, headers=h).status_code)
+        assert codes[:3] == [400, 400, 400] and codes[3:] == [429, 429]
+        # a different real client IP is not collaterally limited
+        h = {"x-forwarded-for": "7.7.7.0, 203.0.113.51"}
+        assert client.post("/invites/claim", json={"invite_id": iid, "email": "x@example.test", "code": "00000000"}, headers=h).status_code == 400
+    finally:
+        _iam.claim_invite_limiter.max_requests = 10**9
+        _iam.claim_invite_limiter._requests.clear()
+
+
+def test_resend_cooldown_and_daily_cap_per_recipient(client, monkeypatch):
+    from services.admin import iam as _iam
+
+    async def noop_send(*a, **k):
+        return "id"
+
+    monkeypatch.setattr(_iam.agentmail, "is_configured", lambda: True)
+    monkeypatch.setattr(_iam.agentmail, "send_email", noop_send)
+    t = make_tenant(client)
+    email = fresh_email()
+    iid = invite(client, t, email, ).json()["invite_id"]
+    url = f"/invites/{iid}/resend"
+    assert client.post(url, headers=platform(t)).status_code == 200
+    r = client.post(url, headers=platform(t))
+    assert r.status_code == 429 and int(r.headers["retry-after"]) >= 1
+    # non-mailing resends are not throttled
+    assert client.post(url + "?send_email=false", headers=platform(t)).status_code == 200
+    # daily cap, with cooldown disabled
+    monkeypatch.setattr(_iam, "RESEND_COOLDOWN_SECONDS", 0)
+    for _ in range(_iam.RESEND_DAILY_CAP - 1):
+        assert client.post(url, headers=platform(t)).status_code == 200
+    r = client.post(url, headers=platform(t))
+    assert r.status_code == 429 and "Daily" in r.json()["detail"]
