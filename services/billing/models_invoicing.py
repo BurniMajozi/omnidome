@@ -91,14 +91,14 @@ class InvoiceMeta(Base):
 
 
 class QuoteSequence(Base):
-    __tablename__ = "quote_sequences"
+    __tablename__ = "billing_quote_sequences"
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     last_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Quote(Base):
-    __tablename__ = "quotes"
+    __tablename__ = "billing_quotes"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
@@ -135,17 +135,17 @@ class Quote(Base):
         back_populates="quote", cascade="all, delete-orphan", order_by="QuoteLine.position")
 
     __table_args__ = (
-        Index("ix_quotes_tenant_number", "tenant_id", "number", unique=True),
-        Index("ix_quotes_tenant_status", "tenant_id", "status"),
+        Index("ix_billing_quotes_tenant_number", "tenant_id", "number", unique=True),
+        Index("ix_billing_quotes_tenant_status", "tenant_id", "status"),
     )
 
 
 class QuoteLine(Base):
-    __tablename__ = "quote_lines"
+    __tablename__ = "billing_quote_lines"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     quote_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("quotes.id", ondelete="CASCADE"), nullable=False, index=True)
+        UUID(as_uuid=True), ForeignKey("billing_quotes.id", ondelete="CASCADE"), nullable=False, index=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     catalog_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
