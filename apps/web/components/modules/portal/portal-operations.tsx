@@ -11,8 +11,15 @@ import { inputClass, textareaClass } from "../billing/shared"
 export function PortalOperations() {
   const [pages, setPages] = useState<Loadable<api.PortalPageList>>({state: "loading"})
   const [selected, setSelected] = useState("")
-  useEffect(() => { void api.loadPortalPages({pageSize: 100}).then(setPages) }, [])
+  const [search, setSearch] = useState("")
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {void api.loadPortalPages({pageSize: 100, search}).then(value => {if (!cancelled) setPages(value)})}, 250)
+    return () => {cancelled = true; clearTimeout(timer)}
+  }, [search])
   return <Tabs defaultValue="campaigns" className="space-y-4">
+    <label className="block max-w-md text-sm">Search pages<input className={inputClass} maxLength={200} value={search} onChange={e => {setSearch(e.target.value); setSelected("")}} placeholder="Find a page to link or inspect" /></label>
+    {pages.state === "ready" && pages.data.total > pages.data.items.length && <p className="text-xs text-muted-foreground">Showing the first {pages.data.items.length} matching pages. Refine the search to find a specific page.</p>}
     <TabsList className="flex h-auto flex-wrap justify-start">
       <TabsTrigger value="campaigns">Campaigns</TabsTrigger><TabsTrigger value="seo">SEO profiles</TabsTrigger>
       <TabsTrigger value="records">Versions & submissions</TabsTrigger>
@@ -20,7 +27,7 @@ export function PortalOperations() {
     <TabsContent value="campaigns"><Campaigns pages={pages.state === "ready" ? pages.data.items : []} /></TabsContent>
     <TabsContent value="seo"><Profiles /></TabsContent>
     <TabsContent value="records" className="space-y-4">
-      {pages.state !== "ready" ? <NotConnected loadable={pages} service="Portal pages" onRetry={() => void api.loadPortalPages({pageSize: 100}).then(setPages)} /> :
+      {pages.state !== "ready" ? <NotConnected loadable={pages} service="Portal pages" onRetry={() => void api.loadPortalPages({pageSize: 100, search}).then(setPages)} /> :
         <label className="block text-sm">Page<select className={inputClass} value={selected} onChange={e => setSelected(e.target.value)}>
           <option value="">Select a page</option>{pages.data.items.map(p => <option key={p.id} value={p.id}>{p.title} ({p.status})</option>)}
         </select></label>}

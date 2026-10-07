@@ -10,10 +10,7 @@ import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 
-// Real inventory service only (/svc/inventory/...). The service currently
-// exposes products, suppliers and purchase orders - it has NO stock-level,
-// warehouse, shipment or movement listing endpoints, so every tile/chart that
-// needed those shows "Not connected" instead of sample numbers.
+// Every figure is read from tenant-scoped Inventory service endpoints.
 
 interface Product {
     id: string
@@ -31,12 +28,6 @@ interface PurchaseOrderLite {
 const formatZar = (v: string | number | null | undefined) =>
     v === null || v === undefined || v === "" ? "—" : `R ${Number(v).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`
 
-const NO_STOCK_ENDPOINT: Loadable<unknown> = {
-    state: "error",
-    status: null,
-    message: "the inventory service exposes no stock-level, warehouse or shipment endpoint yet",
-}
-
 function kpiValue<T>(l: Loadable<T>, fn: (d: T) => string): string {
     if (l.state === "ready") return fn(l.data)
     if (l.state === "loading") return "…"
@@ -47,12 +38,16 @@ export function InventoryModule() {
     const products = useLoadable<Product[]>("/svc/inventory/products")
     const suppliers = useLoadable<unknown[]>("/svc/inventory/suppliers")
     const orders = useLoadable<PurchaseOrderLite[]>("/svc/inventory/purchase-orders")
+    const stock = useLoadable<{soh: number}[]>("/svc/inventory/stock")
+    const lowStock = useLoadable<{total: number}>("/svc/inventory/reports/reorder")
 
     const serviceDown = products.value.state === "unreachable"
     const reloadAll = () => {
         products.reload()
         suppliers.reload()
         orders.reload()
+        stock.reload()
+        lowStock.reload()
     }
 
     const flashcardKPIs = [
@@ -94,13 +89,13 @@ export function InventoryModule() {
         {
             id: "4",
             title: "Stock on Hand / Low Stock",
-            value: "Not connected",
+            value: `${kpiValue(stock.value, d => String(d.reduce((total, row) => total + row.soh, 0)))} / ${kpiValue(lowStock.value, d => String(d.total))}`,
             change: "",
             changeType: "neutral" as const,
             icon: <AlertTriangle className="h-5 w-5 text-amber-400" />,
             backTitle: "Stock levels",
             backDetails: [],
-            backInsight: "No stock-level endpoint is exposed by the inventory service yet.",
+            backInsight: "Physical units on hand / warehouse-product levels below their reorder point.",
         },
     ]
 
@@ -120,6 +115,7 @@ export function InventoryModule() {
             tableData={[]}
             tableColumns={[]}
             showTable={false}
+            hideHeaderExport
         >
             {/* Product catalogue - real rows */}
             <div className="surface-card p-6">
@@ -161,22 +157,6 @@ export function InventoryModule() {
             </div>
 
             <div className="mt-6"><InventoryReports /></div>
-            {/* Stock analytics - no backing endpoint, so no charts */}
-            <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                {["Stock Levels by Category", "Stock by Warehouse", "Stock Movement Trends", "Sell-Through Rate by Product"].map(
-                    (title) => (
-                        <div key={title} className="surface-card p-6">
-                            <h4 className="card-title mb-4">{title}</h4>
-                            <NotConnected
-                                loadable={serviceDown ? products.value : NO_STOCK_ENDPOINT}
-                                service={serviceDown ? "Inventory service" : "Stock data"}
-                                className="h-56"
-                            />
-                        </div>
-                    ),
-                )}
-            </div>
-
             <div className="mt-6">
                 {serviceDown ? (
                     <NotConnected loadable={products.value} service="Inventory service" onRetry={reloadAll} className="py-12" />
