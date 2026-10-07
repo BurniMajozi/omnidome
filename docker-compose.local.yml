@@ -30,7 +30,7 @@ services:
     command: sh -c "uvicorn services.sales.main:app --host 0.0.0.0 --port 8002 --workers 1"
   billing:
     restart: "no"
-    command: sh -c "uvicorn services.billing.main:app --host 0.0.0.0 --port 8003 --workers 1"
+    command: sh -c "uvicorn services.billing.main:app --host 0.0.0.0 --port 8003 --workers 1 --no-access-log"
   finance:
     restart: "no"
     command: sh -c "uvicorn services.finance.main:app --host 0.0.0.0 --port 8015 --workers 1"
