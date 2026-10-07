@@ -69,6 +69,7 @@ services:
     env_file:
       - .env
     environment:
+      - UVICORN_ACCESS_LOG=false
       - AUTH_MODE=${AUTH_MODE:-signed}
       - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}
@@ -403,6 +404,7 @@ services:
     env_file:
       - .env
     environment:
+      - UVICORN_ACCESS_LOG=false
       - AUTH_MODE=${AUTH_MODE:-signed}
       - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
       - DATABASE_URL=${DATABASE_URL}

@@ -16,12 +16,13 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FieldDocuments, type ProspectSeed } from "./field/field-documents"
 import { fieldSalesApi } from "@/lib/mobile-field-sales-api"
-import type { MobileLead, MobileContact, MobileDeal, MobileQuote, Customer360, MobileCommission } from "@/lib/mobile-field-sales-api"
+import type { MobileLead, MobileContact, MobileDeal, Customer360, MobileCommission } from "@/lib/mobile-field-sales-api"
 
 // ── Lead Card ─────────────────────────────────────────────────────────
 
-function LeadCard({ lead, onConvert, onView }: { lead: MobileLead; onConvert: (l: MobileLead) => void; onView: (l: MobileLead) => void }) {
+function LeadCard({ lead, onConvert, onView, onQuote }: { lead: MobileLead; onConvert: (l: MobileLead) => void; onView: (l: MobileLead) => void; onQuote: (l: MobileLead) => void }) {
   const interestColors = ["", "bg-red-500/20 text-red-400", "bg-orange-500/20 text-orange-400", "bg-yellow-500/20 text-yellow-400", "bg-lime-500/20 text-lime-400", "bg-emerald-500/20 text-emerald-400"]
   return (
     <Card className="border-border bg-card">
@@ -42,6 +43,7 @@ function LeadCard({ lead, onConvert, onView }: { lead: MobileLead; onConvert: (l
           </div>
           <div className="flex gap-1 ml-2">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onView(lead)}><ChevronRight className="h-3.5 w-3.5" /></Button>
+            <Button variant="ghost" size="icon" className="h-7 w-7" aria-label="Quote this lead" onClick={() => onQuote(lead)}><FileText className="h-3.5 w-3.5 text-violet-400" /></Button>
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onConvert(lead)}><DollarSign className="h-3.5 w-3.5 text-emerald-400" /></Button>
           </div>
         </div>
@@ -149,83 +151,6 @@ function Customer360Panel({ contact, onClose }: { contact: Customer360; onClose:
   )
 }
 
-// ── Quote Builder ─────────────────────────────────────────────────────
-
-function QuoteBuilder({ customerId, onDone }: { customerId: string; onDone: () => void }) {
-  const [products, setProducts] = useState<Array<{ id: string; name: string; monthly_price: number; setup_fee: number }>>([])
-  const [selected, setSelected] = useState<Array<{ product_id: string; name: string; monthly_price: number; setup_fee: number; qty: number }>>([])
-  const [term, setTerm] = useState("12")
-
-  useEffect(() => {
-    fieldSalesApi.listProducts().then(setProducts).catch(() => {})
-  }, [])
-
-  const addProduct = (p: { id: string; name: string; monthly_price: number; setup_fee: number }) => {
-    if (selected.find(s => s.product_id === p.id)) return
-    setSelected([...selected, { product_id: p.id, name: p.name, monthly_price: p.monthly_price, setup_fee: p.setup_fee, qty: 1 }])
-  }
-
-  const removeProduct = (id: string) => setSelected(selected.filter(s => s.product_id !== id))
-  const updateQty = (id: string, qty: number) => setSelected(selected.map(s => s.product_id === id ? { ...s, qty: Math.max(1, qty) } : s))
-
-  const totalMonthly = selected.reduce((s, i) => s + i.monthly_price * i.qty, 0)
-  const totalOnceOff = selected.reduce((s, i) => s + i.setup_fee * i.qty, 0)
-
-  const handleSend = async () => {
-    await fieldSalesApi.createQuote({ customer_id: customerId, items: selected, term_months: parseInt(term) })
-    onDone()
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h4 className="text-xs font-medium text-muted-foreground mb-2">SELECT PRODUCTS</h4>
-        <div className="space-y-1 max-h-40 overflow-y-auto">
-          {products.map(p => (
-            <button key={p.id} onClick={() => addProduct(p)} className="w-full flex items-center justify-between bg-secondary/30 hover:bg-secondary/50 rounded-lg p-2 text-left">
-              <div><p className="text-sm">{p.name}</p></div>
-              <p className="text-sm font-medium text-emerald-400">R{p.monthly_price}/mo</p>
-            </button>
-          ))}
-          {products.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">No products loaded</p>}
-        </div>
-      </div>
-
-      {selected.length > 0 && (
-        <div>
-          <h4 className="text-xs font-medium text-muted-foreground mb-2">QUOTE ITEMS</h4>
-          <div className="space-y-2">
-            {selected.map(item => (
-              <div key={item.product_id} className="flex items-center justify-between bg-card border border-border rounded-lg p-2">
-                <div className="flex-1"><p className="text-sm">{item.name}</p><p className="text-xs text-muted-foreground">R{item.monthly_price}/mo</p></div>
-                <div className="flex items-center gap-2">
-                  <Input type="number" min={1} value={item.qty} onChange={e => updateQty(item.product_id, parseInt(e.target.value) || 1)} className="w-14 h-7 text-xs text-center" />
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeProduct(item.product_id)}>×</Button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <Label className="text-xs text-muted-foreground">Term</Label>
-        <Select value={term} onValueChange={setTerm}>
-          <SelectTrigger className="w-24 h-8"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="12">12 mo</SelectItem><SelectItem value="24">24 mo</SelectItem></SelectContent>
-        </Select>
-      </div>
-
-      <Card className="border-border bg-card"><CardContent className="p-3 space-y-1">
-        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Monthly</span><span className="font-bold">R{totalMonthly.toLocaleString()}</span></div>
-        <div className="flex justify-between text-sm"><span className="text-muted-foreground">Once-off</span><span className="font-bold">R{totalOnceOff.toLocaleString()}</span></div>
-      </CardContent></Card>
-
-      <Button className="w-full" disabled={selected.length === 0} onClick={handleSend}><Send className="mr-2 h-4 w-4" /> Send Quote</Button>
-    </div>
-  )
-}
-
 // ── Main Field Sales App ──────────────────────────────────────────────
 
 export function FieldSalesApp() {
@@ -238,7 +163,7 @@ export function FieldSalesApp() {
   const [search, setSearch] = useState("")
   const [selectedContact, setSelectedContact] = useState<Customer360 | null>(null)
   const [convertLead, setConvertLead] = useState<MobileLead | null>(null)
-  const [quoteContactId, setQuoteContactId] = useState<string | null>(null)
+  const [quoteFor, setQuoteFor] = useState<{ id: string; label: string } | { prospect: ProspectSeed } | null>(null)
   const [showNewLead, setShowNewLead] = useState(false)
   const [newLead, setNewLead] = useState({ first_name: "", last_name: "", email: "", phone: "", source: "Field Visit", address: "" })
 
@@ -322,11 +247,13 @@ export function FieldSalesApp() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="bg-secondary w-full">
-          <TabsTrigger value="leads" className="flex-1">Leads</TabsTrigger>
-          <TabsTrigger value="contacts" className="flex-1">Customers</TabsTrigger>
-          <TabsTrigger value="deals" className="flex-1">Deals</TabsTrigger>
-          <TabsTrigger value="commissions" className="flex-1">Commissions</TabsTrigger>
+        <TabsList className="bg-secondary w-full overflow-x-auto justify-start">
+          <TabsTrigger value="leads" className="flex-1 text-xs">Leads</TabsTrigger>
+          <TabsTrigger value="contacts" className="flex-1 text-xs">Customers</TabsTrigger>
+          <TabsTrigger value="deals" className="flex-1 text-xs">Deals</TabsTrigger>
+          <TabsTrigger value="quotes" className="flex-1 text-xs">Quotes</TabsTrigger>
+          <TabsTrigger value="invoices" className="flex-1 text-xs">Invoices</TabsTrigger>
+          <TabsTrigger value="commissions" className="flex-1 text-xs">Comm.</TabsTrigger>
         </TabsList>
 
         <TabsContent value="leads" className="mt-3 space-y-2">
@@ -350,7 +277,7 @@ export function FieldSalesApp() {
             </Dialog>
           </div>
           {loading ? <p className="text-xs text-muted-foreground text-center py-8">Loading...</p> : filteredLeads.map(l => (
-            <LeadCard key={l.id} lead={l} onConvert={setConvertLead} onView={lead => handleViewContact(lead.id)} />
+            <LeadCard key={l.id} lead={l} onConvert={setConvertLead} onView={lead => handleViewContact(lead.id)} onQuote={lead => setQuoteFor({ prospect: { name: `${lead.first_name} ${lead.last_name}`.trim(), phone: lead.phone || undefined, address: lead.address || undefined } })} />
           ))}
           {!loading && filteredLeads.length === 0 && <p className="text-xs text-muted-foreground text-center py-8">No new leads</p>}
         </TabsContent>
@@ -368,7 +295,7 @@ export function FieldSalesApp() {
                   </div>
                 </div>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={e => { e.stopPropagation(); setQuoteContactId(c.id) }}><FileText className="h-3.5 w-3.5 text-violet-400" /></Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={e => { e.stopPropagation(); setQuoteFor({ id: c.id, label: `${c.first_name} ${c.last_name}`.trim() }) }}><FileText className="h-3.5 w-3.5 text-violet-400" /></Button>
                   <ChevronRight className="h-4 w-4 text-muted-foreground self-center" />
                 </div>
               </CardContent>
@@ -388,6 +315,14 @@ export function FieldSalesApp() {
               </CardContent>
             </Card>
           ))}
+        </TabsContent>
+
+        <TabsContent value="quotes" className="mt-3">
+          {tab === "quotes" && <FieldDocuments source="field_sales" initialKind="quotes" />}
+        </TabsContent>
+
+        <TabsContent value="invoices" className="mt-3">
+          {tab === "invoices" && <FieldDocuments source="field_sales" initialKind="invoices" />}
         </TabsContent>
 
         <TabsContent value="commissions" className="mt-3 space-y-2">
@@ -417,13 +352,16 @@ export function FieldSalesApp() {
         </DialogContent>
       </Dialog>
 
-      {/* Quote Builder Dialog */}
-      <Dialog open={!!quoteContactId} onOpenChange={() => setQuoteContactId(null)}>
-        <DialogContent className="max-h-[80vh] overflow-y-auto">
-          <DialogHeader><DialogTitle>Build Quote</DialogTitle></DialogHeader>
-          {quoteContactId && <QuoteBuilder customerId={quoteContactId} onDone={() => { setQuoteContactId(null); load() }} />}
-        </DialogContent>
-      </Dialog>
+      {/* Quote for a customer or a lead (shared billing builders) */}
+      {quoteFor && (
+        <FieldDocuments
+          source="field_sales"
+          autoCreate
+          customer={"id" in quoteFor ? { id: quoteFor.id, label: quoteFor.label } : null}
+          prospectSeed={"prospect" in quoteFor ? quoteFor.prospect : null}
+          onClose={() => setQuoteFor(null)}
+        />
+      )}
     </div>
   )
 }

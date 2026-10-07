@@ -82,6 +82,13 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   { methods: ["POST"], pattern: /^\/svc\/admin\/invites\/claim$/ },
   // Recipient unsubscribe page / one-click POST: authorised by an HMAC-signed token in `?t=`
   { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
+  // Customer-facing invoice / quote pages (app/pay/[token], app/quote/[token]). Authorised by the unguessable share
+  // token in the path (billing keeps only its SHA-256, rate-limits per IP, identical 404 for bad tokens). Exactly these
+  // five calls; the dedicated handler app/svc/billing/public/[...path] re-checks the same shapes and strips identity.
+  { methods: ["GET"], pattern: /^\/svc\/billing\/public\/invoices\/[A-Za-z0-9_-]{16,200}$/ },
+  { methods: ["POST"], pattern: /^\/svc\/billing\/public\/invoices\/[A-Za-z0-9_-]{16,200}\/pay$/ },
+  { methods: ["GET"], pattern: /^\/svc\/billing\/public\/quotes\/[A-Za-z0-9_-]{16,200}$/ },
+  { methods: ["POST"], pattern: /^\/svc\/billing\/public\/quotes\/[A-Za-z0-9_-]{16,200}\/(?:accept|decline)$/ },
   // Portal Builder: published page by slug (anonymous visitors; backend rate-limits, returns published pages only)
   { methods: ["GET"], pattern: /^\/svc\/portal_builder\/api\/v1\/portal\/public\/[A-Za-z0-9-]{1,100}$/ },
   // Portal Builder: private review link, authorised by the unguessable share token in the path

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -41,6 +41,11 @@ import { mapAgingBuckets, collectionRateText, customerLabel, invoiceStatusView, 
 import { fmtMoney, sumCents } from "@/lib/money"
 import { downloadCsv } from "@/lib/export-csv"
 import { useRoles } from "@/lib/use-roles"
+import { InvoicesTab } from "@/components/modules/billing/invoicing/invoices-tab"
+import { QuotesTab } from "@/components/modules/billing/invoicing/quotes-tab"
+import { MovementsTab } from "@/components/modules/billing/invoicing/movements-tab"
+import { ItemsTemplatesTab } from "@/components/modules/billing/invoicing/items-templates-tab"
+import { FeePoliciesTab } from "@/components/modules/billing/invoicing/fee-policies-tab"
 
 // All figures come from the billing service (/svc/billing/...). Nothing is
 // hard-coded: when the service is down or returns no rows the UI says so.
@@ -107,6 +112,13 @@ export function BillingModule() {
   }, [])
   const collectionMonth = mapLoadable(collections.value, rows => rows[0] ?? null)
   const [activeTab, setActiveTab] = useState("overview")
+  const [newInvoiceOpen, setNewInvoiceOpen] = useState(false)
+  const [openInvoiceId, setOpenInvoiceId] = useState<string | null>(null)
+  const [focusQuoteId, setFocusQuoteId] = useState<string | null>(null)
+  const clearOpenInvoice = useCallback(() => setOpenInvoiceId(null), [])
+  const clearFocusQuote = useCallback(() => setFocusQuoteId(null), [])
+  const showInvoice = useCallback((id: string) => { setOpenInvoiceId(id); setActiveTab("invoices") }, [])
+  const showQuote = useCallback((id: string) => { setFocusQuoteId(id); setActiveTab("quotes") }, [])
   const isClient = useIsClient()
 
   // Oldest -> newest for the trend chart.
@@ -184,12 +196,12 @@ export function BillingModule() {
               if (invoices.value.state !== "ready") return
               downloadCsv("billing-invoices.csv", billingCsv(["Invoice", "Customer", "Customer ID", "Total ZAR", "Paid ZAR", "Due date", "Status"], invoices.value.data.items.map(i => [i.number, customerLabel(names, i.customer_id), i.customer_id, i.total_zar, i.amount_paid_zar, i.due_date, i.status])))
             }}><Download className="h-3.5 w-3.5" />Export CSV</Button>
-            <span title="Manual invoice creation is unsupported here; subscription invoices use the generation API."><Button variant="cta" size="sm" disabled><Plus className="h-3.5 w-3.5" />New Invoice</Button></span>
+            <Button variant="cta" size="sm" onClick={() => { setActiveTab("invoices"); setNewInvoiceOpen(true) }}><Plus className="h-3.5 w-3.5" />New Invoice</Button>
           </>
         }
       />
 
-      <p className="text-xs text-muted-foreground">Manual invoice creation is unavailable in this screen. {isBillingAdmin(roles) ? "Subscription billing uses the invoice generation API." : "Invoice generation requires a billing admin."} Export includes the loaded invoices only.</p>
+      <p className="text-xs text-muted-foreground">{isBillingAdmin(roles) ? "Subscription billing uses the invoice generation API; one-off invoices and quotes are built in the Invoices and Quotes tabs." : "One-off invoices and quotes are built in the Invoices and Quotes tabs; bulk subscription invoice generation requires a billing admin."} The CSV export includes the loaded invoices only.</p>
       {invoices.value.state === "ready" && <p className="text-xs text-muted-foreground">{showingLabel(invoices.value.data.items.length, invoices.value.data.total)} invoices{invoices.value.data.truncated ? " — partial dataset" : ""}. {namesPartial ? "Customer directory is incomplete; unknown names use a short customer ID." : ""}</p>}
       {/* KPI Cards - real report data only */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -280,9 +292,13 @@ export function BillingModule() {
 
       {/* Main Content */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="bg-secondary">
+        <TabsList className="h-auto flex-wrap bg-secondary">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="invoices">Invoices</TabsTrigger>
+          <TabsTrigger value="quotes">Quotes</TabsTrigger>
+          <TabsTrigger value="catalogue">Items &amp; Templates</TabsTrigger>
+          <TabsTrigger value="movements">Movements</TabsTrigger>
+          <TabsTrigger value="fees">Fee policies</TabsTrigger>
           <TabsTrigger value="collections">Collections</TabsTrigger>
           <TabsTrigger value="aging">Aging Report</TabsTrigger>
         </TabsList>
@@ -365,23 +381,32 @@ export function BillingModule() {
         </TabsContent>
 
         <TabsContent value="invoices" className="mt-4">
-          {invoiceRows.state !== "ready" ? (
-            <NotConnected loadable={invoiceRows} service="Billing" onRetry={invoices.reload} />
-          ) : (
-            <TableShell
-              title="Invoices"
-              columns={[
-                { key: "number", label: "Invoice" },
-                { key: "customer", label: "Customer" },
-                { key: "amount", label: "Amount", render: (v) => formatCurrency(v) },
-                { key: "date", label: "Due" },
-                { key: "status", label: "Status", render: (v) => getStatusBadge(String(v)) },
-              ]}
-              data={invoiceRows.data}
-              searchPlaceholder="Search invoices..."
-              onRefresh={invoices.reload}
-            />
-          )}
+          <InvoicesTab
+            invoices={invoices.value}
+            reload={invoices.reload}
+            names={names}
+            namesPartial={namesPartial}
+            newOpen={newInvoiceOpen}
+            onNewOpenChange={setNewInvoiceOpen}
+            openRequest={openInvoiceId}
+            onOpenRequestHandled={clearOpenInvoice}
+          />
+        </TabsContent>
+
+        <TabsContent value="quotes" className="mt-4">
+          <QuotesTab names={names} focusQuoteId={focusQuoteId} onFocusHandled={clearFocusQuote} onOpenInvoice={showInvoice} />
+        </TabsContent>
+
+        <TabsContent value="catalogue" className="mt-4">
+          <ItemsTemplatesTab />
+        </TabsContent>
+
+        <TabsContent value="movements" className="mt-4">
+          <MovementsTab names={names} onOpenQuote={showQuote} />
+        </TabsContent>
+
+        <TabsContent value="fees" className="mt-4">
+          <FeePoliciesTab onOpenInvoice={showInvoice} />
         </TabsContent>
 
         <TabsContent value="collections" className="mt-4">

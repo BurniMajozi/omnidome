@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { FieldDocuments } from "./field/field-documents"
 import { technicianApi } from "@/lib/mobile-technician-api"
 import type { TechJob, TechDevice, SpeedTestResult } from "@/lib/mobile-technician-api"
 
@@ -115,6 +116,7 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
   const [partQty, setPartQty] = useState("1")
   const [status, setStatus] = useState(job.status)
   const [saving, setSaving] = useState(false)
+  const [showDocs, setShowDocs] = useState(false)
 
   useEffect(() => {
     technicianApi.getCustomerDevices(job.customer_id).then(setDevices).catch(() => {})
@@ -187,6 +189,18 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
           </CardContent>
         </Card>
       )}
+
+      {/* On-site quotes and sales invoices (real billing documents, customer locked to this job) */}
+      <div>
+        <Button variant="outline" className="w-full" onClick={() => setShowDocs(v => !v)}>
+          <Package className="mr-2 h-4 w-4" /> {showDocs ? "Hide quotes & invoices" : "Quotes & invoices for this job"}
+        </Button>
+        {showDocs && (
+          <div className="mt-3">
+            <FieldDocuments source="technician" customer={{ id: job.customer_id, label: job.customer_name || "Job customer" }} />
+          </div>
+        )}
+      </div>
 
       {/* Action buttons */}
       {status === "OPEN" && (
@@ -358,8 +372,10 @@ export function TechnicianApp() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="bg-secondary w-full">
-          <TabsTrigger value="queue" className="flex-1">Job Queue</TabsTrigger>
-          <TabsTrigger value="stats" className="flex-1">My Stats</TabsTrigger>
+          <TabsTrigger value="queue" className="flex-1 text-xs">Jobs</TabsTrigger>
+          <TabsTrigger value="quotes" className="flex-1 text-xs">Quotes</TabsTrigger>
+          <TabsTrigger value="invoices" className="flex-1 text-xs">Invoices</TabsTrigger>
+          <TabsTrigger value="stats" className="flex-1 text-xs">Stats</TabsTrigger>
         </TabsList>
 
         <TabsContent value="queue" className="mt-3 space-y-2">
@@ -374,6 +390,14 @@ export function TechnicianApp() {
             <JobCard key={j.id} job={j} onSelect={setSelectedJob} />
           ))}
           {!loading && filteredJobs.length === 0 && <p className="text-xs text-muted-foreground text-center py-8">No jobs in queue</p>}
+        </TabsContent>
+
+        <TabsContent value="quotes" className="mt-3">
+          {tab === "quotes" && <FieldDocuments source="technician" initialKind="quotes" />}
+        </TabsContent>
+
+        <TabsContent value="invoices" className="mt-3">
+          {tab === "invoices" && <FieldDocuments source="technician" initialKind="invoices" />}
         </TabsContent>
 
         <TabsContent value="stats" className="mt-3 space-y-3">

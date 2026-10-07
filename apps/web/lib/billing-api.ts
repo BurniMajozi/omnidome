@@ -5,7 +5,8 @@ import { createTtlCache } from "@/lib/request-cache"
 import { fetchLoadable } from "@/lib/service-fetch"
 import { sendJson, type ActionResult } from "@/lib/api-result"
 import type { Loadable } from "@/lib/service-state"
-import { customerNameMap } from "@/lib/billing-derive"
+import { customerNameMap, billingTier, type BillingTier } from "@/lib/billing-derive"
+import { useRoles } from "@/lib/use-roles"
 
 /**
  * Billing API client. Everything goes through /svc/billing (the signed-identity
@@ -194,4 +195,14 @@ export function useBillingPages<T>(path: string) {
   }, [path, tick])
   const reload = useCallback(() => setTick(t => t + 1), [])
   return { value, reload }
+}
+
+/**
+ * The caller's billing tier (UI hint only; the server enforces). `loading` while the
+ * role lookup is in flight; `none` when roles are unreadable, which hides every write control.
+ */
+export function useBillingTier(): { tier: BillingTier; loading: boolean; canWrite: boolean; isAdmin: boolean } {
+  const { roles } = useRoles()
+  const tier = billingTier(roles)
+  return { tier, loading: roles === undefined, canWrite: tier === "clerk" || tier === "admin", isAdmin: tier === "admin" }
 }
