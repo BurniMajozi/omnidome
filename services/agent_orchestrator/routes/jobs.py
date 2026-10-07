@@ -175,7 +175,8 @@ async def create_job(body: CreateJob, ctx: AuthContext = Depends(require_operato
             objective=body.objective.strip(), goal_label=body.goal_label,
             max_cost_usd=Decimal(str(body.max_cost_usd)), max_iterations=body.max_iterations,
             max_steps=body.max_steps, status="queued",
-            checkpoint={"actor_id": str(ctx.user_id)},
+            checkpoint={"actor_id": str(ctx.user_id), "actor_roles": list(ctx.roles),
+                        "actor_permissions": list(ctx.permissions)},
         )
         session.add(job)
         await session.flush()
@@ -268,7 +269,8 @@ async def retry_job(job_id: uuid.UUID, body: RetryJob,
             objective=body.objective.strip(), goal_label=prior.goal_label,
             max_cost_usd=Decimal(str(body.max_cost_usd)), max_iterations=min(prior.max_iterations, 3),
             max_steps=min(prior.max_steps, 5), status="queued",
-            checkpoint={"parent_job_id": str(prior.id), "actor_id": str(ctx.user_id)},
+            checkpoint={"parent_job_id": str(prior.id), "actor_id": str(ctx.user_id),
+                        "actor_roles": list(ctx.roles), "actor_permissions": list(ctx.permissions)},
         )
         session.add(new_job)
         await session.flush()

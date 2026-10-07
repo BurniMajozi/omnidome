@@ -37,6 +37,7 @@ import logging
 import os
 import re
 import time
+from contextvars import ContextVar
 from typing import Iterable, Mapping, Optional
 
 logger = logging.getLogger("omnidome.auth")
@@ -197,6 +198,40 @@ def verify_request(
 _banner_logged = False
 _httpx_patched = False
 
+# Verified caller identity of the request/job currently being served, set by a
+# service from its verified AuthContext (never from client input). The httpx
+# signing patch uses it ONLY to add x-roles / x-permissions to an outgoing call
+# that already names the same tenant and user.
+identity_context: ContextVar[Optional[dict]] = ContextVar("identity_context", default=None)
+
+
+def set_identity_context(tenant_id, user_id, roles=(), permissions=()):
+    """Bind the verified identity for this task; returns the reset token."""
+    return identity_context.set({
+        "tenant_id": _norm_id(str(tenant_id)) if tenant_id else "",
+        "user_id": _norm_id(str(user_id)) if user_id else "",
+        "roles": _norm_list(list(roles or [])),
+        "permissions": _norm_list(list(permissions or [])),
+    })
+
+
+def _fill_roles_from_context(headers) -> None:
+    """Add x-roles/x-permissions from identity_context when (and only when) the
+    request already carries the same tenant+user and sets no x-roles itself."""
+    ident = identity_context.get()
+    if not ident or not ident.get("tenant_id") or not ident.get("user_id"):
+        return
+    if headers.get("x-roles"):
+        return
+    if _norm_id(headers.get("x-tenant-id")) != ident["tenant_id"]:
+        return
+    if _norm_id(headers.get("x-user-id")) != ident["user_id"]:
+        return
+    if ident["roles"]:
+        headers["x-roles"] = ident["roles"]
+    if ident["permissions"] and not headers.get("x-permissions"):
+        headers["x-permissions"] = ident["permissions"]
+
 
 def log_mode_banner(mode: str) -> None:
     global _banner_logged
@@ -242,6 +277,8 @@ def install_httpx_signing() -> None:
 
     def _maybe_sign(request) -> None:
         h = request.headers
+        if SIG_HEADER not in h:
+            _fill_roles_from_context(h)
         if SIG_HEADER in h or not (h.get("x-tenant-id") or h.get("x-user-id")):
             return
         try:

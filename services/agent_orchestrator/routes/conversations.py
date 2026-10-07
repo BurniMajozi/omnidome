@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope as get_session
@@ -49,9 +49,9 @@ async def list_conversations(
         )
 
         if not is_admin(ctx):
-            # Own conversations (plus pre-ownership ones with no recorded owner).
+            # Own conversations only; conversations with no recorded owner are admin-only.
             owner_col = AgentConversation.context[OWNER_KEY].astext
-            stmt = stmt.where(or_(owner_col == str(ctx.user_id), owner_col.is_(None)))
+            stmt = stmt.where(owner_col == str(ctx.user_id))
         if agent_type:
             stmt = stmt.where(AgentConversation.agent_type == agent_type)
         if status:
@@ -222,3 +222,36 @@ async def add_message(
         await session.refresh(msg)
 
     return MessageRead.model_validate(msg)
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/conversations/{id}/owner — Admin: claim or reassign ownership
+# ---------------------------------------------------------------------------
+
+@router.put("/{conversation_id}/owner")
+async def set_conversation_owner(
+    conversation_id: uuid.UUID,
+    body: dict,
+    ctx: AuthContext = Depends(get_auth_context),
+):
+    """Admin-only. The only way to give a legacy (ownerless) conversation an owner."""
+    if not is_admin(ctx):
+        raise HTTPException(status_code=403, detail="Admin role required")
+    try:
+        new_owner = str(uuid.UUID(str((body or {}).get("user_id"))))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="user_id must be a UUID")
+    async with get_session() as session:
+        conv = (await session.execute(
+            select(AgentConversation).where(
+                AgentConversation.id == conversation_id,
+                AgentConversation.tenant_id == ctx.tenant_id,
+            )
+        )).scalar_one_or_none()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        previous = (conv.context or {}).get(OWNER_KEY)
+        conv.context = {**(conv.context or {}), OWNER_KEY: new_owner}  # new dict so JSONB change is saved
+        await session.flush()
+    logger.info("conversation %s owner %s -> %s by %s", conversation_id, previous, new_owner, ctx.user_id)
+    return {"id": str(conversation_id), "owner_user_id": new_owner, "previous_owner_user_id": previous}

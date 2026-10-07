@@ -28,9 +28,9 @@ MAX_JOB_ATTEMPTS = int(os.getenv("AGENT_JOB_MAX_ATTEMPTS", "3"))
 DEFAULT_TENANT_MONTHLY_BUDGET_USD = Decimal(os.getenv("AGENT_TENANT_MONTHLY_BUDGET_USD", "100"))
 # Platform-set daily cap for every tenant (env only: no tenant or request input can change it).
 TENANT_DAILY_BUDGET_USD = Decimal(os.getenv("AGENT_TENANT_DAILY_BUDGET_USD", "10"))
-# Metered LLM usage (llm_calls tokens) is priced at this conservative flat rate, so spend
-# that never became a job (chat, nested consultations, workflows) still counts.
-USD_PER_1K_TOKENS = float(os.getenv("AGENT_USD_PER_1K_TOKENS", "0.01"))
+# Metered LLM usage (llm_calls tokens) is priced per model (model_pricing.py, env
+# AGENT_MODEL_PRICES), so spend that never became a job (chat, nested consultations,
+# workflows) still counts. AGENT_USD_PER_1K_TOKENS is only the last-resort flat rate.
 
 
 def tenant_budget_limit(row: AgentTenantBudget | None) -> float | None:
@@ -108,18 +108,35 @@ def _day_start() -> datetime:
 
 async def _metered_spend(session, tenant_id: uuid.UUID, since: datetime, agent_type: str | None = None) -> float:
     """Priced token usage from every recorded model call, job or not."""
-    sql = "SELECT COALESCE(SUM(total_tokens), 0) FROM llm_calls WHERE tenant_id = :t AND created_at >= :since"
+    return (await metered_spend_detail(session, tenant_id, since, agent_type))[0]
+
+
+async def metered_spend_detail(session, tenant_id: uuid.UUID, since: datetime,
+                               agent_type: str | None = None) -> tuple[float, bool]:
+    """(usd, estimated) for llm_calls since `since`, priced per model. Uses the
+    prompt/completion split; if those columns are missing, falls back to total tokens
+    priced at the higher of input/output (flagged estimated)."""
+    from services.agent_orchestrator.model_pricing import price_rows
+
+    where = "tenant_id = :t AND created_at >= :since"
     params: dict = {"t": tenant_id, "since": since}
     if agent_type:
-        sql += " AND agent_type = :a"
+        where += " AND agent_type = :a"
         params["a"] = agent_type
-    try:
-        async with session.begin_nested():
-            tokens = (await session.execute(text(sql), params)).scalar_one()
-    except Exception as exc:  # noqa: BLE001 - tracing table may not exist yet
-        logger.warning("metered spend unavailable: %s", exc)
-        return 0.0
-    return float(tokens or 0) / 1000.0 * USD_PER_1K_TOKENS
+    split_sql = ("SELECT model, COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), "
+                 f"COALESCE(SUM(total_tokens), 0) FROM llm_calls WHERE {where} GROUP BY model")
+    total_sql = f"SELECT model, 0, 0, COALESCE(SUM(total_tokens), 0) FROM llm_calls WHERE {where} GROUP BY model"
+    rows = None
+    for sql in (split_sql, total_sql):
+        try:
+            async with session.begin_nested():
+                rows = (await session.execute(text(sql), params)).all()
+            break
+        except Exception as exc:  # noqa: BLE001 - tracing table/columns may not exist yet
+            logger.warning("metered spend query failed: %s", exc)
+    if rows is None:
+        return 0.0, False
+    return price_rows([tuple(r) for r in rows])
 
 
 async def spend_since(session, tenant_id: uuid.UUID, since: datetime, agent_type: str | None = None) -> float:
@@ -298,6 +315,9 @@ async def execute_job(job_id: uuid.UUID) -> None:
         context["kpi_status"] = kpi_status
 
     attempts = int(checkpoint.get("attempts", 0))
+    # Outgoing service calls from this job carry the creator's stored roles (none if not stored).
+    from services.agent_orchestrator.identity import bind_job_identity
+    bind_job_identity(tenant_id, checkpoint)
 
     async def save_checkpoint(state: dict, iteration: dict | None) -> None:
         state = {**state, "attempts": attempts}

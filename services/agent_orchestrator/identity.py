@@ -2,15 +2,28 @@
 
 Identity comes only from the signed AuthContext. Anything a client puts in a
 request body (tenant_id, context.user_id, context.draft_only, ...) is untrusted.
+
+Conversation ownership: new conversations are stamped with the creator's user id
+(context.owner_user_id). A conversation with NO recorded owner (created before
+stamping) fails closed: only admins can list/read/continue/delete it, non-admins
+get 404. Owners are never guessed or backfilled; an admin may claim or reassign
+one explicitly with PUT /api/conversations/{id}/owner {"user_id": ...}.
+
+Service-to-service roles: bind_identity_context() publishes the verified
+AuthContext (tenant, user, roles, permissions) in
+services.common.internal_auth.identity_context so outgoing tool/memory/skills/
+voicebox calls are signed with roles, but only when the call already names the
+same tenant+user.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
-from services.common.auth import AuthContext
+from services.common import internal_auth
+from services.common.auth import AuthContext, get_auth_context
 
 ADMIN_ROLES = {"admin", "org_admin", "tenant_admin", "owner"}
 
@@ -51,9 +64,40 @@ def conversation_owner(conv) -> Optional[str]:
 
 
 def check_conversation_access(conv, ctx: AuthContext) -> None:
-    """The caller must own the conversation unless an admin. Conversations that
-    predate ownership stamping (no owner recorded) stay tenant-visible."""
+    """The caller must own the conversation or be an admin. A conversation with no
+    recorded owner is admin-only (fail closed)."""
+    if is_admin(ctx):
+        return
     owner = conversation_owner(conv)
-    if owner and owner != str(ctx.user_id) and not is_admin(ctx):
+    if not owner or owner != str(ctx.user_id):
         # 404, not 403: do not confirm that another user's conversation exists.
         raise HTTPException(status_code=404, detail="Conversation not found")
+
+
+def bind_identity_context(ctx: AuthContext):
+    """Publish the verified identity for outgoing service calls; returns the reset token."""
+    return internal_auth.set_identity_context(ctx.tenant_id, ctx.user_id, ctx.roles, ctx.permissions)
+
+
+def bind_job_identity(tenant_id, checkpoint: Optional[Dict[str, Any]]):
+    """Background jobs: use the creator identity stored on the job. No stored roles
+    (older jobs) means no roles are attached: fail closed."""
+    cp = checkpoint or {}
+    actor = cp.get("actor_id")
+    if not actor:
+        return internal_auth.identity_context.set(None)
+    return internal_auth.set_identity_context(
+        tenant_id, actor, cp.get("actor_roles") or [], cp.get("actor_permissions") or [])
+
+
+async def identity_context_dependency(request: Request) -> None:
+    """App-level dependency: bind the verified AuthContext for this request. Runs
+    async so the contextvar is visible to the endpoint. Routes without valid auth
+    (health, public chat, webhooks) simply bind nothing; their own auth rejects them."""
+    try:
+        ctx = await get_auth_context(request)
+    except HTTPException:
+        return
+    except Exception:  # noqa: BLE001 - never let binding break a request
+        return
+    bind_identity_context(ctx)

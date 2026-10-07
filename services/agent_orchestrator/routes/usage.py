@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
+from services.agent_orchestrator.model_pricing import price_model
 
 router = APIRouter()
 
@@ -36,6 +37,8 @@ async def llm_usage(days: int = Query(7, ge=1, le=90), ctx: AuthContext = Depend
             SELECT coalesce(model, 'none')                    AS model,
                    count(*)                                   AS calls,
                    coalesce(sum(total_tokens), 0)             AS tokens,
+                   coalesce(sum(prompt_tokens), 0)            AS prompt_tokens,
+                   coalesce(sum(completion_tokens), 0)        AS completion_tokens,
                    count(*) FILTER (WHERE outcome IN ('error', 'unavailable', 'empty')) AS failures,
                    round(avg(latency_ms))                     AS avg_latency_ms
               FROM llm_calls
@@ -43,4 +46,15 @@ async def llm_usage(days: int = Query(7, ge=1, le=90), ctx: AuthContext = Depend
              GROUP BY 1 ORDER BY calls DESC
         """), params)).mappings().all()
     as_int = lambda row: {k: (int(v) if hasattr(v, "__int__") and not isinstance(v, str) else v) for k, v in row.items()}  # noqa: E731
-    return {"days": days, "agents": [as_int(r) for r in agents], "models": [as_int(r) for r in models]}
+    model_rows = []
+    total_usd, any_estimated = 0.0, False
+    for r in models:
+        row = as_int(r)
+        raw = None if row["model"] == "none" else row["model"]
+        priced = price_model(raw, row.pop("prompt_tokens"), row.pop("completion_tokens"), row["tokens"])
+        row.update(cost_usd=round(priced.usd, 6), price_source=priced.source, estimated=priced.estimated)
+        total_usd += priced.usd
+        any_estimated = any_estimated or priced.estimated
+        model_rows.append(row)
+    return {"days": days, "agents": [as_int(r) for r in agents], "models": model_rows,
+            "cost_usd": round(total_usd, 6), "estimated": any_estimated}

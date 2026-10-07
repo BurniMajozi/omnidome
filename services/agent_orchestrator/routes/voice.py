@@ -31,7 +31,7 @@ async def voice_transcribe(
 ):
     """STT only — transcribe audio for use as agent input."""
     voice_limits.check_agent_type(agent_type)
-    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    await voice_limits.check_rate_limit_shared(str(ctx.tenant_id))
     audio_bytes = await voice_limits.read_audio(file)
     try:
         return await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)
@@ -47,7 +47,7 @@ async def voice_speak(
 ):
     """TTS only — speak arbitrary text in this agent type's bound voice."""
     voice_limits.check_agent_type(agent_type)
-    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    await voice_limits.check_rate_limit_shared(str(ctx.tenant_id))
     voice_limits.check_tts_text(text)
     try:
         audio_bytes, content_type = await speak(text, tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
@@ -71,7 +71,7 @@ async def voice_invoke(
     a voice UI needs without a second round trip).
     """
     voice_limits.check_agent_type(agent_type)
-    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    await voice_limits.check_rate_limit_shared(str(ctx.tenant_id))
     audio_bytes = await voice_limits.read_audio(file)
     try:
         transcription = await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)

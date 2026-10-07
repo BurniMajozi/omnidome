@@ -176,3 +176,81 @@ def test_get_auth_context_signed_mode(monkeypatch):
     assert c.get("/who", headers=dict(signed, **{"x-roles": "x"})).status_code == 401
     monkeypatch.delenv("INTERNAL_AUTH_SECRET")
     assert c.get("/who", headers=signed).status_code == 503
+
+
+# ── identity_context role filling on outgoing calls ─────────────────────────
+
+class _Req:
+    def __init__(self, headers, method="GET", path="/x"):
+        import httpx
+        self.headers = httpx.Headers(headers)
+        self.method = method
+        self.url = httpx.URL("http://svc" + path)
+
+
+def _capture_signer(monkeypatch):
+    """Install the httpx patch and return a function that runs _maybe_sign via a stub transport."""
+    import httpx
+    monkeypatch.setenv("INTERNAL_AUTH_SECRET", SECRET)
+    ia.install_httpx_signing()
+    seen = {}
+
+    def handler(request):
+        seen["h"] = request.headers
+        return httpx.Response(200)
+
+    def call(headers):
+        with httpx.Client(transport=httpx.MockTransport(handler)) as c:
+            c.get("http://svc/x", headers=headers)
+        return seen["h"]
+    return call
+
+
+U = "11111111-2222-3333-4444-555555555555"
+T = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_identity_context_fills_roles_for_same_tenant_and_user(monkeypatch):
+    call = _capture_signer(monkeypatch)
+    tok = ia.set_identity_context(T, U, ["staff", "billing_admin"], ["crm.read"])
+    try:
+        h = call({"X-Tenant-Id": T.upper(), "X-User-Id": U})
+    finally:
+        ia.identity_context.reset(tok)
+    assert h["x-roles"] == "billing_admin,staff"
+    assert h["x-permissions"] == "crm.read"
+    # signature covers the filled roles
+    ia.verify_request(h, "GET", "/x", SECRET)
+    assert h["x-identity-sig"]
+
+
+@pytest.mark.parametrize("hdrs", [
+    {"X-Tenant-Id": "99999999-bbbb-cccc-dddd-eeeeeeeeeeee", "X-User-Id": U},     # other tenant
+    {"X-Tenant-Id": T, "X-User-Id": "99999999-2222-3333-4444-555555555555"},     # other user
+    {"X-Tenant-Id": T},                                                          # no user header
+    {"X-User-Id": U},                                                            # no tenant header
+])
+def test_identity_context_never_fills_on_mismatch(monkeypatch, hdrs):
+    call = _capture_signer(monkeypatch)
+    tok = ia.set_identity_context(T, U, ["org_admin"], ["x.y"])
+    try:
+        h = call(hdrs)
+    finally:
+        ia.identity_context.reset(tok)
+    assert "x-roles" not in h and "x-permissions" not in h
+
+
+def test_identity_context_does_not_override_explicit_roles(monkeypatch):
+    call = _capture_signer(monkeypatch)
+    tok = ia.set_identity_context(T, U, ["org_admin"])
+    try:
+        h = call({"X-Tenant-Id": T, "X-User-Id": U, "X-Roles": "viewer"})
+    finally:
+        ia.identity_context.reset(tok)
+    assert h["x-roles"] == "viewer"
+
+
+def test_no_identity_context_leaves_headers_alone(monkeypatch):
+    call = _capture_signer(monkeypatch)
+    h = call({"X-Tenant-Id": T, "X-User-Id": U})
+    assert "x-roles" not in h

@@ -95,7 +95,7 @@ def test_conversation_ownership():
     conv = SimpleNamespace(context={identity.OWNER_KEY: str(USER)})
     identity.check_conversation_access(conv, make_ctx())  # owner
     identity.check_conversation_access(conv, make_ctx(roles=["admin"], user=uuid.uuid4()))  # admin
-    identity.check_conversation_access(SimpleNamespace(context={}), make_ctx(user=uuid.uuid4()))  # legacy, unowned
+    identity.check_conversation_access(SimpleNamespace(context={}), make_ctx(roles=["admin"]))  # legacy, admin only
     with pytest.raises(HTTPException) as exc:
         identity.check_conversation_access(conv, make_ctx(user=uuid.uuid4()))
     assert exc.value.status_code == 404

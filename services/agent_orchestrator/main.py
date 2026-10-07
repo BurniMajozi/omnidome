@@ -8,11 +8,12 @@ import logging
 import os
 from datetime import datetime
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+from services.agent_orchestrator.identity import identity_context_dependency
 
 logger = logging.getLogger("agent_orchestrator")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -21,6 +22,8 @@ app = FastAPI(
     title="OmniDome Agent Orchestrator",
     description="AI agent runtime — tool execution, conversation management, multi-agent orchestration",
     version="1.0.0",
+    # Bind the verified caller identity (roles included) for outgoing service calls.
+    dependencies=[Depends(identity_context_dependency)],
 )
 
 guard = EntitlementGuard(
