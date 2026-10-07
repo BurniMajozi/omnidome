@@ -139,6 +139,11 @@ async def post_entry(tenant_id: uuid.UUID, entry: dict) -> None:
     """POST one entry to finance. Raises on transport errors AND on any non-2xx response."""
     timeout = float(os.getenv("BILLING_FINANCE_TIMEOUT", "8"))
     headers = {"x-tenant-id": str(tenant_id), "x-user-id": service_user_id(), "content-type": "application/json"}
+    # Service-to-service: finance accepts the shared INTERNAL_SERVICE_KEY for journal writes, so billing
+    # needs no finance role (the service user id only labels the entry; inventory posts the same way).
+    key = os.getenv("INTERNAL_SERVICE_KEY", "")
+    if key:
+        headers["x-internal-key"] = key
     async with httpx.AsyncClient(timeout=timeout) as client:
         resp = await client.post(f"{finance_url()}/journal-entries", json=entry, headers=headers)
     if not 200 <= resp.status_code < 300:

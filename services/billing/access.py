@@ -7,8 +7,8 @@ token roles are not trusted, and an unreadable RBAC table fails closed.
 Tiers (each includes the ones above it):
 
     admin   BILLING_ADMIN_ROLES: billing_admin, finance, finance_admin, admin, tenant_admin, owner,
-            platform_admin. ``org_admin`` counts ONLY when BILLING_ADMIN_EXTRA_ROLES lists it
-            (same stance as HR). Permission ``billing.admin`` also counts.
+            org_admin (the tenant's own administrator, who runs the ISP's billing), platform_admin.
+            BILLING_ADMIN_EXTRA_ROLES can add more. Permission ``billing.admin`` also counts.
             May: credit notes, generate invoices, void, suspend/reinstate, plans/bundles/
             subscriptions/arrangements/billing accounts, Paystack initialize + recurring, outbox retry.
     clerk   manager, billing, billing_clerk, finance_clerk, finance_manager (+ admin).
@@ -36,7 +36,7 @@ from services.common.auth import AuthContext, get_auth_context
 
 logger = logging.getLogger("billing.access")
 
-ADMIN_ROLES = frozenset({"billing_admin", "finance", "finance_admin", "admin", "tenant_admin", "owner", "platform_admin"})
+ADMIN_ROLES = frozenset({"billing_admin", "finance", "finance_admin", "admin", "tenant_admin", "owner", "org_admin", "platform_admin"})
 CLERK_ROLES = frozenset({"manager", "billing", "billing_clerk", "finance_clerk", "finance_manager"})
 READER_ROLES = frozenset({"billing_viewer", "finance_viewer", "billing_readonly", "auditor"})
 

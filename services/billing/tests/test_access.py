@@ -35,10 +35,9 @@ def test_admin_roles_have_every_tier(role):
     assert all(allowed(ctx, t) for t in ("admin", "clerk", "reader"))
 
 
-def test_org_admin_is_not_admin_unless_configured(monkeypatch):
-    assert not allowed(who("org_admin"), "admin") and not allowed(who("org_admin"), "reader")
-    monkeypatch.setenv("BILLING_ADMIN_EXTRA_ROLES", "org_admin, other")
-    assert allowed(who("org_admin"), "admin")
+def test_org_admin_is_billing_admin_by_default(monkeypatch):
+    monkeypatch.delenv("BILLING_ADMIN_EXTRA_ROLES", raising=False)
+    assert allowed(who("org_admin"), "admin") and allowed(who("org_admin"), "reader")
 
 
 def test_clerk_can_record_and_send_but_not_administer():
