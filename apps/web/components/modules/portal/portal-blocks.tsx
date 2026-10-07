@@ -1,5 +1,3 @@
-"use client"
-
 import type { PortalBlock, PortalPageContent } from "@/lib/portal-api"
 
 /**

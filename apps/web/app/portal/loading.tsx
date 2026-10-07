@@ -1,0 +1,1 @@
+export default function PortalLoading() { return <main className="mx-auto max-w-4xl space-y-6 p-8" aria-busy="true" aria-label="Loading portal page"><div className="h-10 animate-pulse rounded bg-muted" /><div className="h-48 animate-pulse rounded bg-muted" /></main> }
