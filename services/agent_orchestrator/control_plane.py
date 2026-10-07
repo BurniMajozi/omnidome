@@ -22,8 +22,15 @@ from services.agent_orchestrator.models import AgentJob, AgentTenantBudget, Regi
 
 logger = logging.getLogger(__name__)
 WORKER_ID = f"{os.getpid()}-{uuid.uuid4().hex[:8]}"
-LEASE = timedelta(hours=1)
+LEASE = timedelta(minutes=int(os.getenv("AGENT_JOB_LEASE_MINUTES", "15")))
+# A claim past this many attempts goes to the dead-letter state instead of running again.
+MAX_JOB_ATTEMPTS = int(os.getenv("AGENT_JOB_MAX_ATTEMPTS", "3"))
 DEFAULT_TENANT_MONTHLY_BUDGET_USD = Decimal(os.getenv("AGENT_TENANT_MONTHLY_BUDGET_USD", "100"))
+# Platform-set daily cap for every tenant (env only: no tenant or request input can change it).
+TENANT_DAILY_BUDGET_USD = Decimal(os.getenv("AGENT_TENANT_DAILY_BUDGET_USD", "10"))
+# Metered LLM usage (llm_calls tokens) is priced at this conservative flat rate, so spend
+# that never became a job (chat, nested consultations, workflows) still counts.
+USD_PER_1K_TOKENS = float(os.getenv("AGENT_USD_PER_1K_TOKENS", "0.01"))
 
 
 def tenant_budget_limit(row: AgentTenantBudget | None) -> float | None:
@@ -60,6 +67,26 @@ def job_dict(row: AgentJob) -> dict:
     }
 
 
+def job_summary(row: AgentJob, parent_job_id: str | None = None) -> dict:
+    """List view: no result, iteration history or checkpoint payloads."""
+    return {
+        "id": str(row.id), "agent_type": row.agent_type,
+        "employee_id": str(row.employee_id) if row.employee_id else None,
+        "objective": (row.objective or "")[:200], "status": row.status,
+        "goal_label": row.goal_label,
+        "max_cost_usd": float(row.max_cost_usd),
+        "estimated_cost_usd": float(row.estimated_cost_usd),
+        "actual_cost_usd": float(row.actual_cost_usd) if row.actual_cost_usd is not None else None,
+        "cost_source": row.cost_source, "total_steps": row.total_steps, "total_tokens": row.total_tokens,
+        "parent_job_id": parent_job_id,
+        "error": row.error,
+        "reviewed_by": str(row.reviewed_by) if row.reviewed_by else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+    }
+
+
 def registered_dict(row: RegisteredAgent) -> dict:
     return {
         "id": str(row.id), "employee_id": str(row.employee_id),
@@ -71,29 +98,99 @@ def registered_dict(row: RegisteredAgent) -> dict:
     }
 
 
-async def monthly_spend(session, tenant_id: uuid.UUID, agent_type: str | None = None) -> float:
-    now = datetime.now(timezone.utc)
-    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+def _month_start() -> datetime:
+    return datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def _day_start() -> datetime:
+    return datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _metered_spend(session, tenant_id: uuid.UUID, since: datetime, agent_type: str | None = None) -> float:
+    """Priced token usage from every recorded model call, job or not."""
+    sql = "SELECT COALESCE(SUM(total_tokens), 0) FROM llm_calls WHERE tenant_id = :t AND created_at >= :since"
+    params: dict = {"t": tenant_id, "since": since}
+    if agent_type:
+        sql += " AND agent_type = :a"
+        params["a"] = agent_type
+    try:
+        async with session.begin_nested():
+            tokens = (await session.execute(text(sql), params)).scalar_one()
+    except Exception as exc:  # noqa: BLE001 - tracing table may not exist yet
+        logger.warning("metered spend unavailable: %s", exc)
+        return 0.0
+    return float(tokens or 0) / 1000.0 * USD_PER_1K_TOKENS
+
+
+async def spend_since(session, tenant_id: uuid.UUID, since: datetime, agent_type: str | None = None) -> float:
+    """Spend is the larger of job accounting and metered usage, so neither a job
+    that under-reports nor usage outside any job can slip under a cap."""
     query = select(func.coalesce(func.sum(
         func.coalesce(AgentJob.actual_cost_usd, AgentJob.estimated_cost_usd)
     ), 0)).where(
         AgentJob.tenant_id == tenant_id,
-        AgentJob.created_at >= start,
+        AgentJob.created_at >= since,
     )
     if agent_type:
         query = query.where(AgentJob.agent_type == agent_type)
-    value = (await session.execute(query)).scalar_one()
-    return float(value or 0)
+    jobs = float((await session.execute(query)).scalar_one() or 0)
+    return max(jobs, await _metered_spend(session, tenant_id, since, agent_type))
+
+
+async def monthly_spend(session, tenant_id: uuid.UUID, agent_type: str | None = None) -> float:
+    return await spend_since(session, tenant_id, _month_start(), agent_type)
+
+
+async def daily_spend(session, tenant_id: uuid.UUID) -> float:
+    return await spend_since(session, tenant_id, _day_start())
+
+
+async def tenant_cap_reason(session, tenant_id: uuid.UUID) -> str | None:
+    """Why this tenant may not start more agent work right now (None = within caps)."""
+    row = (await session.execute(select(AgentTenantBudget).where(
+        AgentTenantBudget.tenant_id == tenant_id,
+    ))).scalar_one_or_none()
+    limit = tenant_budget_limit(row)
+    if limit is not None and await monthly_spend(session, tenant_id) >= limit:
+        return "Tenant monthly agent budget reached"
+    if float(TENANT_DAILY_BUDGET_USD) > 0 and await daily_spend(session, tenant_id) >= float(TENANT_DAILY_BUDGET_USD):
+        return "Tenant daily agent budget reached"
+    return None
+
+
+async def enforce_tenant_caps(tenant_id: uuid.UUID) -> None:
+    """Gate for interactive (non-job) agent calls. 429 when a cap is hit; a database
+    failure is logged and lets the call through rather than taking chat down."""
+    from fastapi import HTTPException
+
+    try:
+        async with session_scope(tenant_id) as session:
+            reason = await tenant_cap_reason(session, tenant_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("tenant cap check skipped: %s", exc)
+        return
+    if reason:
+        raise HTTPException(status_code=429, detail=reason)
 
 
 async def recover_expired_jobs() -> None:
-    """A crashed turn may have made side effects: require deliberate resume."""
+    """A crashed turn may have made side effects: require deliberate resume. A job
+    that keeps getting stuck is dead-lettered once it has used its attempts."""
     async with session_scope() as session:
-        await session.execute(update(AgentJob).where(
+        rows = (await session.execute(select(AgentJob).where(
             AgentJob.status.in_(["running", "pause_requested"]),
             AgentJob.lease_expires_at < datetime.now(timezone.utc),
-        ).values(status="interrupted", lease_owner=None, lease_expires_at=None,
-                 error="Worker stopped before the run finished. Review the checkpoint before resuming."))
+        ).with_for_update(skip_locked=True))).scalars().all()
+        for row in rows:
+            attempts = int((row.checkpoint or {}).get("attempts", 0))
+            if attempts >= MAX_JOB_ATTEMPTS:
+                row.status = "dead_letter"
+                row.error = f"Stopped after {attempts} attempts without finishing; needs an operator."
+                row.finished_at = datetime.now(timezone.utc)
+            else:
+                row.status = "interrupted"
+                row.error = "Worker stopped before the run finished. Review the checkpoint before resuming."
+            row.lease_owner, row.lease_expires_at = None, None
 
 
 async def claim_next_job() -> uuid.UUID | None:
@@ -112,6 +209,14 @@ async def claim_next_job() -> uuid.UUID | None:
             ).limit(1))).first()
             if already_running:
                 continue
+            attempts = int((row.checkpoint or {}).get("attempts", 0)) + 1
+            if attempts > MAX_JOB_ATTEMPTS:
+                row.status = "dead_letter"
+                row.error = f"Dead-lettered: {MAX_JOB_ATTEMPTS} attempts used. Retry it as new work."
+                row.finished_at = datetime.now(timezone.utc)
+                await session.flush()
+                continue
+            row.checkpoint = {**(row.checkpoint or {}), "attempts": attempts}  # new dict so JSONB change is saved
             row.status = "running"
             row.lease_owner = WORKER_ID
             row.lease_expires_at = datetime.now(timezone.utc) + LEASE
@@ -144,6 +249,12 @@ async def execute_job(job_id: uuid.UUID) -> None:
                 job.status, job.error = "stopped_by_ceiling", "Tenant monthly agent budget reached"
                 return
             max_cost = min(max_cost, float(checkpoint.get("accumulated_cost_usd", 0)) + tenant_remaining)
+        if float(TENANT_DAILY_BUDGET_USD) > 0:
+            daily_remaining = float(TENANT_DAILY_BUDGET_USD) - await daily_spend(session, tenant_id)
+            if daily_remaining <= 0:
+                job.status, job.error = "stopped_by_ceiling", "Tenant daily agent budget reached"
+                return
+            max_cost = min(max_cost, float(checkpoint.get("accumulated_cost_usd", 0)) + daily_remaining)
         registered = None
         if employee_id:
             registered = (await session.execute(select(RegisteredAgent).where(
@@ -167,7 +278,8 @@ async def execute_job(job_id: uuid.UUID) -> None:
             }
             runtime_type = "assistant"
         else:
-            context = {}
+            # Unattended built-in agent runs only read and draft; a person reviews the output.
+            context = {"draft_only": True}
             runtime_type = agent_type
         context["run_id"] = str(job_id)
         hints = component_hints(objective)
@@ -185,7 +297,10 @@ async def execute_job(job_id: uuid.UUID) -> None:
         context["kpi_briefing"] = kpi_briefing
         context["kpi_status"] = kpi_status
 
+    attempts = int(checkpoint.get("attempts", 0))
+
     async def save_checkpoint(state: dict, iteration: dict | None) -> None:
+        state = {**state, "attempts": attempts}
         pause_requested = False
         async with session_scope() as session:
             row = (await session.execute(select(AgentJob).where(
@@ -212,6 +327,20 @@ async def execute_job(job_id: uuid.UUID) -> None:
         if pause_requested:
             raise PauseRequested()
 
+    async def heartbeat() -> None:
+        # Keeps the lease alive through a long model call; a dead worker stops renewing it.
+        while True:
+            await asyncio.sleep(LEASE.total_seconds() / 3)
+            try:
+                async with session_scope() as session:
+                    await session.execute(update(AgentJob).where(
+                        AgentJob.id == job_id, AgentJob.lease_owner == WORKER_ID,
+                        AgentJob.status.in_(["running", "pause_requested"]),
+                    ).values(lease_expires_at=datetime.now(timezone.utc) + LEASE))
+            except Exception:  # noqa: BLE001
+                logger.warning("lease heartbeat failed for job %s", job_id)
+
+    heartbeat_task = asyncio.create_task(heartbeat())
     try:
         result = await run_long_horizon_agent(
             prompt=objective, agent_type=runtime_type, tenant_id=tenant_id,
@@ -226,7 +355,7 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row = (await session.execute(select(AgentJob).where(AgentJob.id == job_id).with_for_update())).scalar_one()
             row.status = "awaiting_review" if result.status == "completed" else result.status
             row.result = result.to_dict()
-            row.checkpoint = result.checkpoint
+            row.checkpoint = {**(result.checkpoint or {}), "attempts": attempts}
             row.estimated_cost_usd = Decimal(str(result.estimated_cost_usd))
             row.actual_cost_usd = Decimal(str(result.actual_cost_usd)) if result.actual_cost_usd is not None else None
             row.cost_source = "provider" if result.actual_cost_usd is not None else "estimated"
@@ -244,6 +373,8 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row = (await session.execute(select(AgentJob).where(AgentJob.id == job_id))).scalar_one()
             row.status, row.error = "failed", "Run failed; review its checkpoint before resuming"
             row.lease_owner, row.lease_expires_at = None, None
+    finally:
+        heartbeat_task.cancel()
 
 
 async def worker_loop() -> None:

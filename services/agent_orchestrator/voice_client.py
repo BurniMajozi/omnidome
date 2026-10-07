@@ -10,6 +10,8 @@ from typing import Optional
 
 import httpx
 
+from services.agent_orchestrator import voice_limits
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,6 +44,8 @@ async def transcribe(audio_bytes: bytes, tenant_id: str, user_id: Optional[str] 
             result = resp.json()
             return {"text": result.get("text", ""), "duration": result.get("duration")}
     except Exception as exc:
+        if not voice_limits.third_party_fallback_enabled():
+            raise VoiceboxUnavailable(f"Voicebox service unavailable: {exc}") from exc
         logger.info("Voicebox unavailable (%s); falling back to OpenRouter STT", exc)
         try:
             from services.agent_orchestrator.voice import transcribe_audio
@@ -72,6 +76,8 @@ async def speak(text: str, tenant_id: str, agent_type: str, user_id: Optional[st
             resp.raise_for_status()
             return resp.content, resp.headers.get("content-type", "audio/wav")
     except Exception as exc:
+        if not voice_limits.third_party_fallback_enabled():
+            raise VoiceboxUnavailable(f"Voicebox service unavailable: {exc}") from exc
         logger.info("Voicebox unavailable (%s); falling back to OpenRouter TTS", exc)
         try:
             from services.agent_orchestrator.voice import synthesize_speech

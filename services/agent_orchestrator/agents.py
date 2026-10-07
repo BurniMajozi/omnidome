@@ -8,7 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from services.agent_orchestrator import compaction, memory_capture, memory_context, skills_runtime, usage
+from services.agent_orchestrator import compaction, tool_call_log, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
 from services.agent_orchestrator.tools import SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
@@ -422,14 +422,20 @@ class Agent:
     ):
         """Run one tool call with the A1/A2 guards. Returns (name, args, result)."""
         tool_name = tc.get("name", "")
-        if self.context.get("draft_only") and tool_name not in self.available_tool_names:
-            return tool_name, {}, {"success": False, "refused": True, "error": "This registered agent is limited to read-only tools."}
+        # The per-agent allow-list (config.agent_tool_map) is always enforced, so a
+        # hallucinated or injected tool name cannot run outside the agent's toolset.
+        if tool_name not in self.available_tool_names:
+            msg = ("This registered agent is limited to read-only tools."
+                   if self.context.get("draft_only") else f"Tool {tool_name} is not permitted for this agent.")
+            return tool_name, {}, {"success": False, "refused": True, "error": msg}
         # Spec A1: repaired arguments only. A call whose arguments could not be
         # repaired or were cut off is refused (never run with {}); the error goes
         # back to the model so it re-issues the call.
         tool_args, parse_error = parse_tool_arguments(tc.get("arguments", {}))
         args_error = tc.get("arguments_error") or parse_error
-        tool_args = tool_args or {}
+        # `_`-prefixed keys are reserved for gate metadata (_jev_gate, _tool_call_id);
+        # the model cannot inject them.
+        tool_args = {k: v for k, v in (tool_args or {}).items() if not str(k).startswith("_")}
         if args_error:
             logger.warning("Refused %s: %s", tool_name, args_error)
             return tool_name, tool_args, {"success": False, "error": args_error, "refused": True}
@@ -519,10 +525,36 @@ class Agent:
             }
 
         timeout = getattr(tool, "timeout_s", None) or DEFAULT_TOOL_TIMEOUT_S
+        # Crash-replay guard: inside a job, a state-changing call is logged by
+        # (job, iteration, tool, args hash) so a resumed run never repeats it.
+        log_job = None
+        if getattr(tool, "mutates", False) and self.context.get("run_id"):
+            try:
+                log_job = uuid.UUID(str(self.context["run_id"]))
+            except ValueError:
+                log_job = None
+        step = str(self.context.get("iteration", 0))
+        if log_job:
+            try:
+                claim = await tool_call_log.claim(log_job, step, tool_name, enriched_args, tenant)
+            except Exception as exc:  # noqa: BLE001 - cannot prove it is safe, so do not run it
+                logger.error("Tool-call log unavailable for %s: %s", tool_name, exc)
+                return tool_name, tool_args, {"success": False, "refused": True,
+                                              "error": "Could not record this action, so it was not run."}
+            if claim["state"] == "replay":
+                logger.info("Replay of %s in job %s served from the call log", tool_name, log_job)
+                return tool_name, tool_args, {**(claim["result"] or {}), "replayed": True}
+            if claim["state"] == "unknown":
+                return tool_name, tool_args, {
+                    "success": False, "refused": True,
+                    "error": f"An earlier attempt at this {tool_name} call did not record an outcome, so it "
+                             "may already have happened. It was not repeated; ask a person to check.",
+                }
         try:
             result = await asyncio.wait_for(
                 tool.execute(tool_input=enriched_args, tenant_id=tenant,
                              user_id=str(self.context.get("user_id", "")),
+                             **({"roles": self.context["roles"]} if self.context.get("roles") else {}),
                              **({"agent_type": self.agent_type} if tool_name in SQL_TOOL_NAMES else {})),
                 timeout=timeout,
             )
@@ -530,6 +562,11 @@ class Agent:
             logger.warning("Tool %s timed out after %ss", tool_name, timeout)
             result = {"success": False, "error": f"{tool_name} timed out after {timeout}s; try again later "
                                                  "or answer without it."}
+        if log_job:
+            try:
+                await tool_call_log.finish(log_job, step, tool_name, enriched_args, result)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Could not record outcome of %s in job %s: %s", tool_name, log_job, exc)
         # Spec M3: whatever changed data is remembered, without relying on the model.
         if getattr(tool, "mutates", False):
             await memory_capture.request(

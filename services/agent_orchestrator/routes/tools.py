@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
 from services.common.auth import AuthContext, get_auth_context
+from services.agent_orchestrator.identity import is_admin
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.schemas import ToolInfo, ToolInvokeRequest, ToolInvokeResponse
 
@@ -48,10 +49,15 @@ async def invoke_tool(
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool not found: {body.tool_name}")
 
+    # Debug endpoint: runs under the signed caller identity only (body tenant/user
+    # ids are ignored), and state-changing tools need an admin.
+    if getattr(tool, "mutates", True) and not is_admin(ctx):
+        raise HTTPException(status_code=403, detail="Admin role required to invoke state-changing tools directly")
     result = await tool.execute(
         tool_input=body.tool_input,
-        tenant_id=str(body.tenant_id) if body.tenant_id else str(ctx.tenant_id),
-        user_id=str(body.user_id) if body.user_id else str(ctx.user_id),
+        tenant_id=str(ctx.tenant_id),
+        user_id=str(ctx.user_id),
+        roles=list(ctx.roles),
     )
 
     return ToolInvokeResponse(

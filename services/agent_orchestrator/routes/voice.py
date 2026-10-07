@@ -15,6 +15,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.agent_orchestrator.schemas import AgentInvokeRequest
 from services.agent_orchestrator.routes.agents import invoke_agent
 from services.agent_orchestrator.voice_client import speak, transcribe, VoiceboxUnavailable
+from services.agent_orchestrator import voice_limits
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,10 @@ async def voice_transcribe(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """STT only — transcribe audio for use as agent input."""
+    voice_limits.check_agent_type(agent_type)
+    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    audio_bytes = await voice_limits.read_audio(file)
     try:
-        audio_bytes = await file.read()
         return await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -43,6 +46,9 @@ async def voice_speak(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """TTS only — speak arbitrary text in this agent type's bound voice."""
+    voice_limits.check_agent_type(agent_type)
+    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    voice_limits.check_tts_text(text)
     try:
         audio_bytes, content_type = await speak(text, tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
         return Response(content=audio_bytes, media_type=content_type)
@@ -64,8 +70,10 @@ async def voice_invoke(
     reply audio base64-encoded (so a single response carries everything
     a voice UI needs without a second round trip).
     """
+    voice_limits.check_agent_type(agent_type)
+    voice_limits.check_rate_limit(str(ctx.tenant_id))
+    audio_bytes = await voice_limits.read_audio(file)
     try:
-        audio_bytes = await file.read()
         transcription = await transcribe(audio_bytes, tenant_id=str(ctx.tenant_id), user_id=str(ctx.user_id), language=language)
     except VoiceboxUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -84,7 +92,8 @@ async def voice_invoke(
     }
 
     try:
-        audio_reply, content_type = await speak(invoke_result.message, tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
+        # Cap what we synthesize: a long agent reply must not become an unbounded TTS bill.
+        audio_reply, content_type = await speak(invoke_result.message[:voice_limits.max_tts_chars()], tenant_id=str(ctx.tenant_id), agent_type=agent_type, user_id=str(ctx.user_id))
         response["audio_base64"] = base64.b64encode(audio_reply).decode("ascii")
         response["audio_content_type"] = content_type
     except VoiceboxUnavailable as exc:

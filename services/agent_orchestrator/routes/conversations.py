@@ -9,7 +9,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope as get_session
@@ -18,6 +18,7 @@ from services.agent_orchestrator.conversation.models import (
     AgentMessage,
     AgentAction,
 )
+from services.agent_orchestrator.identity import OWNER_KEY, check_conversation_access, is_admin
 from services.agent_orchestrator.schemas import (
     ConversationRead,
     MessageRead,
@@ -47,6 +48,10 @@ async def list_conversations(
             AgentConversation.tenant_id == ctx.tenant_id
         )
 
+        if not is_admin(ctx):
+            # Own conversations (plus pre-ownership ones with no recorded owner).
+            owner_col = AgentConversation.context[OWNER_KEY].astext
+            stmt = stmt.where(or_(owner_col == str(ctx.user_id), owner_col.is_(None)))
         if agent_type:
             stmt = stmt.where(AgentConversation.agent_type == agent_type)
         if status:
@@ -121,6 +126,7 @@ async def get_conversation(
 
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        check_conversation_access(conv, ctx)
 
         # Explicitly query messages sorted by created_at asc
         msg_result = await session.execute(
@@ -166,6 +172,7 @@ async def delete_conversation(
 
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        check_conversation_access(conv, ctx)
 
         await session.delete(conv)
         await session.flush()
@@ -195,6 +202,7 @@ async def add_message(
         conv = conv_result.scalar_one_or_none()
         if not conv:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        check_conversation_access(conv, ctx)
 
         msg = AgentMessage(
             conversation_id=conversation_id,

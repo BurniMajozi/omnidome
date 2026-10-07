@@ -26,6 +26,12 @@ from services.agent_orchestrator.conversation.models import (
     AgentAction,
 )
 from services.agent_orchestrator.guardrails.gate import run_gate
+from services.agent_orchestrator.control_plane import enforce_tenant_caps
+from services.agent_orchestrator.identity import (
+    OWNER_KEY,
+    check_conversation_access,
+    sanitize_client_context,
+)
 from services.agent_orchestrator.audit_actions import GUARDRAILS_INPUT, GUARDRAILS_OUTPUT
 
 logger = logging.getLogger(__name__)
@@ -584,6 +590,10 @@ async def invoke_agent(
     """
     conversation_id = body.conversation_id
     skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
+    # Identity is the signed context only; client context is whitelisted.
+    body.context = sanitize_client_context(body.context, ctx)
+    if not skip_db:
+        await enforce_tenant_caps(ctx.tenant_id)
 
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
@@ -654,6 +664,7 @@ async def invoke_agent(
                 conv = conv_result.scalar_one_or_none()
                 if not conv:
                     raise HTTPException(status_code=404, detail="Conversation not found")
+                check_conversation_access(conv, ctx)
 
                 # Load message history
                 msg_result = await session.execute(
@@ -675,14 +686,14 @@ async def invoke_agent(
                     tenant_id=ctx.tenant_id,
                     agent_type=effective_agent_type,
                     channel="api",
-                    context=body.context,
+                    context={**body.context, OWNER_KEY: str(ctx.user_id)},
                 )
                 session.add(conv)
                 await session.flush()
                 conversation_id = conv.id
 
     # Run the agent (outside the DB session to avoid long-held locks)
-    tenant_id = body.tenant_id or ctx.tenant_id
+    tenant_id = ctx.tenant_id
     agent = Agent(
         agent_type=effective_agent_type,
         tenant_id=tenant_id,
@@ -778,10 +789,23 @@ async def invoke_agent_stream(
 ):
     """Streaming agent invocation — returns an SSE stream of AGUIEvent JSON
     (matching packages/agent-chat's invokeAgentStreaming parser)."""
-    tenant_id = body.tenant_id or ctx.tenant_id
+    tenant_id = ctx.tenant_id
     conversation_id = body.conversation_id
+    body.context = sanitize_client_context(body.context, ctx)
 
     skip_db = __import__("os").getenv("VOICE_DEV_SKIP_DB", "").lower() in {"1", "true", "yes", "on"}
+    if not skip_db:
+        await enforce_tenant_caps(ctx.tenant_id)
+    if conversation_id and not skip_db:
+        # An existing conversation must belong to this tenant and (unless admin) this user.
+        async with get_session() as session:
+            existing = (await session.execute(
+                select(AgentConversation).where(AgentConversation.id == conversation_id)
+            )).scalar_one_or_none()
+        if existing is not None:
+            if existing.tenant_id != ctx.tenant_id:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            check_conversation_access(existing, ctx)
 
     # Intent-based auto routing if agent_type is 'auto' or unspecified
     effective_agent_type = body.agent_type
@@ -803,7 +827,7 @@ async def invoke_agent_stream(
                 tenant_id=tenant_id,
                 agent_type=effective_agent_type,
                 channel="api",
-                context=body.context,
+                context={**body.context, OWNER_KEY: str(ctx.user_id)},
             )
             session.add(conv)
             await session.flush()

@@ -168,7 +168,8 @@ async def request_approval(
     run_uuid = uuid.UUID(str(run_id)) if run_id else None
     expires_at = datetime.now(timezone.utc) + timedelta(hours=DEFAULT_EXPIRATION_HOURS)
 
-    stored_arguments = dict(arguments or {})
+    # `_`-prefixed keys are reserved for the gate itself; never accept them from a caller.
+    stored_arguments = {k: v for k, v in (arguments or {}).items() if not str(k).startswith("_")}
     if tool_call_id:
         stored_arguments["_tool_call_id"] = tool_call_id
     if jev_gate:
@@ -382,6 +383,8 @@ async def decide_approval(
     decision = decision.lower()
     if decision not in ("approved", "rejected"):
         raise ValueError("Decision must be 'approved' or 'rejected'")
+    if decision == "approved" and row.requested_by and str(row.requested_by).lower() == str(decided_by).lower():
+        raise ValueError("Requesters cannot approve their own request")
 
     row.status = decision
     row.decided_at = now
@@ -620,7 +623,6 @@ async def resume_conversation(
 async def execute_approved(
     tenant_id: str | uuid.UUID,
     approval_id: str | uuid.UUID,
-    custom_output: Optional[dict] = None,
     resume: bool = True,
 ) -> Optional[dict]:
     """Run an approved call at most once: claim (committed) -> run -> record -> resume conversation.
@@ -631,25 +633,20 @@ async def execute_approved(
 
     clean_args = {k: v for k, v in (row.arguments or {}).items() if not k.startswith("_")}
 
-    if custom_output is not None:
-        # HITL onResponseReceived pattern: human supplied custom output
-        logger.info("Using human-supplied custom output for %s (#%s)", row.tool_name, approval_ref(row.id))
-        result = custom_output
+    tool = tool_registry.get(row.tool_name)
+    if not tool:
+        result = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
     else:
-        tool = tool_registry.get(row.tool_name)
-        if not tool:
-            result = {"success": False, "error": f"Tool {row.tool_name} not found in registry"}
-        else:
-            logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, approval_ref(row.id))
-            try:
-                result = await tool.execute(
-                    tool_input=clean_args,
-                    tenant_id=str(row.tenant_id),
-                    user_id=acting_user_id(row),
-                )
-            except Exception as exc:  # noqa: BLE001 - the failure is the outcome to record
-                logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
-                result = {"success": False, "error": str(exc)}
+        logger.info("Executing approved tool call %s for %s (#%s)", row.tool_name, row.agent_type, approval_ref(row.id))
+        try:
+            result = await tool.execute(
+                tool_input=clean_args,
+                tenant_id=str(row.tenant_id),
+                user_id=acting_user_id(row),
+            )
+        except Exception as exc:  # noqa: BLE001 - the failure is the outcome to record
+            logger.exception("Approved tool call %s execution failed: %s", row.tool_name, exc)
+            result = {"success": False, "error": str(exc)}
 
     resumed_response = None
     if resume and row.conversation_id:

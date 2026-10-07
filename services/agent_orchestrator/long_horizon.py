@@ -293,6 +293,7 @@ async def run_long_horizon_agent(
             break
 
         # 2. Run agent iteration
+        agent.context["iteration"] = i  # step id for the crash-replay tool-call log
         try:
             turn_result = await agent.run(
                 user_message=current_input,

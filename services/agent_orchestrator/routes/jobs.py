@@ -8,10 +8,14 @@ from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy.orm import defer
 
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
-from services.agent_orchestrator.control_plane import job_dict, monthly_spend, registered_dict, tenant_budget_limit
+from services.agent_orchestrator.control_plane import (
+    TENANT_DAILY_BUDGET_USD, daily_spend, job_dict, job_summary, monthly_spend, registered_dict, tenant_budget_limit,
+    tenant_cap_reason,
+)
 from services.agent_orchestrator.models import AgentApproval, AgentJob, AgentTenantBudget, RegisteredAgent
 from services.agent_orchestrator import memory_capture
 from services.agent_orchestrator.routes.agents import _may_manage_agents
@@ -60,11 +64,16 @@ async def get_tenant_budget(ctx: AuthContext = Depends(require_operator)):
             AgentTenantBudget.tenant_id == ctx.tenant_id,
         ))).scalar_one_or_none()
         return {"monthly_budget_usd": tenant_budget_limit(row),
-                "month_spend_usd": await monthly_spend(session, ctx.tenant_id)}
+                "daily_budget_usd": float(TENANT_DAILY_BUDGET_USD),
+                "month_spend_usd": await monthly_spend(session, ctx.tenant_id),
+                "day_spend_usd": await daily_spend(session, ctx.tenant_id)}
 
 
 @router.put("/budgets/tenant")
 async def set_tenant_budget(body: TenantBudgetUpdate, ctx: AuthContext = Depends(require_operator)):
+    # The cap protects the platform spend, so the tenant it limits cannot change it.
+    if not ctx.is_platform_admin:
+        raise HTTPException(status_code=403, detail="Tenant budgets are set by the platform")
     async with session_scope(ctx.tenant_id) as session:
         row = (await session.execute(select(AgentTenantBudget).where(
             AgentTenantBudget.tenant_id == ctx.tenant_id,
@@ -145,10 +154,9 @@ async def create_job(body: CreateJob, ctx: AuthContext = Depends(require_operato
         tenant_budget = (await session.execute(select(AgentTenantBudget).where(
             AgentTenantBudget.tenant_id == ctx.tenant_id,
         ))).scalar_one_or_none()
-        tenant_limit = tenant_budget_limit(tenant_budget)
-        if tenant_limit is not None:
-            if await monthly_spend(session, ctx.tenant_id) >= tenant_limit:
-                raise HTTPException(status_code=409, detail="Tenant monthly agent budget reached")
+        reason = await tenant_cap_reason(session, ctx.tenant_id)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
         employee_id = None
         if body.agent_type not in RUNNABLE_BUILTINS:
             row = (await session.execute(select(RegisteredAgent).where(
@@ -177,10 +185,13 @@ async def create_job(body: CreateJob, ctx: AuthContext = Depends(require_operato
 @router.get("/jobs")
 async def list_jobs(ctx: AuthContext = Depends(require_operator)):
     async with session_scope(ctx.tenant_id) as session:
-        rows = (await session.execute(select(AgentJob).where(
-            AgentJob.tenant_id == ctx.tenant_id,
-        ).order_by(AgentJob.created_at.desc(), AgentJob.id.desc()).limit(100))).scalars().all()
-        return [job_dict(row) for row in rows]
+        # Summaries only: the heavy columns (checkpoint, result, history) are not even read.
+        rows = (await session.execute(
+            select(AgentJob, AgentJob.checkpoint["parent_job_id"].astext)
+            .options(defer(AgentJob.checkpoint), defer(AgentJob.result), defer(AgentJob.iteration_history))
+            .where(AgentJob.tenant_id == ctx.tenant_id)
+            .order_by(AgentJob.created_at.desc(), AgentJob.id.desc()).limit(100))).all()
+        return [job_summary(row, parent) for row, parent in rows]
 
 
 @router.get("/jobs/{job_id}")
@@ -237,7 +248,7 @@ async def retry_job(job_id: uuid.UUID, body: RetryJob,
         ).with_for_update())).scalar_one_or_none()
         if prior is None:
             raise HTTPException(status_code=404, detail="Job not found")
-        if prior.status not in {"awaiting_review", "max_iterations", "failed", "stopped_by_ceiling", "completed"}:
+        if prior.status not in {"awaiting_review", "max_iterations", "failed", "stopped_by_ceiling", "completed", "dead_letter"}:
             raise HTTPException(status_code=409, detail="This run is still active; pause or finish it first")
         if prior.employee_id:
             registered = (await session.execute(select(RegisteredAgent).where(
@@ -249,12 +260,9 @@ async def retry_job(job_id: uuid.UUID, body: RetryJob,
                 raise HTTPException(status_code=409, detail="Agent is no longer registered")
             if await monthly_spend(session, ctx.tenant_id, prior.agent_type) >= float(registered.monthly_budget_usd):
                 raise HTTPException(status_code=409, detail="Monthly agent budget reached")
-        tenant_budget = (await session.execute(select(AgentTenantBudget).where(
-            AgentTenantBudget.tenant_id == ctx.tenant_id,
-        ))).scalar_one_or_none()
-        limit = tenant_budget_limit(tenant_budget)
-        if limit is not None and await monthly_spend(session, ctx.tenant_id) >= limit:
-            raise HTTPException(status_code=409, detail="Tenant monthly agent budget reached")
+        reason = await tenant_cap_reason(session, ctx.tenant_id)
+        if reason:
+            raise HTTPException(status_code=409, detail=reason)
         new_job = AgentJob(
             tenant_id=ctx.tenant_id, agent_type=prior.agent_type, employee_id=prior.employee_id,
             objective=body.objective.strip(), goal_label=prior.goal_label,

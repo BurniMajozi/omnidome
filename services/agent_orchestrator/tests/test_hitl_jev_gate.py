@@ -199,32 +199,29 @@ def test_format_display_metadata_with_jev_info():
     assert "Jev System One (Risk 4.0/5.0" in meta["context"]
 
 
-def test_execute_approved_with_custom_output_override():
-    """Cookbook HITL pattern: human supplies custom tool output (onResponseReceived)."""
+def test_execute_approved_ignores_human_supplied_output_and_runs_the_stored_call():
+    """A human may approve or reject, never fabricate the tool result."""
     async def _run():
         mock_row = AgentApproval(
             id=uuid.uuid4(),
             tenant_id=uuid.uuid4(),
             agent_type="billing",
             tool_name="billing_issue_refund",
-            arguments={"customer_id": "C-1", "amount": 500},
+            arguments={"customer_id": "C-1", "amount": 500, "_jev_gate": {"x": 1}},
             status="approved",
             conversation_id=None,
         )
+        import inspect
+        assert "custom_output" not in inspect.signature(execute_approved).parameters
 
-        custom_human_output = {"approved": True, "custom_amount": 250, "reviewer": "Manager"}
+        fake_tool = AsyncMock()
+        fake_tool.execute = AsyncMock(return_value={"success": True, "data": {"real": True}})
+        with patch("services.agent_orchestrator.approvals._claim", AsyncMock(return_value=mock_row)),              patch("services.agent_orchestrator.approvals._record", AsyncMock()),              patch("services.agent_orchestrator.approvals.tool_registry.get", return_value=fake_tool):
+            result = await execute_approved(tenant_id=mock_row.tenant_id, approval_id=mock_row.id, resume=False)
 
-        with patch("services.agent_orchestrator.approvals._claim", AsyncMock(return_value=mock_row)), \
-             patch("services.agent_orchestrator.approvals._record", AsyncMock()):
-            result = await execute_approved(
-                tenant_id=mock_row.tenant_id,
-                approval_id=mock_row.id,
-                custom_output=custom_human_output,
-                resume=False,
-            )
-
-        assert result is not None
-        assert result == custom_human_output
+        assert result == {"success": True, "data": {"real": True}}
+        # `_`-prefixed gate metadata never reaches the tool.
+        assert fake_tool.execute.await_args.kwargs["tool_input"] == {"customer_id": "C-1", "amount": 500}
 
     asyncio.run(_run())
 

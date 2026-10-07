@@ -22,8 +22,22 @@ router = APIRouter()
 
 class ApproveRequest(BaseModel):
     notes: Optional[str] = None
-    custom_output: Optional[dict] = None
     resume_conversation: bool = True
+
+
+# Roles that may decide an approval; anything else (plain staff, agents) may not.
+APPROVER_ROLES = {"admin", "org_admin", "tenant_admin", "owner", "manager", "executive"}
+
+
+def _may_decide_approvals(ctx: AuthContext) -> bool:
+    roles = {role.lower() for role in ctx.roles}
+    permissions = {permission.lower() for permission in ctx.permissions}
+    return ctx.is_platform_admin or bool(roles & APPROVER_ROLES) or "agents.approve" in permissions
+
+
+def _require_approver(ctx: AuthContext) -> None:
+    if not _may_decide_approvals(ctx):
+        raise HTTPException(status_code=403, detail="Manager or admin role required to decide approvals")
 
 
 class RejectRequest(BaseModel):
@@ -69,7 +83,12 @@ async def approve(
     body: Optional[ApproveRequest] = None,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Approve a pending agent action proposal, then run it (at most once)."""
+    """Approve a pending agent action proposal, then run it (at most once).
+
+    The tool always runs with the arguments stored at request time; a human can
+    approve or reject but never supply the result.
+    """
+    _require_approver(ctx)
     async with session_scope() as session:
         try:
             await decide_approval(
@@ -86,7 +105,6 @@ async def approve(
     exec_res = await execute_approved(
         ctx.tenant_id,
         approval_id,
-        custom_output=body.custom_output if body else None,
         resume=body.resume_conversation if body is not None and body.resume_conversation is not None else True,
     )
     async with session_scope() as session:
@@ -103,6 +121,7 @@ async def reject(
     ctx: AuthContext = Depends(get_auth_context),
 ):
     """Reject a pending agent action proposal."""
+    _require_approver(ctx)
     async with session_scope() as session:
         try:
             return await decide_approval(

@@ -104,6 +104,7 @@ def test_agent_execute_call_intercepts_approval_required(monkeypatch):
         )
 
         agent = Agent(agent_type="support", tenant_id=uuid.UUID(TENANT), context={"user_id": "u-123"})
+        agent.available_tool_names.append("test_approval_tool")  # the allow-list is enforced on every call
         name, args, result = await agent._execute_call(
             tc={"name": "test_approval_tool", "arguments": {"customer_id": "C-1"}},
             call_counts={},

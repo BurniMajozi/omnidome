@@ -398,6 +398,34 @@ class JevVerificationVerdict:
         }
 
 
+TRIAGE_AGENT_OPTIONS = (
+    "support", "billing", "provisioning", "retention",
+    "sales", "call_center", "talent", "analytics", "products", "assistant",
+)
+TRIAGE_MIN_CONFIDENCE = float(os.getenv("JEV_TRIAGE_MIN_CONFIDENCE", "0.6"))
+
+
+def _unit(value: Any, default: float = 0.0, high: float = 1.0) -> float:
+    """Model output is untrusted: coerce to a finite number clamped to [0, high]."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if number != number or number in (float("inf"), float("-inf")):
+        return default
+    return max(0.0, min(high, number))
+
+
+def validate_triage_choice(chosen: Any, confidence: float, default_fallback: str = "assistant") -> tuple[str, bool]:
+    """Return (agent, accepted). A routing answer outside the offered options, or below
+    the confidence threshold, falls back to the general assistant instead of being trusted."""
+    if not isinstance(chosen, str) or chosen not in TRIAGE_AGENT_OPTIONS:
+        return default_fallback, False
+    if confidence < TRIAGE_MIN_CONFIDENCE:
+        return default_fallback, False
+    return chosen, True
+
+
 async def triage_inbound_inquiry(
     message: str,
     context: Optional[Dict[str, Any]] = None,
@@ -425,10 +453,7 @@ async def triage_inbound_inquiry(
             reason="Static regex/keyword classification fallback (Jev disabled or no key).",
         )
 
-    options = [
-        "support", "billing", "provisioning", "retention",
-        "sales", "call_center", "talent", "analytics", "products", "assistant"
-    ]
+    options = list(TRIAGE_AGENT_OPTIONS)
     criteria = {
         "support": "Technical network faults, fiber outages, LOS red light, packet loss, or router troubleshooting.",
         "billing": "Invoices, payment issues, debit orders, refunds, billing disputes, or account balance.",
@@ -504,26 +529,30 @@ async def triage_inbound_inquiry(
             answers = data.get("answers", {})
 
             choice_ans = answers.get("target_agent", {})
-            chosen = choice_ans.get("choice") or default_fallback
-            conf = float(choice_ans.get("confidence", 0.8))
-            probs = {k: float(v) for k, v in choice_ans.get("probabilities", {}).items()}
+            conf = _unit(choice_ans.get("confidence", 0.8))
+            chosen, accepted = validate_triage_choice(choice_ans.get("choice"), conf, default_fallback)
+            if not accepted:
+                logger.warning("Jev triage choice %r (conf=%.2f) rejected; using %s",
+                               choice_ans.get("choice"), conf, default_fallback)
+            raw_probs = choice_ans.get("probabilities", {})
+            probs = {str(k): _unit(v) for k, v in raw_probs.items()} if isinstance(raw_probs, dict) else {}
 
             frust_ans = answers.get("frustration_level", {})
-            frust_score = float(frust_ans.get("score", 0.0))
+            frust_score = _unit(frust_ans.get("score", 0.0), high=2.0)
             frust_legend = frust_ans.get("legend", {})
             frust_label = frust_legend.get(str(int(frust_score)), "Calm")
 
             churn_ans = answers.get("churn_risk", {})
-            churn_score = float(churn_ans.get("score", 0.0))
+            churn_score = _unit(churn_ans.get("score", 0.0), high=2.0)
             churn_legend = churn_ans.get("legend", {})
             churn_label = churn_legend.get(str(int(churn_score)), "Low churn risk")
 
             esc_ans = answers.get("requires_immediate_escalation", {})
-            esc_prob = float(esc_ans.get("noul", 0.0))
+            esc_prob = _unit(esc_ans.get("noul", 0.0))
             needs_esc = esc_prob >= 0.70 or frust_score >= 1.8
 
             noul_ans = answers.get("is_direct_lookup", {})
-            direct_prob = float(noul_ans.get("noul", 0.0))
+            direct_prob = _unit(noul_ans.get("noul", 0.0))
             is_direct = direct_prob >= 0.80
 
             logger.info(

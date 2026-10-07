@@ -15,8 +15,38 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 
 import httpx
+from urllib.parse import unquote, urlparse
+
+from services.common import internal_auth
 
 logger = logging.getLogger(__name__)
+
+
+def signed_service_headers(
+    method: str,
+    url: str,
+    tenant_id: Optional[str],
+    user_id: Optional[str],
+    roles: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """Identity headers for a service call, HMAC-signed over this exact method and
+    path (services/common/internal_auth), roles included so the signature covers
+    them. Unsigned (header-mode peers) only when INTERNAL_AUTH_SECRET is not set."""
+    headers: Dict[str, str] = {}
+    if tenant_id:
+        headers["X-Tenant-Id"] = str(tenant_id)
+    if user_id:
+        headers["X-User-Id"] = str(user_id)
+    if roles:
+        headers["X-Roles"] = ",".join(sorted({str(r).strip() for r in roles if str(r).strip()}))
+    if not headers:
+        return headers
+    try:
+        secret = internal_auth.get_secret()
+    except internal_auth.IdentityConfigError:
+        return headers
+    headers.update(internal_auth.sign_headers(headers, method, unquote(urlparse(url).path), secret))
+    return headers
 
 # Service URL resolution
 SERVICE_URLS = {
@@ -151,6 +181,7 @@ class Tool:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None,
         agent_type: Optional[str] = None,
+        roles: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Execute the tool by calling the microservice API or internal handler.
         agent_type selects the SQL tool's table allowlist (spec A9)."""
@@ -202,11 +233,7 @@ class Tool:
             if placeholder in url:
                 url = url.replace(placeholder, str(value))
                 request_input.pop(key, None)
-        headers = {}
-        if tenant_id:
-            headers["X-Tenant-Id"] = str(tenant_id)
-        if user_id:
-            headers["X-User-Id"] = str(user_id)
+        headers = signed_service_headers(self.method, url, tenant_id, user_id, roles)
 
         try:
             # Per-tool timeout (spec A6): the web-intel tools need well over 10 s.
