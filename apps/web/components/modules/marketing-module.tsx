@@ -48,6 +48,12 @@ import {
   adminApi, adminErrorMessage, AdminApiError, grantableRoles, ROLE_LABELS,
   type Whoami, type TenantMember, type TenantInvite,
 } from "@/lib/admin-api"
+import { scheduledPostsPath } from "@/lib/marketing-zernio-api"
+import { ConnectionsPanel, ConnectPlatformDialog } from "./marketing/connect-flow"
+import { SocialComposer } from "./marketing/post-composer"
+import { CreateAdModal } from "./marketing/create-ad-modal"
+import { LeadFormsPanel } from "./marketing/lead-forms-panel"
+import { CampaignCreateForm } from "./marketing/campaign-create-form"
 import {
   loadMarketing, writeMarketing, campaignsPath, socialAccountsPath, socialPostsPath,
   inboxMessagesPath, analyticsDailyPath, analyticsPostsPath, adCampaignsPath, commentAutomationsPath, whatsAppContactsPath, whatsAppBroadcastsPath,
@@ -201,13 +207,45 @@ const MARKETING_NAV: NavEntry[] = [
   { key: "staff-attribution", label: "Staff Attribution", icon: Layers },
 ]
 
+const VALID_TABS = new Set<string>([
+  "connections", "campaigns", "social-overview", "social-composer", "social-queues", "social-scheduled",
+  "inbox-messages", "inbox-comments", "inbox-reviews", "inbox-contacts", "analytics",
+  "whatsapp-overview", "whatsapp-templates", "whatsapp-flows", "whatsapp-groups", "whatsapp-conversions", "whatsapp-broadcasts", "whatsapp-contacts",
+  "email-templates", "email-compose", "email-journeys", "email-agentmail", "sms-senders", "team-users", "ads", "automations", "traditional",
+  "platform-usage", "platform-keys", "platform-offboard", "staff-attribution",
+])
+
+/** Tab and connect-result banner handed back by the in-app connect callback (?marketing_tab=...&connect=success|error). */
+function readReturnParams(): { tab: MarketingTab | null; banner: { kind: "success" | "error"; message: string } | null } {
+  if (typeof window === "undefined") return { tab: null, banner: null }
+  const q = new URLSearchParams(window.location.search)
+  const t = q.get("marketing_tab")
+  const kind = q.get("connect")
+  const msg = q.get("connect_msg")
+  return {
+    tab: t && VALID_TABS.has(t) ? (t as MarketingTab) : null,
+    banner: (kind === "success" || kind === "error") && msg ? { kind, message: msg } : null,
+  }
+}
+
 export function MarketingModule() {
-  const [activeTab, setActiveTab] = useState<MarketingTab>("campaigns")
+  const [returnParams] = useState(readReturnParams)
+  const [activeTab, setActiveTab] = useState<MarketingTab>(returnParams.tab ?? "campaigns")
+  const [adsSubTab, setAdsSubTab] = useState<"campaigns" | "audiences" | "lead-forms">("campaigns")
+  useEffect(() => {
+    // Strip the one-shot banner params so a refresh does not replay them.
+    if (typeof window === "undefined") return
+    const u = new URL(window.location.href)
+    if (u.searchParams.has("connect") || u.searchParams.has("connect_msg") || u.searchParams.has("marketing_tab")) {
+      u.searchParams.delete("connect"); u.searchParams.delete("connect_msg"); u.searchParams.delete("marketing_tab")
+      window.history.replaceState(null, "", `${u.pathname}${u.search}${u.hash}`)
+    }
+  }, [])
   // Track which nav groups are open; auto-open the group holding the active tab.
   const [expanded, setExpanded] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {}
     for (const entry of MARKETING_NAV) {
-      if (isGroup(entry)) init[entry.id] = entry.children.some((c) => c.key === "campaigns")
+      if (isGroup(entry)) init[entry.id] = entry.children.some((c) => c.key === (returnParams.tab ?? "campaigns"))
     }
     return init
   })
@@ -287,10 +325,10 @@ export function MarketingModule() {
 
         {/* Content */}
         <div className="min-w-0 flex-1">
-          {activeTab === "connections" && <ConnectionsTab />}
-          {activeTab === "campaigns" && <CampaignsTab />}
+          {activeTab === "connections" && <ConnectionsPanel banner={returnParams.banner} />}
+          {activeTab === "campaigns" && <CampaignsTab onOpenAudiences={() => { setAdsSubTab("audiences"); setActiveTab("ads") }} />}
           {activeTab === "social-overview" && <PostsOverviewTab onOpenComposer={() => setActiveTab("social-composer")} />}
-          {activeTab === "social-composer" && <SocialComposerTab onBackToOverview={() => setActiveTab("social-overview")} />}
+          {activeTab === "social-composer" && <SocialComposer onBackToOverview={() => setActiveTab("social-overview")} />}
           {activeTab === "social-queues" && <QueuesTab />}
           {activeTab === "social-scheduled" && <ScheduledPostsTab onOpenComposer={() => setActiveTab("social-composer")} />}
           {activeTab === "inbox-messages" && <SocialInboxTab kind="messages" />}
@@ -318,7 +356,7 @@ export function MarketingModule() {
           {activeTab === "email-agentmail" && <AgentMailTab />}
           {activeTab === "sms-senders" && <SmsSenderIdsTab />}
           {activeTab === "team-users" && <TeamUsersTab />}
-          {activeTab === "ads" && <AdsTab />}
+          {activeTab === "ads" && <AdsTab initialSubTab={adsSubTab} />}
           {activeTab === "automations" && <AutomationsTab />}
           {activeTab === "platform-usage" && <UsageTab />}
           {activeTab === "platform-keys" && <ApiKeysTab />}
@@ -745,170 +783,6 @@ function ScheduleSortDropdown({
   )
 }
 
-function ConnectionsTab() {
-  const { value: conn, reload } = useMarketingLoad<{ connectable: boolean; configured: boolean; profile_ready: boolean; connectors: MarketingConnector[] }>("/social/zernio/connectors")
-  const data = conn.state === "ready" ? conn.data : null
-  const loading = conn.state === "loading"
-  const [error, setError] = useState<string | null>(null)
-  const [connectingId, setConnectingId] = useState<string | null>(null)
-  const [health, setHealth] = useState<AccountHealth | null>(null)
-  const [checkingHealth, setCheckingHealth] = useState(false)
-  const load = reload
-
-  const checkHealth = async () => {
-    setCheckingHealth(true)
-    const res = await loadMarketing<AccountHealth>("/social/accounts-health", { force: true })
-    if (res.state === "ready") {
-      setHealth(res.data)
-      setError(null)
-    } else {
-      setError(describeLoadableError(res, "Health check failed"))
-    }
-    setCheckingHealth(false)
-  }
-
-  const handleConnect = async (id: string) => {
-    setConnectingId(id)
-    setError(null)
-    const res = await loadMarketing<{ platform: string; auth_url: string }>(`/social/accounts/connect/${encodeURIComponent(id)}`, { force: true })
-    if (res.state === "ready" && res.data?.auth_url) {
-      window.open(res.data.auth_url, "_blank", "noopener,noreferrer")
-    } else if (res.state === "ready") {
-      setError("Zernio returned no connect URL for this platform.")
-    } else {
-      setError(describeLoadableError(res, "Failed to start connection"))
-    }
-    setConnectingId(null)
-  }
-
-  const connectors = data?.connectors ?? []
-  const connectedCount = connectors.filter((c) => c.connected).length
-  const categories = ["Social", "Messaging", "Commerce"]
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-base font-semibold text-foreground">Connections</h3>
-          <p className="text-sm text-muted-foreground">
-            {loading ? "Loading…" : conn.state === "ready" ? `${connectedCount} connected · ${connectors.length} platforms available via Zernio` : "Connection status unavailable"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={checkHealth} disabled={checkingHealth}>
-            <Radio className={`mr-2 h-4 w-4 ${checkingHealth ? "animate-spin" : ""}`} /> Check health
-          </Button>
-          <Button size="sm" variant="ghost" onClick={load} disabled={loading}>
-            <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Refresh
-          </Button>
-        </div>
-      </div>
-
-      {health && (
-        <div className={`rounded-lg border p-3 ${health.summary.needsReconnect > 0 ? "border-amber-500/30 bg-amber-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
-          {health.summary.needsReconnect > 0 ? (
-            <div className="space-y-2">
-              <p className="flex items-center gap-2 text-sm font-medium text-amber-500">
-                <AlertTriangle className="h-4 w-4" /> {health.summary.needsReconnect} account(s) need reconnection
-              </p>
-              {health.accounts.filter((a) => a.needsReconnect).map((a) => (
-                <div key={a.accountId} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="flex items-center gap-2 text-foreground">
-                    <BrandChip id={a.platform} size={24} />
-                    {a.username || a.platform}
-                    <span className="text-xs text-muted-foreground">{(a.issues || []).join(", ")}</span>
-                  </span>
-                  <Button size="sm" variant="outline" className="shrink-0" onClick={() => handleConnect(a.platform)}>
-                    <RefreshCw className="mr-1 h-3.5 w-3.5" /> Reconnect
-                  </Button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="flex items-center gap-2 text-sm text-emerald-500">
-              <CheckCircle className="h-4 w-4" /> All {health.summary.total} account(s) healthy
-            </p>
-          )}
-        </div>
-      )}
-
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-          <p className="text-sm text-red-400">{error}</p>
-        </div>
-      )}
-
-      {conn.state !== "ready" && <NotConnected loadable={conn} service="The marketing service" onRetry={reload} />}
-
-      {data && !data.connectable && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-          <div className="text-sm text-amber-500">
-            <p className="font-medium">Connecting is disabled</p>
-            <p className="text-amber-500/80">
-              {!data.configured
-                ? "Set ZERNIO_API_KEY to enable Zernio connectors."
-                : "Set ZERNIO_PROFILE_ID so new accounts attach to your Zernio profile."}
-              {" "}You can still browse the catalogue below.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {categories.map((cat) => {
-        const items = connectors.filter((c) => c.category === cat)
-        if (items.length === 0) return null
-        return (
-          <div key={cat} className="space-y-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{cat}</p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {items.map((c) => (
-                <Card key={c.id} className="border-border bg-card">
-                  <CardContent className="flex items-center gap-3 p-4">
-                    <BrandChip id={c.id} />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium leading-tight text-foreground">{c.label}</p>
-                      {c.connected ? (
-                        <p className="truncate text-xs text-emerald-500">
-                          {c.accounts[0]?.name || c.accounts[0]?.username || "Connected"}
-                        </p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">Not connected</p>
-                      )}
-                    </div>
-                    {c.coming_soon ? (
-                      <Badge variant="outline" className="shrink-0 border-amber-500/40 text-amber-500">Soon</Badge>
-                    ) : c.connected ? (
-                      <Badge variant="outline" className="shrink-0 border-emerald-500/40 text-emerald-500">
-                        <CheckCircle className="mr-1 h-3 w-3" /> Connected
-                      </Badge>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="shrink-0"
-                        disabled={!data?.connectable || connectingId === c.id}
-                        onClick={() => handleConnect(c.id)}
-                      >
-                        {connectingId === c.id ? (
-                          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <><Link2 className="mr-1 h-3.5 w-3.5" /> Connect</>
-                        )}
-                      </Button>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // EMAIL TABS & JOURNEYS (Modularized in ./marketing/email-templates-tab, etc.)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1117,33 +991,12 @@ function OffboardTab() {
 // CAMPAIGNS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function CampaignsTab() {
+function CampaignsTab({ onOpenAudiences }: { onOpenAudiences?: () => void } = {}) {
   const [channel, setChannel] = useState<string>("all")
   const [showCreate, setShowCreate] = useState(false)
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
-  const [newCampaign, setNewCampaign] = useState({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
   const { value: camp, reload } = useMarketingLoad<any[]>(campaignsPath(channel !== "all" ? { channel } : undefined))
   const loading = camp.state === "loading"
   const campaigns: any[] = camp.state === "ready" ? camp.data : []
-
-  const handleCreate = async () => {
-    if (!newCampaign.name) return
-    setCreating(true)
-    setCreateError(null)
-    const res = await writeMarketing("POST", "/campaigns", {
-      ...newCampaign,
-      budget_zar: newCampaign.budget_zar ? Number(newCampaign.budget_zar) : undefined,
-    })
-    setCreating(false)
-    if (!res.ok) {
-      setCreateError(describeMutationError(res.status, res.error))
-      return
-    }
-    reload()
-    setShowCreate(false)
-    setNewCampaign({ name: "", channel: "email", budget_zar: "", start_date: "", end_date: "" })
-  }
 
   const activeCount = campaigns.filter((c: any) => c.status === "active").length
   const totalSent = campaigns.reduce((sum: number, c: any) => sum + (c.total_sent || 0), 0)
@@ -1229,25 +1082,11 @@ function CampaignsTab() {
 
       {/* Create Form */}
       {showCreate && (
-        <Card className="border-border bg-card">
-          <CardHeader><CardTitle className="text-sm">Create Campaign</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <Input placeholder="Campaign name" value={newCampaign.name} onChange={(e) => setNewCampaign({ ...newCampaign, name: e.target.value })} />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <select value={newCampaign.channel} onChange={(e) => setNewCampaign({ ...newCampaign, channel: e.target.value })} className="rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground">
-                <option value="email">Email</option><option value="social">Social</option>
-                <option value="search">Search</option><option value="display">Display</option>
-                <option value="sms">SMS</option>
-              </select>
-              <Input placeholder="Budget (ZAR)" value={newCampaign.budget_zar} onChange={(e) => setNewCampaign({ ...newCampaign, budget_zar: e.target.value })} />
-            </div>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleCreate} disabled={creating || !newCampaign.name}>{creating ? "Creating…" : "Create"}</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
-            </div>
-            {createError && <p className="text-sm text-red-400" role="alert">{createError}</p>}
-          </CardContent>
-        </Card>
+        <CampaignCreateForm
+          onCancel={() => setShowCreate(false)}
+          onCreated={() => { setShowCreate(false); reload() }}
+          onOpenAudiences={onOpenAudiences}
+        />
       )}
 
       {/* Campaign Table */}
@@ -1260,11 +1099,12 @@ function CampaignsTab() {
             <div className="py-12 text-center text-muted-foreground">No campaigns yet. Use New Campaign to create one.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[800px]">
+              <table className="w-full min-w-[900px]">
                 <thead>
                   <tr className="border-b border-border text-left text-xs text-muted-foreground">
                     <th className="py-2 pr-4 font-medium">Name</th>
                     <th className="py-2 pr-4 font-medium">Channel</th>
+                    <th className="py-2 pr-4 font-medium">Audience</th>
                     <th className="py-2 pr-4 font-medium">Status</th>
                     <th className="py-2 pr-4 font-medium">Budget</th>
                     <th className="py-2 pr-4 font-medium">Sent</th>
@@ -1277,6 +1117,7 @@ function CampaignsTab() {
                     <tr key={c.id} className="border-b border-border/60 text-sm">
                       <td className="py-3 pr-4 text-foreground font-medium">{c.name}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.channel}</td>
+                      <td className="py-3 pr-4 text-muted-foreground">{c.audience_name ? `${c.audience_name}${typeof c.audience_size === "number" ? ` (${c.audience_size})` : ""}` : "—"}</td>
                       <td className="py-3 pr-4"><Badge variant="outline" className={statusColor[c.status] || "border-muted text-muted-foreground"}>{c.status}</Badge></td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.budget_zar ? `R ${Number(c.budget_zar).toLocaleString()}` : "—"}</td>
                       <td className="py-3 pr-4 text-muted-foreground">{c.total_sent || 0}</td>
@@ -1537,10 +1378,14 @@ function QueuesTab() {
 }
 
 function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } = {}) {
-  const { value: postsLoad, reload: load } = useMarketingLoad<any[]>(socialPostsPath({ status: "scheduled" }))
+  const [listView, setListView] = useState<"scheduled" | "draft" | "failed">("scheduled")
+  // Scheduled view reads the dedicated endpoint (scheduled + queued, soonest first); drafts/failed use the filtered list.
+  const listPath = listView === "scheduled" ? scheduledPostsPath() : `/social/posts?status=${listView}&sort=created_desc&limit=200`
+  const { value: postsLoad, reload: load } = useMarketingLoad<{ posts?: any[]; provider_error?: string | null } | any[]>(listPath)
   const loading = postsLoad.state === "loading"
   const [removed, setRemoved] = useState<string[]>([])
-  const posts: any[] = postsLoad.state === "ready" ? postsLoad.data.filter((p: any) => !removed.includes(p.id)) : []
+  const rawPosts: any[] = postsLoad.state === "ready" ? (Array.isArray(postsLoad.data) ? postsLoad.data : postsLoad.data?.posts ?? []) : []
+  const posts: any[] = rawPosts.filter((p: any) => !removed.includes(p.id))
   const [cancelling, setCancelling] = useState<string | null>(null)
   const [cancelError, setCancelError] = useState<string | null>(null)
   const [platformFilter, setPlatformFilter] = useState("all")
@@ -1597,7 +1442,7 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
     })
 
     return result
-  }, [posts, platformFilter, sortBy])
+  }, [posts, platformFilter, dateFilter, sortBy])
 
   const gridColsClass =
     zoomScale === 1
@@ -1628,7 +1473,7 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
           >
             <Plus className="mr-1.5 h-4 w-4" /> Create post
           </Button>
-          <Button size="sm" variant="outline" className="text-xs h-9 border-border bg-card">
+          <Button size="sm" variant="outline" className="text-xs h-9 border-border bg-card" disabled title="CSV import is not available yet: there is no backend endpoint for it">
             <Upload className="mr-1.5 h-3.5 w-3.5" /> Import CSV
           </Button>
           <Button size="sm" variant="ghost" onClick={load} disabled={loading} className="h-9 px-2.5 text-muted-foreground hover:text-foreground">
@@ -1700,7 +1545,15 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
         </div>
       </div>
 
+      <div className="flex items-center gap-1 rounded-lg border border-border bg-card/60 p-1 text-xs w-fit">
+        {([["scheduled", "Scheduled and queued"], ["draft", "Drafts"], ["failed", "Failed"]] as const).map(([k, label]) => (
+          <button key={k} type="button" onClick={() => setListView(k)} className={`rounded-md px-3 py-1.5 font-medium ${listView === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>{label}</button>
+        ))}
+      </div>
       {cancelError && <p className="text-sm text-red-400" role="alert">{cancelError}</p>}
+      {postsLoad.state === "ready" && !Array.isArray(postsLoad.data) && postsLoad.data?.provider_error && (
+        <p className="text-xs text-amber-500" role="status">Provider status could not be checked: {postsLoad.data.provider_error}</p>
+      )}
       {postsLoad.state !== "ready" ? (
         <NotConnected loadable={postsLoad} service="The marketing service" onRetry={load} />
       ) : filteredPosts.length === 0 ? (
@@ -1708,8 +1561,8 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted/60 text-muted-foreground">
             <Calendar className="h-6 w-6" />
           </div>
-          <h3 className="text-base font-bold text-foreground">Nothing scheduled</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Create a scheduled post in the composer or add a slot in your queue</p>
+          <h3 className="text-base font-bold text-foreground">{listView === "scheduled" ? "Nothing scheduled" : listView === "draft" ? "No drafts" : "No failed posts"}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{listView === "scheduled" ? "Create a scheduled post in the composer or add a slot in your queue" : listView === "draft" ? "Drafts saved from the composer appear here" : "Posts the provider rejected appear here with the reason"}</p>
           <Button
             onClick={onOpenComposer}
             className="mt-5 bg-[#EA3829] hover:bg-[#d02e20] text-white font-medium text-xs px-5 h-9 shadow-sm"
@@ -1726,7 +1579,7 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                   <th className="px-4 py-3 font-semibold">Scheduled Time</th>
                   <th className="px-4 py-3 font-semibold">Platforms</th>
                   <th className="px-4 py-3 font-semibold">Post Content</th>
-                  <th className="px-4 py-3 font-semibold">Account / Handle</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
                   <th className="px-4 py-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
@@ -1762,9 +1615,10 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                     </td>
                     <td className="px-4 py-3 max-w-sm">
                       <p className="line-clamp-2 text-foreground font-medium">{p.content}</p>
+                      {p.publish_error && <p className="mt-0.5 text-[11px] text-red-400">{p.publish_error}</p>}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground font-mono text-[11px]">
-                      {p.brand_handle || "—"}
+                    <td className="px-4 py-3 text-muted-foreground text-[11px]">
+                      <Badge variant="outline" className={statusColor[String(p.status).toLowerCase()] || "border-muted text-muted-foreground"}>{p.queue_id ? "queued" : p.status}</Badge>
                     </td>
                     <td className="px-4 py-3 text-right">
                       <Button
@@ -1797,12 +1651,13 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                 {day}
               </div>
             ))}
-            {Array.from({ length: 14 }).map((_, idx) => {
+            {Array.from({ length: new Date().getDay() }).map((_, i) => <div key={`pad-${i}`} />)}
+            {Array.from({ length: 28 }).map((_, idx) => {
               const cellDate = new Date(Date.now() + idx * 86400 * 1000)
               const cellPosts = filteredPosts.filter((p) => {
                 if (!p.scheduled_for) return false
                 const d = new Date(p.scheduled_for)
-                return d.getDate() === cellDate.getDate() && d.getMonth() === cellDate.getMonth()
+                return d.getFullYear() === cellDate.getFullYear() && d.getDate() === cellDate.getDate() && d.getMonth() === cellDate.getMonth()
               })
               return (
                 <div
@@ -1869,8 +1724,8 @@ function ScheduledPostsTab({ onOpenComposer }: { onOpenComposer?: () => void } =
                   <p className="line-clamp-3 text-xs text-foreground font-medium leading-relaxed">{post.content}</p>
                 </div>
                 <div className="mt-4 pt-3 border-t border-border/60 flex items-center justify-between text-xs">
-                  <span className="text-[11px] text-muted-foreground font-mono truncate max-w-[120px]">
-                    {post.brand_handle || "—"}
+                  <span className="text-[11px] text-muted-foreground truncate max-w-[160px]">
+                    {post.publish_error ? <span className="text-red-400" title={post.publish_error}>{post.publish_error}</span> : (post.queue_id ? "queued" : post.status)}
                   </span>
                   <Button
                     size="sm"
@@ -2248,336 +2103,6 @@ function PostsOverviewTab({ onOpenComposer }: { onOpenComposer: () => void }) {
           ))}
         </div>
       )}
-    </div>
-  )
-}
-
-function SocialComposerTab({ onBackToOverview }: { onBackToOverview?: () => void } = {}) {
-  const { value: accountsLoad, reload: reloadAccounts } = useMarketingLoad<any[]>(socialAccountsPath())
-  const { value: postsLoad, reload: reloadPosts } = useMarketingLoad<any[]>(socialPostsPath())
-  const { value: queuesLoad, reload: reloadQueues } = useMarketingLoad<{ queues: MarketingQueue[] }>("/social/queues")
-  const accounts: any[] = accountsLoad.state === "ready" ? accountsLoad.data : []
-  const posts: any[] = postsLoad.state === "ready" ? postsLoad.data : []
-  const queues: MarketingQueue[] = queuesLoad.state === "ready" ? (queuesLoad.data?.queues ?? []) : []
-  const loading = postsLoad.state === "loading"
-  const loadData = () => { reloadAccounts(); reloadPosts(); reloadQueues() }
-  const [content, setContent] = useState("")
-  const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([])
-  // Default the picker to ~1 hour ahead, formatted for <input type="datetime-local">.
-  const defaultScheduleAt = () => {
-    const d = new Date(Date.now() + 60 * 60000 - new Date().getTimezoneOffset() * 60000)
-    return d.toISOString().slice(0, 16)
-  }
-  const [scheduleAt, setScheduleAt] = useState(defaultScheduleAt)
-  const [mode, setMode] = useState<"now" | "schedule" | "queue" | "draft">("schedule")
-  const [queueId, setQueueId] = useState("")
-  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null)
-  const [submitting, setSubmitting] = useState(false)
-  const browserTimezone = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return "local time" } })()
-  const [showReuseModal, setShowReuseModal] = useState(false)
-
-  const togglePlatform = (platform: string) => {
-    setSelectedPlatforms((prev) =>
-      prev.includes(platform) ? prev.filter((p) => p !== platform) : [...prev, platform]
-    )
-  }
-
-  const scheduledFor = () => new Date(scheduleAt).toISOString()
-  const scheduleInvalid = mode === "schedule" && (!scheduleAt || new Date(scheduleAt).getTime() <= Date.now())
-  const queueInvalid = mode === "queue" && !queueId
-  const canSubmit = content.trim() && selectedPlatforms.length > 0 && !scheduleInvalid && !queueInvalid
-
-  const submitLabel = { now: "Publish Now", schedule: "Schedule Post", queue: "Add to Queue", draft: "Save Draft" }[mode]
-
-  const handlePublish = async () => {
-    if (!canSubmit || submitting) return
-    setNotice(null)
-    setSubmitting(true)
-    const base = { account_id: accounts[0]?.id, content, platforms: selectedPlatforms }
-    let r
-    if (mode === "now") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "published" })
-    else if (mode === "schedule") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "scheduled", scheduled_for: scheduledFor() })
-    else if (mode === "draft") r = await writeMarketing<any>("POST", "/social/posts", { ...base, status: "draft" })
-    else r = await writeMarketing<any>("POST", `/social/queues/${queueId}/enqueue`, { ...base, status: "scheduled" })
-    setSubmitting(false)
-    if (!r.ok) {
-      setNotice({ kind: "error", text: describeMutationError(r.status, r.error) })
-      return
-    }
-    const res = r.data
-    // Real publish/schedule can fail (e.g. no connected account) - surface it.
-    if (res?.publish_error) {
-      setNotice({ kind: "error", text: `Saved, but publishing failed: ${res.publish_error}` })
-    } else if (mode === "queue" && res?.scheduled_for) {
-      setNotice({ kind: "ok", text: `Queued for ${new Date(res.scheduled_for).toLocaleString()}` })
-      setContent(""); setSelectedPlatforms([])
-    } else {
-      setNotice({ kind: "ok", text: `Saved (server status: ${res?.status ?? "unknown"}).` })
-      setContent(""); setSelectedPlatforms([])
-    }
-    loadData()
-  }
-
-  const handleReusePost = (pastPostText: string) => {
-    setContent(pastPostText)
-    setShowReuseModal(false)
-  }
-
-  return (
-    <div className="space-y-6">
-      {/* Zernio Screenshot 5 Container Layout */}
-      <Card className="border-border bg-background shadow-lg overflow-hidden">
-        {/* Top Header matching Screenshot 5 */}
-        <div className="flex items-center justify-between border-b border-border bg-card/60 px-6 py-4">
-          <div>
-            <h2 className="text-base font-bold text-foreground">Create Post</h2>
-            <p className="text-xs text-muted-foreground">create & publish content</p>
-          </div>
-          <div className="flex items-center gap-2">
-            {onBackToOverview && (
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs h-8"
-                onClick={onBackToOverview}
-              >
-                ← Back to Posts
-              </Button>
-            )}
-            <Button
-              size="sm"
-              className="bg-[#6610f2] hover:bg-[#520dc2] text-white font-medium text-xs h-8 shadow-sm"
-              onClick={() => setShowReuseModal(true)}
-            >
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Reuse
-            </Button>
-          </div>
-        </div>
-
-        {/* 2-Column Body */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border">
-          {/* LEFT COLUMN: Content & Media */}
-          <div className="p-6 space-y-4">
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-2">content</label>
-              <Textarea
-                placeholder="what's on your mind..."
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                rows={7}
-                className="resize-none text-sm bg-card border-border focus:border-border/90"
-              />
-              <div className="text-right mt-1.5">
-                <span className="text-xs text-muted-foreground">{content.length} chars</span>
-              </div>
-            </div>
-
-            {/* Media Dropzone matching Screenshot 5 */}
-            <div>
-              <div
-                aria-disabled="true"
-                title="Media upload is not available yet"
-                className="flex items-center justify-center rounded-xl border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-not-allowed opacity-60"
-              >
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Plus className="h-4 w-4" />
-                  <span className="text-xs font-medium">Media upload is not available yet</span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN: Profiles, Platforms & Publishing */}
-          <div className="p-6 space-y-5">
-            {/* Platforms matching Screenshot 5 */}
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-2">platforms (connected accounts)</label>
-              {accounts.length === 0 ? (
-                <div className="flex flex-col items-center justify-center rounded-xl border border-border bg-card/40 p-8 text-center">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-card text-muted-foreground mb-2">
-                    <Plus className="h-5 w-5" />
-                  </div>
-                  <p className="text-xs font-semibold text-foreground">no connected accounts</p>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">{accountsLoad.state === "ready" ? "connect an account under Connections first" : accountsLoad.state === "loading" ? "loading accounts…" : "accounts could not be loaded (service not running or errored)"}</p>
-                </div>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {accounts.map((acc: any) => {
-                    const isSelected = selectedPlatforms.includes(acc.platform)
-                    return (
-                      <button
-                        key={acc.id}
-                        type="button"
-                        onClick={() => togglePlatform(acc.platform)}
-                        className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-                          isSelected ? "border-primary bg-primary/10 text-primary" : "border-border bg-card text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <div className="h-2 w-2 rounded-full" style={{ backgroundColor: platformColors[acc.platform] || "#666" }} />
-                        {acc.account_name || acc.platform}
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Publishing Tabs matching Screenshot 5: Schedule | Now | Queue | Draft */}
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground block mb-2">publishing</label>
-              <div className="grid grid-cols-4 rounded-lg border border-border bg-card/60 p-1 text-xs">
-                {([
-                  { m: "schedule", label: "Schedule" },
-                  { m: "now", label: "Now" },
-                  { m: "queue", label: "Queue" },
-                  { m: "draft", label: "Draft" },
-                ] as const).map(({ m, label }) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMode(m)}
-                    className={`py-1.5 rounded-md font-medium transition-all ${
-                      mode === m ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-
-              {/* Schedule Sub-form */}
-              {mode === "schedule" && (
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">date & time</label>
-                    <Input
-                      type="datetime-local"
-                      value={scheduleAt}
-                      min={defaultScheduleAt()}
-                      onChange={(e) => setScheduleAt(e.target.value)}
-                      className="text-xs bg-card border-border"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">timezone</label>
-                    <p className="rounded-md border border-border bg-card px-2.5 py-2 text-xs text-muted-foreground">{browserTimezone} (your browser)</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Queue Sub-form */}
-              {mode === "queue" && (
-                <div className="mt-3">
-                  <label className="text-[11px] font-medium text-muted-foreground block mb-1">select queue</label>
-                  {queuesLoad.state !== "ready" ? (
-                    <p className="text-xs text-amber-500">{queuesLoad.state === "loading" ? "Loading queues…" : "Queues could not be loaded."}</p>
-                  ) : queues.length === 0 ? (
-                    <p className="text-xs text-amber-500">No queues yet — create one under Queues first.</p>
-                  ) : (
-                    <select
-                      value={queueId}
-                      onChange={(e) => setQueueId(e.target.value)}
-                      className="w-full rounded-md border border-border bg-card px-3 py-2 text-xs text-foreground focus:outline-none"
-                    >
-                      <option value="">Select a queue…</option>
-                      {queues.map((q) => (
-                        <option key={q.id} value={q.id}>{q.name} ({q.slots?.length || 0} recurring slots)</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-              )}
-
-              {mode === "draft" && (
-                <p className="mt-2 text-xs text-muted-foreground">Post will be stored as draft and can be scheduled or modified later.</p>
-              )}
-              {notice && <p role={notice.kind === "error" ? "alert" : "status"} className={`mt-2 text-xs ${notice.kind === "error" ? "text-red-400" : "text-emerald-500"}`}>{notice.text}</p>}
-            </div>
-          </div>
-        </div>
-
-        {/* Footer actions matching Screenshot 5 */}
-        <div className="flex items-center justify-end gap-2 border-t border-border bg-card/30 px-6 py-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setContent("")
-              setSelectedPlatforms([])
-            }}
-          >
-            cancel
-          </Button>
-          <Button
-            size="sm"
-            disabled={!canSubmit || submitting}
-            onClick={handlePublish}
-            className="bg-muted-foreground text-background hover:bg-foreground hover:text-background font-medium"
-          >
-            {submitLabel.toLowerCase()}
-          </Button>
-        </div>
-      </Card>
-
-      {/* REUSE MODAL */}
-      {showReuseModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="relative flex w-full max-w-lg flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden max-h-[80vh]">
-            <div className="flex items-center justify-between border-b border-border px-6 py-4">
-              <h3 className="text-sm font-bold text-foreground">Reuse Past Post</h3>
-              <button onClick={() => setShowReuseModal(false)} className="text-muted-foreground hover:text-foreground">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="overflow-y-auto p-4 space-y-2">
-              {posts.length === 0 ? (
-                <p className="py-8 text-center text-xs text-muted-foreground">No past posts available to reuse.</p>
-              ) : (
-                posts.slice(0, 10).map((p) => (
-                  <div
-                    key={p.id}
-                    onClick={() => handleReusePost(p.content)}
-                    className="p-3 rounded-lg border border-border bg-card hover:border-primary/50 cursor-pointer transition-colors"
-                  >
-                    <p className="text-xs text-foreground line-clamp-3">{p.content}</p>
-                    <p className="text-[10px] text-muted-foreground mt-1.5">{new Date(p.created_at).toLocaleDateString()} · {p.status}</p>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Recent Posts List */}
-      <Card className="border-border bg-card">
-        <CardHeader><CardTitle className="text-sm">Recent Posts</CardTitle></CardHeader>
-        <CardContent>
-          <ScrollArea className="h-64">
-            {postsLoad.state !== "ready" ? (
-              <NotConnected loadable={postsLoad} service="The marketing service" onRetry={reloadPosts} />
-            ) : posts.length === 0 ? (
-              <div className="py-8 text-center text-muted-foreground text-xs">No posts yet</div>
-            ) : (
-              <div className="space-y-3">
-                {posts.map((post: any) => (
-                  <div key={post.id} className="rounded-lg border border-border bg-background/40 p-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        {(post.platforms || []).map((p: string) => (
-                          <span key={p} className="text-[10px] px-2 py-0.5 rounded-full border border-border" style={{ borderColor: platformColors[p] + "40", color: platformColors[p] }}>{p}</span>
-                        ))}
-                      </div>
-                      <Badge variant="outline" className={statusColor[post.status] || "border-muted text-muted-foreground"}>{post.status}</Badge>
-                    </div>
-                    <p className="text-xs text-foreground line-clamp-2">{post.content}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-          </ScrollArea>
-        </CardContent>
-      </Card>
     </div>
   )
 }
@@ -3803,25 +3328,6 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
     }
   }
 
-  const handleConnectNumber = async () => {
-    if (!connectMode) return
-    setIsConnecting(true)
-    const ok = await runWrite("POST", "/whatsapp/senders/connect", {
-      mode: connectMode,
-      country_code: selectedCountry,
-      phone_number: customPhone || undefined,
-      display_name: customDisplayName || undefined,
-    })
-    setIsConnecting(false)
-    if (ok) {
-      setShowConnectModal(false)
-      setConnectMode(null)
-      setCustomPhone("")
-      setCustomDisplayName("")
-      reloadSenders()
-    }
-  }
-
   const handleCreateTemplate = async () => {
     if (!newTemplate.name || !newTemplate.body) return
     const ok = await runWrite("POST", "/whatsapp/templates", {
@@ -3965,11 +3471,11 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
                             {s.type}
                           </span>
                         </td>
-                        <td className="py-3 px-4 text-xs text-muted-foreground">{s.name_review || "—"}</td>
-                        <td className="py-3 px-4 text-xs text-muted-foreground">{s.business_verification || "—"}</td>
+                        <td className="py-3 px-4 text-xs text-muted-foreground" title={s.status_error ?? undefined}>{s.name_review ?? "Not reported"}</td>
+                        <td className="py-3 px-4 text-xs text-muted-foreground" title={s.status_error ?? undefined}>{s.business_verification ?? "Not reported"}</td>
                         <td className="py-3 px-4 text-right">
-                          <Badge variant="outline" className="border-emerald-500/40 text-emerald-500 text-[10px]">
-                            {s.status}
+                          <Badge variant="outline" className={`text-[10px] ${s.status ? "border-emerald-500/40 text-emerald-500" : "border-muted text-muted-foreground"}`} title={s.status_error ?? undefined}>
+                            {s.status ?? "Not reported"}
                           </Badge>
                         </td>
                       </tr>
@@ -4492,118 +3998,15 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
         </div>
       )}
 
-      {/* CONNECT WHATSAPP MODAL matching Screenshot 4 */}
+      {/* Connect WhatsApp: Meta Embedded Signup inside OmniDome */}
       {showConnectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="relative flex w-full max-w-lg flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="flex items-start justify-between border-b border-border px-6 py-4">
-              <div className="flex items-center gap-2">
-                <MessageCircle className="h-5 w-5 text-[#25D366]" />
-                <div>
-                  <h3 className="text-base font-bold text-foreground">Connect WhatsApp</h3>
-                  <p className="text-xs text-muted-foreground">Choose how to set up your number</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowConnectModal(false)}
-                className="rounded-lg p-1 text-muted-foreground hover:bg-card hover:text-foreground"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Content: 2 Cards matching Screenshot 4 */}
-            <div className="p-6 space-y-4">
-              {/* Option A: Get a number */}
-              <div
-                onClick={() => setConnectMode("get_number")}
-                className={`flex items-start gap-4 rounded-xl border p-4 cursor-pointer transition-all ${
-                  connectMode === "get_number"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary"
-                    : "border-border bg-card hover:border-border/80"
-                }`}
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-sm text-foreground">Get a number</p>
-                  <p className="text-xs text-muted-foreground">From $3/mo. Pick a country, we handle setup.</p>
-                  {connectMode === "get_number" && (
-                    <div className="pt-3 space-y-2">
-                      <label className="text-[11px] font-medium text-foreground block">Select Country</label>
-                      <select
-                        value={selectedCountry}
-                        onChange={(e) => setSelectedCountry(e.target.value)}
-                        className="w-full rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none"
-                      >
-                        <option value="+27">🇿🇦 South Africa (+27)</option>
-                        <option value="+1">🇺🇸 United States (+1)</option>
-                        <option value="+44">🇬🇧 United Kingdom (+44)</option>
-                      </select>
-                      <Input
-                        placeholder="Sender display name (e.g. OmniDome Sales)"
-                        value={customDisplayName}
-                        onChange={(e) => setCustomDisplayName(e.target.value)}
-                        className="text-xs bg-background border-border"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Option B: Use my own number */}
-              <div
-                onClick={() => setConnectMode("own_number")}
-                className={`flex items-start gap-4 rounded-xl border p-4 cursor-pointer transition-all ${
-                  connectMode === "own_number"
-                    ? "border-primary bg-primary/5 ring-1 ring-primary"
-                    : "border-border bg-card hover:border-border/80"
-                }`}
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-background text-foreground">
-                  <Hash className="h-4 w-4" />
-                </div>
-                <div className="space-y-1">
-                  <p className="font-semibold text-sm text-foreground">Use my own number</p>
-                  <p className="text-xs text-muted-foreground">Bring your existing phone number. Requires verification during setup.</p>
-                  {connectMode === "own_number" && (
-                    <div className="pt-3 space-y-2">
-                      <Input
-                        placeholder="Your phone number (with country code)"
-                        value={customPhone}
-                        onChange={(e) => setCustomPhone(e.target.value)}
-                        className="text-xs bg-background border-border"
-                      />
-                      <Input
-                        placeholder="Sender display name"
-                        value={customDisplayName}
-                        onChange={(e) => setCustomDisplayName(e.target.value)}
-                        className="text-xs bg-background border-border"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-end gap-2 border-t border-border bg-card/30 px-6 py-4">
-              <Button variant="outline" size="sm" onClick={() => setShowConnectModal(false)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                disabled={!connectMode || (connectMode === "own_number" && !customPhone.trim()) || isConnecting}
-                onClick={handleConnectNumber}
-                className="bg-[#25D366] hover:bg-[#1ebd5a] text-black font-semibold"
-              >
-                {isConnecting ? "Connecting…" : "Proceed Setup"}
-              </Button>
-            </div>
-          </div>
-        </div>
+        <ConnectPlatformDialog
+          platform={{ id: "whatsapp", label: "WhatsApp", flow: "embedded_signup", category: "social" }}
+          category="social"
+          returnTo="/dashboard?section=marketing&marketing_tab=whatsapp-overview"
+          onClose={() => setShowConnectModal(false)}
+          onConnected={() => { setShowConnectModal(false); reloadSenders() }}
+        />
       )}
     </div>
   )
@@ -4613,8 +4016,8 @@ function WhatsAppTab({ view }: { view: "overview" | "templates" | "flows" | "gro
 // ADS TAB (Zernio-style Ads & Boosted Posts)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function AdsTab() {
-  const [activeSubTab, setActiveSubTab] = useState<"campaigns" | "audiences" | "lead-forms">("campaigns")
+function AdsTab({ initialSubTab = "campaigns" }: { initialSubTab?: "campaigns" | "audiences" | "lead-forms" } = {}) {
+  const [activeSubTab, setActiveSubTab] = useState<"campaigns" | "audiences" | "lead-forms">(initialSubTab)
   const { value: adsLoad, reload: loadAds } = useMarketingLoad<any[]>(adCampaignsPath())
   const { value: accountsLoad } = useMarketingLoad<any[]>(socialAccountsPath())
   const ads: any[] = adsLoad.state === "ready" ? adsLoad.data : []
@@ -4653,41 +4056,6 @@ function AdsTab() {
   const [boostAgeMax, setBoostAgeMax] = useState("")
   const [boostGender, setBoostGender] = useState("All")
   const [isBoosting, setIsBoosting] = useState(false)
-
-  const handleCreateAd = async () => {
-    if (!adName.trim()) return
-    setSubmitting(true)
-    setAdError(null)
-    const budgetNum = parseFloat(budgetAmount) || 0
-    const r = await writeMarketing("POST", "/ads/campaigns", {
-      name: adName,
-      platform: "facebook",
-      objective: selectedGoal.toUpperCase().replace(/\s+/g, "_"),
-      budget_zar: budgetType === "total" ? budgetNum : undefined,
-      daily_budget_zar: budgetType === "daily" ? budgetNum : undefined,
-      status: createAsPaused ? "PAUSED" : "ACTIVE",
-      creative: {
-        primary_text: primaryText,
-        headline: headline,
-        destination_url: destinationUrl,
-      },
-      targeting: selectedAudience.trim() ? { audience: selectedAudience.trim() } : undefined,
-    })
-    setSubmitting(false)
-    if (!r.ok) {
-      setAdError(describeMutationError(r.status, r.error))
-      return
-    }
-    setShowCreateModal(false)
-    setPrimaryText("")
-    setHeadline("")
-    setDestinationUrl("")
-    setMediaFile(null)
-    setAdName("")
-    setBudgetAmount("5")
-    setCreateAsPaused(true)
-    loadAds()
-  }
 
   const clearFilters = () => {
     setFilterPlatform("all")
@@ -4900,231 +4268,9 @@ function AdsTab() {
 
       {activeSubTab === "audiences" && <MarketingAudiences />}
 
-      {activeSubTab === "lead-forms" && (
-        <div className="space-y-4">
-          <div>
-            <h3 className="text-base font-semibold text-foreground">Instant Lead Forms</h3>
-            <p className="text-xs text-muted-foreground">In-feed native forms for customer inquiries</p>
-          </div>
-          <NoDataYet message="No lead forms yet. Lead form syncing is not connected to a backend, so no forms or lead counts are shown." />
-        </div>
-      )}
+      {activeSubTab === "lead-forms" && <LeadFormsPanel />}
 
-      {/* CREATE AD MODAL — Faithfully matching Screenshot 3 */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-          <div className="relative flex max-h-[92vh] w-full max-w-5xl flex-col rounded-xl border border-border bg-background shadow-2xl overflow-hidden">
-            {/* Modal Header */}
-            <div className="flex items-start justify-between border-b border-border px-6 py-4">
-              <div>
-                <h3 className="text-lg font-bold text-foreground">Create Ad</h3>
-                <p className="text-xs text-muted-foreground">design your ad creative and configure targeting</p>
-              </div>
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="rounded-lg p-1 text-muted-foreground hover:bg-card hover:text-foreground"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Modal Body: 2 Columns */}
-            <div className="flex-1 overflow-y-auto p-6">
-              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-                {/* LEFT COLUMN: Creative & Copy */}
-                <div className="space-y-5">
-                  {/* Primary text */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-xs font-semibold text-foreground">primary text</label>
-                    </div>
-                    <Textarea
-                      placeholder="Write the main text for your ad. This appears above the image."
-                      value={primaryText}
-                      maxLength={125}
-                      onChange={(e) => setPrimaryText(e.target.value)}
-                      rows={4}
-                      className="resize-none text-sm bg-card border-border"
-                    />
-                    <div className="text-right mt-1">
-                      <span className="text-[11px] text-muted-foreground">{primaryText.length}/125</span>
-                    </div>
-                  </div>
-
-                  {/* Media Dropzone */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">media</label>
-                    <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-border bg-card/40 p-8 text-center hover:border-border/80 transition-colors cursor-pointer">
-                      <Image className="h-9 w-9 text-muted-foreground/60 mb-2" />
-                      <p className="text-xs font-medium text-foreground">Media upload is not available yet</p>
-                      <p className="text-[11px] text-muted-foreground mt-0.5">The ad is created without an image.</p>
-                    </div>
-                  </div>
-
-                  {/* Headline */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">headline</label>
-                    <Input
-                      placeholder="Your headline"
-                      value={headline}
-                      maxLength={40}
-                      onChange={(e) => setHeadline(e.target.value)}
-                      className="text-sm bg-card border-border"
-                    />
-                    <div className="text-right mt-1">
-                      <span className="text-[11px] text-muted-foreground">{headline.length}/40</span>
-                    </div>
-                  </div>
-
-                  {/* Destination URL */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">destination URL</label>
-                    <Input
-                      placeholder="https://yourwebsite.com/landing-page"
-                      value={destinationUrl}
-                      onChange={(e) => setDestinationUrl(e.target.value)}
-                      className="text-sm bg-card border-border"
-                    />
-                  </div>
-                </div>
-
-                {/* RIGHT COLUMN: Targeting, Budget & Profile */}
-                <div className="space-y-5">
-                  {/* Ad name */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">ad name</label>
-                    <Input
-                      placeholder="Summer Sale Campaign"
-                      value={adName}
-                      onChange={(e) => setAdName(e.target.value)}
-                      className="text-sm bg-card border-border"
-                    />
-                  </div>
-
-                  {/* Platform & account notice / connection */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1 block">platform & account</label>
-                    <p className="text-xs text-muted-foreground mb-2">
-                      {socialAccounts.length > 0
-                        ? `Connected: ${socialAccounts.map((a) => a.platform).join(", ")}`
-                        : "No ads accounts connected. Connect an ads platform in Connections to create an ad."}
-                    </p>
-                    <Button variant="outline" size="sm" className="text-xs">
-                      Go to Connections
-                    </Button>
-                  </div>
-
-                  {/* Goal (4 pills matching Screenshot 3) */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">goal</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {([
-                        { key: "Engagement", icon: MessageSquare },
-                        { key: "Traffic", icon: Link2 },
-                        { key: "Awareness", icon: Eye },
-                        { key: "Video Views", icon: Play },
-                      ] as const).map(({ key, icon: Icon }) => (
-                        <button
-                          key={key}
-                          type="button"
-                          onClick={() => setSelectedGoal(key)}
-                          className={`flex items-center gap-2 rounded-md border p-2.5 text-xs font-medium transition-colors ${
-                            selectedGoal === key
-                              ? "border-primary bg-primary/10 text-primary"
-                              : "border-border bg-card text-foreground hover:bg-card/80"
-                          }`}
-                        >
-                          <Icon className="h-3.5 w-3.5 shrink-0" />
-                          <span>{key}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Budget (Input + Per day / Total toggle) */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">budget</label>
-                    <div className="flex items-center gap-2">
-                      <div className="relative flex-1">
-                        <span className="absolute left-3 top-2.5 text-xs text-muted-foreground">R</span>
-                        <Input
-                          type="number"
-                          value={budgetAmount}
-                          onChange={(e) => setBudgetAmount(e.target.value)}
-                          className="pl-6 text-sm bg-card border-border"
-                        />
-                      </div>
-                      <div className="flex rounded-md border border-border p-0.5 text-xs">
-                        <button
-                          type="button"
-                          onClick={() => setBudgetType("daily")}
-                          className={`px-3 py-1.5 rounded transition-colors ${
-                            budgetType === "daily" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-                          }`}
-                        >
-                          Per day
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setBudgetType("total")}
-                          className={`px-3 py-1.5 rounded transition-colors ${
-                            budgetType === "total" ? "bg-card text-foreground shadow-sm" : "text-muted-foreground"
-                          }`}
-                        >
-                          Total
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Targeting */}
-                  <div>
-                    <label className="text-xs font-semibold text-foreground mb-1.5 block">targeting</label>
-                    <Input
-                      placeholder="Audience description (optional)"
-                      value={selectedAudience}
-                      onChange={(e) => setSelectedAudience(e.target.value)}
-                      className="text-xs bg-card border-border"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {adError && <p role="alert" className="border-t border-border bg-red-500/5 px-6 py-2 text-xs text-red-400">{adError}</p>}
-            {/* Modal Footer */}
-            <div className="flex items-center justify-between border-t border-border bg-card/30 px-6 py-4">
-              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={createAsPaused}
-                  onChange={(e) => setCreateAsPaused(e.target.checked)}
-                  className="rounded border-border"
-                />
-                <span>create as paused</span>
-              </label>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowCreateModal(false)}
-                >
-                  cancel
-                </Button>
-                <Button
-                  size="sm"
-                  disabled={!adName.trim() || submitting}
-                  onClick={handleCreateAd}
-                  className="bg-muted-foreground text-background hover:bg-foreground hover:text-background"
-                >
-                  {submitting ? "creating…" : "create Ad"}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {showCreateModal && <CreateAdModal onClose={() => setShowCreateModal(false)} onCreated={loadAds} />}
 
       {/* BOOST POST MODAL — Faithfully matching Screenshot 2 (media_1789288184604.png) */}
       {showBoostModal && (

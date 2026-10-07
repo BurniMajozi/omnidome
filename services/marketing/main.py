@@ -20,7 +20,7 @@ import uuid
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text, select, insert, update, delete, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,8 @@ from services.common.middleware import configure_production
 from services.common import suppression as suppression_lib
 from services.common.background_tasks import schedule_background
 from services.marketing import security as sec
+from services.marketing import zernio_posts as _zp
+from services.marketing.zernio_client import _guess_media_type
 from services.marketing.security import require_marketing_admin, require_marketing_write
 from services.marketing.database import (
     get_session,
@@ -91,14 +93,43 @@ async def entitlement_middleware(request, call_next):
 # ─────────────────────────────── Pydantic Models ───────────────────────────────
 
 
+def _blank_to_none(v):
+    """'' / whitespace from a form field means "not provided"."""
+    if isinstance(v, str) and not v.strip():
+        return None
+    return v
+
+
 class CampaignCreate(BaseModel):
+    """Empty-string dates/ids from the Create Campaign form are normalised to null (they used to
+    422 on datetime parsing). `audience_id` is an alias of `audience_segment_id`: the audience
+    (segment) whose members the campaign's sends are addressed to."""
     name: str
-    channel: str = Field(..., description="email | social | search | display | sms")
+    channel: str = Field(..., description="email | social | search | display | sms | whatsapp")
     description: Optional[str] = None
     budget_zar: Decimal = Decimal("0")
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     audience_segment_id: Optional[uuid.UUID] = None
+    audience_id: Optional[uuid.UUID] = None
+
+    @field_validator("start_date", "end_date", "audience_segment_id", "audience_id", "description", mode="before")
+    @classmethod
+    def _blank_none(cls, v):
+        return _blank_to_none(v)
+
+    @field_validator("budget_zar", mode="before")
+    @classmethod
+    def _blank_budget(cls, v):
+        v = _blank_to_none(v)
+        return Decimal("0") if v is None else v
+
+    @field_validator("budget_zar")
+    @classmethod
+    def _budget_nonneg(cls, v):
+        if v < 0:
+            raise ValueError("budget_zar must be >= 0")
+        return v
 
 
 class CampaignUpdate(BaseModel):
@@ -109,6 +140,13 @@ class CampaignUpdate(BaseModel):
     budget_zar: Optional[Decimal] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    audience_segment_id: Optional[uuid.UUID] = None
+    audience_id: Optional[uuid.UUID] = None
+
+    @field_validator("start_date", "end_date", "audience_segment_id", "audience_id", "budget_zar", mode="before")
+    @classmethod
+    def _blank_none(cls, v):
+        return _blank_to_none(v)
 
 
 class CampaignOut(BaseModel):
@@ -121,6 +159,10 @@ class CampaignOut(BaseModel):
     budget_zar: Decimal
     start_date: Optional[datetime]
     end_date: Optional[datetime]
+    audience_segment_id: Optional[uuid.UUID] = None
+    audience_id: Optional[uuid.UUID] = None
+    audience_name: Optional[str] = None
+    audience_size: Optional[int] = None
     total_sent: int
     total_delivered: int
     total_opened: int
@@ -129,12 +171,19 @@ class CampaignOut(BaseModel):
     created_at: datetime
 
 
+def _campaign_out(row) -> Dict[str, Any]:
+    d = dict(row)
+    d["audience_id"] = d.get("audience_segment_id")
+    return d
+
+
 class EmailSendRequest(BaseModel):
     campaign_id: Optional[uuid.UUID] = None
     template_id: Optional[uuid.UUID] = None
     subject: str = Field(..., min_length=1, max_length=500, pattern=r"^[^\r\n]*$")
     body_html: str = Field(..., max_length=500_000)
-    recipients: List[str] = Field(..., min_length=1, max_length=5000, description="List of email addresses")
+    recipients: List[str] = Field(default_factory=list, max_length=5000,
+                                  description="Email addresses. Omit (with campaign_id) to send to the campaign's audience")
     from_name: Optional[str] = "OmniDome"
     from_email: Optional[str] = None
     reply_to: Optional[str] = None
@@ -284,6 +333,8 @@ class SocialAccountOut(BaseModel):
 class OAuthUrlResponse(BaseModel):
     platform: str
     auth_url: str
+    state: Optional[str] = None  # signed connection state; echoed back by the callback page
+    expires_in: Optional[int] = None
 
 
 class TokenRefreshResponse(BaseModel):
@@ -293,13 +344,38 @@ class TokenRefreshResponse(BaseModel):
 
 # -- Social Post --
 class SocialPostCreate(BaseModel):
-    account_id: uuid.UUID
+    """Create/schedule/queue/draft/publish a social post.
+
+    `status` keeps the legacy values the UI sends (draft | scheduled | published); intent is
+    derived: published -> publish now, scheduled -> schedule (or queue when queue_id is set),
+    draft -> saved in OmniDome only (set provider_draft=true to also store it as a provider draft).
+    `account_id` (legacy credentials-table id) is now OPTIONAL: provider accounts are resolved from
+    `account_ids` (Zernio account ids of THIS tenant) or by `platforms`.
+    """
+    account_id: Optional[uuid.UUID] = None
+    account_ids: Optional[List[str]] = None
     campaign_id: Optional[uuid.UUID] = None
     content: Optional[str] = None
     media_urls: Optional[List[str]] = None
+    media_items: Optional[List[Dict[str, Any]]] = None
     platforms: Optional[List[str]] = None
-    status: str = "DRAFT"
+    status: str = "draft"
     scheduled_for: Optional[datetime] = None
+    timezone: Optional[str] = None
+    queue_id: Optional[uuid.UUID] = None
+    provider_draft: bool = False
+
+    @field_validator("account_id", "campaign_id", "scheduled_for", "queue_id", "timezone", "content", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):  # '' from a form field must mean "not provided", not a 422
+        from services.marketing.zernio_posts import blank_to_none
+        return blank_to_none(v)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _norm_status(cls, v):
+        from services.marketing.zernio_posts import norm_status
+        return norm_status(v if v is not None else "draft")
 
 
 class SocialPostUpdate(BaseModel):
@@ -307,6 +383,20 @@ class SocialPostUpdate(BaseModel):
     media_urls: Optional[List[str]] = None
     status: Optional[str] = None
     scheduled_for: Optional[datetime] = None
+
+    @field_validator("scheduled_for", mode="before")
+    @classmethod
+    def _blank_to_none(cls, v):
+        from services.marketing.zernio_posts import blank_to_none
+        return blank_to_none(v)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _norm_status(cls, v):
+        if v is None:
+            return v
+        from services.marketing.zernio_posts import norm_status
+        return norm_status(v)
 
 
 class SocialPostOut(BaseModel):
@@ -869,30 +959,52 @@ async def health():
 # ─────────────────────────── Campaigns ─────────────────────────
 
 
+def _audience_for_tenant(conn, tenant_id: uuid.UUID, audience_id: uuid.UUID):
+    row = conn.execute(
+        text("SELECT id, name, rules, member_count FROM marketing_audience_segments WHERE id = :id AND tenant_id = :tid"),
+        {"id": str(audience_id), "tid": str(tenant_id)},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(422, "Audience not found in this workspace")
+    return row
+
+
+def _check_dates(start, end) -> None:
+    if start and end and end < start:
+        raise HTTPException(422, "end_date must be on or after start_date")
+
+
 @app.get("/campaigns", response_model=List[CampaignOut])
 async def list_campaigns(
     channel: Optional[str] = None,
     campaign_status: Optional[str] = Query(None, alias="status"),
+    audience_id: Optional[uuid.UUID] = None,
     limit: int = 50,
     offset: int = 0,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
     engine = get_engine()
     _ensure_marketing_tables(engine)
-    filters = "WHERE tenant_id = :tid"
+    filters = "WHERE c.tenant_id = :tid"
     params: Dict[str, Any] = {"tid": str(tenant_id), "lim": limit, "off": offset}
     if channel:
-        filters += " AND channel = :ch"
+        filters += " AND c.channel = :ch"
         params["ch"] = channel
     if campaign_status:
-        filters += " AND status = :st"
+        filters += " AND c.status = :st"
         params["st"] = campaign_status
+    if audience_id:
+        filters += " AND c.audience_segment_id = :aid"
+        params["aid"] = str(audience_id)
     with engine.connect() as conn:
         rows = conn.execute(
-            text(f"SELECT * FROM marketing_campaigns {filters} ORDER BY created_at DESC LIMIT :lim OFFSET :off"),
+            text(f"""SELECT c.*, s.name AS audience_name, s.member_count AS audience_size
+                       FROM marketing_campaigns c
+                       LEFT JOIN marketing_audience_segments s ON s.id = c.audience_segment_id AND s.tenant_id = c.tenant_id
+                       {filters} ORDER BY c.created_at DESC LIMIT :lim OFFSET :off"""),
             params,
         ).mappings().all()
-    return [dict(r) for r in rows]
+    return [_campaign_out(r) for r in rows]
 
 
 @app.post("/campaigns", response_model=CampaignOut, status_code=201, dependencies=[Depends(require_marketing_write)])
@@ -902,10 +1014,14 @@ async def create_campaign(
 ):
     if body.channel not in sec.CAMPAIGN_CHANNELS:
         raise HTTPException(422, f"channel must be one of {sorted(sec.CAMPAIGN_CHANNELS)}")
+    _check_dates(body.start_date, body.end_date)
+    audience = body.audience_segment_id or body.audience_id
     engine = get_engine()
     _ensure_marketing_tables(engine)
     cid = uuid.uuid4()
     with engine.begin() as conn:
+        if audience:
+            _audience_for_tenant(conn, tenant_id, audience)
         conn.execute(
             text("""
                 INSERT INTO marketing_campaigns
@@ -923,13 +1039,17 @@ async def create_campaign(
                 "budget": float(body.budget_zar) if body.budget_zar is not None else 0.0,
                 "sd": body.start_date,
                 "ed": body.end_date,
-                "asid": str(body.audience_segment_id) if body.audience_segment_id else None,
+                "asid": str(audience) if audience else None,
             },
         )
         row = conn.execute(
-            text("SELECT * FROM marketing_campaigns WHERE id = :id"), {"id": str(cid)}
+            text("""SELECT c.*, s.name AS audience_name, s.member_count AS audience_size
+                      FROM marketing_campaigns c
+                      LEFT JOIN marketing_audience_segments s ON s.id = c.audience_segment_id AND s.tenant_id = c.tenant_id
+                     WHERE c.id = :id AND c.tenant_id = :tid"""),
+            {"id": str(cid), "tid": str(tenant_id)},
         ).mappings().first()
-    return dict(row)
+    return _campaign_out(row)
 
 
 @app.patch("/campaigns/{campaign_id}", response_model=CampaignOut, dependencies=[Depends(require_marketing_write)])
@@ -941,19 +1061,29 @@ async def update_campaign(
     engine = get_engine()
     sets = []
     params: Dict[str, Any] = {"cid": str(campaign_id), "tid": str(tenant_id)}
-    changes = body.dict(exclude_unset=True)
+    changes = body.model_dump(exclude_unset=True)
+    # audience_id is an alias for audience_segment_id; either may be set to null to clear the audience
+    if "audience_id" in changes:
+        aid = changes.pop("audience_id")
+        changes.setdefault("audience_segment_id", aid)
     if changes.get("channel") is not None and changes["channel"] not in sec.CAMPAIGN_CHANNELS:
         raise HTTPException(422, f"channel must be one of {sorted(sec.CAMPAIGN_CHANNELS)}")
     if "status" in changes and changes["status"] not in sec.CAMPAIGN_STATUSES:
         raise HTTPException(422, f"status must be one of {sorted(sec.CAMPAIGN_STATUSES)}")
+    _check_dates(changes.get("start_date"), changes.get("end_date"))
     for field, val in changes.items():
         sets.append(f"{field} = :{field}")
-        params[field] = float(val) if isinstance(val, Decimal) else val
+        if field == "audience_segment_id":
+            params[field] = str(val) if val else None
+        else:
+            params[field] = float(val) if isinstance(val, Decimal) else val
     if not sets:
         raise HTTPException(400, "No fields to update")
     sets.append("updated_at = now()")
     where = "id = :cid AND tenant_id = :tid"
     with engine.begin() as conn:
+        if changes.get("audience_segment_id"):
+            _audience_for_tenant(conn, tenant_id, changes["audience_segment_id"])
         if "status" in changes:
             cur = conn.execute(
                 text("SELECT status FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid FOR UPDATE"),
@@ -969,7 +1099,39 @@ async def update_campaign(
         ).mappings().first()
     if not result:
         raise HTTPException(404, "Campaign not found")
-    return dict(result)
+    return _campaign_out(result)
+
+
+@app.get("/campaigns/{campaign_id}/audience", response_model=Dict[str, Any])
+async def get_campaign_audience(
+    campaign_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """The audience a campaign targets and how many contactable members it resolves to right now
+    (emails for email sends, phones for SMS/WhatsApp). Homes audiences hold areas only and resolve to 0."""
+    from services.marketing import audience_members as am
+
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        camp = conn.execute(
+            text("SELECT id, channel, audience_segment_id FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid"),
+            {"cid": str(campaign_id), "tid": str(tenant_id)},
+        ).mappings().first()
+        if not camp:
+            raise HTTPException(404, "Campaign not found")
+        if not camp["audience_segment_id"]:
+            return {"campaign_id": str(campaign_id), "audience": None, "emails": 0, "phones": 0, "note": "No audience selected"}
+        seg = _audience_for_tenant(conn, tenant_id, camp["audience_segment_id"])
+    members = am.resolve_members(seg["rules"] or {})
+    return {
+        "campaign_id": str(campaign_id),
+        "audience": {"id": str(seg["id"]), "name": seg["name"], "type": (seg["rules"] or {}).get("type", "custom")},
+        "emails": len(members["emails"]),
+        "phones": len(members["phones"]),
+        "skipped_without_contact": members["skipped"],
+        "note": members["note"],
+    }
 
 
 @app.delete("/campaigns/{campaign_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
@@ -1111,6 +1273,33 @@ async def _run_email_batch(
         logger.exception("email batch %s finalize failed", batch_id)
 
 
+def _campaign_audience_emails(tenant_id: uuid.UUID, campaign_id: uuid.UUID):
+    """Email addresses of the campaign's audience members (tenant scoped); 422 with a reason when there are none."""
+    from services.marketing import audience_members as am
+
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        camp = conn.execute(
+            text("SELECT audience_segment_id FROM marketing_campaigns WHERE id = :cid AND tenant_id = :tid"),
+            {"cid": str(campaign_id), "tid": str(tenant_id)},
+        ).first()
+        if not camp:
+            raise HTTPException(404, "Campaign not found")
+        if not camp[0]:
+            raise HTTPException(422, "Campaign has no audience; pass recipients or select an audience")
+        seg = _audience_for_tenant(conn, tenant_id, camp[0])
+        members = am.resolve_members(seg["rules"] or {})
+        if not members["emails"]:
+            raise HTTPException(422, members["note"] or f"Audience '{seg['name']}' has no members with an email address")
+        conn.execute(
+            text("UPDATE marketing_campaigns SET audience_member_count = :n, last_audience_send_at = now() "
+                 "WHERE id = :cid AND tenant_id = :tid"),
+            {"n": len(members["emails"]), "cid": str(campaign_id), "tid": str(tenant_id)},
+        )
+    return members["emails"], seg["name"]
+
+
 @app.post("/email/send", response_model=EmailSendResponse, status_code=202,
           dependencies=[Depends(require_marketing_write)])
 async def send_email_batch(
@@ -1131,9 +1320,15 @@ async def send_email_batch(
         logger.error("email send blocked: %s", exc)
         raise HTTPException(503, "Unsubscribe links not configured (EMAIL_UNSUBSCRIBE_SECRET / EMAIL_UNSUBSCRIBE_BASE_URL)")
     sec.check_email_rate(tenant_id)
-    valid, invalid = sec.clean_recipients(body.recipients)
+    recipients = list(body.recipients or [])
+    audience_name: Optional[str] = None
+    if not recipients:
+        if not body.campaign_id:
+            raise HTTPException(422, "recipients is required (or pass campaign_id to send to the campaign's audience)")
+        recipients, audience_name = _campaign_audience_emails(tenant_id, body.campaign_id)
+    valid, invalid = sec.clean_recipients(recipients)
     if not valid:
-        raise HTTPException(422, "No valid recipient addresses")
+        raise HTTPException(422, "No valid recipient addresses" + (f" in audience '{audience_name}'" if audience_name else ""))
 
     engine = get_engine()
     _ensure_marketing_tables(engine)
@@ -2310,33 +2505,31 @@ async def delete_social_account(
     return None
 
 
-@app.get("/social/accounts/connect/{platform}", response_model=OAuthUrlResponse, dependencies=[Depends(require_marketing_admin)])
+@app.get("/social/accounts/connect/{platform}", response_model=OAuthUrlResponse)
 async def get_oauth_url(
     platform: str,
-    redirect_url: Optional[str] = None,
+    redirect_url: Optional[str] = None,  # ignored: callbacks are server-configured (see zernio_connect)
+    category: str = Query("social", description="social | ads"),
+    return_to: Optional[str] = None,
+    auth: AuthContext = Depends(require_marketing_admin),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Get the OAuth connect URL for a platform via Zernio's hosted flow, scoped
-    to THIS tenant's profile (auto-created on first connect). The account then
-    lands in the customer's own profile — the profile-per-customer model.
+    """Legacy entrypoint, kept for the existing UI: returns {platform, auth_url}.
+
+    It now delegates to the OmniDome-hosted flow (POST /social/connect/start): the provider is
+    given an OmniDome redirect (so the user is never sent to zernio.com) and the response also
+    carries the signed `state`. A caller-supplied `redirect_url` is deliberately ignored: only a
+    server-configured callback may receive the OAuth hand-off.
     """
-    client = get_zernio_client()
-    if client is None:
-        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
-    profile_id = await _ensure_tenant_profile(tenant_id)
-    if not profile_id:
-        raise HTTPException(status_code=503, detail="Could not resolve a Zernio profile for this tenant")
-    try:
-        auth_url = await client.get_connect_url(platform.lower(), profile_id=profile_id, redirect_url=redirect_url)
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"Zernio connect URL failed for {platform}: {e}")
-        raise _upstream_error("zernio", e)
-    if not auth_url:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Zernio returned no connect URL for '{platform}' (unsupported platform?)",
-        )
-    return OAuthUrlResponse(platform=platform, auth_url=auth_url)
+    from services.marketing import zernio_connect as zc
+
+    res = await zc._start(
+        zc.ConnectStartIn(platform=platform, category=category, return_to=return_to), auth, tenant_id,
+    )
+    if res.get("status") != "redirect":
+        return JSONResponse(status_code=200, content=res)
+    return OAuthUrlResponse(platform=platform, auth_url=res["auth_url"], state=res.get("state"),
+                            expires_in=res.get("expires_in"))
 
 
 @app.post("/social/accounts/{account_id}/refresh", response_model=TokenRefreshResponse, dependencies=[Depends(require_marketing_admin)])
@@ -2369,88 +2562,354 @@ async def refresh_social_token(
 # ──────────────────── Social Posts ────────────────────────
 
 
+def _detail_text(exc: HTTPException) -> str:
+    d = exc.detail
+    if isinstance(d, dict):
+        return str(d.get("message") or d.get("error") or "request failed")[:1000]
+    return str(d)[:1000]
+
+
+def _post_dict(p) -> Dict[str, Any]:
+    return {
+        "id": p.id,
+        "tenant_id": p.tenant_id,
+        "account_id": p.account_id,
+        "campaign_id": p.campaign_id,
+        "content": p.content,
+        "media_urls": p.media_urls,
+        "platforms": p.platforms,
+        "status": str(p.status or "draft").lower(),
+        "scheduled_for": p.scheduled_for,
+        "published_at": p.published_at,
+        "platform_post_ids": p.platform_post_ids,
+        "engagement_data": p.engagement_data,
+        "publish_error": getattr(p, "publish_error", None),
+        "queue_id": getattr(p, "queue_id", None),
+        "zernio_post_id": getattr(p, "zernio_post_id", None),
+        "timezone": getattr(p, "timezone", None),
+        "created_at": p.created_at,
+        "updated_at": p.updated_at,
+    }
+
+
+def _apply_post_filters(stmt, tenant_id, post_status, account_id, campaign_id, platform, queued, from_date, to_date):
+    """Shared by the list and scheduled endpoints. Status is compared case-insensitively
+    and may be a comma list ('scheduled,draft'); 'queued' = scheduled through a queue."""
+    from services.marketing import zernio_posts as zp
+
+    stmt = stmt.where(SocialPost.tenant_id == tenant_id)
+    statuses, queued_only = zp.parse_status_filter(post_status)
+    if statuses:
+        stmt = stmt.where(func.lower(SocialPost.status).in_(statuses))
+    if queued or queued_only:
+        stmt = stmt.where(SocialPost.queue_id.is_not(None))
+    if account_id:
+        stmt = stmt.where(SocialPost.account_id == account_id)
+    if campaign_id:
+        stmt = stmt.where(SocialPost.campaign_id == campaign_id)
+    if platform:
+        stmt = stmt.where(SocialPost.platforms.contains([zp.norm_platform(platform)]))
+    if from_date:
+        stmt = stmt.where(SocialPost.scheduled_for >= zp.to_utc(from_date))
+    if to_date:
+        stmt = stmt.where(SocialPost.scheduled_for <= zp.to_utc(to_date))
+    return stmt
+
+
+def _sort_posts(stmt, sort: str):
+    if sort == "scheduled_asc":
+        return stmt.order_by(SocialPost.scheduled_for.asc().nulls_last(), SocialPost.created_at.desc())
+    if sort == "scheduled_desc":
+        return stmt.order_by(SocialPost.scheduled_for.desc().nulls_last(), SocialPost.created_at.desc())
+    if sort == "created_asc":
+        return stmt.order_by(SocialPost.created_at.asc())
+    return stmt.order_by(SocialPost.created_at.desc())
+
+
 @app.get("/social/posts", response_model=List[Dict[str, Any]])
 async def list_social_posts(
-    post_status: Optional[str] = Query(None, alias="status"),
+    response: Response,
+    post_status: Optional[str] = Query(None, alias="status", description="draft|scheduled|queued|published|failed|... (comma list, case-insensitive)"),
     account_id: Optional[uuid.UUID] = None,
     campaign_id: Optional[uuid.UUID] = None,
-    limit: int = 50,
-    offset: int = 0,
+    platform: Optional[str] = None,
+    queued: Optional[bool] = None,
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    sort: str = Query("created_desc", pattern="^(created_desc|created_asc|scheduled_asc|scheduled_desc)$"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """List social media posts with optional filters."""
+    """List social media posts. Total row count (ignoring limit/offset) is in X-Total-Count."""
     async with get_session() as session:
-        stmt = select(SocialPost).where(SocialPost.tenant_id == tenant_id)
-        if post_status:
-            stmt = stmt.where(SocialPost.status == post_status)
-        if account_id:
-            stmt = stmt.where(SocialPost.account_id == account_id)
-        if campaign_id:
-            stmt = stmt.where(SocialPost.campaign_id == campaign_id)
-        stmt = stmt.order_by(SocialPost.created_at.desc()).limit(limit).offset(offset)
-        result = await session.execute(stmt)
-        posts = result.scalars().all()
-    return [
-        {
-            "id": p.id,
-            "tenant_id": p.tenant_id,
-            "account_id": p.account_id,
-            "campaign_id": p.campaign_id,
-            "content": p.content,
-            "media_urls": p.media_urls,
-            "platforms": p.platforms,
-            "status": p.status,
-            "scheduled_for": p.scheduled_for,
-            "published_at": p.published_at,
-            "platform_post_ids": p.platform_post_ids,
-            "engagement_data": p.engagement_data,
-            "created_at": p.created_at,
-            "updated_at": p.updated_at,
-        }
-        for p in posts
-    ]
+        base = _apply_post_filters(select(SocialPost), tenant_id, post_status, account_id, campaign_id, platform, queued, from_date, to_date)
+        total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+        stmt = _sort_posts(base, sort).limit(limit).offset(offset)
+        posts = (await session.execute(stmt)).scalars().all()
+    response.headers["X-Total-Count"] = str(total)
+    return [_post_dict(p) for p in posts]
 
 
-async def _publish_via_zernio(post, tenant_id: uuid.UUID) -> None:
-    """Publish (or schedule) a SocialPost to the customer's connected Zernio
-    accounts. Mutates `post` (status, published_at, platform_post_ids). Raises
-    HTTPException on hard failures. Real publishing — no fake platform ids."""
+def _provider_post_view(zp_: Dict[str, Any]) -> Dict[str, Any]:
+    plats = [pl for pl in (zp_.get("platforms") or []) if isinstance(pl, dict)]
+    published = [pl.get("publishedAt") for pl in plats if pl.get("publishedAt")]
+    return {
+        "id": zp_.get("_id"),
+        "source": "provider",
+        "zernio_post_id": zp_.get("_id"),
+        "content": zp_.get("content"),
+        "media_urls": [m.get("url") for m in (zp_.get("mediaItems") or []) if isinstance(m, dict) and m.get("url")],
+        "platforms": [str(pl.get("platform")) for pl in plats],
+        "account_ids": [str(pl.get("accountId")) for pl in plats if pl.get("accountId")],
+        "status": str(zp_.get("status") or "").lower(),
+        "scheduled_for": zp_.get("scheduledFor"),
+        "published_at": min(published) if published else None,
+        "queued": bool(zp_.get("queuedFromProfile")),
+        "queue_id": zp_.get("queueId"),
+        "timezone": zp_.get("timezone"),
+        "publish_error": "; ".join(_zp.platform_errors(zp_)) or None,
+        "platform_urls": [pl.get("platformPostUrl") for pl in plats if pl.get("platformPostUrl")],
+        "created_at": zp_.get("createdAt"),
+    }
+
+
+async def _provider_posts_for_tenant(tenant_id: uuid.UUID, status_: Optional[str], page: int, limit: int,
+                                     platform: Optional[str] = None, sort_by: Optional[str] = None) -> Dict[str, Any]:
+    """Live provider posts for THIS tenant's profile, with every entry re-checked against the
+    tenant's own account ids (fail closed: a post touching a foreign account is dropped)."""
+    from services.marketing.zernio_errors import provider_error
+
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    profile_id = _get_tenant_profile(tenant_id)
+    if not profile_id:
+        return {"posts": [], "pagination": {"page": page, "limit": limit, "total": 0, "pages": 0}}
+    try:
+        data = await client.list_posts(status=status_, limit=limit, profile_id=profile_id, page=page,
+                                       platform=platform, sort_by=sort_by)
+    except Exception as exc:  # noqa: BLE001
+        raise provider_error("list posts", exc)
+    mine = _tenant_account_ids(tenant_id)
+    posts = []
+    for zpost in (data or {}).get("posts") or []:
+        accts = {str(pl.get("accountId")) for pl in (zpost.get("platforms") or []) if isinstance(pl, dict)}
+        if accts and accts <= mine:
+            posts.append(_provider_post_view(zpost))
+    return {"posts": posts, "pagination": (data or {}).get("pagination") or {}}
+
+
+@app.get("/social/posts/scheduled", response_model=Dict[str, Any])
+async def list_scheduled_posts(
+    include_provider: bool = Query(False, description="also merge posts that exist only at the provider (created elsewhere)"),
+    platform: Optional[str] = None,
+    queued: Optional[bool] = None,
+    from_date: Optional[datetime] = Query(None, alias="from"),
+    to_date: Optional[datetime] = Query(None, alias="to"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Everything waiting to go out: scheduled + queued posts, soonest first. This is what the
+    Scheduled view should call. With include_provider=true, posts that exist at the provider but
+    not in OmniDome are appended (flagged source='provider')."""
+    async with get_session() as session:
+        base = _apply_post_filters(select(SocialPost), tenant_id, "scheduled", None, None, platform, queued, from_date, to_date)
+        total = (await session.execute(select(func.count()).select_from(base.subquery()))).scalar() or 0
+        rows = (await session.execute(_sort_posts(base, "scheduled_asc").limit(limit).offset(offset))).scalars().all()
+    posts = [{**_post_dict(p), "source": "local"} for p in rows]
+    provider_error_msg = None
+    if include_provider:
+        known = {p["zernio_post_id"] for p in posts if p.get("zernio_post_id")}
+        try:
+            prov = await _provider_posts_for_tenant(tenant_id, "scheduled", 1, 100, platform, "scheduled-asc")
+            extra = [p for p in prov["posts"] if p["zernio_post_id"] not in known]
+            posts.extend(extra)
+            total += len(extra)
+        except HTTPException as exc:  # the local list is still valid; say why the merge is missing
+            provider_error_msg = _detail_text(exc)
+    out: Dict[str, Any] = {"posts": posts, "total": total, "limit": limit, "offset": offset}
+    if provider_error_msg:
+        out["provider_error"] = provider_error_msg
+    return out
+
+
+@app.get("/social/posts/provider", response_model=Dict[str, Any])
+async def list_provider_posts(
+    post_status: Optional[str] = Query(None, alias="status"),
+    platform: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+):
+    """Live posts from the provider for this tenant's profile (draft|scheduled|publishing|published|
+    partial|failed|cancelled), paginated by the provider."""
+    from services.marketing import zernio_posts as zp
+    statuses, _ = zp.parse_status_filter(post_status)
+    return await _provider_posts_for_tenant(tenant_id, statuses[0] if statuses else None, page, limit, platform)
+
+
+@app.post("/social/posts/sync", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
+async def sync_post_statuses(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Refresh the status of OmniDome posts that exist at the provider (scheduled -> published/failed...)."""
+    from services.marketing import zernio_posts as zp
+
+    updated = 0
+    for st in ("scheduled", "publishing", "published", "partial", "failed"):
+        data = await _provider_posts_for_tenant(tenant_id, st, 1, 100)
+        for zpost in data["posts"]:
+            zid = zpost["zernio_post_id"]
+            if not zid:
+                continue
+            async with get_session() as session:
+                row = (await session.execute(select(SocialPost).where(
+                    SocialPost.tenant_id == tenant_id, SocialPost.zernio_post_id == zid))).scalar_one_or_none()
+                if row is None:
+                    continue
+                new = zp.norm_status(zpost["status"], default=row.status)
+                if new != str(row.status).lower() or (zpost.get("publish_error") or None) != row.publish_error:
+                    row.status = new
+                    row.publish_error = zpost.get("publish_error")
+                    if new in ("published", "partial") and not row.published_at:
+                        row.published_at = datetime.now(timezone.utc)
+                    updated += 1
+    return {"updated": updated}
+
+
+def _tenant_account_rows(tenant_id: uuid.UUID) -> List[Dict[str, Any]]:
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT account_id, platform, status FROM marketing_connected_accounts WHERE tenant_id = :tid"),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def _push_post(post, tenant_id: uuid.UUID, intent: str, *, account_ids: Optional[List[str]] = None,
+                     media_items: Optional[List[Dict[str, Any]]] = None, provider_draft: bool = False) -> None:
+    """Send a SocialPost to the provider according to `intent` (now | schedule | queue | draft) and
+    copy the provider's real answer (status, per-platform errors, ids) onto the row. Raises
+    HTTPException for prerequisites (no provider key, no connected account, provider rejection).
+    Nothing is invented: a provider rejection never leaves the post looking published/scheduled."""
+    from services.marketing import zernio_posts as zp
+    from services.marketing.zernio_errors import provider_error
+
+    if intent == "draft" and not provider_draft:
+        post.status = "draft"
+        return
     client = get_zernio_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
     _require_tenant_profile(tenant_id)
-    engine = get_engine()
-    with engine.connect() as conn:
-        rows = conn.execute(
-            text("SELECT account_id, platform FROM marketing_connected_accounts WHERE tenant_id = :tid AND status <> 'disconnected'"),
-            {"tid": str(tenant_id)},
-        ).mappings().all()
-    by_platform: Dict[str, str] = {}
-    for r in rows:
-        by_platform.setdefault(str(r["platform"] or "").lower(), r["account_id"])
-    wanted = [str(p).lower() for p in (post.platforms or [])]
-    zplatforms = [{"platform": p, "accountId": by_platform[p]} for p in wanted if p in by_platform]
-    if not zplatforms:
+    targets, missing = zp.build_targets(post.platforms or [], account_ids, _tenant_account_rows(tenant_id))
+    if account_ids and missing:
+        raise HTTPException(status_code=403, detail="One or more account_ids do not belong to this workspace")
+    if missing or not targets:
         raise HTTPException(
             status_code=400,
-            detail="No connected accounts for the selected platform(s) — connect them under Connections first",
+            detail="No connected account for: " + ", ".join(missing or ["any selected platform"]) + " - connect it under Connections first",
         )
-    publish_now = post.status == "published"
-    schedule_iso = post.scheduled_for.isoformat() if (not publish_now and post.scheduled_for) else None
+    kwargs: Dict[str, Any] = {"idempotency_key": f"omnidome-post-{post.id}-{intent}"}
+    if post.timezone:
+        kwargs["timezone"] = post.timezone
+    if media_items:
+        kwargs["media_items"] = media_items
+    if intent == "now":
+        kwargs["publish_now"] = True
+    elif intent in ("schedule", "queue"):
+        if not post.scheduled_for:
+            raise HTTPException(status_code=422, detail="scheduled_for is required to schedule a post")
+        try:
+            when = zp.check_schedule_time(post.scheduled_for)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        kwargs.update(publish_now=False, schedule_date=zp.iso_z(when))
+    else:  # provider draft
+        kwargs.update(publish_now=False, is_draft=True)
     try:
         zpost = await client.publish_content(
-            content=post.content or "", platforms=zplatforms,
-            publish_now=publish_now, schedule_date=schedule_iso,
-            media_urls=post.media_urls or None,
+            content=post.content or "", platforms=targets, media_urls=post.media_urls or None, **kwargs,
         )
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise _upstream_error("zernio publish", e)
-    post.platform_post_ids = {"zernio_post_id": (zpost or {}).get("_id"), "platforms": (zpost or {}).get("platforms")}
-    if publish_now:
-        post.status = "published"
-        post.published_at = datetime.now(timezone.utc)
+    except Exception as exc:  # noqa: BLE001
+        raise provider_error("publish post", exc)
+    fields = zp.result_fields(zpost, "draft" if kwargs.get("is_draft") else intent)
+    post.status = fields["status"]
+    post.publish_error = fields["publish_error"]
+    post.zernio_post_id = fields["zernio_post_id"]
+    post.platform_post_ids = {"zernio_post_id": fields["zernio_post_id"], "platforms": fields["platforms_info"]}
+    if fields.get("published_at") and not post.published_at:
+        post.published_at = fields["published_at"]
+
+
+async def _legacy_account(session, tenant_id: uuid.UUID, account_id: Optional[uuid.UUID], platform_hint: str):
+    """SocialPost.account_id is a NOT NULL FK to the legacy credentials table. Use the id the client
+    sent when it is this tenant's row, otherwise the tenant's stub row for the platform."""
+    if account_id:
+        acct = (await session.execute(select(SocialMediaAccount).where(
+            SocialMediaAccount.id == account_id, SocialMediaAccount.tenant_id == tenant_id))).scalar_one_or_none()
+        if acct:
+            return acct
+    return await _resolve_inbox_account(session, tenant_id, platform_hint or "social")
+
+
+async def _create_post_core(body: "SocialPostCreate", tenant_id: uuid.UUID) -> Dict[str, Any]:
+    from services.marketing import zernio_posts as zp
+
+    intent = zp.derive_intent(body.status, body.scheduled_for, body.queue_id)
+    platforms = [zp.norm_platform(p) for p in (body.platforms or []) if p]
+    media_urls = list(body.media_urls or [])
+    media_items = [m for m in (body.media_items or []) if isinstance(m, dict) and m.get("url")]
+    for m in media_items:
+        if m["url"] not in media_urls:
+            media_urls.append(m["url"])
+    if intent in ("schedule", "queue"):
+        if not body.scheduled_for:
+            raise HTTPException(status_code=422, detail="scheduled_for is required when status is 'scheduled'")
+        try:
+            zp.check_schedule_time(body.scheduled_for)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    if intent != "draft":
+        if not platforms and not body.account_ids:
+            raise HTTPException(status_code=422, detail="Select at least one platform")
+        if not (body.content or media_urls):
+            raise HTTPException(status_code=422, detail="Post needs text or media")
+
+    initial = {"now": "publishing", "schedule": "scheduled", "queue": "scheduled", "draft": "draft"}[intent]
+    async with get_session() as session:
+        account = await _legacy_account(session, tenant_id, body.account_id, platforms[0] if platforms else "social")
+        post = SocialPost(
+            tenant_id=tenant_id,
+            account_id=account.id,
+            campaign_id=body.campaign_id,
+            content=body.content,
+            media_urls=media_urls or None,
+            platforms=platforms,
+            status=initial,
+            scheduled_for=zp.to_utc(body.scheduled_for) if body.scheduled_for else None,
+            queue_id=body.queue_id,
+            timezone=body.timezone,
+        )
+        session.add(post)
+        await session.flush()
+
+        publish_error: Optional[str] = None
+        try:
+            await _push_post(post, tenant_id, intent, account_ids=body.account_ids, media_items=media_items,
+                             provider_draft=body.provider_draft)
+        except HTTPException as e:
+            publish_error = _detail_text(e)
+            post.status = "failed"
+            post.publish_error = publish_error
+
+        await session.flush()
+        await session.refresh(post)
+        out = _post_dict(post)
+        out["publish_error"] = publish_error or out.get("publish_error")
+        return out
 
 
 @app.post("/social/posts", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
@@ -2458,50 +2917,14 @@ async def create_social_post(
     body: SocialPostCreate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Create a social media post. When status is 'published' or 'scheduled' the
-    post is actually published/scheduled to the customer's connected Zernio
-    accounts; a publish failure is reported (status 'failed' + publish_error)
-    rather than silently faking success."""
-    async with get_session() as session:
-        post = SocialPost(
-            tenant_id=tenant_id,
-            account_id=body.account_id,
-            campaign_id=body.campaign_id,
-            content=body.content,
-            media_urls=body.media_urls,
-            platforms=body.platforms or [],
-            status=body.status,
-            scheduled_for=body.scheduled_for,
-        )
-        session.add(post)
-        await session.flush()
+    """Create a social post.
 
-        publish_error: Optional[str] = None
-        if body.status in ("published", "scheduled"):
-            try:
-                await _publish_via_zernio(post, tenant_id)
-            except HTTPException as e:
-                publish_error = str(e.detail)
-                post.status = "failed"
-
-        await session.flush()
-        await session.refresh(post)
-        return {
-            "id": post.id,
-            "tenant_id": post.tenant_id,
-            "account_id": post.account_id,
-            "campaign_id": post.campaign_id,
-            "content": post.content,
-            "media_urls": post.media_urls,
-            "platforms": post.platforms,
-            "status": post.status,
-            "scheduled_for": post.scheduled_for,
-            "published_at": post.published_at,
-            "platform_post_ids": post.platform_post_ids,
-            "publish_error": publish_error,
-            "created_at": post.created_at,
-            "updated_at": post.updated_at,
-        }
+    status=draft      saved in OmniDome (provider_draft=true also stores a provider draft)
+    status=scheduled  scheduled at the provider for scheduled_for (UTC ISO; must be >= 30s ahead)
+    status=scheduled + queue_id   same, at the next open slot (prefer POST /social/queues/{id}/enqueue)
+    status=published  published now
+    A provider rejection is reported (status 'failed' + publish_error), never faked as success."""
+    return await _create_post_core(body, tenant_id)
 
 
 @app.get("/social/posts/{post_id}", response_model=Dict[str, Any])
@@ -2519,22 +2942,7 @@ async def get_social_post(
         post = result.scalar_one_or_none()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
-    return {
-        "id": post.id,
-        "tenant_id": post.tenant_id,
-        "account_id": post.account_id,
-        "campaign_id": post.campaign_id,
-        "content": post.content,
-        "media_urls": post.media_urls,
-        "platforms": post.platforms,
-        "status": post.status,
-        "scheduled_for": post.scheduled_for,
-        "published_at": post.published_at,
-        "platform_post_ids": post.platform_post_ids,
-        "engagement_data": post.engagement_data,
-        "created_at": post.created_at,
-        "updated_at": post.updated_at,
-    }
+    return _post_dict(post)
 
 
 @app.put("/social/posts/{post_id}", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
@@ -2543,7 +2951,11 @@ async def update_social_post(
     body: SocialPostUpdate,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Update a social media post."""
+    """Update a social media post (content / media / schedule). A post already at the provider is
+    updated there first, so the edit really changes what will be published."""
+    from services.marketing import zernio_posts as zp
+    from services.marketing.zernio_errors import provider_error
+
     async with get_session() as session:
         stmt = select(SocialPost).where(
             SocialPost.id == post_id,
@@ -2553,30 +2965,37 @@ async def update_social_post(
         post = result.scalar_one_or_none()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
-        if post.status == "PUBLISHED":
+        if str(post.status).lower() in ("published", "publishing"):
             raise HTTPException(status_code=400, detail="Cannot update a published post")
 
-        update_data = body.dict(exclude_unset=True)
+        update_data = body.model_dump(exclude_unset=True)
+        if "scheduled_for" in update_data and update_data["scheduled_for"] is not None:
+            try:
+                update_data["scheduled_for"] = zp.check_schedule_time(update_data["scheduled_for"])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+        if post.zernio_post_id and str(post.status).lower() in ("scheduled", "draft", "failed", "partial"):
+            client = get_zernio_client()
+            if client is None:
+                raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+            patch: Dict[str, Any] = {}
+            if "content" in update_data:
+                patch["content"] = update_data["content"] or ""
+            if update_data.get("scheduled_for"):
+                patch["scheduledFor"] = zp.iso_z(update_data["scheduled_for"])
+                patch["isDraft"] = False
+            if "media_urls" in update_data and update_data["media_urls"] is not None:
+                patch["mediaItems"] = [{"type": _guess_media_type(u), "url": u} for u in update_data["media_urls"]]
+            if patch:
+                try:
+                    await client._request("PUT", f"/posts/{post.zernio_post_id}", json_data=patch)
+                except Exception as exc:  # noqa: BLE001
+                    raise provider_error("update post", exc)
         for field, value in update_data.items():
             setattr(post, field, value)
         await session.flush()
         await session.refresh(post)
-        return {
-            "id": post.id,
-            "tenant_id": post.tenant_id,
-            "account_id": post.account_id,
-            "campaign_id": post.campaign_id,
-            "content": post.content,
-            "media_urls": post.media_urls,
-            "platforms": post.platforms,
-            "status": post.status,
-            "scheduled_for": post.scheduled_for,
-            "published_at": post.published_at,
-            "platform_post_ids": post.platform_post_ids,
-            "engagement_data": post.engagement_data,
-            "created_at": post.created_at,
-            "updated_at": post.updated_at,
-        }
+        return _post_dict(post)
 
 
 @app.delete("/social/posts/{post_id}", status_code=204, dependencies=[Depends(require_marketing_write)])
@@ -2584,7 +3003,11 @@ async def delete_social_post(
     post_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Delete a social media post."""
+    """Delete a post. A scheduled/draft post at the provider is deleted there FIRST (otherwise it
+    would still publish); published posts only disappear from OmniDome (use the platform to remove them)."""
+    from services.marketing.zernio_client import ZernioError
+    from services.marketing.zernio_errors import provider_error
+
     async with get_session() as session:
         stmt = select(SocialPost).where(
             SocialPost.id == post_id,
@@ -2594,6 +3017,16 @@ async def delete_social_post(
         post = result.scalar_one_or_none()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
+        if post.zernio_post_id and str(post.status).lower() != "published":
+            client = get_zernio_client()
+            if client is not None:
+                try:
+                    await client.delete_post(post.zernio_post_id)
+                except ZernioError as exc:
+                    if exc.status != 404:  # already gone at the provider is fine
+                        raise provider_error("delete post", exc)
+                except Exception as exc:  # noqa: BLE001
+                    raise provider_error("delete post", exc)
         await session.delete(post)
     return None
 
@@ -2603,7 +3036,7 @@ async def publish_post(
     post_id: uuid.UUID,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Publish a social media post immediately."""
+    """Publish a stored post immediately."""
     async with get_session() as session:
         stmt = select(SocialPost).where(
             SocialPost.id == post_id,
@@ -2613,19 +3046,34 @@ async def publish_post(
         post = result.scalar_one_or_none()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
-        if post.status in ("PUBLISHED", "published"):
+        if str(post.status).lower() == "published":
             raise HTTPException(status_code=400, detail="Post is already published")
 
-        # Publish for real to the customer's connected Zernio accounts.
-        post.status = "published"
-        await _publish_via_zernio(post, tenant_id)
+        if post.zernio_post_id:
+            # exists at the provider (draft / scheduled / failed): promote it instead of creating a duplicate
+            client = get_zernio_client()
+            if client is None:
+                raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+            from services.marketing import zernio_posts as zp
+            from services.marketing.zernio_errors import provider_error
+            try:
+                zpost = await client._request("PUT", f"/posts/{post.zernio_post_id}", json_data={"isDraft": False, "publishNow": True})
+            except Exception as exc:  # noqa: BLE001
+                raise provider_error("publish post", exc)
+            fields = zp.result_fields((zpost or {}).get("post", zpost) if isinstance(zpost, dict) else {}, "now")
+            post.status, post.publish_error = fields["status"], fields["publish_error"]
+            if fields.get("published_at"):
+                post.published_at = fields["published_at"]
+        else:
+            await _push_post(post, tenant_id, "now")
         await session.flush()
         await session.refresh(post)
         return {
             "id": post.id,
-            "status": post.status,
+            "status": str(post.status).lower(),
             "published_at": post.published_at,
             "platform_post_ids": post.platform_post_ids,
+            "publish_error": post.publish_error,
         }
 
 
@@ -2640,7 +3088,7 @@ async def schedule_post(
     scheduled_for: datetime,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    """Schedule a social media post for later."""
+    """Schedule a stored post for later at the provider (it used to only flip a local flag)."""
     scheduled_for = _to_utc(scheduled_for)
     if scheduled_for <= datetime.now(timezone.utc):
         raise HTTPException(status_code=400, detail="Scheduled time must be in the future")
@@ -2654,18 +3102,155 @@ async def schedule_post(
         post = result.scalar_one_or_none()
         if not post:
             raise HTTPException(status_code=404, detail="Post not found")
-        if post.status == "PUBLISHED":
+        if str(post.status).lower() in ("published", "publishing"):
             raise HTTPException(status_code=400, detail="Post is already published")
 
-        post.status = "SCHEDULED"
         post.scheduled_for = scheduled_for
+        if post.zernio_post_id:
+            client = get_zernio_client()
+            if client is None:
+                raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+            from services.marketing import zernio_posts as zp
+            from services.marketing.zernio_errors import provider_error
+            try:
+                zpost = await client._request("PUT", f"/posts/{post.zernio_post_id}",
+                                              json_data={"isDraft": False, "scheduledFor": zp.iso_z(scheduled_for)})
+            except Exception as exc:  # noqa: BLE001
+                raise provider_error("schedule post", exc)
+            fields = zp.result_fields((zpost or {}).get("post", zpost) if isinstance(zpost, dict) else {}, "schedule")
+            post.status, post.publish_error = fields["status"], fields["publish_error"]
+        else:
+            await _push_post(post, tenant_id, "schedule")
         await session.flush()
         await session.refresh(post)
         return {
             "id": post.id,
-            "status": post.status,
+            "status": str(post.status).lower(),
             "scheduled_for": post.scheduled_for,
+            "publish_error": post.publish_error,
         }
+
+
+# ──────────────────── Media upload (posts + ads) ────────────────────
+
+_MEDIA_TYPES = {
+    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+    "video/mp4", "video/mpeg", "video/quicktime", "video/avi", "video/x-msvideo", "video/webm", "video/x-m4v",
+    "application/pdf",
+}
+_MEDIA_MAX_BYTES = int(os.getenv("MARKETING_MEDIA_MAX_BYTES", str(100 * 1024 * 1024)))
+
+
+class MediaPresignIn(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=200)
+    content_type: str
+    size: Optional[int] = Field(None, ge=1)
+
+    @field_validator("filename")
+    @classmethod
+    def _clean_name(cls, v: str) -> str:
+        import re as _re
+        base = v.replace("\\", "/").rsplit("/", 1)[-1]
+        base = _re.sub(r"[^A-Za-z0-9._\- ]", "_", base).strip(" .")
+        if not base:
+            raise ValueError("invalid filename")
+        return base[:150]
+
+
+@app.post("/social/media/presign", response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
+async def presign_media(body: MediaPresignIn, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Browser-direct upload: returns {upload_url, public_url, key, expires_in}. The browser PUTs the
+    file to upload_url (Content-Type header = content_type, no auth), then uses public_url as a
+    media_urls entry on posts or as image_url / video_url on ads. Up to the provider's 5 GB limit."""
+    from services.marketing.zernio_errors import provider_error
+
+    ct = body.content_type.strip().lower()
+    if ct not in _MEDIA_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported media type '{ct}'. Allowed: {sorted(_MEDIA_TYPES)}")
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        res = await client.presign_media(body.filename, ct, body.size)
+    except Exception as exc:  # noqa: BLE001
+        raise provider_error("media presign", exc)
+    return {"upload_url": res.get("uploadUrl"), "public_url": res.get("publicUrl"), "key": res.get("key"),
+            "expires_in": res.get("expiresIn", 3600), "content_type": ct}
+
+
+class MediaBase64In(BaseModel):
+    filename: str = Field(..., min_length=1, max_length=200)
+    content_type: str
+    data_base64: str = Field(..., min_length=4, description="Raw base64 (a data: URL prefix is tolerated)")
+
+    @field_validator("filename")
+    @classmethod
+    def _clean_name(cls, v: str) -> str:
+        return MediaPresignIn(filename=v, content_type="image/png").filename
+
+
+@app.post("/social/media/upload-base64", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
+async def upload_media_base64(body: MediaBase64In, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Upload through the JSON-only /svc proxy (which forwards bodies as text, so multipart/binary is not
+    safe through it). Same result as /social/media/upload; ~33% bigger on the wire, so keep to a few MB."""
+    import base64
+    import binascii
+    from services.marketing.zernio_errors import provider_error
+
+    ct = body.content_type.strip().lower()
+    if ct not in _MEDIA_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported media type '{ct}'. Allowed: {sorted(_MEDIA_TYPES)}")
+    raw = body.data_base64.split(",", 1)[1] if body.data_base64.startswith("data:") and "," in body.data_base64 else body.data_base64
+    try:
+        data = base64.b64decode(raw, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="data_base64 is not valid base64")
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty file")
+    if len(data) > _MEDIA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {_MEDIA_MAX_BYTES // (1024 * 1024)} MB); use /social/media/presign")
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        res = await client.presign_media(body.filename, ct, len(data))
+        await client.put_presigned(res["uploadUrl"], data, ct)
+    except Exception as exc:  # noqa: BLE001
+        raise provider_error("media upload", exc)
+    return {"public_url": res.get("publicUrl"), "key": res.get("key"), "content_type": ct, "size": len(data),
+            "type": _guess_media_type(body.filename)}
+
+
+@app.post("/social/media/upload", status_code=201, response_model=Dict[str, Any], dependencies=[Depends(require_marketing_write)])
+async def upload_media(request: Request, tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
+    """Server-side upload (multipart/form-data, field `file`, up to MARKETING_MEDIA_MAX_BYTES, default
+    100 MB): the file is pushed to the provider's media storage and {public_url, ...} is returned.
+    Use /social/media/presign instead for larger files."""
+    from services.marketing.zernio_errors import provider_error
+
+    form = await request.form()
+    up = form.get("file")
+    if up is None or not hasattr(up, "read"):
+        raise HTTPException(status_code=422, detail="multipart field 'file' is required")
+    ct = (getattr(up, "content_type", "") or "").lower()
+    if ct not in _MEDIA_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported media type '{ct}'. Allowed: {sorted(_MEDIA_TYPES)}")
+    data = await up.read(_MEDIA_MAX_BYTES + 1)
+    if len(data) > _MEDIA_MAX_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {_MEDIA_MAX_BYTES // (1024 * 1024)} MB); use /social/media/presign")
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty file")
+    name = MediaPresignIn(filename=getattr(up, "filename", None) or "upload", content_type=ct).filename
+    client = get_zernio_client()
+    if client is None:
+        raise HTTPException(status_code=503, detail="Zernio not configured (ZERNIO_API_KEY missing)")
+    try:
+        res = await client.presign_media(name, ct, len(data))
+        await client.put_presigned(res["uploadUrl"], data, ct)
+    except Exception as exc:  # noqa: BLE001
+        raise provider_error("media upload", exc)
+    return {"public_url": res.get("publicUrl"), "key": res.get("key"), "content_type": ct, "size": len(data),
+            "type": _guess_media_type(name)}
 
 
 @app.post("/social/posts/cross-post", response_model=CrossPostResponse, dependencies=[Depends(require_marketing_write)])
@@ -3830,11 +4415,22 @@ ZERNIO_CONNECTORS: List[Dict[str, Any]] = [
     {"id": "pinterest", "label": "Pinterest", "category": "Social"},
     {"id": "reddit", "label": "Reddit", "category": "Social"},
     {"id": "googlebusiness", "label": "Google Business", "category": "Social"},
-    {"id": "snapchat", "label": "Snapchat", "category": "Social", "coming_soon": True},
+    {"id": "snapchat", "label": "Snapchat", "category": "Social"},
     {"id": "telegram", "label": "Telegram", "category": "Messaging"},
     {"id": "whatsapp", "label": "WhatsApp", "category": "Messaging"},
-    {"id": "shopify", "label": "Shopify", "category": "Commerce"},
+    {"id": "shopify", "label": "Shopify", "category": "Commerce", "coming_soon": True},  # needs the merchant's shop domain: not in the in-app flow yet
+    # Ads connections are separate provider accounts (platform metaads / googleads / ...). The `id`s are the
+    # ids accepted by POST /social/connect/start with category="ads".
+    {"id": "meta_ads", "label": "Meta Ads", "category": "Ads", "kind": "ads"},
+    {"id": "google_ads", "label": "Google Ads", "category": "Ads", "kind": "ads"},
+    {"id": "tiktok_ads", "label": "TikTok Ads", "category": "Ads", "kind": "ads"},
+    {"id": "linkedin_ads", "label": "LinkedIn Ads", "category": "Ads", "kind": "ads"},
+    {"id": "pinterest_ads", "label": "Pinterest Ads", "category": "Ads", "kind": "ads"},
+    {"id": "x_ads", "label": "X Ads", "category": "Ads", "kind": "ads"},
 ]
+# provider account platform -> connector id (ads accounts are reported as e.g. "metaads")
+_ADS_PLATFORM_TO_CONNECTOR = {"metaads": "meta_ads", "googleads": "google_ads", "tiktokads": "tiktok_ads",
+                              "linkedinads": "linkedin_ads", "pinterestads": "pinterest_ads", "xads": "x_ads"}
 
 
 @app.get("/social/zernio/connectors", response_model=Dict[str, Any])
@@ -3856,7 +4452,7 @@ async def zernio_connectors(tenant_id: uuid.UUID = Depends(get_current_tenant_id
             {"tid": str(tenant_id)},
         ).mappings().all()
     for acct in rows:
-        p = str(acct["platform"] or "").lower()
+        p = _ADS_PLATFORM_TO_CONNECTOR.get(str(acct["platform"] or "").lower(), str(acct["platform"] or "").lower())
         connected_by_platform.setdefault(p, []).append({
             "id": acct["account_id"], "name": acct["username"], "username": acct["username"],
             "status": acct["status"],
@@ -4395,15 +4991,16 @@ def _queue_next_slot(slots: List[Dict[str, Any]], tz_name: str, taken_iso: set) 
 def _taken_slot_isos(engine, tenant_id: uuid.UUID) -> set:
     with engine.connect() as conn:
         rows = conn.execute(
-            text("SELECT scheduled_for FROM social_posts WHERE tenant_id = :tid AND status = 'scheduled' AND scheduled_for IS NOT NULL"),
+            text("SELECT scheduled_for FROM social_posts WHERE tenant_id = :tid AND lower(status) = 'scheduled' AND scheduled_for IS NOT NULL"),
             {"tid": str(tenant_id)},
         ).all()
     out = set()
     for r in rows:
         v = r[0]
         if v is not None:
-            iso = v.isoformat() if hasattr(v, "isoformat") else str(v)
-            out.add(iso)
+            if hasattr(v, "astimezone"):
+                v = _zp.to_utc(v)
+            out.add(v.isoformat() if hasattr(v, "isoformat") else str(v))
     return out
 
 
@@ -4540,16 +5137,18 @@ async def enqueue_post(
     if not slot:
         raise HTTPException(status_code=400, detail="Queue has no available slots — add slots first")
     slot_dt = datetime.fromisoformat(slot)
-    async with get_session() as session:
-        post = SocialPost(
-            tenant_id=tenant_id, account_id=body.account_id, content=body.content,
-            media_urls=body.media_urls, platforms=body.platforms or [],
-            status="scheduled", scheduled_for=slot_dt,
-        )
-        session.add(post)
-        await session.flush()
-        await session.refresh(post)
-        return {"id": str(post.id), "status": post.status, "scheduled_for": post.scheduled_for.isoformat() if post.scheduled_for else slot, "queue_id": str(queue_id)}
+    # The slot is computed from OmniDome's queue definition and the post is scheduled at the provider
+    # for exactly that time (previously the row was saved locally and never sent anywhere).
+    core = body.model_copy(update={"status": "scheduled", "scheduled_for": slot_dt, "queue_id": queue_id})
+    created = await _create_post_core(core, tenant_id)
+    return {
+        "id": str(created["id"]),
+        "status": created["status"],
+        "scheduled_for": created["scheduled_for"].isoformat() if created.get("scheduled_for") else slot,
+        "queue_id": str(queue_id),
+        "publish_error": created.get("publish_error"),
+        "zernio_post_id": created.get("zernio_post_id"),
+    }
 
 
 def _tenant_account_ids(tenant_id: uuid.UUID) -> set:
@@ -4737,6 +5336,25 @@ async def receive_zernio_webhook(
         raise
 
 
+def _apply_post_event(tenant_id: str, zernio_post_id: str, status_: str, error: Optional[str]) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            UPDATE social_posts
+               SET status = :st, publish_error = :err,
+                   published_at = CASE WHEN :st IN ('published', 'partial') THEN COALESCE(published_at, now()) ELSE published_at END,
+                   updated_at = now()
+             WHERE tenant_id = :tid AND zernio_post_id = :zid
+        """), {"st": status_, "err": error, "tid": tenant_id, "zid": zernio_post_id})
+
+
+async def _mark_event_processed(event_id) -> None:
+    async with get_session() as session:
+        evt = await session.get(SocialWebhookEvent, event_id)
+        if evt:
+            evt.processed = True
+            await session.flush()
+
+
 async def _process_zernio_event(payload: Dict[str, Any], header_tenant: str, event_type: str, platform: str):
     """Runs only for verified, non-duplicate Zernio deliveries."""
 
@@ -4772,7 +5390,15 @@ async def _process_zernio_event(payload: Dict[str, Any], header_tenant: str, eve
             plats = payload.get("platforms") or (payload.get("post") or {}).get("platforms") or []
             if plats and isinstance(plats[0], dict):
                 acct_id = plats[0].get("accountId")
-        if acct_id:
+        if not acct_id:
+            # lead.* / ad.* / whatsapp.* events carry a top-level `account`
+            top = payload.get("account") or {}
+            acct_id = top.get("accountId") or top.get("id")
+            if not acct_id and top.get("profileId"):
+                by_profile = _tenant_for_profile(str(top["profileId"]))
+                if by_profile:
+                    tenant_id = uuid.UUID(by_profile)
+        if acct_id and tenant_id is None:
             resolved = _tenant_for_account(str(acct_id))
             if resolved:
                 tenant_id = uuid.UUID(resolved)
@@ -4794,6 +5420,26 @@ async def _process_zernio_event(payload: Dict[str, Any], header_tenant: str, eve
         session.add(event)
         await session.flush()
         event_id = event.id
+
+    # 1b. Post lifecycle: keep OmniDome's post rows in step with what the provider actually did.
+    post_status = _zp.event_to_status(event_type)
+    if post_status:
+        zpost = payload.get("post") or {}
+        zid = str(zpost.get("id") or zpost.get("_id") or "")
+        err = None
+        if post_status in ("failed", "partial"):
+            err = "; ".join(_zp.platform_errors(zpost))[:1000] or f"provider reported {post_status}"
+        if zid:
+            await asyncio.to_thread(_apply_post_event, str(tenant_id), zid, post_status, err)
+        await _mark_event_processed(event_id)
+        return {"status": "received", "event": event_type, "post_id": zid or None, "post_status": post_status}
+
+    # 1c. Meta Lead Ads: store the lead (idempotent on lead id; sync backfills anything missed).
+    if event_type == "lead.received":
+        from services.marketing import zernio_leads
+        stored = await asyncio.to_thread(zernio_leads.ingest_lead_event, str(tenant_id), payload)
+        await _mark_event_processed(event_id)
+        return {"status": "received", "event": event_type, **stored}
 
     # 2. Reactions: log only, no inbox row.
     if event_type == "reaction.received":
@@ -5053,11 +5699,83 @@ def _init_default_whatsapp(tenant_key: str):
         store.setdefault(tenant_key, [])
 
 
+_NAME_REVIEW_LABELS = {
+    "APPROVED": "Approved",
+    "AVAILABLE_WITHOUT_REVIEW": "No review required",
+    "PENDING_REVIEW": "Pending Meta review",
+    "DECLINED": "Declined",
+    "EXPIRED": "Expired",
+    "NONE": "Not submitted",
+}
+_BIZ_VERIFICATION_LABELS = {
+    "verified": "Verified",
+    "not_verified": "Not verified",
+    "pending": "Pending",
+    "rejected": "Rejected",
+    "failed": "Failed",
+}
+
+
+def whatsapp_sender_view(account_id: str, username: Optional[str], info: Optional[Dict[str, Any]], error: Optional[str]) -> Dict[str, Any]:
+    """One senders-table row. `name_review` / `business_verification` come ONLY from Meta via the
+    provider's number-info call (phone.name_status, waba.business_verification_status). When that
+    call fails they are null (UI shows a dash) - never a placeholder value."""
+    phone = (info or {}).get("phone") or {}
+    waba = (info or {}).get("waba") or {}
+    ns = phone.get("name_status")
+    bv = waba.get("business_verification_status")
+    raw_status = phone.get("status")
+    return {
+        "id": account_id,
+        "account_id": account_id,
+        "name": phone.get("verified_name") or waba.get("name") or username or "WhatsApp number",
+        "number": phone.get("display_phone_number") or username,
+        "type": "Business (Cloud API)" if phone.get("platform_type") in (None, "CLOUD_API") else str(phone.get("platform_type")),
+        "name_review": _NAME_REVIEW_LABELS.get(str(ns).upper(), ns) if ns else None,
+        "name_status": ns,
+        "business_verification": _BIZ_VERIFICATION_LABELS.get(str(bv).lower(), bv) if bv else None,
+        "business_verification_status": bv,
+        "quality_rating": phone.get("quality_rating"),
+        "messaging_limit_tier": phone.get("messaging_limit_tier"),
+        "official_business_account": phone.get("is_official_business_account"),
+        "status": ("LIVE" if str(raw_status).upper() == "CONNECTED" else str(raw_status).upper()) if raw_status else None,
+        "live_data": info is not None,
+        "status_error": error,
+    }
+
+
 @app.get("/whatsapp/senders", response_model=List[Dict[str, Any]])
 async def list_whatsapp_senders(tenant_id: uuid.UUID = Depends(get_current_tenant_id)):
-    tkey = str(tenant_id)
-    _init_default_whatsapp(tkey)
-    return _WHATSAPP_SENDERS[tkey]
+    """The tenant's connected WhatsApp numbers with LIVE Meta status (display-name review, business
+    verification, quality, messaging tier) fetched through the provider per number."""
+    from services.marketing.zernio_errors import provider_error
+
+    engine = get_engine()
+    _ensure_marketing_tables(engine)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""SELECT account_id, username, connected_at FROM marketing_connected_accounts
+                     WHERE tenant_id = :tid AND platform = 'whatsapp' AND status <> 'disconnected'
+                     ORDER BY connected_at DESC"""),
+            {"tid": str(tenant_id)},
+        ).mappings().all()
+    client = get_zernio_client()
+
+    async def one(r) -> Dict[str, Any]:
+        if client is None:
+            return whatsapp_sender_view(r["account_id"], r["username"], None, "provider not configured")
+        try:
+            info = await client.whatsapp_number_info(r["account_id"])
+            return whatsapp_sender_view(r["account_id"], r["username"], info, None)
+        except Exception as exc:  # noqa: BLE001
+            err = provider_error("whatsapp number-info", exc)
+            msg = err.detail.get("message") if isinstance(err.detail, dict) else str(err.detail)
+            return whatsapp_sender_view(r["account_id"], r["username"], None, msg)
+
+    out = await asyncio.gather(*(one(r) for r in rows))
+    for view, r in zip(out, rows):
+        view["created_at"] = r["connected_at"].isoformat() if r.get("connected_at") else None
+    return list(out)
 
 
 class WhatsAppConnectNumberRequest(BaseModel):
@@ -5072,25 +5790,19 @@ async def connect_whatsapp_number(
     body: WhatsAppConnectNumberRequest,
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
 ):
-    tkey = str(tenant_id)
-    _init_default_whatsapp(tkey)
+    """Retired: this used to append a fabricated sender ('Pending Meta Review' / 'Verified' were
+    hard-coded strings, and nothing was connected). Real connection runs through Meta Embedded
+    Signup inside OmniDome: GET /social/connect/whatsapp/sdk-config, then
+    POST /social/connect/whatsapp/embedded-signup (or .../credentials)."""
     if body.mode == "get_number":
-        # No number-provisioning provider is integrated; never invent a number.
         raise HTTPException(status_code=501, detail="Number provisioning is not implemented; connect your own number")
-    else:
-        # Using own existing number with verification
-        sender = {
-            "id": f"snd-{uuid.uuid4().hex[:8]}",
-            "name": body.display_name or "Custom Number",
-            "number": body.phone_number or "+27 11 000 0000",
-            "type": "BYO Business",
-            "name_review": "Pending Meta Review",
-            "business_verification": "Verified",
-            "status": "LIVE",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-    _WHATSAPP_SENDERS[tkey].append(sender)
-    return sender
+    raise HTTPException(status_code=422, detail={
+        "error": "use_embedded_signup",
+        "message": "Connect a WhatsApp number with Meta Embedded Signup.",
+        "sdk_config_endpoint": "/social/connect/whatsapp/sdk-config",
+        "complete_endpoint": "/social/connect/whatsapp/embedded-signup",
+        "credentials_endpoint": "/social/connect/whatsapp/credentials",
+    })
 
 
 @app.get("/whatsapp/templates", response_model=List[Dict[str, Any]])
@@ -5404,6 +6116,20 @@ async def delete_team_member(
     _init_default_sms_and_team(tkey)
     _TEAM_MEMBERS[tkey] = [m for m in _TEAM_MEMBERS[tkey] if m["id"] != member_id]
     return {"status": "deleted", "member_id": member_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ZERNIO INTEGRATION ROUTERS (connect flow, ads, lead forms). Included last so the
+# explicit routes above keep precedence; modules import this one lazily (no cycle).
+# See docs/zernio-marketing-integration.md for the full contract.
+# ═══════════════════════════════════════════════════════════════════════════════
+from services.marketing import zernio_connect as _zernio_connect  # noqa: E402
+from services.marketing import zernio_ads as _zernio_ads  # noqa: E402
+from services.marketing import zernio_leads as _zernio_leads  # noqa: E402
+
+app.include_router(_zernio_connect.router)
+app.include_router(_zernio_ads.router)
+app.include_router(_zernio_leads.router)
 
 
 if __name__ == "__main__":

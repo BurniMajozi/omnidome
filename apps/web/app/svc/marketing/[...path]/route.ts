@@ -2,6 +2,7 @@ import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
 import { verifiedRoleHeaders } from "@/lib/proxy-roles"
+import { readBodyLimited, isNullBodyStatus } from "@/lib/proxy-body"
 
 const MARKETING_SERVICE_URL = process.env.MARKETING_SERVICE_URL || "http://marketing:8014"
 const DEV_TENANT_ID = "00000000-0000-0000-0000-000000000001"
@@ -22,7 +23,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   // NOTE: x-zernio-* must be forwarded — the marketing webhook receiver
   // HMAC-verifies X-Zernio-Signature over the raw body. Dropping it here
   // caused every signed Zernio delivery to 401 (Sep 2026).
-  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type", "x-zernio-signature", "x-zernio-event", "x-zernio-event-id"]) {
+  for (const header of ["authorization", "x-tenant-id", "x-user-id", "x-roles", "x-permissions", "content-type", "x-zernio-signature", "x-zernio-event", "x-zernio-event-id", "idempotency-key"]) {
     const value = request.headers.get(header)
     if (value) headers.set(header, value)
   }
@@ -47,17 +48,20 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
   }
 
   try {
-    const body = request.method !== "GET" && request.method !== "HEAD" ? await request.text() : undefined
+    // Raw bytes, original content-type: multipart/binary bodies and the webhook HMAC both need them untouched.
+    const incoming = await readBodyLimited(request)
+    if (!incoming.ok) return NextResponse.json({ error: incoming.error }, { status: incoming.status })
     const res = await signedFetch(url.toString(), {
       method: request.method,
       headers,
-      body,
+      body: incoming.body as BodyInit | undefined,
+      signal: AbortSignal.timeout(60_000),
     })
     const contentType = res.headers.get("content-type") || "application/json"
-    const data = await res.text()
+    const data = await res.arrayBuffer()
     // 204/205/304 must not carry a body: passing "" makes NextResponse throw,
     // which the catch below turned into a 502 for every successful DELETE.
-    const noBody = res.status === 204 || res.status === 205 || res.status === 304
+    const noBody = isNullBodyStatus(res.status)
     return new NextResponse(noBody ? null : data, {
       status: res.status,
       headers: { "Content-Type": contentType },

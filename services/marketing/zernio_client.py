@@ -28,6 +28,21 @@ logger = logging.getLogger(__name__)
 ZERNIO_BASE_URL = "https://zernio.com/api/v1"
 
 
+_VIDEO_EXT = (".mp4", ".mov", ".m4v", ".webm", ".avi", ".mpeg", ".mpg")
+
+
+def _guess_media_type(url: str) -> str:
+    """Zernio mediaItems need a `type` (image|video|gif|document)."""
+    base = (url or "").split("?", 1)[0].lower()
+    if base.endswith(".gif"):
+        return "gif"
+    if base.endswith(".pdf"):
+        return "document"
+    if base.endswith(_VIDEO_EXT):
+        return "video"
+    return "image"
+
+
 class ZernioError(Exception):
     def __init__(self, status: int, message: str):
         self.status = status
@@ -53,14 +68,14 @@ class ZernioClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = ZERNIO_BASE_URL,
+        base_url: Optional[str] = None,
         webhook_secret: Optional[str] = None,
         timeout: float = 30.0,
     ):
         self.api_key = api_key or os.getenv("ZERNIO_API_KEY", "")
         if not self.api_key:
             raise ValueError("ZERNIO_API_KEY environment variable is required")
-        self.base_url = base_url.rstrip("/")
+        self.base_url = (base_url or os.getenv("ZERNIO_BASE_URL") or ZERNIO_BASE_URL).rstrip("/")
         self.webhook_secret = webhook_secret or os.getenv("ZERNIO_WEBHOOK_SECRET")
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
@@ -88,10 +103,15 @@ class ZernioClient:
         method: str,
         path: str,
         params: Optional[Dict] = None,
-        json_data: Optional[Dict] = None,
+        json_data: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
     ) -> Any:
         client = await self._get_client()
-        resp = await client.request(method, path, params=params, json=json_data)
+        # None-valued params are dropped so callers can pass optional filters blindly.
+        clean = {k: v for k, v in (params or {}).items() if v is not None} or None
+        resp = await client.request(
+            method, path, params=clean, json=json_data, headers=dict(headers or {}) or None,
+        )
         if resp.status_code == 429:
             # Prefer Retry-After; fall back to X-RateLimit-Reset (epoch seconds).
             retry_after: Optional[int] = None
@@ -106,7 +126,12 @@ class ZernioClient:
             raise ZernioRateLimitError(resp.text, retry_after=retry_after)
         if resp.status_code >= 400:
             raise ZernioError(resp.status_code, resp.text)
-        return resp.json()
+        if not resp.content:
+            return {}
+        try:
+            return resp.json()
+        except ValueError:
+            return {"raw": resp.text}
 
     async def close(self):
         if self._client and not self._client.is_closed:
@@ -234,56 +259,81 @@ class ZernioClient:
     async def create_post(
         self,
         content: str,
-        platforms: List[str],
-        account_ids: Optional[List[str]] = None,
+        platforms: List[Any],
+        account_ids: Optional[List[str]] = None,  # legacy, ignored
         profile_id: Optional[str] = None,
         is_draft: bool = False,
         publish_now: bool = False,
-        schedule_minutes: int = 60,
-        media_urls: Optional[str] = None,
+        schedule_minutes: int = 60,  # legacy, ignored (Zernio has no relative scheduling)
+        media_urls: Optional[Any] = None,
         title: Optional[str] = None,
     ) -> Dict:
-        """Create a social media post."""
-        payload: Dict[str, Any] = {
-            "content": content,
-            "platforms": platforms,
-            "is_draft": is_draft,
-            "publish_now": publish_now,
-            "schedule_minutes": schedule_minutes,
-        }
-        if account_ids:
-            payload["account_ids"] = account_ids
-        if profile_id:
-            payload["profile_id"] = profile_id
-        if media_urls:
-            payload["media_urls"] = media_urls
-        if title:
-            payload["title"] = title
-        result = await self._request("POST", "/posts", json_data=payload)
-        return result.get("data", result) if isinstance(result, dict) else result
+        """Deprecated shim over publish_content(). The previous implementation sent
+        snake_case fields (is_draft, schedule_minutes, media_urls) that the API
+        does not read, so posts silently became drafts. `platforms` must be the
+        documented [{platform, accountId}] list."""
+        return await self.publish_content(
+            content=content, platforms=platforms, publish_now=publish_now,
+            is_draft=is_draft, media_urls=media_urls if isinstance(media_urls, list) else None,
+            title=title,
+        )
 
     async def publish_content(
         self,
         content: str,
-        platforms: List[Dict[str, str]],  # [{platform, accountId}]
+        platforms: List[Dict[str, Any]],  # [{platform, accountId, customContent?, ...}]
         publish_now: bool = True,
         schedule_date: Optional[str] = None,  # ISO8601; used when publish_now is False
         media_urls: Optional[List[str]] = None,
         title: Optional[str] = None,
+        *,
+        is_draft: bool = False,
+        queued_from_profile: Optional[str] = None,
+        queue_id: Optional[str] = None,
+        timezone: Optional[str] = None,
+        media_items: Optional[List[Dict[str, Any]]] = None,
+        idempotency_key: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict:
-        """POST /v1/posts in the real spec shape: platforms is a list of
-        {platform, accountId} for the customer's connected accounts. Returns the
-        created post ({_id, status, platforms:[{platform, accountId, status}]})."""
-        payload: Dict[str, Any] = {"content": content, "platforms": platforms}
-        if publish_now:
+        """POST /v1/posts (docs.zernio.com/posts/create-post).
+
+        Exactly one scheduling intent is sent, in the documented precedence:
+          draft (isDraft) > publishNow > scheduledFor > queuedFromProfile(+queueId).
+        Field names are the real ones: scheduledFor / mediaItems / isDraft /
+        queuedFromProfile / queueId / timezone. (The previous `scheduleDate` and
+        `mediaUrls` were not API fields and were silently dropped.)
+        Returns the created post ({_id, status, platforms:[{platform, accountId, status}]})."""
+        payload: Dict[str, Any] = {"platforms": platforms}
+        if content:
+            payload["content"] = content
+        if is_draft:
+            payload["isDraft"] = True
+        elif publish_now:
             payload["publishNow"] = True
         elif schedule_date:
-            payload["scheduleDate"] = schedule_date
-        if media_urls:
-            payload["mediaUrls"] = media_urls
+            payload["scheduledFor"] = schedule_date
+        elif queued_from_profile:
+            payload["queuedFromProfile"] = queued_from_profile
+            if queue_id:
+                payload["queueId"] = queue_id
+        else:
+            payload["isDraft"] = True
+        if timezone:
+            payload["timezone"] = timezone
+        items = list(media_items or [])
+        if not items and media_urls:
+            items = [{"type": _guess_media_type(u), "url": u} for u in media_urls if u]
+        if items:
+            payload["mediaItems"] = items
         if title:
             payload["title"] = title
-        result = await self._request("POST", "/posts", json_data=payload)
+        if tags:
+            payload["tags"] = tags
+        if metadata:
+            payload["metadata"] = metadata
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        result = await self._request("POST", "/posts", json_data=payload, headers=headers)
         if isinstance(result, dict):
             return result.get("post", result.get("data", result))
         return result
@@ -292,13 +342,59 @@ class ZernioClient:
         self,
         status: Optional[str] = None,
         limit: int = 10,
-    ) -> List[Dict]:
-        """List posts."""
-        params: Dict[str, Any] = {"limit": limit}
-        if status:
-            params["status"] = status
+        *,
+        profile_id: Optional[str] = None,
+        page: Optional[int] = None,
+        platform: Optional[str] = None,
+        account_id: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Any:
+        """GET /v1/posts. status: draft|scheduled|publishing|published|partial|failed|cancelled.
+        Returns the raw `{posts, pagination}` envelope when any new kwarg is used,
+        else the legacy bare list."""
+        params: Dict[str, Any] = {
+            "limit": limit, "status": status, "profileId": profile_id, "page": page,
+            "platform": platform, "accountId": account_id, "sortBy": sort_by,
+            "fromDate": from_date, "toDate": to_date, "source": source,
+        }
         result = await self._request("GET", "/posts", params=params)
-        return result.get("data", result) if isinstance(result, dict) else result
+        modern = any(v is not None for v in (profile_id, page, platform, account_id, sort_by, from_date, to_date, source))
+        if modern:
+            return result
+        if isinstance(result, dict):
+            return result.get("posts", result.get("data", result))
+        return result
+
+    async def get_post(self, post_id: str) -> Dict:
+        result = await self._request("GET", f"/posts/{post_id}")
+        return result.get("post", result) if isinstance(result, dict) else result
+
+    async def delete_post(self, post_id: str) -> Dict:
+        return await self._request("DELETE", f"/posts/{post_id}")
+
+    async def retry_post(self, post_id: str) -> Dict:
+        return await self._request("POST", f"/posts/{post_id}/retry", json_data={})
+
+    # ── Media ─────────────────────────────────────────────────────────
+
+    async def presign_media(self, filename: str, content_type: str, size: Optional[int] = None) -> Dict:
+        """POST /v1/media/presign -> {uploadUrl, publicUrl, key, expiresIn}. PUT the
+        bytes to uploadUrl (no auth header), then use publicUrl in posts/ads."""
+        payload: Dict[str, Any] = {"filename": filename, "contentType": content_type}
+        if size is not None:
+            payload["size"] = size
+        return await self._request("POST", "/media/presign", json_data=payload)
+
+    async def put_presigned(self, upload_url: str, data: bytes, content_type: str) -> None:
+        """PUT bytes to a presigned storage URL. Uses a throwaway client: the URL is
+        a third-party bucket and must NOT receive our Authorization header."""
+        async with httpx.AsyncClient(timeout=max(self.timeout, 300.0)) as c:
+            resp = await c.put(upload_url, content=data, headers={"Content-Type": content_type})
+        if resp.status_code >= 400:
+            raise ZernioError(resp.status_code, "media storage rejected the upload")
 
     # ── Broadcasts (WhatsApp / SMS / social) ──────────────────────────
 
@@ -541,3 +637,202 @@ class ZernioClient:
             "GET", "/accounts/follower-stats",
             params={"profileId": profile_id, "granularity": granularity},
         )
+
+    # ── Connect flows (headless, OmniDome-hosted UI) ───────────────────────
+    # docs.zernio.com/guides/connecting-accounts
+
+    async def start_connect(
+        self,
+        platform: str,
+        profile_id: str,
+        redirect_url: str,
+        *,
+        headless: bool = False,
+        ads: bool = False,
+        login_method: Optional[str] = None,
+        login_mode: Optional[str] = None,
+        scopes: Optional[str] = None,
+        reconnect_account_id: Optional[str] = None,
+        ad_account_ids: Optional[List[str]] = None,
+        page_id: Optional[str] = None,
+        onboarding: Optional[str] = None,
+        permission_level: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """GET /v1/connect/{platform} (or /v1/connect/{platform}/ads for the dedicated
+        ads connection). Returns {authUrl, state?} (or {alreadyConnected, ...} for a
+        Meta business-login reconnect). `redirect_url` MUST be ours: without it Zernio
+        finishes on its own hosted dashboard, i.e. zernio.com/signin."""
+        params: Dict[str, Any] = {
+            "profileId": profile_id,
+            "redirect_url": redirect_url,
+            "headless": "true" if headless else None,
+            "loginMethod": login_method,
+            "loginMode": login_mode,
+            "scopes": scopes,
+            "reconnectAccountId": reconnect_account_id,
+            "adAccountIds": ",".join(ad_account_ids) if ad_account_ids else None,
+            "pageId": page_id,
+            "onboarding": onboarding,
+            "permissionLevel": permission_level,
+        }
+        path = f"/connect/{platform}/ads" if ads else f"/connect/{platform}"
+        result = await self._request("GET", path, params=params)
+        return result if isinstance(result, dict) else {"authUrl": str(result)}
+
+    async def connect_get(
+        self, path: str, params: Optional[Dict[str, Any]] = None, connect_token: Optional[str] = None
+    ) -> Any:
+        """GET a /v1/connect/... selection/list endpoint (path relative to /connect)."""
+        headers = {"X-Connect-Token": connect_token} if connect_token else None
+        return await self._request("GET", f"/connect/{path.lstrip('/')}", params=params, headers=headers)
+
+    async def connect_post(
+        self, path: str, body: Dict[str, Any], connect_token: Optional[str] = None
+    ) -> Any:
+        """POST a /v1/connect/... selection/credentials endpoint (path relative to /connect)."""
+        headers = {"X-Connect-Token": connect_token} if connect_token else None
+        return await self._request("POST", f"/connect/{path.lstrip('/')}", json_data=body, headers=headers)
+
+    async def get_pending_connect_data(self, token: str) -> Dict[str, Any]:
+        """GET /v1/connect/pending-data?token=<pendingDataToken> (LinkedIn orgs, GBP
+        locations, Pinterest boards, Snapchat profiles, Slack channels)."""
+        return await self._request("GET", "/connect/pending-data", params={"token": token})
+
+    async def get_current_user_id(self) -> str:
+        """GET /v1/users -> currentUserId (needed for Bluesky `state` = {userId}-{profileId})."""
+        result = await self._request("GET", "/users")
+        return str((result or {}).get("currentUserId") or "")
+
+    async def list_profile_accounts(self, profile_id: str, category: Optional[str] = None) -> List[Dict]:
+        """GET /v1/accounts?profileId=... — the ONLY trustworthy source for 'does this
+        accountId belong to this tenant's profile'."""
+        params: Dict[str, Any] = {"profileId": profile_id, "category": category, "includeOverLimit": "true"}
+        result = await self._request("GET", "/accounts", params=params)
+        if isinstance(result, dict):
+            return result.get("accounts", result.get("data", []))
+        return result if isinstance(result, list) else []
+
+    # ── Queue ──────────────────────────────────────────────────────────────
+
+    async def list_queues(self, profile_id: str) -> Dict[str, Any]:
+        return await self._request("GET", "/queue/slots", params={"profileId": profile_id, "all": "true"})
+
+    async def next_queue_slot(self, profile_id: str, queue_id: Optional[str] = None) -> Dict[str, Any]:
+        return await self._request("GET", "/queue/next-slot", params={"profileId": profile_id, "queueId": queue_id})
+
+    # ── WhatsApp (senders / numbers) ───────────────────────────────────────
+
+    async def whatsapp_number_info(self, account_id: str) -> Dict[str, Any]:
+        """GET /v1/whatsapp/number-info — live from Meta: display name + approval
+        (name_status), quality, tier, and the WABA's business_verification_status."""
+        return await self._request("GET", "/whatsapp/number-info", params={"accountId": account_id})
+
+    async def whatsapp_display_name(self, account_id: str) -> Dict[str, Any]:
+        return await self._request("GET", "/whatsapp/business-profile/display-name", params={"accountId": account_id})
+
+    # ── Ads ────────────────────────────────────────────────────────────────
+
+    async def ads_list_ad_accounts(self, account_id: str, limit: Optional[int] = None) -> List[Dict]:
+        """GET /v1/ads/accounts?accountId= — platform ad accounts for an ads connection."""
+        result = await self._request("GET", "/ads/accounts", params={"accountId": account_id, "limit": limit})
+        if isinstance(result, dict):
+            return result.get("accounts", [])
+        return result if isinstance(result, list) else []
+
+    async def ads_targeting_search(
+        self, account_id: str, q: str, *, dimension: Optional[str] = None, geo_type: Optional[str] = None,
+        country_code: Optional[str] = None, ad_account_id: Optional[str] = None, limit: Optional[int] = None,
+    ) -> List[Dict]:
+        result = await self._request("GET", "/ads/targeting/search", params={
+            "accountId": account_id, "q": q, "dimension": dimension, "geoType": geo_type,
+            "countryCode": country_code, "adAccountId": ad_account_id, "limit": limit,
+        })
+        return (result or {}).get("results", []) if isinstance(result, dict) else []
+
+    async def ads_reach_estimate(self, account_id: str, ad_account_id: str, spec: Dict[str, Any]) -> Dict:
+        return await self._request("POST", "/ads/targeting/reach-estimate", json_data={
+            "accountId": account_id, "adAccountId": ad_account_id, "spec": spec,
+        })
+
+    async def ads_list_audiences(
+        self, account_id: str, ad_account_id: str, *, platform: Optional[str] = None, type_: Optional[str] = None,
+    ) -> List[Dict]:
+        result = await self._request("GET", "/ads/audiences", params={
+            "accountId": account_id, "adAccountId": ad_account_id, "platform": platform, "type": type_,
+        })
+        return (result or {}).get("audiences", []) if isinstance(result, dict) else []
+
+    async def ads_create_audience(self, body: Dict[str, Any]) -> Dict:
+        return await self._request("POST", "/ads/audiences", json_data=body)
+
+    async def ads_add_audience_users(self, audience_id: str, users: List[Dict[str, str]]) -> Dict:
+        """POST /v1/ads/audiences/{id}/users — Zernio SHA256-hashes server-side. Max 10k/request."""
+        return await self._request("POST", f"/ads/audiences/{audience_id}/users", json_data={"users": users})
+
+    async def ads_create(self, body: Dict[str, Any], idempotency_key: Optional[str] = None) -> Dict:
+        """POST /v1/ads/create (standalone ad: campaign + ad set + ad)."""
+        headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
+        return await self._request("POST", "/ads/create", json_data=body, headers=headers)
+
+    async def ads_preview(self, body: Dict[str, Any]) -> Dict:
+        """POST /v1/ads/preview (Meta only) — render creative previews before creating."""
+        return await self._request("POST", "/ads/preview", json_data=body)
+
+    async def ads_upload_image(self, account_id: str, ad_account_id: str, image_base64: str, filename: Optional[str] = None) -> Dict:
+        body: Dict[str, Any] = {"accountId": account_id, "adAccountId": ad_account_id, "imageBase64": image_base64}
+        if filename:
+            body["filename"] = filename
+        return await self._request("POST", "/ads/images", json_data=body)
+
+    async def ads_list_campaigns(self, **filters: Any) -> Dict:
+        return await self._request("GET", "/ads/campaigns", params=_camel(filters))
+
+    async def ads_list_ads(self, **filters: Any) -> Dict:
+        return await self._request("GET", "/ads", params=_camel(filters))
+
+    async def ads_set_campaign_status(self, campaign_id: str, status: str, platform: str) -> Dict:
+        return await self._request("PUT", f"/ads/campaigns/{campaign_id}/status",
+                                   json_data={"status": status, "platform": platform})
+
+    async def ads_set_ad_status(self, ad_id: str, status: str) -> Dict:
+        return await self._request("PUT", f"/ads/{ad_id}/status", json_data={"status": status})
+
+    # ── Lead forms / leads (Meta Lead Ads, LinkedIn Lead Gen) ──────────────
+
+    async def lead_forms_list(
+        self, account_id: str, *, ad_account_id: Optional[str] = None, limit: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict:
+        return await self._request("GET", "/ads/lead-forms", params={
+            "accountId": account_id, "adAccountId": ad_account_id, "limit": limit, "cursor": cursor,
+        })
+
+    async def lead_forms_create(self, body: Dict[str, Any]) -> Dict:
+        return await self._request("POST", "/ads/lead-forms", json_data=body)
+
+    async def leads_list(
+        self, *, account_id: Optional[str] = None, form_id: Optional[str] = None,
+        ad_account_id: Optional[str] = None, limit: Optional[int] = None, since: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict:
+        """GET /v1/ads/leads — newest-first, keyset pagination on `cursor`."""
+        return await self._request("GET", "/ads/leads", params={
+            "accountId": account_id, "formId": form_id, "adAccountId": ad_account_id,
+            "limit": limit, "since": since, "cursor": cursor,
+        })
+
+    # ── Webhook subscription management ────────────────────────────────────
+
+    async def webhook_settings_get(self) -> Dict:
+        return await self._request("GET", "/webhooks/settings")
+
+
+def _camel(d: Dict[str, Any]) -> Dict[str, Any]:
+    """snake_case kwargs -> the camelCase query names Zernio expects."""
+    out: Dict[str, Any] = {}
+    for k, v in d.items():
+        if v is None:
+            continue
+        parts = k.split("_")
+        out[parts[0] + "".join(w.title() for w in parts[1:])] = v
+    return out

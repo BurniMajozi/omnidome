@@ -310,9 +310,12 @@ export interface WhatsAppSender {
   name: string
   number: string
   type: string
-  name_review: string
-  business_verification: string
-  status: string
+  /** As reported by Meta through the backend; null means the provider did not report it. */
+  name_review: string | null
+  business_verification: string | null
+  status: string | null
+  live_data?: boolean
+  status_error?: string | null
   created_at?: string
 }
 

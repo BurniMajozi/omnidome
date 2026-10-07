@@ -393,6 +393,11 @@ class SocialPost(Base):
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     platform_post_ids: Mapped[Optional[Dict[str, str]]] = mapped_column(JSONB, nullable=True)
     engagement_data: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    # Provider sync state (added by the idempotent hardening migration; create_all never ALTERs).
+    publish_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    zernio_post_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    timezone: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

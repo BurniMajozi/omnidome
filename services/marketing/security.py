@@ -338,6 +338,80 @@ HARDENING_STATEMENTS = [
     "ALTER TABLE marketing_email_batches ALTER COLUMN total_clicked SET DEFAULT 0",
     "ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ",
     "ALTER TABLE marketing_analytics_sync_state ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ",
+    # ── Zernio integration (connect flow, posts, campaign audiences, lead forms) ──
+    # In-progress connection attempts: binds the OAuth round trip to tenant + user + profile.
+    """CREATE TABLE IF NOT EXISTS marketing_connect_sessions (
+        nonce VARCHAR(64) PRIMARY KEY,
+        tenant_id UUID NOT NULL,
+        user_id UUID,
+        platform VARCHAR(40) NOT NULL,
+        category VARCHAR(20) NOT NULL DEFAULT 'social',
+        profile_id VARCHAR(64) NOT NULL,
+        flow VARCHAR(30),
+        reconnect_account_id VARCHAR(128),
+        return_to TEXT,
+        options JSONB DEFAULT '{}',
+        pending_enc TEXT,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        error VARCHAR(120),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        completed_at TIMESTAMPTZ
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_mkt_connect_sessions_tenant ON marketing_connect_sessions(tenant_id, created_at DESC)",
+    # social_posts: provider sync state (the ORM model carries the same columns)
+    "ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS publish_error TEXT",
+    "ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS queue_id UUID",
+    "ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS zernio_post_id VARCHAR(64)",
+    "ALTER TABLE social_posts ADD COLUMN IF NOT EXISTS timezone VARCHAR(64)",
+    # status was written in mixed case ("SCHEDULED"/"scheduled"); the API now stores lower case only
+    "UPDATE social_posts SET status = lower(status) WHERE status IS NOT NULL AND status <> lower(status)",
+    "CREATE INDEX IF NOT EXISTS idx_social_posts_tenant_status ON social_posts(tenant_id, status, scheduled_for)",
+    "CREATE INDEX IF NOT EXISTS idx_social_posts_zernio ON social_posts(zernio_post_id)",
+    # campaigns can target an audience (segment); audience_segment_id already existed, the rest is send bookkeeping
+    "ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS audience_member_count INT",
+    "ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS last_audience_send_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_mkt_campaigns_audience ON marketing_campaigns(audience_segment_id)",
+    # Lead Gen forms + leads synced from the provider (Meta Lead Ads / LinkedIn Lead Gen)
+    """CREATE TABLE IF NOT EXISTS marketing_lead_forms (
+        tenant_id UUID NOT NULL,
+        form_id VARCHAR(128) NOT NULL,
+        account_id VARCHAR(128) NOT NULL,
+        platform VARCHAR(40),
+        name TEXT,
+        status VARCHAR(40),
+        questions JSONB DEFAULT '[]',
+        raw JSONB DEFAULT '{}',
+        synced_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, form_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS marketing_ad_leads (
+        tenant_id UUID NOT NULL,
+        lead_id VARCHAR(128) NOT NULL,
+        leadgen_id VARCHAR(128),
+        form_id VARCHAR(128),
+        form_name TEXT,
+        account_id VARCHAR(128),
+        platform VARCHAR(40) DEFAULT 'facebook',
+        ad_id VARCHAR(128),
+        adset_id VARCHAR(128),
+        campaign_id VARCHAR(128),
+        is_organic BOOLEAN DEFAULT FALSE,
+        fields JSONB DEFAULT '{}',
+        created_time TIMESTAMPTZ,
+        source VARCHAR(20) DEFAULT 'sync',
+        contact_id UUID,
+        ingested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant_id, lead_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_mkt_ad_leads_created ON marketing_ad_leads(tenant_id, created_time DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_mkt_ad_leads_form ON marketing_ad_leads(tenant_id, form_id)",
+    """CREATE TABLE IF NOT EXISTS marketing_lead_sync_state (
+        tenant_id UUID PRIMARY KEY,
+        last_synced_at TIMESTAMPTZ,
+        last_error TEXT,
+        last_count INT DEFAULT 0
+    )""",
 ]
 
 
