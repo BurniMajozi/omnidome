@@ -202,7 +202,7 @@ export function QuoteBuilder({ mode, initial, customer, lockCustomer, allowProsp
       {act.msg && <Note tone={act.msg.tone}>{act.msg.text}</Note>}
 
       <div className={hidePreview ? "space-y-5" : "grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]"}>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <div className="space-y-2">
             {allowProspect && !customerLocked && (
               <div className="flex gap-3 text-xs">
@@ -268,7 +268,7 @@ export function QuoteBuilder({ mode, initial, customer, lockCustomer, allowProsp
         </div>
 
         {!hidePreview && (
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <Field label="Template">
               <TemplatePicker templates={tpl.templates} state={tpl.state} value={templateId} onChange={setTemplateId} disabled={locked} />
             </Field>

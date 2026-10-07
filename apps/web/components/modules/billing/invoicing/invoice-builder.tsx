@@ -212,7 +212,7 @@ export function InvoiceBuilder({ mode, initial, customer, lockCustomer, source =
       {act.msg && <Note tone={act.msg.tone}>{act.msg.text}</Note>}
 
       <div className={hidePreview ? "space-y-5" : "grid gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]"}>
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Field label="Customer">
             {customerLocked && cust ? (
               <div className="rounded-md border border-border bg-secondary/30 px-3 py-2 text-sm text-foreground">
@@ -259,7 +259,7 @@ export function InvoiceBuilder({ mode, initial, customer, lockCustomer, source =
         </div>
 
         {!hidePreview && (
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-3">
             <Field label="Template">
               <TemplatePicker templates={tpl.templates} state={tpl.state} value={templateId} onChange={setTemplateId} disabled={locked} />
             </Field>

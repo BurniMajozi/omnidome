@@ -114,7 +114,7 @@ export function LinesGrid({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => onChange([...lines, blankLine()])}>
           <Plus className="h-3.5 w-3.5" />
@@ -122,7 +122,7 @@ export function LinesGrid({
         </Button>
         <select
           aria-label="Add element from catalogue"
-          className={`${inputClass} h-8 w-64`}
+          className={`${inputClass} h-8 max-w-full sm:w-64`}
           value={pick}
           disabled={disabled || catalog.length === 0}
           onChange={(e) => addFromCatalog(e.target.value)}
@@ -144,9 +144,9 @@ export function LinesGrid({
         </select>
       </div>
 
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full min-w-[820px] text-sm">
-          <thead className="bg-secondary/40 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+      <div className="min-w-0 overflow-x-auto rounded-md border border-border">
+        <table className="block w-full text-sm md:table md:min-w-[820px]">
+          <thead className="hidden bg-secondary/40 text-left text-[11px] uppercase tracking-wide text-muted-foreground md:table-header-group">
             <tr>
               <th className="px-2 py-2">Description</th>
               <th className="w-20 px-2 py-2">Qty</th>
@@ -157,7 +157,7 @@ export function LinesGrid({
               <th className="w-24 px-2 py-2" />
             </tr>
           </thead>
-          <tbody>
+          <tbody className="block md:table-row-group">
             {lines.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-3 py-6 text-center text-xs text-muted-foreground">
@@ -168,8 +168,8 @@ export function LinesGrid({
             {lines.map((l, i) => {
               const c = calcLine(l)
               return (
-                <tr key={l.key} className="border-t border-border align-top">
-                  <td className="px-2 py-1.5">
+                <tr key={l.key} className="grid grid-cols-2 border-t border-border align-top md:table-row [&>td]:block [&>td]:min-w-0 [&>td]:before:mb-1 [&>td]:before:block [&>td]:before:text-[11px] [&>td]:before:text-muted-foreground [&>td]:before:content-[attr(data-label)] md:[&>td]:table-cell md:[&>td]:before:hidden">
+                  <td data-label="Description" className="col-span-2 px-2 py-1.5">
                     <input
                       aria-label="Description"
                       className={inputClass}
@@ -180,26 +180,26 @@ export function LinesGrid({
                     />
                     {l.catalog_item_id && <span className="text-[10px] text-muted-foreground">from catalogue (price snapshot)</span>}
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td data-label="Quantity" className="px-2 py-1.5">
                     <input aria-label="Quantity" className={inputClass} inputMode="decimal" value={l.quantity} disabled={disabled} onChange={(e) => patch(l.key, { quantity: e.target.value })} />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td data-label="Unit price" className="px-2 py-1.5">
                     <input aria-label="Unit price" className={inputClass} inputMode="decimal" value={l.unit_price} disabled={disabled} onChange={(e) => patch(l.key, { unit_price: e.target.value })} />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td data-label="Discount" className="px-2 py-1.5">
                     <div className="flex gap-1">
                       <input aria-label="Discount" className={inputClass} inputMode="decimal" value={l.discount} disabled={disabled} onChange={(e) => patch(l.key, { discount: e.target.value })} />
-                      <select aria-label="Discount type" className={`${inputClass} w-14 px-1`} value={l.discount_type} disabled={disabled} onChange={(e) => patch(l.key, { discount_type: e.target.value as "amount" | "percent" })}>
+                      <select aria-label="Discount type" className={`${inputClass} w-14 shrink-0 px-1`} value={l.discount_type} disabled={disabled} onChange={(e) => patch(l.key, { discount_type: e.target.value as "amount" | "percent" })}>
                         <option value="amount">R</option>
                         <option value="percent">%</option>
                       </select>
                     </div>
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td data-label="VAT %" className="px-2 py-1.5">
                     <input aria-label="VAT rate" className={inputClass} inputMode="decimal" placeholder="default" value={l.tax_rate} disabled={disabled} onChange={(e) => patch(l.key, { tax_rate: e.target.value })} />
                   </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-foreground">{fmtCents(c.total)}</td>
-                  <td className="px-1 py-1.5">
+                  <td data-label="Line total" className="px-2 py-2 tabular-nums text-foreground md:text-right">{fmtCents(c.total)}</td>
+                  <td data-label="Line actions" className="px-1 py-1.5">
                     <div className="flex justify-end gap-0.5">
                       <Button type="button" size="icon-sm" variant="ghost" aria-label="Move up" disabled={disabled || i === 0} onClick={() => move(i, -1)}>
                         <ArrowUp className="h-3.5 w-3.5" />
