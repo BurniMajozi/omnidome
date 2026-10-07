@@ -22,4 +22,4 @@ Supported generation sections: hero, text, features, pricing, FAQ, CTA and galle
 
 ## Verification
 
-Portal backend suite: 48 passed. Scoped TypeScript check: passed. Production build and browser results will be recorded after deployment.
+Portal backend suite: 50 passed (includes the published-snapshot fix). Full `tsc --noEmit` is clean apart from stale `.next/types` entries. Deployed locally on 7 Oct 2026 (portal-builder and web images match the working tree). The browser walkthrough (create draft, chat refinement, direct edit, save, reopen, phone layout) and a live AI-provider call have NOT been done: the previous session ran out of credit, and the automated browser timed out afterwards.
