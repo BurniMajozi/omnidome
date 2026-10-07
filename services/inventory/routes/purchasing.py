@@ -7,14 +7,15 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from services.common.auth import get_current_tenant_id, get_current_user_id
+from services.common.auth import AuthContext, get_auth_context, get_current_tenant_id, get_current_user_id
 from services.common.http_client import service_get, service_post
-from services.inventory.access import require_tier
+from services.inventory.access import require_access, require_tier
 from services.inventory import finance_outbox
 from services.inventory.purchasing_helpers import (
     VAT_RATE, money, approval_hash, validate_signature, require_state,
@@ -454,25 +455,51 @@ async def reject_purchase_order(po_id: uuid.UUID, body: RejectionInput,
     return await _decide(db, tenant_id, po_id, user_id, body, "rejected")
 
 
+async def _is_manager(ctx: AuthContext) -> bool:
+    try:
+        await require_access(ctx, "manager")
+        return True
+    except HTTPException:
+        return False
+
+
+def _header_value(value) -> Optional[str]:
+    """Header(...) defaults leak through on direct (non-HTTP) calls; accept only real strings."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()[:128]
+    return None
+
+
 @router.get("/purchase-orders/{po_id}/approvals")
-async def list_po_approvals(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+async def list_po_approvals(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                            db: AsyncSession = Depends(get_session), ctx: AuthContext = Depends(get_auth_context)):
     await _load_po(db, tenant_id, po_id)
     rows = (await db.execute(select(PurchaseOrderApproval).where(PurchaseOrderApproval.tenant_id == tenant_id,
                             PurchaseOrderApproval.po_id == po_id).order_by(PurchaseOrderApproval.decided_at))).scalars().all()
+    manager = await _is_manager(ctx)
+    # Drawn signatures are sensitive: only managers/admins and the signer themself may read them.
+    # Everyone else still gets the signature hash as proof one exists.
     return [{"id": r.id, "decision": r.decision, "mode": r.mode, "signer_user_id": r.signer_user_id,
-             "signer_name": r.signer_name, "signature_data": r.signature_data, "comment": r.comment,
+             "signer_name": r.signer_name,
+             "signature_data": r.signature_data if (manager or (r.signer_user_id and r.signer_user_id == ctx.user_id)) else None,
              "signature_hash": hashlib.sha256(r.signature_data.encode()).hexdigest() if r.signature_data else None,
+             "comment": r.comment,
              "po_total_hash": r.po_total_hash, "po_total_zar": r.po_total_zar, "decided_at": r.decided_at} for r in rows]
 
 
-@router.post("/purchase-orders/{po_id}/cancel", response_model=PurchaseOrderRead, dependencies=[Depends(require_tier("manager"))])
-async def cancel_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+@router.post("/purchase-orders/{po_id}/cancel", response_model=PurchaseOrderRead, dependencies=[Depends(require_tier("write"))])
+async def cancel_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                db: AsyncSession = Depends(get_session), ctx: AuthContext = Depends(get_auth_context)):
     po = await _load_po(db, tenant_id, po_id, lock=True)
+    if not await _is_manager(ctx):
+        # Non-managers may only withdraw their own draft.
+        if not (po.status == "draft" and po.created_by is not None and po.created_by == ctx.user_id):
+            raise HTTPException(403, "Only a manager can cancel this purchase order (creators may cancel their own draft)")
     require_state(po, ("draft", "pending_approval", "submitted", "approved", "rejected", "sent"), "cancel")
     if po.send_claimed_at:
         raise HTTPException(409, "Reconcile the pending supplier email before cancelling this order")
     items = await _locked_items(db, po)
-    if po.send_claimed_at or any(i.quantity_received for i in items):
+    if any(i.quantity_received for i in items):
         raise HTTPException(409, "Cannot cancel an order being sent or already received")
     po.status = "cancelled"
     po.cancelled_at = datetime.now(timezone.utc)
@@ -481,31 +508,59 @@ async def cancel_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends
     return po
 
 
-@router.get("/purchase-orders/{po_id}/pdf")
-async def purchase_order_pdf(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id), db: AsyncSession = Depends(get_session)):
+@router.post("/purchase-orders/{po_id}/reapprove", response_model=PurchaseOrderRead, dependencies=[Depends(require_tier("manager"))])
+async def reapprove_legacy_purchase_order(po_id: uuid.UUID, body: ApprovalInput,
+                                          tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                          user_id: uuid.UUID = Depends(get_current_user_id),
+                                          db: AsyncSession = Depends(get_session)):
+    """Manager re-approval of a pre-signature (legacy) approved PO: records a signed approval and stamps the hash."""
     po = await _load_po(db, tenant_id, po_id, lock=True)
+    require_state(po, ("approved", "sent", "partially_received"), "re-approve")
+    if po.approval_hash or po.approval_mode != "legacy":
+        raise HTTPException(409, "Only legacy approvals without a signed snapshot can be re-approved")
+    if user_id in (po.created_by, po.submitted_by):
+        raise HTTPException(403, "Creator or submitter cannot manually decide their own purchase order")
     items = await _locked_items(db, po)
+    _audit(db, po, items, "approved", user_id, body)
+    await db.flush()
+    await db.refresh(po, attribute_names=["items"])
+    return po
+
+
+@router.get("/purchase-orders/{po_id}/pdf")
+async def purchase_order_pdf(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                             db: AsyncSession = Depends(get_session),
+                             user_id: uuid.UUID = Depends(get_current_user_id)):
+    # Rendering is a pure local read: no row locks and no dependency on the mail service
+    # (mail availability only matters when actually sending).
+    po = await _load_po(db, tenant_id, po_id)
+    items = (await db.execute(select(PurchaseOrderItem).where(PurchaseOrderItem.po_id == po.id)
+                              .order_by(PurchaseOrderItem.id))).scalars().all()
     supplier = await get_supplier(po.supplier_id, tenant_id, db)
     pdf = render_purchase_order_pdf(po, items, supplier.name)
-    try:
-        capabilities = await service_get("communication", "/api/v1/mail/send-capabilities", tenant_id=tenant_id, user_id=user_id)
-    except Exception:
-        raise HTTPException(503, "Mail permissions and provider availability could not be verified")
-    if not isinstance(capabilities, dict) or not capabilities.get("pdf_attachments") or not capabilities.get("configured"):
-        raise HTTPException(503, "Configure the mail provider with PDF attachment support before sending")
     return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="PO-{po.id}.pdf"'})
+
+
+def _is_definite_send_failure(exc: Exception) -> bool:
+    """True only when the mail service positively refused the request (nothing was sent)."""
+    code = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(code, int) and 400 <= code < 500 and code != 408
 
 
 @router.post("/purchase-orders/{po_id}/send", dependencies=[Depends(require_tier("write"))])
 async def send_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-                              db: AsyncSession = Depends(get_session), user_id: uuid.UUID = Depends(get_current_user_id)):
+                              db: AsyncSession = Depends(get_session), user_id: uuid.UUID = Depends(get_current_user_id),
+                              idempotency_key: Optional[str] = Header(None)):
+    key = _header_value(idempotency_key)
     po = await _load_po(db, tenant_id, po_id, lock=True)
+    if key and po.status == "sent" and po.send_idempotency_key == key and po.sent_message_id:
+        return {"status": "sent", "message_id": po.sent_message_id, "replayed": True}
     require_state(po, ("approved",), "send")
     items = await _locked_items(db, po)
     if po.approval_hash != approval_hash(po, items):
         raise HTTPException(409, "Purchase order changed after approval; a new approval is required")
     if po.send_claimed_at:
-        raise HTTPException(409, "A send is already pending; reconcile the mailbox before retrying")
+        raise HTTPException(409, "A send is already pending; a manager must reconcile it before retrying")
     supplier = await get_supplier(po.supplier_id, tenant_id, db)
     if not supplier.email:
         raise HTTPException(422, "Supplier has no email address")
@@ -521,14 +576,29 @@ async def send_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(g
     # Persist the claim before I/O; a crash or uncertain delivery must never auto-send twice.
     po.send_claimed_at = datetime.now(timezone.utc)
     po.sent_to = supplier.email
+    po.send_idempotency_key = key or str(uuid.uuid4())
     await db.commit()
+
+    async def release_claim():
+        locked = await _load_po(db, tenant_id, po_id, lock=True)
+        locked.send_claimed_at = None
+        locked.sent_to = None
+        locked.send_idempotency_key = None
+        await db.commit()
+
     try:
         delivery = await service_post("communication", "/api/v1/mail/send", json=body,
             tenant_id=tenant_id, user_id=user_id, timeout=30, retries=0)
-    except Exception:
-        raise HTTPException(502, "Delivery could not be confirmed. Check the mailbox before attempting another send")
+    except Exception as exc:
+        if _is_definite_send_failure(exc):
+            await release_claim()
+            raise HTTPException(502, "The mail service rejected the email; nothing was sent. You can retry")
+        raise HTTPException(502, "Delivery could not be confirmed. Check the mailbox, then ask a manager to reconcile")
+    if isinstance(delivery, dict) and str(delivery.get("status", "")).lower() in {"failed", "rejected", "error"}:
+        await release_claim()
+        raise HTTPException(502, "The mail service reported the email as failed; nothing was sent. You can retry")
     if not isinstance(delivery, dict) or delivery.get("status") != "sent" or not delivery.get("message_id"):
-        raise HTTPException(502, "Email was not confirmed sent. Check the mailbox; the purchase order remains approved")
+        raise HTTPException(502, "Email was not confirmed sent. Check the mailbox, then ask a manager to reconcile")
     po = await _load_po(db, tenant_id, po_id, lock=True)
     if po.status == "approved":
         po.status = "sent"
@@ -537,6 +607,33 @@ async def send_purchase_order(po_id: uuid.UUID, tenant_id: uuid.UUID = Depends(g
     po.send_claimed_at = None
     await db.flush()
     return {"status": "sent", "message_id": po.sent_message_id}
+
+
+class SendReconcileInput(BaseModel):
+    outcome: str = Field(pattern="^(sent|not_sent)$")
+    message_id: Optional[str] = Field(None, max_length=255)
+    note: Optional[str] = Field(None, max_length=2000)
+
+
+@router.post("/purchase-orders/{po_id}/send/reconcile", dependencies=[Depends(require_tier("manager"))])
+async def reconcile_purchase_order_send(po_id: uuid.UUID, body: SendReconcileInput,
+                                        tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+                                        db: AsyncSession = Depends(get_session)):
+    """Manager resolves an ambiguous/stuck send claim after checking the mailbox."""
+    po = await _load_po(db, tenant_id, po_id, lock=True)
+    if not po.send_claimed_at:
+        raise HTTPException(409, "No pending send claim to reconcile")
+    if body.outcome == "sent":
+        if po.status == "approved":
+            po.status = "sent"
+        po.sent_message_id = (body.message_id or "").strip() or "manual-reconcile"
+        po.sent_at = datetime.now(timezone.utc)
+    else:
+        po.sent_to = None
+        po.send_idempotency_key = None
+    po.send_claimed_at = None
+    await db.flush()
+    return {"status": po.status, "outcome": body.outcome, "message_id": po.sent_message_id}
 
 
 @router.get("/purchasing/finance-outbox", dependencies=[Depends(require_tier("manager"))])
@@ -557,11 +654,16 @@ async def retry_finance_outbox(tenant_id: uuid.UUID = Depends(get_current_tenant
              status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("write"))])
 async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
                                tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-                               user_id: uuid.UUID = Depends(get_current_user_id), db: AsyncSession = Depends(get_session)):
+                               user_id: uuid.UUID = Depends(get_current_user_id), db: AsyncSession = Depends(get_session),
+                               idempotency_key: Optional[str] = Header(None)):
     po = await _load_po(db, tenant_id, po_id, lock=True)
-    # PO lock serializes receipt_ref lookup with receipt creation, including first delivery.
+    # Dedicated idempotency key: Idempotency-Key header, falling back to the caller's receipt_ref.
+    key = _header_value(idempotency_key) or body.receipt_ref
+    # PO lock serializes key lookup with receipt creation, including first delivery.
     existing = (await db.execute(select(GoodsReceipt).where(GoodsReceipt.tenant_id == tenant_id,
-                     GoodsReceipt.po_id == po.id, GoodsReceipt.receipt_ref == body.receipt_ref))).scalar_one_or_none()
+                     GoodsReceipt.po_id == po.id,
+                     or_(GoodsReceipt.idempotency_key == key, GoodsReceipt.receipt_ref == body.receipt_ref))
+                     )).scalars().first()
     if existing:
         await db.refresh(existing, attribute_names=["items"])
         existing_lines = await _locked_items(db, po)
@@ -570,7 +672,9 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
         return existing
     require_state(po, ("approved", "sent", "partially_received"), "receive")
     items = await _locked_items(db, po)
-    if not po.approval_hash or po.approval_hash != approval_hash(po, items):
+    # Legacy approvals pre-date signed snapshots (approval_mode='legacy', no hash): receivable as-is.
+    legacy = po.approval_mode == "legacy" and not po.approval_hash
+    if not legacy and (not po.approval_hash or po.approval_hash != approval_hash(po, items)):
         raise HTTPException(409, "Purchase order has no matching approval snapshot")
     by_id = {str(i.id): i for i in items}
     validate_receipt(body.items, by_id)
@@ -585,6 +689,7 @@ async def create_goods_receipt(po_id: uuid.UUID, body: GoodsReceiptCreate,
     now = datetime.now(timezone.utc)
     gr = GoodsReceipt(tenant_id=tenant_id, po_id=po.id, warehouse_id=po.warehouse_id,
         gr_number=await next_sequence_number(db, tenant_id, "gr", "GR"), receipt_ref=body.receipt_ref,
+        idempotency_key=key,
         status="accepted", received_by=user_id, received_at=now,
         supplier_delivery_note=body.supplier_delivery_note, supplier_invoice_number=body.supplier_invoice_number,
         notes=body.notes)
@@ -636,6 +741,8 @@ async def list_purchase_orders(
     tenant_id: uuid.UUID = Depends(get_current_tenant_id),
     db: AsyncSession = Depends(get_session),
     status_filter: Optional[str] = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
     stmt = select(PurchaseOrder).where(
         PurchaseOrder.tenant_id == tenant_id,
@@ -643,11 +750,10 @@ async def list_purchase_orders(
     )
     if status_filter:
         stmt = stmt.where(PurchaseOrder.status == status_filter)
-    result = await db.execute(stmt.order_by(PurchaseOrder.created_at.desc()))
-    pos = result.scalars().unique().all()
-    for po in pos:
-        await db.refresh(po, attribute_names=["items"])
-    return pos
+    # selectinload batches all lines in one extra query (no per-PO refresh / N+1).
+    stmt = (stmt.options(selectinload(PurchaseOrder.items))
+            .order_by(PurchaseOrder.created_at.desc(), PurchaseOrder.id.desc()).limit(limit).offset(offset))
+    return (await db.execute(stmt)).scalars().unique().all()
 
 
 @router.get("/purchase-orders/{po_id}", response_model=PurchaseOrderRead)

@@ -71,6 +71,11 @@ async def seeded(monkeypatch, *, limit=0, status="draft", quantity=10, cost="100
     await engine.dispose()
 
 
+def mgr_ctx(seed, user=None, roles=("inventory_admin",)):
+    from services.common.auth import AuthContext
+    return AuthContext(user_id=user or seed.manager, tenant_id=seed.tenant, roles=list(roles), rbac_loaded=True)
+
+
 def receipt(seed, received=3, rejected=0, ref="delivery-1"):
     return routes.GoodsReceiptCreate(receipt_ref=ref, items=[routes.GRItemInput(
         po_item_id=seed.line.id, quantity_received=received, quantity_rejected=rejected,
@@ -136,7 +141,7 @@ def test_manual_decision_prevents_creator_and_submitter_and_records_signature(mo
             result = await routes.approve_purchase_order(s.po.id, approval_input(), s.tenant, s.manager, s.db)
             audit = (await s.db.execute(select(models.PurchaseOrderApproval))).scalar_one()
             assert result.status == "approved" and audit.signature_data == PNG and audit.signer_user_id == s.manager
-            records = await routes.list_po_approvals(s.po.id, s.tenant, s.db)
+            records = await routes.list_po_approvals(s.po.id, s.tenant, s.db, mgr_ctx(s))
             assert len(records[0]["signature_hash"]) == 64
             assert records[0]["po_total_hash"] == result.approval_hash
             with pytest.raises(HTTPException):
@@ -153,7 +158,7 @@ def test_reject_cancel_and_receive_state_gates(monkeypatch):
             assert result.status == "rejected" and result.rejection_reason == "Too expensive"
             with pytest.raises(HTTPException):
                 await routes.create_goods_receipt(s.po.id, receipt(s), s.tenant, s.manager, s.db)
-            assert (await routes.cancel_purchase_order(s.po.id, s.tenant, s.db)).status == "cancelled"
+            assert (await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, mgr_ctx(s))).status == "cancelled"
             with pytest.raises(HTTPException):
                 await routes.submit_purchase_order(s.po.id, s.tenant, s.creator, s.db)
     asyncio.run(scenario())
@@ -337,7 +342,7 @@ def test_receipt_completion_replay_and_cancel_protection(monkeypatch):
                 await routes.create_goods_receipt(s.po.id, receipt(s, received=2), s.tenant, s.manager, s.db)
             assert exc.value.status_code == 409
             with pytest.raises(HTTPException):
-                await routes.cancel_purchase_order(s.po.id, s.tenant, s.db)
+                await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, mgr_ctx(s))
     asyncio.run(scenario())
 
 
@@ -413,4 +418,166 @@ def test_settings_update_persists_and_is_tenant_scoped(monkeypatch):
             await s.db.commit()
             assert (await routes.get_purchasing_settings(s.tenant, s.db))["auto_approve_limit"] == "5000.00"
             assert (await routes.get_purchasing_settings(uuid.uuid4(), s.db))["auto_approve_limit"] == "0.00"
+    asyncio.run(scenario())
+
+
+def _supplier_with_email(s):
+    async def go():
+        sup = (await s.db.execute(select(models.Supplier).where(models.Supplier.id == s.po.supplier_id))).scalar_one()
+        sup.email = "supplier@example.test"
+    return go()
+
+
+def test_pdf_endpoint_has_user_id_and_needs_no_mail_service(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            async def boom(*a, **k):
+                raise AssertionError("communication must not be called to render the PDF")
+            monkeypatch.setattr(routes, "service_get", boom)
+            try:
+                resp = await routes.purchase_order_pdf(s.po.id, s.tenant, s.db, s.manager)
+            except HTTPException as exc:
+                assert exc.status_code == 503 and "renderer unavailable" in exc.detail
+            else:
+                assert resp.body.startswith(b"%PDF-")
+    asyncio.run(scenario())
+
+
+def test_definite_send_failure_releases_claim_and_allows_cancel(monkeypatch):
+    import httpx
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            await _supplier_with_email(s)
+            async def fake_get(service, path, **kw):
+                return [{"id": str(uuid.uuid4()), "is_active": True}]
+            async def refused(*a, **k):
+                req = httpx.Request("POST", "http://x")
+                raise httpx.HTTPStatusError("bad", request=req, response=httpx.Response(422, request=req))
+            monkeypatch.setattr(routes, "service_get", fake_get)
+            monkeypatch.setattr(routes, "service_post", refused)
+            with pytest.raises(HTTPException) as exc:
+                await routes.send_purchase_order(s.po.id, s.tenant, s.db, s.manager)
+            assert exc.value.status_code == 502
+            assert s.po.send_claimed_at is None and s.po.sent_to is None
+            assert (await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, mgr_ctx(s))).status == "cancelled"
+    asyncio.run(scenario())
+
+
+def test_manager_reconcile_resolves_ambiguous_claim(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            with pytest.raises(HTTPException) as exc:
+                await routes.reconcile_purchase_order_send(s.po.id, routes.SendReconcileInput(outcome="not_sent"), s.tenant, s.db)
+            assert exc.value.status_code == 409
+            s.po.send_claimed_at = datetime.now(timezone.utc)
+            s.po.sent_to = "supplier@example.test"
+            with pytest.raises(HTTPException):
+                await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, mgr_ctx(s))
+            await routes.reconcile_purchase_order_send(s.po.id, routes.SendReconcileInput(outcome="not_sent"), s.tenant, s.db)
+            assert s.po.send_claimed_at is None and s.po.status == "approved"
+            s.po.send_claimed_at = datetime.now(timezone.utc)
+            result = await routes.reconcile_purchase_order_send(
+                s.po.id, routes.SendReconcileInput(outcome="sent", message_id="m-1"), s.tenant, s.db)
+            assert result["status"] == "sent" and s.po.sent_message_id == "m-1" and s.po.send_claimed_at is None
+    asyncio.run(scenario())
+
+
+def test_send_idempotency_key_replays_confirmed_send(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            await _supplier_with_email(s)
+            sent = []
+            async def fake_get(service, path, **kw):
+                return [{"id": str(uuid.uuid4()), "is_active": True}]
+            async def fake_post(service, path, **kw):
+                sent.append(1)
+                return {"status": "sent", "message_id": "m-9"}
+            monkeypatch.setattr(routes, "service_get", fake_get)
+            monkeypatch.setattr(routes, "service_post", fake_post)
+            await routes.send_purchase_order(s.po.id, s.tenant, s.db, s.manager, "key-1")
+            assert s.po.send_idempotency_key == "key-1"
+            again = await routes.send_purchase_order(s.po.id, s.tenant, s.db, s.manager, "key-1")
+            assert again["replayed"] is True and len(sent) == 1
+    asyncio.run(scenario())
+
+
+def test_legacy_approved_po_can_be_received_and_reapproved(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            s.po.approval_mode, s.po.approval_hash = "legacy", None
+            with pytest.raises(HTTPException) as exc:   # creator cannot re-approve
+                await routes.reapprove_legacy_purchase_order(s.po.id, approval_input(), s.tenant, s.creator, s.db)
+            assert exc.value.status_code == 403
+            po = await routes.reapprove_legacy_purchase_order(s.po.id, approval_input(), s.tenant, s.manager, s.db)
+            assert po.approval_hash == approval_hash(po, [s.line]) and po.approval_mode == "manual"
+            with pytest.raises(HTTPException) as exc:   # no longer legacy
+                await routes.reapprove_legacy_purchase_order(s.po.id, approval_input(), s.tenant, s.manager, s.db)
+            assert exc.value.status_code == 409
+        async with seeded(monkeypatch, status="approved") as s:
+            s.po.approval_mode, s.po.approval_hash = "legacy", None
+            gr = await routes.create_goods_receipt(s.po.id, receipt(s), s.tenant, s.manager, s.db)
+            assert gr.status == "accepted" and s.line.quantity_received == 3
+    asyncio.run(scenario())
+
+
+def test_receipt_idempotency_key_header_replays_and_is_stored(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            gr = await routes.create_goods_receipt(s.po.id, receipt(s, ref="r-1"), s.tenant, s.manager, s.db, "hdr-1")
+            assert gr.idempotency_key == "hdr-1" and gr.receipt_ref == "r-1"
+            replay = await routes.create_goods_receipt(s.po.id, receipt(s, ref="r-2"), s.tenant, s.manager, s.db, "hdr-1")
+            assert replay.id == gr.id and s.line.quantity_received == 3
+            fallback = await routes.create_goods_receipt(s.po.id, receipt(s, 2, ref="r-3"), s.tenant, s.manager, s.db)
+            assert fallback.idempotency_key == "r-3"
+    asyncio.run(scenario())
+
+
+def test_list_purchase_orders_paginates_and_loads_items(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch, status="approved") as s:
+            for n in range(2, 5):
+                po = models.PurchaseOrder(tenant_id=s.tenant, supplier_id=s.po.supplier_id, warehouse_id=s.warehouse.id,
+                    po_number=f"PO-{n}", status="draft", currency="ZAR", subtotal_zar=1, tax_zar=0, total_zar=1)
+                s.db.add(po)
+                await s.db.flush()
+                s.db.add(models.PurchaseOrderItem(po_id=po.id, product_id=s.product.id, quantity_ordered=1,
+                                                  quantity_received=0, unit_cost_zar=1, total_cost_zar=1))
+            await s.db.commit()
+            s.db.expire_all()
+            page1 = await routes.list_purchase_orders(s.tenant, s.db, None, 3, 0)
+            page2 = await routes.list_purchase_orders(s.tenant, s.db, None, 3, 3)
+            assert len(page1) == 3 and len(page2) == 1
+            assert {p.id for p in page1}.isdisjoint({p.id for p in page2})
+            assert all(len(p.items) == 1 for p in page1 + page2)
+    asyncio.run(scenario())
+
+
+def test_signature_visible_only_to_manager_or_signer(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch) as s:
+            await routes.submit_purchase_order(s.po.id, s.tenant, s.creator, s.db)
+            await routes.approve_purchase_order(s.po.id, approval_input(), s.tenant, s.manager, s.db)
+            other = mgr_ctx(s, user=uuid.uuid4(), roles=("viewer",))
+            assert (await routes.list_po_approvals(s.po.id, s.tenant, s.db, other))[0]["signature_data"] is None
+            assert (await routes.list_po_approvals(s.po.id, s.tenant, s.db, other))[0]["signature_hash"]
+            signer = mgr_ctx(s, user=s.manager, roles=("viewer",))
+            assert (await routes.list_po_approvals(s.po.id, s.tenant, s.db, signer))[0]["signature_data"] == PNG
+            assert (await routes.list_po_approvals(s.po.id, s.tenant, s.db, mgr_ctx(s, user=uuid.uuid4())))[0]["signature_data"] == PNG
+    asyncio.run(scenario())
+
+
+def test_creator_can_cancel_own_draft_only(monkeypatch):
+    async def scenario():
+        async with seeded(monkeypatch) as s:
+            stranger = mgr_ctx(s, user=uuid.uuid4(), roles=("stock_controller",))
+            with pytest.raises(HTTPException) as exc:
+                await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, stranger)
+            assert exc.value.status_code == 403
+            owner = mgr_ctx(s, user=s.creator, roles=("stock_controller",))
+            assert (await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, owner)).status == "cancelled"
+        async with seeded(monkeypatch, status="approved") as s:
+            owner = mgr_ctx(s, user=s.creator, roles=("stock_controller",))
+            with pytest.raises(HTTPException) as exc:
+                await routes.cancel_purchase_order(s.po.id, s.tenant, s.db, owner)
+            assert exc.value.status_code == 403
     asyncio.run(scenario())

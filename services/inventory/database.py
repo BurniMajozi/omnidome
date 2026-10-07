@@ -476,6 +476,7 @@ class PurchaseOrder(Base, SoftDeleteMixin):
     sent_to: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
     sent_message_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     send_claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    send_idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)  # dedicated send replay key
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     notes: Mapped[Optional[str]] = mapped_column(Text)
@@ -557,6 +558,8 @@ class GoodsReceipt(Base):
     # Caller-supplied idempotency key: a replay of the same (tenant, PO, receipt_ref) returns the
     # original receipt instead of receiving the goods twice.
     receipt_ref: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Dedicated idempotency key (Idempotency-Key header, else receipt_ref); never overloads other fields.
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     value_ex_vat_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
     vat_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
 
@@ -574,6 +577,8 @@ class GoodsReceipt(Base):
         Index("ix_gr_tenant_status", "tenant_id", "status"),
         Index("uq_gr_tenant_po_receipt_ref", "tenant_id", "po_id", "receipt_ref", unique=True,
               postgresql_where=text("receipt_ref IS NOT NULL"), sqlite_where=text("receipt_ref IS NOT NULL")),
+        Index("uq_gr_tenant_po_idempotency_key", "tenant_id", "po_id", "idempotency_key", unique=True,
+              postgresql_where=text("idempotency_key IS NOT NULL"), sqlite_where=text("idempotency_key IS NOT NULL")),
     )
 
 

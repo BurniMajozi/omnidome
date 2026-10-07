@@ -143,10 +143,28 @@ export const technicianApi = {
   checkParts: (sku: string) =>
     fetchJSON<TechInventoryItem[]>(`/inventory/stock?sku=${encodeURIComponent(sku)}`),
 
-  checkoutParts: (data: { job_id: string; items: Array<{ product_id: string; quantity: number }> }) =>
-    fetchJSON<{ status: string; reference: string }>("/inventory/stock/checkout", {
+  // Pass the same `clientRef` when retrying a failed/uncertain checkout so the server replays
+  // the original result instead of deducting stock twice. A fresh ref = a new checkout.
+  checkoutParts: (
+    data: { job_id: string; items: Array<{ product_id: string; quantity: number; warehouse_id?: string }>; warehouse_id?: string },
+    clientRef: string = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `co-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+  ) =>
+    fetchJSON<{
+      job_id: string
+      status: string
+      items: Array<{
+        product_id: string
+        warehouse_id: string
+        status: string
+        quantity: number
+        remaining: number
+      }>
+    }>("/inventory/stock/checkout", {
       method: "POST",
-      body: JSON.stringify(data),
+      headers: { "Content-Type": "application/json", "Idempotency-Key": clientRef },
+      body: JSON.stringify({ ...data, client_ref: clientRef }),
     }),
 
   // Speed test (runs from gateway)

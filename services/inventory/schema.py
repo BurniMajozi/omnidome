@@ -109,6 +109,8 @@ UNIQUE_INDEXES: Tuple[UniqueIndexSpec, ...] = (
                     "client_ref IS NOT NULL"),
     UniqueIndexSpec("uq_gr_tenant_po_receipt_ref", "inventory_goods_receipts", ("tenant_id", "po_id", "receipt_ref"),
                     "receipt_ref IS NOT NULL"),
+    UniqueIndexSpec("uq_gr_tenant_po_idempotency_key", "inventory_goods_receipts",
+                    ("tenant_id", "po_id", "idempotency_key"), "idempotency_key IS NOT NULL"),
 )
 
 # Applied only when the column holds no NULLs (otherwise skipped + logged).
@@ -268,6 +270,7 @@ END $$"""))
         ("sent_to", "VARCHAR(320)"),
         ("sent_message_id", "VARCHAR(255)"),
         ("send_claimed_at", "TIMESTAMPTZ"),
+        ("send_idempotency_key", "VARCHAR(128)"),
         ("cancelled_at", "TIMESTAMPTZ"),
     ])
     s.append(("inventory_purchase_orders: legacy 'submitted' -> 'pending_approval'",
@@ -278,6 +281,7 @@ END $$"""))
               "AND approval_mode IS NULL AND approval_hash IS NULL"))
     s += _add_columns("inventory_goods_receipts", [
         ("receipt_ref", "VARCHAR(128)"),
+        ("idempotency_key", "VARCHAR(128)"),
         ("value_ex_vat_zar", "NUMERIC(14,2) NOT NULL DEFAULT 0"),
         ("vat_zar", "NUMERIC(14,2) NOT NULL DEFAULT 0"),
     ])
