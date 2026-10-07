@@ -25,6 +25,8 @@ from services.billing.models import (
 )
 from services.common.auth import AuthContext, get_auth_context
 from services.billing.access import require_tier
+from services.billing import fee_policies as fees
+from services.billing.models_fees import FeePolicy
 
 logger = logging.getLogger("billing.cancellations")
 
@@ -46,6 +48,10 @@ class CancelInitiateResponse(BaseModel):
     status: str
     message: str
     retention_offer_eligible: bool
+    # Fee engine result when the tenant has an applicable fee policy (auto-run on initiate).
+    fee_calculation_id: Optional[uuid.UUID] = None
+    fee_total_zar: Optional[Decimal] = None
+    fee_amount_due_zar: Optional[Decimal] = None
 
 
 class ETFCalculationResponse(BaseModel):
@@ -59,6 +65,21 @@ class ETFCalculationResponse(BaseModel):
     outstanding_balance_zar: Decimal
     total_etf_zar: Decimal
     router_return_option: bool
+    # Fee engine fields. engine="legacy" means no fee policy applies and the hardcoded penalty tiers were used.
+    engine: str = "legacy"
+    calculation_id: Optional[uuid.UUID] = None
+    policy_id: Optional[uuid.UUID] = None
+    policy_version: Optional[int] = None
+    fee_net_zar: Optional[Decimal] = None
+    fee_vat_zar: Optional[Decimal] = None
+    fee_total_zar: Optional[Decimal] = None   # VAT-inclusive fee after waivers
+    amount_due_zar: Optional[Decimal] = None
+    flags: list[str] = []
+    breakdown: Optional[dict] = None
+
+
+class ETFCalculationRequest(BaseModel):
+    reason_code: Optional[str] = None  # e.g. fno_fault, relocation_in_coverage; defaults from the cancellation
 
 
 class RouterReturnBookRequest(BaseModel):
@@ -142,6 +163,60 @@ def _calculate_etf(
     }
 
 
+def _inspected_router(session, tenant_id, cancel_id):
+    """(returned, condition) from the latest inspected router return of this cancellation."""
+    rr = session.query(RouterReturn).filter(
+        RouterReturn.tenant_id == tenant_id, RouterReturn.cancellation_request_id == cancel_id,
+        RouterReturn.condition.isnot(None)).order_by(RouterReturn.inspected_at.desc()).first()
+    return (True, rr.condition) if rr is not None else (False, None)
+
+
+def _auto_fee(session, cancel_req, sub, ctx):
+    """Auto-run the fee engine when a cancellation is initiated. Never blocks the cancellation itself."""
+    try:
+        with session.begin_nested():
+            res = fees.calculate_for_cancellation(session, cancel_req, sub, actor_id=ctx.user_id, auto=True)
+            if res is None:
+                return None
+            calc, _tf, pol = res
+            if (pol.get("auto_invoice") and pol.get("auto_invoice_stage") == "initiate"
+                    and cancel_req.status != "retention_offered" and calc.amount_due_zar > 0):
+                fees.invoice_calculation(session, calc, pol, issue=True, actor_id=ctx.user_id)
+            return calc
+    except Exception:  # noqa: BLE001
+        logger.warning("auto fee calculation failed for cancellation %s", cancel_req.id, exc_info=True)
+        return None
+
+
+def _engine_router_update(session, ctx, rr, calc, condition):
+    """Apply the router-return credit through the engine. An un-invoiced calculation is recalculated; an invoiced
+    one is never mutated: the credit that is now due is reported so a credit note can be raised."""
+    cancel_req = session.get(CancellationRequest, rr.cancellation_request_id)
+    sub = session.get(Subscription, cancel_req.subscription_id) if cancel_req and cancel_req.subscription_id else None
+    if cancel_req is None or sub is None:
+        return None
+    if calc.status == "invoiced":
+        try:
+            _p, _pol, bd, _d, _s, _i = fees.run_calculation(
+                session, tenant_id=ctx.tenant_id, sub=sub, trigger="cancellation",
+                effective_date=cancel_req.effective_date or date.today(), reason_code=fees.reason_code_for(cancel_req),
+                router_returned=True, router_condition=condition, policy_id=calc.policy_id)
+        except LookupError:
+            return None
+        new_due = bd["totals"]["fee_total"]
+        credit = max(calc.amount_due_zar - new_due, Decimal("0.00"))
+        return {"mode": "invoiced_no_change", "invoice_id": str(calc.invoice_id), "credit_note_required_zar": str(credit)}
+    res = fees.calculate_for_cancellation(
+        session, cancel_req, sub, actor_id=ctx.user_id, router_returned=True, router_condition=condition)
+    if res is None:
+        return None
+    new_calc, tf, _pol = res
+    tf.router_returned = True
+    tf.router_returned_at = datetime.utcnow()
+    return {"mode": "recalculated", "calculation_id": str(new_calc.id), "amount_due_zar": str(new_calc.amount_due_zar),
+            "flags": list(new_calc.flags or [])}
+
+
 # ── POST /cancellations/initiate ─────────────────────────────────────────
 
 @router.post("/initiate", response_model=CancelInitiateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("clerk"))])
@@ -187,11 +262,16 @@ async def initiate_cancellation(
             cancel_req.retention_offer_shown = True
             session.flush()
 
+        calc = _auto_fee(session, cancel_req, sub, ctx)
+
         return CancelInitiateResponse(
             cancellation_id=cancel_req.id,
             status=cancel_req.status,
             message="Cancellation initiated" + (". Retention offer available." if retention_eligible else "."),
             retention_offer_eligible=retention_eligible,
+            fee_calculation_id=calc.id if calc else None,
+            fee_total_zar=calc.fee_total_zar if calc else None,
+            fee_amount_due_zar=calc.amount_due_zar if calc else None,
         )
 
 
@@ -200,9 +280,13 @@ async def initiate_cancellation(
 @router.post("/{cancel_id}/calculate-etf", response_model=ETFCalculationResponse, dependencies=[Depends(require_tier("clerk"))])
 async def calculate_termination_fee(
     cancel_id: uuid.UUID,
+    body: Optional[ETFCalculationRequest] = None,
     ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Calculate Early Termination Fee for a cancellation request."""
+    """Calculate the early termination / claw-back fee for a cancellation request.
+
+    Uses the tenant's fee policy (services/billing/fee_policies.py). Only when the tenant has no applicable
+    policy does it fall back to the legacy hardcoded penalty tiers (response engine="legacy")."""
     from services.billing.database import get_session
     from sqlalchemy import select, func
 
@@ -220,6 +304,23 @@ async def calculate_termination_fee(
         if not sub:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
+        returned, condition = _inspected_router(session, ctx.tenant_id, cancel_id)
+        res = fees.calculate_for_cancellation(
+            session, cancel_req, sub, actor_id=ctx.user_id, router_returned=returned, router_condition=condition,
+            reason_code=(body.reason_code.strip().lower() if body and body.reason_code else None))
+        if res is not None:
+            calc, tf, _pol = res
+            return ETFCalculationResponse(
+                customer_id=cancel_req.customer_id, account_number=cancel_req.account_number,
+                monthly_rate_zar=sub.base_price_zar, remaining_months=tf.remaining_months,
+                penalty_percentage=tf.penalty_percentage, contract_etf_zar=tf.contract_etf_zar,
+                router_charge_zar=tf.router_charge_zar, outstanding_balance_zar=tf.outstanding_balance_zar,
+                total_etf_zar=tf.total_etf_zar, router_return_option=True, engine="policy",
+                calculation_id=calc.id, policy_id=calc.policy_id, policy_version=calc.policy_version,
+                fee_net_zar=calc.fee_net_zar, fee_vat_zar=calc.fee_vat_zar, fee_total_zar=calc.fee_total_zar,
+                amount_due_zar=calc.amount_due_zar, flags=list(calc.flags or []), breakdown=calc.breakdown)
+
+        # No fee policy for this tenant: legacy hardcoded tiers (kept as a clearly flagged fallback).
         # Calculate remaining months
         if cancel_req.effective_date:
             remaining = max(0, (cancel_req.effective_date - date.today()).days // 30)
@@ -271,6 +372,8 @@ async def calculate_termination_fee(
             outstanding_balance_zar=outstanding,
             total_etf_zar=total_etf,
             router_return_option=True,
+            engine="legacy",
+            flags=["legacy_no_policy"],
         )
 
 
@@ -333,34 +436,54 @@ async def proceed_with_cancellation(
                 sub.status = "cancelled"
                 sub.cancelled_at = datetime.utcnow()
 
-        # Generate final invoice (ETF)
-        tf = session.query(TerminationFee).filter(
-            TerminationFee.cancellation_request_id == cancel_id,
-        ).first()
-        if tf and tf.total_etf_zar > 0:
-            inv = Invoice(
-                tenant_id=ctx.tenant_id,
-                customer_id=cancel_req.customer_id,
-                subscription_id=cancel_req.subscription_id,
-                number=f"ETF-{str(cancel_id)[:8]}",
-                status="sent",
-                subtotal_zar=tf.total_etf_zar,
-                vat_zar=(tf.total_etf_zar * Decimal("0.15")).quantize(Decimal("0.01")),
-                total_zar=(tf.total_etf_zar * Decimal("1.15")).quantize(Decimal("0.01")),
-                due_date=date.today() + timedelta(days=14),
-            )
-            session.add(inv)
-            session.flush()
-            tf.invoice_id = inv.id
-            # Issued invoice: queue its ledger entry (delivered by the outbox retry/worker) and dun it.
-            from services.billing import invoicing
-            invoicing.enqueue_issue(session, inv)
-            invoicing.schedule_dunning(session, inv)
+        # Final invoice: fee engine when a policy applied, legacy hardcoded ETF otherwise.
+        fee_invoice = None
+        calc = fees.current_cancellation_calc(session, ctx.tenant_id, cancel_id)
+        sub_row = session.query(Subscription).get(cancel_req.subscription_id) if cancel_req.subscription_id else None
+        if (calc is None or calc.status != "invoiced") and sub_row is not None:
+            returned, condition = _inspected_router(session, ctx.tenant_id, cancel_id)
+            res = fees.calculate_for_cancellation(
+                session, cancel_req, sub_row, actor_id=ctx.user_id, router_returned=returned, router_condition=condition)
+            if res is not None:
+                calc = res[0]
+        if calc is not None:
+            if calc.amount_due_zar > 0 or calc.invoice_id:
+                pol = fees.policy_to_engine(session.get(FeePolicy, calc.policy_id))
+                inv, _created = fees.invoice_calculation(
+                    session, calc, pol, issue=bool(pol.get("auto_invoice")), actor_id=ctx.user_id)
+                fee_invoice = {"invoice_id": str(inv.id), "invoice_number": inv.number, "status": inv.status,
+                               "total_zar": str(inv.total_zar), "calculation_id": str(calc.id)}
+        else:
+            tf = session.query(TerminationFee).filter(
+                TerminationFee.cancellation_request_id == cancel_id,
+            ).first()
+            if tf and tf.total_etf_zar > 0:
+                inv = Invoice(
+                    tenant_id=ctx.tenant_id,
+                    customer_id=cancel_req.customer_id,
+                    subscription_id=cancel_req.subscription_id,
+                    number=f"ETF-{str(cancel_id)[:8]}",
+                    status="sent",
+                    subtotal_zar=tf.total_etf_zar,
+                    vat_zar=(tf.total_etf_zar * Decimal("0.15")).quantize(Decimal("0.01")),
+                    total_zar=(tf.total_etf_zar * Decimal("1.15")).quantize(Decimal("0.01")),
+                    due_date=date.today() + timedelta(days=14),
+                )
+                session.add(inv)
+                session.flush()
+                tf.invoice_id = inv.id
+                # Issued invoice: queue its ledger entry (delivered by the outbox retry/worker) and dun it.
+                from services.billing import invoicing
+                invoicing.enqueue_issue(session, inv)
+                invoicing.schedule_dunning(session, inv)
+                fee_invoice = {"invoice_id": str(inv.id), "invoice_number": inv.number, "status": inv.status,
+                               "total_zar": str(inv.total_zar), "legacy": True}
 
         return {
             "status": "cancellation_proceeding",
             "message": "Cancellation confirmed. Final invoice generated.",
             "fno_cancellation_required": True,
+            "fee_invoice": fee_invoice,
         }
 
 
@@ -441,8 +564,12 @@ async def inspect_router_return(
         else:
             rr.status = "written_off"
 
-        # Update termination fee
-        if rr.termination_fee_id:
+        # Update the fee: engine recompute / credit when a fee policy produced a calculation, legacy otherwise.
+        fee_update = None
+        calc = fees.current_cancellation_calc(session, ctx.tenant_id, rr.cancellation_request_id)
+        if calc is not None:
+            fee_update = _engine_router_update(session, ctx, rr, calc, body.condition)
+        elif rr.termination_fee_id:
             tf = session.query(TerminationFee).get(rr.termination_fee_id)
             if tf:
                 tf.router_returned = True
@@ -455,6 +582,7 @@ async def inspect_router_return(
             "status": rr.status,
             "refund_amount_zar": rr.refund_amount_zar,
             "refund_reference": rr.refund_reference,
+            "fee_update": fee_update,
         }
 
 
@@ -556,6 +684,8 @@ async def get_cancellation_status(
             FNOCancellation.cancellation_request_id == cancel_id,
         ).all()
 
+        calc = fees.current_cancellation_calc(session, ctx.tenant_id, cancel_id)
+
         return {
             "cancellation": {
                 "id": str(cancel_req.id),
@@ -570,6 +700,8 @@ async def get_cancellation_status(
                 "router_charge_zar": float(tf.router_charge_zar) if tf else 0,
                 "router_returned": tf.router_returned if tf else False,
             } if tf else None,
+            "fee_calculation": fees.calc_to_dict(calc) if calc else None,
+            "fee_engine": "policy" if calc else ("legacy" if tf else None),
             "router_returns": [
                 {
                     "id": str(rr.id),

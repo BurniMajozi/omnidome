@@ -75,6 +75,8 @@ async def create_subscription(
         session.add(sub)
         session.flush()
         session.refresh(sub)
+        from services.billing import fee_policies as _fees  # contract fee snapshot (no-op without a policy)
+        _fees.auto_snapshot_for_subscription(session, sub, ctx.user_id)
         logger.info("Created subscription %s for customer %s", sub.id, sub.customer_id)
         return SubscriptionRead.model_validate(sub)
 
@@ -120,6 +122,8 @@ async def create_prorated_subscription(
         session.add(sub)
         session.flush()
         session.refresh(sub)
+        from services.billing import fee_policies as _fees  # contract fee snapshot (no-op without a policy)
+        _fees.auto_snapshot_for_subscription(session, sub, ctx.user_id)
 
         vat = compute_vat(prorated)
         total = prorated + vat

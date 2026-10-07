@@ -28,4 +28,4 @@ EXPOSE 8026
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8026/health')" || exit 1
 
-CMD ["sh", "-c", "uvicorn services.portal_builder.main:app --host ${UVICORN_HOST} --port 8026 --workers 2"]
+CMD ["sh", "-c", "uvicorn services.portal_builder.main:app --host ${UVICORN_HOST} --port 8026 --workers 2 --no-access-log"]

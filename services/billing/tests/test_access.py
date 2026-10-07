@@ -190,11 +190,13 @@ def test_routes_carry_the_expected_gates():
 
 def test_every_post_is_gated_or_deliberately_public():
     from services.billing.main import app
-    public = {"/payments/paystack/webhook", "/dunning/process", "/billing/finance-outbox/retry"}
+    # "/delivery/webhook-event" checks the internal key itself; "/public/" routes are share-token + per-IP rate limited
+    public = {"/payments/paystack/webhook", "/dunning/process", "/billing/finance-outbox/retry", "/delivery/webhook-event"}
     seats = "/billing/seats"          # seats.py keeps its own operator / billing-reader checks
     ungated = []
     for route in all_routes(app):
-        if "POST" in (getattr(route, "methods", None) or ()) and route.path not in public and not route.path.startswith(seats):
+        if "POST" in (getattr(route, "methods", None) or ()) and route.path not in public and not route.path.startswith(seats) \
+                and not route.path.startswith("/public/"):
             if not any(getattr(d.dependency, "__name__", "").startswith("require_billing_") for d in route.dependencies):
                 ungated.append(route.path)
     assert ungated == []

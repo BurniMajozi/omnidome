@@ -26,6 +26,13 @@ from services.billing.routes.subscription_transfers import router as transfers_r
 from services.billing.routes.plans import router as plans_router
 from services.billing.routes.seats import router as seats_router
 from services.billing.routes.finance_outbox import PUBLIC_PATHS as OUTBOX_PUBLIC_PATHS, router as outbox_router
+from services.billing.routes.invoice_documents import router as invoice_documents_router
+from services.billing.routes.quotes import router as quotes_router
+from services.billing.routes.public_invoices import router as public_invoices_router
+from services.billing.routes.delivery import PUBLIC_PATHS as DELIVERY_PUBLIC_PATHS, router as delivery_router
+from services.billing.routes.movements import router as movements_router
+from services.billing.routes.customer_app import router as customer_app_router
+from services.billing.routes.fee_policies import router as fee_policies_router
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -43,7 +50,8 @@ app = FastAPI(
 # Paystack webhook is public (no auth required)
 guard = EntitlementGuard(
     module_id="billing",
-    public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS,  # the latter authorize themselves (internal key / admin)
+    public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS | DELIVERY_PUBLIC_PATHS,  # the latter authorize themselves (internal key / admin)
+    public_prefixes=("/public/",),  # share-token routes: per-IP rate limited, generic 404, sanitised (routes/public_invoices.py)
 )
 
 configure_production(app)
@@ -97,6 +105,13 @@ app.include_router(transfers_router)
 app.include_router(plans_router)
 app.include_router(seats_router)
 app.include_router(outbox_router)
+app.include_router(fee_policies_router)
+app.include_router(invoice_documents_router)
+app.include_router(quotes_router)
+app.include_router(public_invoices_router)
+app.include_router(delivery_router)
+app.include_router(movements_router)
+app.include_router(customer_app_router)
 
 
 app.include_router(radius_billing_router)

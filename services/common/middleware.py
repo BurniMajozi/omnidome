@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import os
 import signal
 import time
@@ -14,6 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger("omnidome.middleware")
+
+_SECRET_PATH = re.compile(r"^(/(?:api/v1/portal/)?(?:public|shared)/(?:invoices/|quotes/)?)[^/?]+")
+
+
+def log_path(path: str) -> str:
+    """Redact bearer-style tokens carried in public/share URL paths before logging."""
+    return _SECRET_PATH.sub(lambda m: m.group(1) + "<redacted>", path)
+
+
 
 
 def get_cors_origins() -> list[str]:
@@ -47,13 +57,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            logger.exception("Unhandled exception in %s %s", request.method, request.url.path)
+            logger.exception("Unhandled exception in %s %s", request.method, log_path(request.url.path))
             raise
         duration = (time.monotonic() - start) * 1000
         logger.info(
             "%s %s %d %.1fms",
             request.method,
-            request.url.path,
+            log_path(request.url.path),
             response.status_code,
             duration,
         )
@@ -86,7 +96,7 @@ def add_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(500)
     async def internal_error_handler(request: Request, exc):
-        logger.error("Internal server error: %s %s\n%s", request.method, request.url.path, traceback.format_exc())
+        logger.error("Internal server error: %s %s\n%s", request.method, log_path(request.url.path), traceback.format_exc())
         return Response(
             content='{"detail": "Internal server error"}',
             status_code=500,
