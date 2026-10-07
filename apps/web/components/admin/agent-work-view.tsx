@@ -138,7 +138,21 @@ export function AgentWorkView({ agents }: { agents: AgentInfo[] }) {
     return () => window.clearInterval(timer)
   }, [refresh])
 
-  const chosen = useMemo(() => jobs.find((job) => job.id === selected), [jobs, selected])
+  // The list endpoint returns summaries only (no iteration history, result or full objective).
+  // Load the full record for the selected run and keep it fresh with the list polling.
+  const [detail, setDetail] = useState<AgentJob | null>(null)
+  const selectedStatus = jobs.find((job) => job.id === selected)?.status
+  useEffect(() => {
+    if (!selected) { setDetail(null); return }
+    let cancelled = false
+    api<AgentJob>(`/jobs/${selected}`).then((full) => { if (!cancelled) setDetail(full) }).catch(() => {})
+    return () => { cancelled = true }
+  }, [selected, selectedStatus])
+  const chosen = useMemo(() => {
+    const summary = jobs.find((job) => job.id === selected)
+    if (!summary) return undefined
+    return detail && detail.id === selected ? { ...summary, ...detail } : { ...summary, iteration_history: [] as AgentJob["iteration_history"] }
+  }, [jobs, selected, detail])
   const needAttention = jobs.filter((job) => attention.has(job.status))
   const inProgress = jobs.filter((job) => active.has(job.status))
   const monthSpend = tenantBudget.month_spend_usd
@@ -293,7 +307,7 @@ export function AgentWorkView({ agents }: { agents: AgentInfo[] }) {
       <div className="rounded-md border p-3 text-xs"><strong>Context used:</strong> Memory {chosen.context_used?.memory_status || "not recorded"} · Approved KPI {chosen.context_used?.kpi_status || "not recorded"} · {(chosen.context_used?.skills || []).length} skills ({(chosen.context_used?.skills || []).join(", ") || "none"}) · {(chosen.context_used?.tools_available || []).length} tools available. {chosen.parent_job_id && <span>Retry of {chosen.parent_job_id}.</span>} {(chosen.context_used?.architecture_hints || []).map((hint) => <p key={hint.source_path} className="mt-1">Component match: {hint.name} · <code>{hint.source_path}</code> (location hint, not code inspection)</p>)}<p className="mt-1 text-muted-foreground">Durable work runs through the job worker; AG-UI streaming is used by Chat. Reviewed output is written to tenant memory after acceptance.</p></div>
       {editing && <div className="space-y-2 rounded-md border p-3"><label className="block text-xs font-medium">Revised objective<Textarea className="mt-1" minLength={10} maxLength={4000} value={draftObjective} onChange={(event) => setDraftObjective(event.target.value)} /></label>{!(chosen.status === "queued" || chosen.status === "paused") && <label className="block text-xs">New run ceiling (USD)<Input className="mt-1 w-32" type="number" min="0.01" max="100" step="0.01" value={retryCost} onChange={(event) => setRetryCost(event.target.value)} /></label>}<p className="text-xs text-muted-foreground">{chosen.status === "queued" || chosen.status === "paused" ? "The worker will use this prompt when the queued task starts." : "This queues a fresh run. The previous output and spend remain in its audit trail; no tools are replayed."}</p><Button size="sm" disabled={busy === chosen.id || draftObjective.trim().length < 10} onClick={() => void reviseOrRetry(chosen, !(chosen.status === "queued" || chosen.status === "paused"))}>{chosen.status === "queued" || chosen.status === "paused" ? null : <RotateCcw className="mr-1 h-4 w-4" />}{chosen.status === "queued" || chosen.status === "paused" ? "Save prompt" : "Queue revised run"}</Button></div>}
       {chosen.error && <p role="alert" className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-amber-700 dark:text-amber-300">{chosen.error}</p>}
-      {chosen.iteration_history.length > 0 ? <ol className="space-y-2 border-l pl-4">{chosen.iteration_history.map((step, index) => <li key={`${step.iteration}-${index}`} className="text-xs"><strong>Iteration {step.iteration}</strong> · {step.steps} tool steps · {step.tokens} tokens<p className="mt-1 text-muted-foreground">{step.content_preview || "No response text"}</p>{step.verification && <p className="mt-1 rounded bg-muted p-2">{step.verification.evaluated_by_jev ? "JEV" : "Verification"} · {step.verification.action}: {step.verification.reason}</p>}{step.jev_decisions?.map((item, decisionIndex) => <p key={`${item.tool}-${decisionIndex}`} className="mt-1 rounded bg-muted p-2">JEV · {item.tool}: {item.decision.action} — {item.decision.reason}{item.decision.checks && <span className="block text-muted-foreground">{Object.entries(item.decision.checks).map(([name, value]) => `${name}: ${Math.round(value * 100)}%`).join(" · ")}</span>}</p>)}</li>)}</ol> : <p className="text-muted-foreground">No run steps recorded yet.</p>}
+      {(chosen.iteration_history?.length ?? 0) > 0 ? <ol className="space-y-2 border-l pl-4">{(chosen.iteration_history ?? []).map((step, index) => <li key={`${step.iteration}-${index}`} className="text-xs"><strong>Iteration {step.iteration}</strong> · {step.steps} tool steps · {step.tokens} tokens<p className="mt-1 text-muted-foreground">{step.content_preview || "No response text"}</p>{step.verification && <p className="mt-1 rounded bg-muted p-2">{step.verification.evaluated_by_jev ? "JEV" : "Verification"} · {step.verification.action}: {step.verification.reason}</p>}{step.jev_decisions?.map((item, decisionIndex) => <p key={`${item.tool}-${decisionIndex}`} className="mt-1 rounded bg-muted p-2">JEV · {item.tool}: {item.decision.action} — {item.decision.reason}{item.decision.checks && <span className="block text-muted-foreground">{Object.entries(item.decision.checks).map(([name, value]) => `${name}: ${Math.round(value * 100)}%`).join(" · ")}</span>}</p>)}</li>)}</ol> : <p className="text-muted-foreground">No run steps recorded yet.</p>}
       {chosen.result?.final_output && <div><h3 className="mb-2 font-medium">Output</h3><pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{chosen.result.final_output}</pre></div>}
     </CardContent></Card>}
 
