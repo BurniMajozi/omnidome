@@ -82,8 +82,8 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
     <div className="space-y-6">
       <PageHeader
         icon={<Globe className="h-5 w-5" />}
-        title="Customer Portal"
-        subtitle="Self-service portal, journey management, and customer engagement"
+        title={activeTab === "website" ? "Website Builder" : "Customer Portal"}
+        subtitle={activeTab === "website" ? "Create a landing page in chat, refine the design, then publish." : "Self-service portal, journey management, and customer engagement"}
         actions={
           <Button size="sm" onClick={startNewPage} className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs">
             <Plus className="h-3.5 w-3.5 mr-1" />
@@ -93,7 +93,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
       />
 
       {/* KPI Cards (last 30 days, from Portal Builder analytics) */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4 ${activeTab === "website" ? "hidden" : ""}`}>
         {analytics.state !== "ready" ? (
           <div className="md:col-span-2 lg:col-span-4">
             <NotConnected loadable={analytics} service="Portal Builder analytics" onRetry={() => void reload()} />
@@ -125,7 +125,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
       {/* Main Content */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="bg-secondary">
+        <TabsList className="h-auto w-full flex-wrap justify-start gap-1 overflow-visible bg-secondary sm:w-full sm:justify-start [&>button]:h-9 [&>button]:flex-none">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="website">Website Builder</TabsTrigger>
           <TabsTrigger value="analytics-custom" className="flex items-center gap-1.5">
@@ -213,7 +213,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           )}
         </TabsContent>
 
-        <TabsContent value="website" className="mt-4 space-y-5">
+        <TabsContent forceMount value="website" className="mt-4 space-y-5 data-[state=inactive]:hidden">
           <div id="portal-landing" />
           <DomeDesignStudio pages={pages} onChanged={() => void reload()} onReload={() => void reload()} newPageSignal={newPageSignal} />
         </TabsContent>

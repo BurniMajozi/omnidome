@@ -54,7 +54,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
       method: request.method,
       headers,
       body: incoming.body as BodyInit | undefined,
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(pathStr === "api/v1/portal/design/suggest" ? 70_000 : 30_000),
     })
     const contentType = res.headers.get("content-type") || "application/json"
     const data = await res.arrayBuffer()

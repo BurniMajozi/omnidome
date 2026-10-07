@@ -88,7 +88,7 @@ export function DomeStudioLiveDualView({
             </span>
             <div className="rounded-xl border border-border bg-background p-5 shadow-md">
               <h1 className="mb-3 text-lg font-bold text-foreground">{plainText(page.data.title)}</h1>
-              <PortalBlocksPreview blocks={blocks} />
+              <PortalBlocksPreview blocks={blocks} theme={page.data.theme} />
             </div>
           </div>
           <div className="space-y-2 xl:col-span-5">
@@ -99,7 +99,7 @@ export function DomeStudioLiveDualView({
             <div className="flex justify-center rounded-xl border border-border bg-card p-4 shadow-md">
               <div className="w-[375px] max-w-full rounded-lg border border-border bg-background p-4">
                 <h1 className="mb-3 text-base font-bold text-foreground">{plainText(page.data.title)}</h1>
-                <PortalBlocksPreview blocks={blocks} compact />
+                <PortalBlocksPreview blocks={blocks} compact theme={page.data.theme} />
               </div>
             </div>
           </div>

@@ -1,73 +1,68 @@
+import type { ReactNode } from "react"
 import type { PortalBlock, PortalPageContent } from "@/lib/portal-api"
 
-/**
- * Backend page content is data, never markup. Everything below renders through
- * React text nodes (escaped); tags in imported strings are stripped for display
- * rather than interpreted. No dangerouslySetInnerHTML, no script, no custom_js.
- */
-
 export function plainText(value: unknown): string {
-  if (typeof value !== "string") return ""
-  return value
-    .replace(/<[^>]*>/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
+  return typeof value === "string" ? value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : ""
 }
-
-/** Only http(s) and same-origin relative image URLs are rendered. */
 export function safeImageSrc(value: unknown): string | null {
   if (typeof value !== "string") return null
   const v = value.trim()
-  if (/^https?:\/\//i.test(v) || (v.startsWith("/") && !v.startsWith("//"))) return v
-  return null
+  return /^https?:\/\//i.test(v) || (v.startsWith("/") && !v.startsWith("//") && !v.includes("\\")) ? v : null
 }
-
+export function safeLink(value: unknown): string {
+  if (typeof value !== "string") return "#enquiry"
+  const v = value.trim()
+  return /^(https?:\/\/|mailto:|tel:|#)/i.test(v) || (v.startsWith("/") && !v.startsWith("//") && !v.includes("\\")) ? v : "#enquiry"
+}
 export function blocksOf(content: PortalPageContent | null | undefined): PortalBlock[] {
-  return Array.isArray(content?.blocks) ? (content!.blocks as PortalBlock[]) : []
+  return Array.isArray(content?.blocks) ? content.blocks : []
 }
-
-export function PortalBlocksPreview({ blocks, compact = false }: { blocks: PortalBlock[]; compact?: boolean }) {
-  if (blocks.length === 0) {
-    return (
-      <div className="rounded-lg border border-dashed border-border bg-secondary/20 p-6 text-center text-xs text-muted-foreground">
-        This page has no content blocks yet.
-      </div>
-    )
-  }
-  return (
-    <div className="space-y-4">
-      {blocks.map((b, i) => {
-        if (b.type === "hero") {
-          const img = safeImageSrc(b.image)
-          return (
-            <section key={i} className="space-y-2 rounded-lg border border-border/60 bg-gradient-to-b from-cyan-950/20 to-transparent p-5">
-              {img && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={img} alt="" loading="lazy" referrerPolicy="no-referrer" className="max-h-48 w-full rounded-md object-cover" />
-              )}
-              <h2 className={compact ? "text-lg font-bold text-foreground" : "text-2xl font-bold text-foreground"}>{plainText(b.heading)}</h2>
-              {b.subheading ? <p className="text-sm text-muted-foreground">{plainText(b.subheading)}</p> : null}
-            </section>
-          )
-        }
-        if (b.type === "gallery") {
-          const imgs = (Array.isArray(b.images) ? b.images : []).map((im) => ({ src: safeImageSrc(im?.src), alt: plainText(im?.alt) })).filter((im) => im.src)
-          return (
-            <section key={i} className="grid grid-cols-2 gap-2">
-              {imgs.slice(0, 12).map((im, j) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={j} src={im.src as string} alt={im.alt} loading="lazy" referrerPolicy="no-referrer" className="h-28 w-full rounded-md border border-border object-cover" />
-              ))}
-            </section>
-          )
-        }
-        return (
-          <section key={i} className="space-y-1.5 px-1">
-            {b.heading ? <h3 className="text-base font-semibold text-foreground">{plainText(b.heading)}</h3> : null}
-            {b.body ? <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">{plainText(b.body)}</p> : null}
-          </section>
-        )
-      })}
-    </div>
-  )
+export function pageThemeClass(theme?: Record<string, unknown> | null) {
+  return theme?.appearance === "dark" ? "bg-slate-950 text-slate-100" : "bg-white text-slate-900"
+}
+const accents: Record<string, string> = {
+  cyan: "bg-cyan-600 text-white", blue: "bg-blue-600 text-white",
+  emerald: "bg-emerald-600 text-white", orange: "bg-orange-600 text-white",
+}
+type TextRenderer = (field: string, text: string, className: string) => ReactNode
+export function PortalBlockView({ block: b, compact = false, theme, renderText }: {
+  block: PortalBlock; compact?: boolean; theme?: Record<string, unknown> | null; renderText?: TextRenderer
+}) {
+  const dark = theme?.appearance === "dark"
+  const muted = dark ? "text-slate-300" : "text-slate-600"
+  const surface = dark ? "border-slate-700 bg-slate-900" : "border-slate-200 bg-slate-50"
+  const accent = accents[String(theme?.accent)] || accents.cyan
+  const text = (field: string, value: unknown, cls: string) => renderText
+    ? renderText(field, plainText(value), cls) : <span className={cls}>{plainText(value)}</span>
+  const cta = b.cta_label ? <a href={safeLink(b.cta_url)} className={`inline-flex max-w-full items-center justify-center rounded-md px-5 py-3 text-sm font-semibold ${accent}`}>{text("cta_label", b.cta_label, "break-words")}</a> : null
+  const img = safeImageSrc(b.image)
+  const padding = compact ? "px-5 py-8" : "px-6 py-10 sm:px-10 sm:py-14"
+  const items = (Array.isArray(b.items) ? b.items : []) as Array<{ title?: string; body?: string; price?: string }>
+  if (b.type === "gallery") return <section className={`${padding} grid grid-cols-2 gap-3`}>{(b.images || []).slice(0, 12).map((im, i) => safeImageSrc(im.src) &&
+    // eslint-disable-next-line @next/next/no-img-element
+    <img key={i} src={safeImageSrc(im.src)!} alt={plainText(im.alt)} loading="lazy" referrerPolicy="no-referrer" className="h-40 w-full rounded-lg object-cover" />)}</section>
+  if (b.type === "hero") return <section className={`${padding} space-y-6`}>
+    {img && <img src={img} alt="" loading="lazy" referrerPolicy="no-referrer" className="max-h-64 w-full rounded-lg object-cover" /> /* eslint-disable-line @next/next/no-img-element */}
+    <h2 className={compact ? "text-3xl font-bold tracking-tight" : "text-4xl font-bold tracking-tight sm:text-5xl"}>{text("heading", b.heading, "block break-words")}</h2>
+    <p className={`max-w-2xl text-base leading-relaxed ${muted}`}>{text("subheading", b.subheading, "block whitespace-pre-wrap")}</p>{cta}
+  </section>
+  if (b.type === "features" || b.type === "pricing" || b.type === "faq") return <section className={`${padding} space-y-6`}>
+    <h3 className="text-2xl font-semibold tracking-tight">{text("heading", b.heading, "block break-words")}</h3>
+    {b.body && <p className={`leading-relaxed ${muted}`}>{text("body", b.body, "block whitespace-pre-wrap")}</p>}
+    <div className={b.type === "faq" || compact ? "grid gap-4" : "grid gap-4 sm:grid-cols-2 lg:grid-cols-3"}>
+      {items.map((item, i) => <article key={i} className={`space-y-3 rounded-lg border p-5 ${surface}`}>
+        <h4 className="font-semibold">{text(`items.${i}.title`, item.title, "block")}</h4>
+        {b.type === "pricing" && item.price && <p className="text-2xl font-bold">{text(`items.${i}.price`, item.price, "block")}</p>}
+        <p className={`text-sm leading-relaxed ${muted}`}>{text(`items.${i}.body`, item.body, "block whitespace-pre-wrap")}</p>
+      </article>)}
+    </div>{cta}
+  </section>
+  return <section className={`${padding} space-y-4 ${b.type === "cta" ? surface : ""}`}>
+    <h3 className="text-2xl font-semibold tracking-tight">{text("heading", b.heading, "block break-words")}</h3>
+    <p className={`leading-relaxed ${muted}`}>{text("body", b.body || b.subheading, "block whitespace-pre-wrap")}</p>{cta}
+  </section>
+}
+export function PortalBlocksPreview({ blocks, compact = false, theme }: { blocks: PortalBlock[]; compact?: boolean; theme?: Record<string, unknown> | null }) {
+  if (!blocks.length) return <div className="p-8 text-center text-sm text-muted-foreground">This page has no sections yet.</div>
+  return <div className={`overflow-hidden rounded-lg ${pageThemeClass(theme)}`}>{blocks.map((block, i) => <PortalBlockView key={i} block={block} compact={compact} theme={theme} />)}</div>
 }

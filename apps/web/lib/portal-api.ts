@@ -229,7 +229,7 @@ function errorMessage(status: number | null, body: unknown): string {
   return `Portal request failed (HTTP ${status}).`
 }
 
-async function portalWrite<T>(path: string, method: string, body?: unknown): Promise<PortalResult<T>> {
+async function portalWrite<T>(path: string, method: string, body?: unknown, timeout = TIMEOUT_MS): Promise<PortalResult<T>> {
   let res: Response
   try {
     await getSessionSafe()
@@ -238,7 +238,7 @@ async function portalWrite<T>(path: string, method: string, body?: unknown): Pro
       cache: "no-store",
       headers: body === undefined ? undefined : { "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeout),
     })
   } catch {
     return { ok: false, status: null, message: errorMessage(null, null) }
@@ -259,6 +259,15 @@ async function portalWrite<T>(path: string, method: string, body?: unknown): Pro
 const read = <T>(path: string): Promise<Loadable<T>> => fetchLoadable<T>(`${API_BASE}${path}`, TIMEOUT_MS)
 
 // ---- Pages ----
+export interface PortalDesignDraft {
+  title: string
+  description: string
+  blocks: PortalBlock[]
+  theme: Record<string, unknown>
+}
+export const suggestPortalDesign = (prompt: string, current?: PortalDesignDraft, selected_section?: number) =>
+  portalWrite<{ message: string; draft: PortalDesignDraft }>("/design/suggest", "POST", { prompt, current, selected_section }, 75_000)
+
 export function loadPortalPages(opts: { page?: number; pageSize?: number; pageType?: PortalPageType; status?: PortalPageStatus; search?: string } = {}) {
   const q = new URLSearchParams()
   if (opts.page) q.set("page", String(opts.page))

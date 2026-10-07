@@ -39,6 +39,7 @@ from services.common import suppression
 from services.portal_builder import fetcher, security, seo
 from services.portal_builder.access import require_tier
 from services.portal_builder.builder_ux import router as builder_ux_router
+from services.portal_builder.design import router as design_router
 
 logger = logging.getLogger("portal_builder")
 
@@ -67,6 +68,7 @@ app.add_middleware(
 )
 
 app.include_router(builder_ux_router)
+app.include_router(design_router)
 
 # ── Rate limiters / caps (per process; tune via env) ───────────────────
 
@@ -485,6 +487,26 @@ def _public_payload(page: PortalPage, *, preview: bool = False) -> dict:
     }
 
 
+async def _published_payload(session, page: PortalPage) -> dict:
+    payload = _public_payload(page)
+    if page.published_version is None:
+        return payload  # legacy publication: freeze it on its next edit
+    version = await session.scalar(select(PortalPageVersion).where(
+        PortalPageVersion.page_id == page.id, PortalPageVersion.tenant_id == page.tenant_id,
+        PortalPageVersion.version_number == page.published_version))
+    if version is None:
+        raise HTTPException(404, "Published version not found")
+    content = dict(version.content or {})
+    metadata = content.pop("_publication", None)
+    payload.update(content=security.sanitize_content(content), theme=security.sanitize_content(version.theme),
+                   seo_meta=security.sanitize_content(version.seo_meta))
+    if isinstance(metadata, dict):
+        payload.update(title=security.sanitize_html(metadata.get("title") or ""),
+                       description=security.sanitize_html(metadata.get("description") or "") or None,
+                       custom_css=security.sanitize_css(metadata.get("custom_css")))
+    return payload
+
+
 def _public_headers(*, noindex: bool = False) -> dict:
     h = {
         "Content-Security-Policy": security.PUBLIC_CSP,
@@ -515,7 +537,8 @@ async def _snapshot(session, page: PortalPage, user_id: uuid.UUID, reason: str) 
     """Versioned snapshot. Callers hold the page row lock, so max()+1 cannot race."""
     n = await _next_version(session, page.id)
     session.add(PortalPageVersion(
-        page_id=page.id, tenant_id=page.tenant_id, version_number=n, content=page.content or {}, theme=page.theme,
+        page_id=page.id, tenant_id=page.tenant_id, version_number=n,
+        content={**(page.content or {}), "_publication": {"title": page.title, "description": page.description, "custom_css": page.custom_css}}, theme=page.theme,
         seo_meta=page.seo_meta, reason=reason, created_by=user_id,
     ))
     return n
@@ -611,7 +634,7 @@ async def get_public_page(slug: str, request: Request):
             created_at=_now(),
         ))
         await session.execute(update(PortalPage).where(PortalPage.id == page.id).values(views=PortalPage.views + 1))
-        payload = _public_payload(page)
+        payload = await _published_payload(session, page)
     return JSONResponse(payload, headers=_public_headers())
 
 
@@ -631,6 +654,12 @@ async def update_page(page_id: uuid.UUID, body: PageUpdate, ctx: AuthContext = D
             raise HTTPException(422, f"{key} cannot be empty")
     async with session_scope() as session:
         page = await _get_page(session, page_id, ctx.tenant_id, lock=True)
+        if page.status == "published":
+            prior = await session.scalar(select(PortalPageVersion).where(
+                PortalPageVersion.page_id == page.id, PortalPageVersion.tenant_id == page.tenant_id,
+                PortalPageVersion.version_number == page.published_version)) if page.published_version is not None else None
+            if prior is None or not isinstance((prior.content or {}).get("_publication"), dict):
+                page.published_version = await _snapshot(session, page, ctx.user_id, "publish")
         for k, v in update_data.items():
             if k in ("content",):
                 v = security.sanitize_content(v or {})

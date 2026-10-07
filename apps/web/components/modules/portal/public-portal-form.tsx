@@ -1,10 +1,13 @@
 "use client"
 import { useState, type FormEvent } from "react"
 import { Button } from "@/components/ui/button"
-import { inputClass, textareaClass } from "@/components/modules/billing/shared"
 
 const consentText = "I agree that the service provider may use these details to respond to my enquiry."
-export function PublicPortalForm({ slug }: { slug: string }) {
+export function PublicPortalForm({ slug, theme }: { slug: string; theme?: Record<string, unknown> | null }) {
+  const dark = theme?.appearance === "dark"
+  const inputClass = `mt-1 block w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-cyan-500 ${dark ? "border-slate-700 bg-slate-900 text-slate-100" : "border-slate-300 bg-white text-slate-900"}`
+  const textareaClass = `${inputClass} min-h-24 resize-y`
+  const accents: Record<string, string> = { cyan: "bg-cyan-600 hover:bg-cyan-700", blue: "bg-blue-600 hover:bg-blue-700", emerald: "bg-emerald-600 hover:bg-emerald-700", orange: "bg-orange-600 hover:bg-orange-700" }
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
   const [sent, setSent] = useState(false)
@@ -29,7 +32,7 @@ export function PublicPortalForm({ slug }: { slug: string }) {
     } catch { setMessage("The service is unavailable. Your enquiry has not been sent. Please retry.") }
     finally { setBusy(false) }
   }
-  return <section className="rounded-lg border border-border bg-card p-5 sm:p-7">
+  return <section id="enquiry" className={`rounded-lg border p-5 sm:p-7 ${dark ? "border-slate-700 bg-slate-950 text-slate-100" : "border-slate-200 bg-white text-slate-900"}`}>
     <h2 className="mb-4 text-xl font-semibold">Send an enquiry</h2>
     {sent ? <p role="status">Thank you. Your enquiry has been received.</p> : <form onSubmit={submit} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -41,7 +44,7 @@ export function PublicPortalForm({ slug }: { slug: string }) {
       <div hidden aria-hidden="true"><label>Website<input name="website" tabIndex={-1} autoComplete="off" /></label></div>
       <label className="flex items-start gap-2 text-sm"><input name="consent" type="checkbox" required className="mt-1" /><span>{consentText}</span></label>
       {message && <p role="alert" className="text-sm text-destructive">{message}</p>}
-      <Button type="submit" disabled={busy}>{busy ? "Sending…" : "Send enquiry"}</Button>
+      <Button type="submit" disabled={busy} className={`text-white ${accents[String(theme?.accent)] || accents.cyan}`}>{busy ? "Sending…" : "Send enquiry"}</Button>
     </form>}
   </section>
 }

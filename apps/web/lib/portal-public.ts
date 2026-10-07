@@ -10,6 +10,7 @@ export interface PublicPortalPage {
   title: string
   description: string | null
   content: PortalPageContent
+  theme: Record<string, unknown> | null
   seo_meta: Record<string, unknown> | null
   custom_css: string | null
   preview: boolean
