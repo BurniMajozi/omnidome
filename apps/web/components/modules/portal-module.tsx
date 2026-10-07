@@ -1,11 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { PageHeader } from "@/components/ui/page-header"
-import { TableShell } from "@/components/ui/table-shell"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Globe,
@@ -29,8 +28,6 @@ import {
 } from "lucide-react"
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { useModuleData } from "@/lib/module-data"
-import { useIsClient } from "@/lib/use-is-client"
 import { WebAnalyticsDashboard } from "./web-analytics/web-analytics-dashboard"
 import { JourneyBuilderDashboard } from "./journey-builder/journey-builder-dashboard"
 import { WebAnalyticsCustomDashboard } from "@/modules/web-analytics-custom"
@@ -40,210 +37,40 @@ import { AB_TESTING_ENABLED } from "@/lib/flags"
 import { CommissionTiers } from "./commission-tiers"
 import { FieldSalesApp } from "./field-sales-app"
 import { TechnicianApp } from "./technician-app"
-import { ImpeccableLandingStudio, type ImpeccablePage } from "./portal/impeccable-landing-studio"
-import { DomeStudioWorkspace, DomeStudioLiveDualView } from "./portal/domestudio-workspace"
+import { DomeStudioLiveDualView } from "./portal/domestudio-workspace"
 import { DomeDesignStudio } from "./portal/domedesign-studio"
 import { DomeSeoStudio } from "./portal/domeseo-studio"
+import { NotConnected } from "@/components/ui/not-connected"
 import {
-  fetchPortalPages,
-  createPortalPage,
-  updatePortalPage,
-  deletePortalPage,
-  fetchPortalStats,
-  fetchAiAgents,
-  createAiAgent,
-  toggleAiAgentStatus,
-  type PortalLandingPage,
-  type PortalAiAgent,
-  type PortalStats,
+  loadPortalPages,
+  loadPortalAnalytics,
+  type PortalAnalyticsSummary,
+  type PortalPageSummary,
 } from "@/lib/portal-api"
-import { CreateAiAgentModal } from "./portal/portal-interactive-modals"
-
-const defaultVisitorData = [
-  { day: "Mon", website: 2400, customerPortal: 1800, fieldApp: 450, techApp: 320 },
-  { day: "Tue", website: 2100, customerPortal: 1650, fieldApp: 480, techApp: 340 },
-  { day: "Wed", website: 2800, customerPortal: 2100, fieldApp: 520, techApp: 380 },
-  { day: "Thu", website: 3200, customerPortal: 2400, fieldApp: 490, techApp: 350 },
-  { day: "Fri", website: 2900, customerPortal: 2200, fieldApp: 510, techApp: 370 },
-  { day: "Sat", website: 1800, customerPortal: 1400, fieldApp: 280, techApp: 150 },
-  { day: "Sun", website: 1500, customerPortal: 1100, fieldApp: 220, techApp: 120 },
-]
-
-const defaultLandingPages: PortalLandingPage[] = [
-  {
-    id: 1,
-    name: "Fibre Promo Q1",
-    url: "/promo/fibre-q1",
-    status: "published",
-    views: 12450,
-    conversions: 342,
-    rate: "2.7%",
-  },
-  {
-    id: 2,
-    name: "Business Solutions",
-    url: "/business",
-    status: "published",
-    views: 8920,
-    conversions: 156,
-    rate: "1.7%",
-  },
-  { id: 3, name: "LTE Uncapped Launch", url: "/lte-launch", status: "draft", views: 0, conversions: 0, rate: "-" },
-  { id: 4, name: "Referral Program", url: "/refer", status: "published", views: 5640, conversions: 89, rate: "1.6%" },
-]
-
-const defaultAiAgents: PortalAiAgent[] = [
-  { id: 1, name: "Customer Support Bot", status: "active", conversations: 4250, resolution: "78%", avgTime: "2.3 min" },
-  { id: 2, name: "Sales Assistant", status: "active", conversations: 1820, resolution: "65%", avgTime: "4.1 min" },
-  { id: 3, name: "Technical Help Bot", status: "active", conversations: 2340, resolution: "82%", avgTime: "3.5 min" },
-  { id: 4, name: "Billing Inquiries", status: "paused", conversations: 890, resolution: "71%", avgTime: "2.8 min" },
-]
-
-const defaultFieldSalesStats = {
-  activeAgents: 45,
-  visitsToday: 128,
-  leadsGenerated: 34,
-  dealsWon: 12,
-}
-
-const defaultTechnicianStats = {
-  activeTechs: 38,
-  jobsCompleted: 86,
-  avgJobTime: "42 min",
-  customerRating: 4.7,
-}
-
-const defaultRetentionJourneys = [
-  {
-    id: 1,
-    name: "Cancel Save Journey",
-    status: "active",
-    stepCount: 4,
-    conversion: "18%",
-    audience: "High risk • Tenure > 6 months",
-  },
-  {
-    id: 2,
-    name: "Price Sensitivity Journey",
-    status: "active",
-    stepCount: 3,
-    conversion: "14%",
-    audience: "Standard tier • Price sensitive",
-  },
-  {
-    id: 3,
-    name: "Win-back Journey",
-    status: "draft",
-    stepCount: 3,
-    conversion: "-",
-    audience: "Churned < 30 days",
-  },
-]
+import type { Loadable } from "@/lib/service-state"
 
 export function PortalModule({ activeTabOverride }: { activeTabOverride?: string }) {
-  const { data } = useModuleData("portal", {
-    visitorData: defaultVisitorData,
-    landingPages: defaultLandingPages,
-    aiAgents: defaultAiAgents,
-    fieldSalesStats: defaultFieldSalesStats,
-    technicianStats: defaultTechnicianStats,
-    retentionJourneys: defaultRetentionJourneys,
-  })
+  const [pages, setPages] = useState<Loadable<PortalPageSummary[]>>({ state: "loading" })
+  const [analytics, setAnalytics] = useState<Loadable<PortalAnalyticsSummary>>({ state: "loading" })
+  const [newPageSignal, setNewPageSignal] = useState(0)
 
-  const { visitorData, landingPages, aiAgents, fieldSalesStats, technicianStats, retentionJourneys } = data
-  const [localPages, setLocalPages] = useState<PortalLandingPage[]>(() => landingPages)
-  const [aiAgentList, setAiAgentList] = useState<PortalAiAgent[]>(() => aiAgents)
-  const [portalStats, setPortalStats] = useState<PortalStats | null>(null)
-  const [isLoadingPortal, setIsLoadingPortal] = useState(true)
-
-  const [createAgentModalOpen, setCreateAgentModalOpen] = useState(false)
-  const [studioOpen, setStudioOpen] = useState(false)
-  const [editingPage, setEditingPage] = useState<ImpeccablePage | null>(null)
-  const [websiteSubView, setWebsiteSubView] = useState<"builder" | "roster">("builder")
-
-  useEffect(() => {
-    let mounted = true
-    async function loadPortalData() {
-      setIsLoadingPortal(true)
-      try {
-        const [pages, agents, stats] = await Promise.all([
-          fetchPortalPages(),
-          fetchAiAgents(),
-          fetchPortalStats(),
-        ])
-        if (mounted) {
-          if (pages && pages.length > 0) setLocalPages(pages)
-          if (agents && agents.length > 0) setAiAgentList(agents)
-          if (stats) setPortalStats(stats)
-        }
-      } catch (err) {
-        console.warn("[PortalModule] API fetch error, retaining initial state:", err)
-      } finally {
-        if (mounted) setIsLoadingPortal(false)
-      }
-    }
-    loadPortalData()
-    return () => {
-      mounted = false
-    }
+  const reload = useCallback(async () => {
+    const [p, a] = await Promise.all([loadPortalPages({ pageSize: 100 }), loadPortalAnalytics(30)])
+    setPages(p.state === "ready" ? { state: "ready", data: p.data.items } : p)
+    setAnalytics(a)
   }, [])
 
-  const handleSavePage = async (page: any) => {
-    // Optimistic UI update
-    setLocalPages((prev) => {
-      const idx = prev.findIndex((p) => String(p.id) === String(page.id))
-      if (idx >= 0) {
-        return prev.map((p) => (String(p.id) === String(page.id) ? { ...p, ...page } : p))
-      }
-      return [page, ...prev]
-    })
+  useEffect(() => {
+    void reload()
+  }, [reload])
 
-    try {
-      const exists = localPages.some((p) => String(p.id) === String(page.id))
-      if (exists) {
-        await updatePortalPage(page.id, page)
-      } else {
-        const created = await createPortalPage(page)
-        setLocalPages((prev) => prev.map((p) => (p.id === page.id ? created : p)))
-      }
-    } catch (err) {
-      console.error("[PortalModule] Failed to persist page to API:", err)
-    }
-  }
-
-  const handleDeletePage = async (id: string | number) => {
-    setLocalPages((prev) => prev.filter((p) => String(p.id) !== String(id)))
-    try {
-      await deletePortalPage(id)
-    } catch (err) {
-      console.error("[PortalModule] Failed to delete page via API:", err)
-    }
-  }
-
-  const handleCreateAgent = async (agent: { name: string; department: string; model: string }) => {
-    try {
-      const created = await createAiAgent(agent)
-      setAiAgentList((prev) => [created, ...prev])
-    } catch (err) {
-      console.error("[PortalModule] Failed to deploy AI agent:", err)
-    }
-  }
-
-  const handleToggleAgentStatus = async (agent: PortalAiAgent) => {
-    const nextStatus = agent.status === "active" ? "paused" : "active"
-    setAiAgentList((prev) =>
-      prev.map((a) => (a.id === agent.id ? { ...a, status: nextStatus } : a))
-    )
-    try {
-      await toggleAiAgentStatus(agent.id, nextStatus)
-    } catch (err) {
-      console.error("[PortalModule] Failed to toggle agent status:", err)
-    }
+  const startNewPage = () => {
+    setActiveTab("website")
+    setNewPageSignal((n) => n + 1)
   }
 
   const [activeTab, setActiveTab] = useState("overview")
   const [cancelFlowOpen, setCancelFlowOpen] = useState(false)
-  const isClient = useIsClient()
 
   useEffect(() => {
     if (!activeTabOverride) return
@@ -257,108 +84,42 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         title="Customer Portal"
         subtitle="Self-service portal, journey management, and customer engagement"
         actions={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setActiveTab("website")
-                setEditingPage(null)
-                setStudioOpen(true)
-              }}
-            >
-              <Plus className="h-3.5 w-3.5 mr-1" />
-              New Page
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                setActiveTab("website")
-                setEditingPage(null)
-                setStudioOpen(true)
-              }}
-              className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
-            >
-              <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-              DomeStudio
-            </Button>
-          </>
+          <Button size="sm" onClick={startNewPage} className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs">
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            New Page
+          </Button>
         }
       />
 
-      {/* KPI Cards */}
+      {/* KPI Cards (last 30 days, from Portal Builder analytics) */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-border bg-card">
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Website Visitors</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">16,700</p>
-                <div className="mt-1 flex items-center gap-1 text-emerald-400">
-                  <TrendingUp className="h-3 w-3" />
-                  <span className="text-xs">+12.5% this week</span>
+        {analytics.state !== "ready" ? (
+          <div className="md:col-span-2 lg:col-span-4">
+            <NotConnected loadable={analytics} service="Portal Builder analytics" onRetry={() => void reload()} />
+          </div>
+        ) : (
+          [
+            { label: "Page views", value: analytics.data.views.toLocaleString(), sub: `${analytics.data.unique_visitors.toLocaleString()} unique visitors`, Icon: Eye, tile: "bg-emerald-500/20", icon: "text-emerald-400" },
+            { label: "Form submissions", value: analytics.data.submissions.toLocaleString(), sub: `${analytics.data.conversion_rate}% conversion`, Icon: Activity, tile: "bg-blue-500/20", icon: "text-blue-400" },
+            { label: "Published pages", value: String(analytics.data.pages.published), sub: `${analytics.data.pages.draft} drafts, ${analytics.data.pages.archived} archived`, Icon: Layout, tile: "bg-amber-500/20", icon: "text-amber-400" },
+            { label: "Campaigns running", value: String(analytics.data.campaigns.running), sub: `${analytics.data.campaigns.total} total`, Icon: TrendingUp, tile: "bg-purple-500/20", icon: "text-purple-400" },
+          ].map(({ label, value, sub, Icon, tile, icon }) => (
+            <Card key={label} className="border-border bg-card">
+              <CardContent className="p-5">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground">{label}</p>
+                    <p className="mt-1 text-2xl font-bold text-foreground">{value}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{sub}</p>
+                  </div>
+                  <div className={`rounded-lg ${tile} p-2`}>
+                    <Icon className={`h-5 w-5 ${icon}`} />
+                  </div>
                 </div>
-              </div>
-              <div className="rounded-lg bg-emerald-500/20 p-2">
-                <Globe className="h-5 w-5 text-emerald-400" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">AI Conversations</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">9,300</p>
-                <div className="mt-1 flex items-center gap-1 text-emerald-400">
-                  <Activity className="h-3 w-3" />
-                  <span className="text-xs">75% resolution rate</span>
-                </div>
-              </div>
-              <div className="rounded-lg bg-blue-500/20 p-2">
-                <Bot className="h-5 w-5 text-blue-400" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Field Sales Active</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{fieldSalesStats.activeAgents}</p>
-                <div className="mt-1 flex items-center gap-1 text-amber-400">
-                  <MapPin className="h-3 w-3" />
-                  <span className="text-xs">{fieldSalesStats.visitsToday} visits today</span>
-                </div>
-              </div>
-              <div className="rounded-lg bg-amber-500/20 p-2">
-                <Users className="h-5 w-5 text-amber-400" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-border bg-card">
-          <CardContent className="p-5">
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="text-sm text-muted-foreground">Technicians Active</p>
-                <p className="mt-1 text-2xl font-bold text-foreground">{technicianStats.activeTechs}</p>
-                <div className="mt-1 flex items-center gap-1 text-purple-400">
-                  <Wrench className="h-3 w-3" />
-                  <span className="text-xs">{technicianStats.jobsCompleted} jobs today</span>
-                </div>
-              </div>
-              <div className="rounded-lg bg-purple-500/20 p-2">
-                <Wrench className="h-5 w-5 text-purple-400" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          ))
+        )}
       </div>
 
       {/* Main Content */}
@@ -385,289 +146,78 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
 
         <TabsContent value="overview" className="mt-4 space-y-4">
           <div id="portal-overview" />
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            {/* Traffic Chart */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Portal Traffic Overview</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={visitorData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                      <XAxis dataKey="day" stroke="#9ca3af" fontSize={12} />
-                      <YAxis stroke="#9ca3af" fontSize={12} />
-                      <Tooltip contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }} />
-                      <Area
-                        type="monotone"
-                        dataKey="website"
-                        stroke="#10b981"
-                        fill="#10b981"
-                        fillOpacity={0.3}
-                        name="Website"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="customerPortal"
-                        stroke="#3b82f6"
-                        fill="#3b82f6"
-                        fillOpacity={0.3}
-                        name="Customer Portal"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="fieldApp"
-                        stroke="#f59e0b"
-                        fill="#f59e0b"
-                        fillOpacity={0.3}
-                        name="Field Sales"
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="techApp"
-                        stroke="#8b5cf6"
-                        fill="#8b5cf6"
-                        fillOpacity={0.3}
-                        name="Technician"
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Quick Stats */}
-            <Card className="border-border bg-card">
-              <CardHeader>
-                <CardTitle className="text-base">Platform Status</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-emerald-500/20 p-2">
-                      <Globe className="h-5 w-5 text-emerald-400" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Main Website</p>
-                      <p className="text-sm text-muted-foreground">omnidome.co.za</p>
-                    </div>
+          {analytics.state !== "ready" ? (
+            <NotConnected loadable={analytics} service="Portal Builder analytics" onRetry={() => void reload()} />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <CardTitle className="text-base">Views and submissions, last {analytics.data.period_days} days</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="h-72">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={analytics.data.daily}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                        <XAxis dataKey="date" stroke="#9ca3af" fontSize={12} />
+                        <YAxis stroke="#9ca3af" fontSize={12} allowDecimals={false} />
+                        <Tooltip contentStyle={{ backgroundColor: "#1f2937", border: "1px solid #374151" }} />
+                        <Area type="monotone" dataKey="views" stroke="#10b981" fill="#10b981" fillOpacity={0.3} name="Views" />
+                        <Area type="monotone" dataKey="submissions" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} name="Submissions" />
+                      </AreaChart>
+                    </ResponsiveContainer>
                   </div>
-                  <Badge className="badge-success">Online</Badge>
-                </div>
+                </CardContent>
+              </Card>
 
-                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-blue-500/20 p-2">
-                      <Bot className="h-5 w-5 text-blue-400" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">AI Chat System</p>
-                      <p className="text-sm text-muted-foreground">4 bots active</p>
-                    </div>
+              <Card className="border-border bg-card">
+                <CardHeader>
+                  <CardTitle className="text-base">Top pages and sources</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 text-sm">
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Top pages</p>
+                    {analytics.data.top_pages.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No views recorded yet.</p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {analytics.data.top_pages.map((p) => (
+                          <li key={p.page_id} className="flex justify-between gap-2">
+                            <span className="truncate text-foreground">{p.title}</span>
+                            <span className="text-muted-foreground">{p.views.toLocaleString()}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                  <Badge className="badge-success">Running</Badge>
-                </div>
-
-                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-amber-500/20 p-2">
-                      <Smartphone className="h-5 w-5 text-amber-400" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Field Sales App</p>
-                      <p className="text-sm text-muted-foreground">v2.4.1</p>
-                    </div>
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Top sources</p>
+                    {analytics.data.top_sources.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No traffic sources recorded yet.</p>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {analytics.data.top_sources.map((src) => (
+                          <li key={src.source} className="flex justify-between gap-2">
+                            <span className="truncate text-foreground">{src.source}</span>
+                            <span className="text-muted-foreground">{src.views.toLocaleString()}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                  <Badge className="badge-success">Live</Badge>
-                </div>
-
-                <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 p-4">
-                  <div className="flex items-center gap-3">
-                    <div className="rounded-lg bg-purple-500/20 p-2">
-                      <Wrench className="h-5 w-5 text-purple-400" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground">Technician App</p>
-                      <p className="text-sm text-muted-foreground">v3.1.0</p>
-                    </div>
-                  </div>
-                  <Badge className="badge-success">Live</Badge>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </TabsContent>
 
         <TabsContent value="website" className="mt-4 space-y-5">
           <div id="portal-landing" />
-
-          {/* Subview Navigation Header within Website Builder */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-border/60 pb-3">
-            <div className="flex flex-wrap items-center gap-1.5 bg-secondary/80 p-1 rounded-lg border border-border/60">
-              <Button
-                variant={websiteSubView === "builder" ? "secondary" : "ghost"}
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => setWebsiteSubView("builder")}
-              >
-                <Sparkles className="h-3.5 w-3.5 mr-1 text-cyan-400" />
-                DomeDesign Studio
-              </Button>
-              <Button
-                variant={websiteSubView === "roster" ? "secondary" : "ghost"}
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => setWebsiteSubView("roster")}
-              >
-                <Layout className="h-3.5 w-3.5 mr-1 text-emerald-400" />
-                Landing Pages Roster ({localPages.length})
-              </Button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs h-7"
-                onClick={() => {
-                  setWebsiteSubView("builder")
-                  setEditingPage(null)
-                  setStudioOpen(true)
-                }}
-              >
-                <Plus className="h-3.5 w-3.5 mr-1" />
-                New Page
-              </Button>
-              <Button
-                size="sm"
-                className="text-xs h-7 bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold"
-                onClick={() => {
-                  handleSavePage({
-                    id: `page-${Date.now()}`,
-                    name: "Gigabit Summer Sprint 2026",
-                    url: "/promo/summer-sprint",
-                    status: "published",
-                    views: 320,
-                    conversions: 14,
-                    rate: "4.3%",
-                  })
-                }}
-              >
-                <Globe className="h-3.5 w-3.5 mr-1" />
-                Publish Live
-              </Button>
-            </div>
-          </div>
-
-          {/* Subview 1: DomeDesign Studio (Claude Design Conversational Canvas) */}
-          {websiteSubView === "builder" && (
-            <div className="space-y-6">
-              <DomeDesignStudio
-                initialPages={localPages}
-                onSavePage={handleSavePage}
-                onDeletePage={handleDeletePage}
-                defaultMode="discovery"
-              />
-            </div>
-          )}
-
-          {/* Subview 2: Landing Pages Directory Table */}
-          {websiteSubView === "roster" && (
-            <TableShell
-              title="Landing Pages"
-              columns={[
-                {
-                  key: "name",
-                  label: "Page Name",
-                  inputType: "text" as const,
-                  render: (v, row: any) => (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-foreground">{String(v)}</span>
-                      {row?.intent && (
-                        <Badge variant="outline" className="border-cyan-500/40 text-cyan-400 text-[10px] px-1.5 py-0">
-                          DomeStudio
-                        </Badge>
-                      )}
-                    </div>
-                  ),
-                },
-                { key: "url", label: "URL", inputType: "text" as const },
-                {
-                  key: "status",
-                  label: "Status",
-                  inputType: "select" as const,
-                  options: ["published", "draft"],
-                  render: (v) => (
-                    <span
-                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                        v === "published"
-                          ? "bg-emerald-500/20 text-emerald-400"
-                          : "bg-amber-500/20 text-amber-400"
-                      }`}
-                    >
-                      {String(v)}
-                    </span>
-                  ),
-                },
-                {
-                  key: "views",
-                  label: "Views",
-                  inputType: "number" as const,
-                  render: (v) => Number(v).toLocaleString(),
-                },
-                { key: "conversions", label: "Conversions", inputType: "number" as const },
-                { key: "rate", label: "Conv. Rate", inputType: "text" as const },
-                {
-                  key: "studioAction",
-                  label: "Studio",
-                  render: (_v, row: any) => (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 px-2 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40"
-                      onClick={() => {
-                        setEditingPage(row)
-                        setWebsiteSubView("builder")
-                      }}
-                    >
-                      <Sparkles className="h-3 w-3 mr-1" />
-                      Edit in Studio
-                    </Button>
-                  ),
-                },
-              ]}
-              data={localPages}
-              addLabel="Create Page"
-              extraActions={
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setEditingPage(null)
-                    setWebsiteSubView("builder")
-                  }}
-                  className="bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold text-xs"
-                >
-                  <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                  DomeStudio
-                </Button>
-              }
-              onAdd={() => {
-                setEditingPage(null)
-                setWebsiteSubView("builder")
-              }}
-              onDelete={(id) => handleDeletePage(id)}
-              onEdit={(rec) => {
-                setEditingPage(rec as any)
-                setWebsiteSubView("builder")
-              }}
-              searchPlaceholder="Search pages..."
-            />
-          )}
+          <DomeDesignStudio pages={pages} onChanged={() => void reload()} onReload={() => void reload()} newPageSignal={newPageSignal} />
         </TabsContent>
 
         <TabsContent value="analytics-custom" className="mt-4">
-          <DomeStudioLiveDualView pages={localPages} />
+          <DomeStudioLiveDualView pages={pages} onReload={() => void reload()} />
         </TabsContent>
 
         <TabsContent value="domeseo" className="mt-4">
@@ -683,79 +233,16 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         </TabsContent>
 
         <TabsContent value="ai-apps" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="section-title">AI Agents & Chatbots</h3>
-            <Button variant="cta" size="sm" onClick={() => setCreateAgentModalOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Create AI Agent
-            </Button>
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {aiAgentList.map((agent) => (
-              <Card key={agent.id} className="border-border bg-card">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="rounded-lg bg-blue-500/20 p-2">
-                        <Bot className="h-5 w-5 text-blue-400" />
-                      </div>
-                      <div>
-                        <h4 className="font-medium text-foreground">{agent.name}</h4>
-                        <Badge
-                          className={
-                            agent.status === "active"
-                              ? "bg-emerald-500/20 text-emerald-400"
-                              : "bg-amber-500/20 text-amber-400"
-                          }
-                        >
-                          {agent.status === "active" ? "Active" : "Paused"}
-                        </Badge>
-                      </div>
-                    </div>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setCreateAgentModalOpen(true)}>
-                          <Settings className="mr-2 h-4 w-4" />
-                          Configure
-                        </DropdownMenuItem>
-                        <DropdownMenuItem>
-                          <Eye className="mr-2 h-4 w-4" />
-                          View Logs
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleToggleAgentStatus(agent)}>
-                          {agent.status === "active" ? (
-                            <Pause className="mr-2 h-4 w-4" />
-                          ) : (
-                            <Play className="mr-2 h-4 w-4" />
-                          )}
-                          {agent.status === "active" ? "Pause" : "Resume"}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="mt-4 grid grid-cols-3 gap-4 text-center">
-                    <div>
-                      <p className="section-title">{!isClient ? "--" : agent.conversations.toLocaleString()}</p>
-                      <p className="text-xs text-muted-foreground">Conversations</p>
-                    </div>
-                    <div>
-                      <p className="section-title">{agent.resolution}</p>
-                      <p className="text-xs text-muted-foreground">Resolution</p>
-                    </div>
-                    <div>
-                      <p className="section-title">{agent.avgTime}</p>
-                      <p className="text-xs text-muted-foreground">Avg Time</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+          <div id="portal-ai-apps" />
+          <div
+            role="status"
+            className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-secondary/20 p-8 text-center"
+          >
+            <Bot className="h-6 w-6 text-muted-foreground" />
+            <p className="text-sm font-medium text-foreground">Portal AI agents are not connected</p>
+            <p className="max-w-md text-xs text-muted-foreground">
+              Portal Builder has no AI agent or chatbot endpoint, so no agents, conversation counts or resolution rates are shown here.
+            </p>
           </div>
         </TabsContent>
 
@@ -787,19 +274,6 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         customerName="Demo Customer"
       />
 
-      {/* Impeccable Landing Page & Marketing Studio */}
-      <ImpeccableLandingStudio
-        open={studioOpen}
-        onOpenChange={setStudioOpen}
-        initialPage={editingPage}
-        onSavePage={handleSavePage}
-      />
-
-      <CreateAiAgentModal
-        open={createAgentModalOpen}
-        onOpenChange={setCreateAgentModalOpen}
-        onCreateAgent={handleCreateAgent}
-      />
     </div>
   )
 }

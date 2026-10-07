@@ -82,8 +82,12 @@ const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
   { methods: ["POST"], pattern: /^\/svc\/admin\/invites\/claim$/ },
   // Recipient unsubscribe page / one-click POST: authorised by an HMAC-signed token in `?t=`
   { methods: ["GET", "POST"], pattern: /^\/svc\/marketing\/email\/unsubscribe$/ },
-  // Portal pages, stats, and AI agents
-  { methods: ["GET", "POST", "PUT", "DELETE"], pattern: /^\/api\/portal\/(?:pages|stats|ai-agents)(?:\/.*)?$/ },
+  // Portal Builder: published page by slug (anonymous visitors; backend rate-limits, returns published pages only)
+  { methods: ["GET"], pattern: /^\/svc\/portal_builder\/api\/v1\/portal\/public\/[A-Za-z0-9-]{1,100}$/ },
+  // Portal Builder: private review link, authorised by the unguessable share token in the path
+  { methods: ["GET"], pattern: /^\/svc\/portal_builder\/api\/v1\/portal\/shared\/[A-Za-z0-9_-]{16,200}$/ },
+  // Portal Builder: public form submission (consent required, honeypot + 5/min per IP and page enforced by the backend)
+  { methods: ["POST"], pattern: /^\/svc\/portal_builder\/api\/v1\/portal\/submissions$/ },
 ]
 
 type Verified = Identity | "no-tenant" | "inactive"

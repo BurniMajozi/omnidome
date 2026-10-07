@@ -1,127 +1,316 @@
-import type { PortalLandingPage } from "@/app/api/portal/pages/route"
-import type { PortalAiAgent } from "@/app/api/portal/ai-agents/route"
+"use client"
+
 import { getSessionSafe } from "@/lib/supabase/client"
+import { fetchLoadable } from "@/lib/service-fetch"
+import type { Loadable } from "@/lib/service-state"
 
-export type { PortalLandingPage, PortalAiAgent }
+/**
+ * Portal Builder API client (services/portal_builder, contract in
+ * docs/portal-builder-api.md). Goes through the Next proxy at /svc/portal_builder;
+ * the edge gate (proxy.ts) derives tenant/user from the verified session and the
+ * Bearer token is attached by AuthFetchInit, so no identity headers are sent here.
+ *
+ * Reads return a Loadable (unreachable / denied / error preserved). Writes return a
+ * PortalResult carrying the server's `detail` message verbatim.
+ */
 
-async function authFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const { data } = await getSessionSafe()
-  const headers = new Headers(init.headers)
-  if (data.session?.access_token) {
-    headers.set("Authorization", `Bearer ${data.session.access_token}`)
+const API_BASE = "/svc/portal_builder/api/v1/portal"
+const TIMEOUT_MS = 20_000
+
+export type PortalPageType = "landing" | "campaign" | "product" | "seo"
+export type PortalPageStatus = "draft" | "published" | "archived"
+
+export interface PortalBlock {
+  type: string
+  heading?: string
+  subheading?: string
+  image?: string
+  body?: string
+  images?: Array<{ src: string; alt?: string }>
+  [key: string]: unknown
+}
+
+export interface PortalPageContent {
+  blocks?: PortalBlock[]
+  [key: string]: unknown
+}
+
+export interface PortalPageSummary {
+  id: string
+  slug: string
+  title: string
+  page_type: PortalPageType
+  status: PortalPageStatus
+  views: number
+  conversions: number
+  updated_at: string
+}
+
+export interface PortalPageList {
+  items: PortalPageSummary[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface PortalPage {
+  id: string
+  tenant_id?: string
+  slug: string
+  title: string
+  description: string | null
+  page_type: PortalPageType
+  status: PortalPageStatus
+  content: PortalPageContent
+  theme: Record<string, unknown> | null
+  seo_meta: Record<string, unknown> | null
+  custom_css: string | null
+  views: number
+  conversions: number
+  sort_order?: number
+  published_version: number | null
+  published_at: string | null
+  unpublished_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface PortalPageInput {
+  slug: string
+  title: string
+  description?: string
+  page_type?: PortalPageType
+  content?: PortalPageContent
+  theme?: Record<string, unknown>
+  seo_meta?: Record<string, unknown>
+}
+
+export interface PortalPageUpdate {
+  title?: string
+  description?: string
+  content?: PortalPageContent
+  theme?: Record<string, unknown>
+  seo_meta?: Record<string, unknown>
+  custom_css?: string
+  status?: "draft" | "archived"
+}
+
+export interface PortalVersion {
+  id: string
+  version_number: number
+  reason: "edit" | "publish"
+  created_at: string
+}
+
+export interface PortalPublishResult {
+  status: "published"
+  url: string
+  public_path: string
+  version: number
+  published_at: string
+}
+
+export type ShareEmailStatus = "sent" | "suppressed" | "no_mailbox" | "failed"
+
+export interface PortalShareCreated {
+  id: string
+  page_id: string
+  recipient_email: string
+  expires_at: string
+  share_url: string
+  email_status: ShareEmailStatus
+  message_id: string | null
+}
+
+export interface PortalShare {
+  id: string
+  recipient_email: string
+  expires_at: string
+  revoked_at: string | null
+  active: boolean
+  email_status: ShareEmailStatus | null
+  view_count: number
+  last_viewed_at: string | null
+  created_at: string
+}
+
+export interface PortalImportResult {
+  source_url: string
+  final_url: string
+  fetch: { status_code: number; content_type: string; truncated: boolean; redirects: number; elapsed_ms: number }
+  content: {
+    title: string
+    description: string
+    lang: string | null
+    og_image: string | null
+    headings: Array<{ level: number; text: string }>
+    paragraphs: string[]
+    images: Array<{ src: string; alt?: string }>
+    blocks: PortalBlock[]
+    stats: { words: number; links: number; images: number }
   }
-  return fetch(url, { ...init, headers })
+  suggested_page: { title: string; description: string; content: PortalPageContent }
 }
 
-export interface PortalStats {
-  websiteVisitors: number
-  visitorsGrowth: string
-  aiConversations: number
-  aiResolutionRate: string
-  fieldAgentsActive: number
-  leadsToday: number
-  dealsWonToday: number
-  techniciansActive: number
-  jobsCompletedToday: number
-  averageJobTime: string
-  customerRating: number
-  visitorTraffic: Array<{
-    day: string
-    website: number
-    customerPortal: number
-    fieldApp: number
-    techApp: number
-  }>
-  systemStatus: {
-    mainWebsite: { url: string; status: string }
-    aiChatSystem: { activeBots: number; status: string }
-    fieldSalesApp: { version: string; status: string }
-    technicianApp: { version: string; status: string }
+export interface PortalSeoCheck {
+  id: string
+  label: string
+  status: "pass" | "warn" | "fail"
+  weight: number
+  detail: string
+}
+
+export interface PortalSeoAudit {
+  url: string
+  score: number
+  grade: string
+  checks: PortalSeoCheck[]
+  summary: { pass: number; warn: number; fail: number }
+  stats: Record<string, unknown>
+  keyword: {
+    keyword: string
+    in_title: boolean
+    in_h1: boolean
+    in_meta_description: boolean
+    occurrences_in_text: number
+    density_pct: number
+  } | null
+  fetch: Record<string, unknown>
+}
+
+export interface PortalKeywordResult {
+  provider_configured: boolean
+  provider?: string
+  message?: string
+  error?: string
+  keywords: Array<{ keyword: string; search_volume: number | null; cpc: number | null; competition: number | string | null }>
+}
+
+export interface PortalAnalyticsSummary {
+  period_days: number
+  since: string
+  pages: { total: number; published: number; draft: number; archived: number }
+  views: number
+  unique_visitors: number
+  submissions: number
+  conversion_rate: number
+  daily: Array<{ date: string; views: number; submissions: number }>
+  top_pages: Array<{ page_id: string; slug: string; title: string; views: number }>
+  top_sources: Array<{ source: string; views: number }>
+  campaigns: { total: number; running: number }
+}
+
+export interface PortalSubmission {
+  id: string
+  form_data: Record<string, string | number | boolean | null>
+  utm: Record<string, unknown> | null
+  converted: boolean
+  consent_given: boolean
+  created_at: string
+}
+
+export type PortalResult<T> =
+  | { ok: true; data: T; status: number }
+  | { ok: false; status: number | null; message: string }
+
+function errorMessage(status: number | null, body: unknown): string {
+  if (status === null) return "Portal service is not reachable. Try again shortly."
+  const detail = body && typeof body === "object" ? (body as { detail?: unknown }).detail : undefined
+  if (typeof detail === "string" && detail) return detail
+  if (Array.isArray(detail) && detail.length) {
+    const first = detail[0] as { msg?: unknown }
+    if (typeof first?.msg === "string") return first.msg
   }
+  if (status === 401) return "Your session could not be verified. Sign in again."
+  if (status === 403) return "You do not have the portal role needed for this action."
+  if (status === 429) return "Too many requests. Wait a moment and retry."
+  if (status === 502 || status === 503 || status === 504) return "Portal service is not reachable. Try again shortly."
+  return `Portal request failed (HTTP ${status}).`
 }
 
-export async function fetchPortalPages(): Promise<PortalLandingPage[]> {
-  const res = await authFetch("/api/portal/pages", { cache: "no-store" })
-  if (!res.ok) throw new Error("Failed to fetch landing pages")
-  const json = await res.json()
-  return json.data || []
-}
-
-export async function createPortalPage(page: Partial<PortalLandingPage>): Promise<PortalLandingPage> {
-  const res = await authFetch("/api/portal/pages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(page),
-  })
-  if (!res.ok) throw new Error("Failed to create landing page")
-  const json = await res.json()
-  return json.data
-}
-
-export async function updatePortalPage(
-  id: string | number,
-  updates: Partial<PortalLandingPage>
-): Promise<PortalLandingPage> {
-  const res = await authFetch("/api/portal/pages", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...updates, id }),
-  })
-  if (!res.ok) throw new Error("Failed to update landing page")
-  const json = await res.json()
-  return json.data
-}
-
-export async function deletePortalPage(id: string | number): Promise<void> {
-  const res = await authFetch(`/api/portal/pages?id=${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  })
-  if (!res.ok) throw new Error("Failed to delete landing page")
-}
-
-export async function fetchPortalStats(): Promise<PortalStats | null> {
+async function portalWrite<T>(path: string, method: string, body?: unknown): Promise<PortalResult<T>> {
+  let res: Response
   try {
-    const res = await authFetch("/api/portal/stats", { cache: "no-store" })
-    if (!res.ok) return null
-    const json = await res.json()
-    return json.data
+    await getSessionSafe()
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      cache: "no-store",
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    })
   } catch {
-    return null
+    return { ok: false, status: null, message: errorMessage(null, null) }
   }
-}
-
-export async function fetchAiAgents(): Promise<PortalAiAgent[]> {
-  try {
-    const res = await authFetch("/api/portal/ai-agents", { cache: "no-store" })
-    if (!res.ok) return []
-    const json = await res.json()
-    return json.data || []
-  } catch {
-    return []
+  let parsed: unknown = null
+  const text = await res.text().catch(() => "")
+  if (text) {
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      parsed = null
+    }
   }
+  if (!res.ok) return { ok: false, status: res.status, message: errorMessage(res.status, parsed) }
+  return { ok: true, data: parsed as T, status: res.status }
 }
 
-export async function createAiAgent(agent: Partial<PortalAiAgent>): Promise<PortalAiAgent> {
-  const res = await authFetch("/api/portal/ai-agents", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(agent),
-  })
-  if (!res.ok) throw new Error("Failed to create AI Agent")
-  const json = await res.json()
-  return json.data
+const read = <T>(path: string): Promise<Loadable<T>> => fetchLoadable<T>(`${API_BASE}${path}`, TIMEOUT_MS)
+
+// ---- Pages ----
+export function loadPortalPages(opts: { page?: number; pageSize?: number; pageType?: PortalPageType; status?: PortalPageStatus; search?: string } = {}) {
+  const q = new URLSearchParams()
+  if (opts.page) q.set("page", String(opts.page))
+  if (opts.pageSize) q.set("page_size", String(opts.pageSize))
+  if (opts.pageType) q.set("page_type", opts.pageType)
+  if (opts.status) q.set("status", opts.status)
+  if (opts.search) q.set("search", opts.search)
+  const qs = q.toString()
+  return read<PortalPageList>(`/pages${qs ? `?${qs}` : ""}`)
+}
+export const loadPortalPage = (id: string) => read<PortalPage>(`/pages/${encodeURIComponent(id)}`)
+export const createPortalPage = (input: PortalPageInput) => portalWrite<PortalPage>("/pages", "POST", input)
+export const updatePortalPage = (id: string, updates: PortalPageUpdate) =>
+  portalWrite<PortalPage>(`/pages/${encodeURIComponent(id)}`, "PUT", updates)
+export const deletePortalPage = (id: string) => portalWrite<{ status: "deleted" }>(`/pages/${encodeURIComponent(id)}`, "DELETE")
+export const publishPortalPage = (id: string) =>
+  portalWrite<PortalPublishResult>(`/pages/${encodeURIComponent(id)}/publish`, "POST")
+export const unpublishPortalPage = (id: string) =>
+  portalWrite<{ status: "draft"; unpublished_at: string }>(`/pages/${encodeURIComponent(id)}/unpublish`, "POST")
+export const loadPortalVersions = (id: string) =>
+  read<{ published_version: number | null; items: PortalVersion[] }>(`/pages/${encodeURIComponent(id)}/versions`)
+export const loadPortalSubmissions = (id: string, page = 1, pageSize = 50) =>
+  read<{ items: PortalSubmission[]; total: number }>(
+    `/pages/${encodeURIComponent(id)}/submissions?page_num=${page}&page_size=${pageSize}`,
+  )
+
+// ---- Sharing ----
+export const sharePortalPage = (id: string, input: { recipient_email: string; expires_in_hours?: number; message?: string }) =>
+  portalWrite<PortalShareCreated>(`/pages/${encodeURIComponent(id)}/share`, "POST", input)
+export const loadPortalShares = (id: string) => read<{ items: PortalShare[] }>(`/pages/${encodeURIComponent(id)}/shares`)
+export const revokePortalShare = (shareId: string) =>
+  portalWrite<{ status: "revoked"; id: string; revoked_at: string }>(`/shares/${encodeURIComponent(shareId)}/revoke`, "POST")
+
+// ---- Import / SEO / analytics ----
+export const importPortalSite = (url: string) => portalWrite<PortalImportResult>("/import/site", "POST", { url })
+export const auditPortalSeo = (url: string, keyword?: string) =>
+  portalWrite<PortalSeoAudit>("/seo/audit", "POST", keyword ? { url, keyword } : { url })
+export const lookupPortalKeywords = (keywords: string[]) =>
+  portalWrite<PortalKeywordResult>("/seo/keywords", "POST", { keywords })
+export const loadPortalAnalytics = (days = 30) => read<PortalAnalyticsSummary>(`/analytics/summary?days=${days}`)
+
+/** URL path (relative to the web origin) where a published page is served. */
+export function portalPublicPath(slug: string): string {
+  return `/portal/${encodeURIComponent(slug)}`
 }
 
-export async function toggleAiAgentStatus(
-  id: number | string,
-  newStatus: "active" | "paused"
-): Promise<PortalAiAgent> {
-  const res = await authFetch("/api/portal/ai-agents", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ id, status: newStatus }),
-  })
-  if (!res.ok) throw new Error("Failed to update AI Agent")
-  const json = await res.json()
-  return json.data
+/** Lowercase slug that satisfies the backend regex; returns "" when nothing usable remains. */
+export function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100)
+    .replace(/-+$/g, "")
 }

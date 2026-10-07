@@ -13,231 +13,132 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import {
-  Globe,
-  Sparkles,
-  CheckCircle2,
-  RefreshCw,
-  Search,
-  ExternalLink,
-  Layers,
-  Palette,
-  ArrowRight,
-} from "lucide-react"
-
-export interface ScrapedSitePayload {
-  url: string
-  title: string
-  heroHeadline: string
-  heroSubheadline: string
-  ctaText: string
-  brandColors: {
-    primary: string
-    accent: string
-    background: string
-  }
-  detectedPackages: Array<{
-    name: string
-    speed: string
-    price: string
-  }>
-  coverageOperators: string[]
-}
+import { Globe, Sparkles, CheckCircle2, RefreshCw, Search, AlertTriangle } from "lucide-react"
+import { importPortalSite, type PortalImportResult } from "@/lib/portal-api"
+import { plainText } from "./portal-blocks"
 
 interface ExistingSiteImporterModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onApplySiteStructure: (scraped: ScrapedSitePayload) => void
+  /** Receives the real import result; the caller loads `suggested_page.content.blocks` into the editor. */
+  onApplySiteStructure: (result: PortalImportResult) => void
 }
 
-export function ExistingSiteImporterModal({
-  open,
-  onOpenChange,
-  onApplySiteStructure,
-}: ExistingSiteImporterModalProps) {
-  const [targetUrl, setTargetUrl] = useState("https://coolideas.co.za/promos/fibre-deals")
+export function ExistingSiteImporterModal({ open, onOpenChange, onApplySiteStructure }: ExistingSiteImporterModalProps) {
+  const [targetUrl, setTargetUrl] = useState("")
   const [isCrawling, setIsCrawling] = useState(false)
-  const [scrapedResult, setScrapedResult] = useState<ScrapedSitePayload | null>(null)
+  const [result, setResult] = useState<PortalImportResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const handleCrawl = async () => {
-    if (!targetUrl.trim()) return
+    const url = targetUrl.trim()
+    if (!url) return
     setIsCrawling(true)
-
-    // Simulate headless DOM parsing via Domecrawl Engine
-    setTimeout(() => {
-      let isCompetitor = targetUrl.toLowerCase().includes("cool") || targetUrl.toLowerCase().includes("afrihost")
-      const result: ScrapedSitePayload = {
-        url: targetUrl,
-        title: isCompetitor
-          ? "Uncapped Home Fibre Deals - Zero Shaping, 1Gbps Ready"
-          : "OmniDome NextGen Fibre - Gigabit Internet For Home & Business",
-        heroHeadline: isCompetitor
-          ? "Switch to High-Performance Pure Uncapped Fibre"
-          : "Experience Uncapped Gigabit Fibre with Sub-5ms Latency",
-        heroSubheadline:
-          "Connect to South Africa's premier fibre operators with free standard installation, free Wi-Fi 6 router, and month-to-month contracts.",
-        ctaText: "Check Feasibility Now",
-        brandColors: {
-          primary: isCompetitor ? "#0284c7" : "#06b6d4",
-          accent: "#10b981",
-          background: "#090d16",
-        },
-        detectedPackages: [
-          { name: "Fast Starter", speed: "100/50 Mbps", price: "R599/mo" },
-          { name: "Super Streamer", speed: "250/125 Mbps", price: "R799/mo" },
-          { name: "Gigabit Pro", speed: "1000/500 Mbps", price: "R1,299/mo" },
-        ],
-        coverageOperators: ["Vumatel", "Openserve", "Frogfoot", "Octotel"],
-      }
-
-      setScrapedResult(result)
-      setIsCrawling(false)
-    }, 1400)
+    setError(null)
+    setResult(null)
+    const res = await importPortalSite(url)
+    setIsCrawling(false)
+    if (res.ok) setResult(res.data)
+    else setError(res.message)
   }
 
-  const handleImportToCanvas = () => {
-    if (!scrapedResult) return
-    onApplySiteStructure(scrapedResult)
+  const handleImport = () => {
+    if (!result) return
+    onApplySiteStructure(result)
     onOpenChange(false)
   }
 
+  const blocks = result?.suggested_page.content.blocks ?? []
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md sm:max-w-lg border-border bg-card">
+      <DialogContent className="max-w-md border-border bg-card sm:max-w-lg">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <div className="rounded-lg bg-cyan-500/20 p-2 text-cyan-400">
               <Globe className="h-5 w-5" />
             </div>
             <div>
-              <DialogTitle className="text-base font-semibold text-foreground">
-                Import & Recreate Existing Website
-              </DialogTitle>
+              <DialogTitle className="text-base font-semibold text-foreground">Import an existing website</DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
-                Enter an existing ISP URL or competitor site. Domecrawl extracts layout, color palette,
-                and pricing tiers into an editable DomeDesign artboard.
+                Fetches a public https page and extracts its headings, text and images into editable blocks. Nothing is saved until you save the page.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
-          {/* URL Input Bar */}
           <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground font-medium">Website URL</Label>
+            <Label className="text-xs font-medium text-muted-foreground">Website URL (https only)</Label>
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Globe className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   value={targetUrl}
                   onChange={(e) => setTargetUrl(e.target.value)}
-                  placeholder="https://example.com/fibre-promo"
-                  className="pl-8 text-xs font-mono bg-background"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleCrawl()
+                  }}
+                  placeholder="https://example.com/page"
+                  className="bg-background pl-8 font-mono text-xs"
                 />
               </div>
-              <Button
-                onClick={handleCrawl}
-                disabled={isCrawling}
-                className="text-xs bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold h-9"
-              >
+              <Button onClick={handleCrawl} disabled={isCrawling || !targetUrl.trim()} className="h-9 bg-cyan-500 text-xs font-semibold text-cyan-950 hover:bg-cyan-400">
                 {isCrawling ? (
                   <>
                     <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    Inspecting...
+                    Fetching...
                   </>
                 ) : (
                   <>
                     <Search className="mr-1.5 h-3.5 w-3.5" />
-                    Inspect Site
+                    Fetch
                   </>
                 )}
               </Button>
             </div>
           </div>
 
-          {/* Quick Presets */}
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span>Try sample:</span>
-            <button
-              type="button"
-              onClick={() => setTargetUrl("https://coolideas.co.za/promos/fibre-deals")}
-              className="text-cyan-400 hover:underline"
-            >
-              Cool Ideas Deals
-            </button>
-            <span>•</span>
-            <button
-              type="button"
-              onClick={() => setTargetUrl("https://afrihost.com/fibre")}
-              className="text-cyan-400 hover:underline"
-            >
-              Afrihost FTTH
-            </button>
-          </div>
+          {error && (
+            <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
 
-          {/* Scraped Result Preview */}
-          {scrapedResult && (
-            <div className="rounded-lg border border-border bg-secondary/20 p-3.5 space-y-3">
+          {result && (
+            <div className="space-y-3 rounded-lg border border-border bg-secondary/20 p-3.5">
               <div className="flex items-center justify-between border-b border-border/50 pb-2">
                 <div className="flex items-center gap-1.5">
                   <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-                  <span className="text-xs font-semibold text-foreground">DOM Inspection Complete</span>
+                  <span className="text-xs font-semibold text-foreground">Fetched {plainText(result.final_url)}</span>
                 </div>
-                <Badge className="bg-emerald-500/20 text-emerald-400 text-[10px]">
-                  Headless Ready
+                <Badge className="bg-secondary text-[10px] text-muted-foreground">
+                  {result.content.stats.words} words, {result.content.stats.images} images
                 </Badge>
               </div>
-
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-medium text-muted-foreground">Extracted Headline</p>
-                <p className="text-xs font-semibold text-foreground">{scrapedResult.heroHeadline}</p>
-                <p className="text-[11px] text-muted-foreground line-clamp-2">{scrapedResult.heroSubheadline}</p>
+              <div className="space-y-1">
+                <p className="text-[11px] font-medium text-muted-foreground">Title</p>
+                <p className="text-xs font-semibold text-foreground">{plainText(result.suggested_page.title) || "(none found)"}</p>
+                {result.suggested_page.description ? (
+                  <p className="line-clamp-2 text-[11px] text-muted-foreground">{plainText(result.suggested_page.description)}</p>
+                ) : null}
               </div>
-
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="rounded-md border border-border bg-background p-2">
-                  <span className="text-[10px] text-muted-foreground block">Call To Action</span>
-                  <span className="font-medium text-cyan-400">{scrapedResult.ctaText}</span>
-                </div>
-                <div className="rounded-md border border-border bg-background p-2">
-                  <span className="text-[10px] text-muted-foreground block">Detected Operators</span>
-                  <span className="font-medium text-foreground">{scrapedResult.coverageOperators.join(", ")}</span>
-                </div>
-              </div>
-
-              <div>
-                <span className="text-[10px] text-muted-foreground block mb-1.5">Extracted Packages ({scrapedResult.detectedPackages.length})</span>
-                <div className="grid grid-cols-3 gap-2">
-                  {scrapedResult.detectedPackages.map((pkg, i) => (
-                    <div key={i} className="rounded-md border border-border bg-background p-1.5 text-center">
-                      <p className="text-[10px] font-medium text-foreground">{pkg.name}</p>
-                      <p className="text-[9px] text-cyan-400 font-mono">{pkg.speed}</p>
-                      <p className="text-[10px] font-bold text-foreground mt-0.5">{pkg.price}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {blocks.length} content block{blocks.length === 1 ? "" : "s"} will be loaded into the editor.
+                {result.fetch.truncated ? " The page was larger than the fetch limit, so content was truncated." : ""}
+              </p>
             </div>
           )}
         </div>
 
         <DialogFooter className="border-t border-border pt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="text-xs"
-          >
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} className="text-xs">
             Cancel
           </Button>
-          <Button
-            size="sm"
-            disabled={!scrapedResult}
-            onClick={handleImportToCanvas}
-            className="text-xs bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold"
-          >
+          <Button size="sm" disabled={!result || blocks.length === 0} onClick={handleImport} className="bg-cyan-500 text-xs font-semibold text-cyan-950 hover:bg-cyan-400">
             <Sparkles className="mr-1.5 h-3.5 w-3.5" />
-            Generate Artboard on Canvas
+            Load into editor
           </Button>
         </DialogFooter>
       </DialogContent>

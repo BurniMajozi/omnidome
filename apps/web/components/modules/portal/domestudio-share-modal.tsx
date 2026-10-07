@@ -1,266 +1,229 @@
 "use client"
 
-import React, { useState } from "react"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog"
+import React, { useCallback, useEffect, useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { NotConnected } from "@/components/ui/not-connected"
+import { Share2, Copy, Check, Users, Mail, Globe, AlertTriangle } from "lucide-react"
 import {
-  Share2,
-  Copy,
-  Check,
-  Users,
-  UserPlus,
-  Shield,
-  Trash2,
-  Mail,
-  Globe,
-  Sparkles,
-} from "lucide-react"
-
-interface Collaborator {
-  id: string
-  email: string
-  name: string
-  role: "Editor" | "Reviewer" | "Viewer"
-  status: "active" | "invited"
-}
+  loadPortalShares,
+  revokePortalShare,
+  sharePortalPage,
+  type PortalShare,
+  type PortalShareCreated,
+  type ShareEmailStatus,
+} from "@/lib/portal-api"
+import type { Loadable } from "@/lib/service-state"
 
 interface DomeStudioShareModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Saved page id; null when the page has not been saved yet. */
+  pageId: string | null
   pageTitle: string
-  pageSlug: string
 }
 
-export function DomeStudioShareModal({
-  open,
-  onOpenChange,
-  pageTitle,
-  pageSlug,
-}: DomeStudioShareModalProps) {
-  const [inviteEmail, setInviteEmail] = useState("")
-  const [inviteRole, setInviteRole] = useState<"Editor" | "Reviewer" | "Viewer">("Reviewer")
-  const [copiedLink, setCopiedLink] = useState(false)
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([
-    {
-      id: "collab-1",
-      name: "Sipho Dlamini",
-      email: "sipho.marketing@omnidome.io",
-      role: "Editor",
-      status: "active",
-    },
-    {
-      id: "collab-2",
-      name: "Anika Patel",
-      email: "anika.commercial@omnidome.io",
-      role: "Reviewer",
-      status: "active",
-    },
-    {
-      id: "collab-3",
-      name: "Bongani Moyo",
-      email: "bongani.network@omnidome.io",
-      role: "Viewer",
-      status: "invited",
-    },
-  ])
+const EMAIL_STATUS_COPY: Record<ShareEmailStatus, { label: string; tone: string; detail: string }> = {
+  sent: { label: "Email sent", tone: "text-emerald-400", detail: "The recipient was emailed the review link." },
+  suppressed: { label: "Not emailed", tone: "text-amber-400", detail: "This address is on the suppression list, so no email was sent. Share the link yourself." },
+  no_mailbox: { label: "Not emailed", tone: "text-amber-400", detail: "No single active mailbox is configured in Communication, so no email was sent. Share the link yourself." },
+  failed: { label: "Email failed", tone: "text-red-400", detail: "The email could not be sent. The link was still created; share it yourself." },
+}
 
-  const shareUrl = `https://connect.omnidome.io/preview/${pageSlug || "fibre-summer-sprint"}?ref=team_share`
+export function DomeStudioShareModal({ open, onOpenChange, pageId, pageTitle }: DomeStudioShareModalProps) {
+  const [email, setEmail] = useState("")
+  const [hours, setHours] = useState(168)
+  const [message, setMessage] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [created, setCreated] = useState<PortalShareCreated | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [shares, setShares] = useState<Loadable<{ items: PortalShare[] }>>({ state: "loading" })
 
-  const handleCopy = () => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) {
-      navigator.clipboard.writeText(shareUrl)
-      setCopiedLink(true)
-      setTimeout(() => setCopiedLink(false), 2200)
+  const refresh = useCallback(async () => {
+    if (!pageId) return
+    setShares(await loadPortalShares(pageId))
+  }, [pageId])
+
+  useEffect(() => {
+    if (open && pageId) {
+      setShares({ state: "loading" })
+      void refresh()
     }
-  }
+    if (!open) {
+      setCreated(null)
+      setError(null)
+    }
+  }, [open, pageId, refresh])
 
-  const handleInvite = (e: React.FormEvent) => {
+  const handleShare = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!inviteEmail.trim()) return
-
-    const newCollab: Collaborator = {
-      id: `collab-${Date.now()}`,
-      name: inviteEmail.split("@")[0].replace(".", " "),
-      email: inviteEmail.trim(),
-      role: inviteRole,
-      status: "invited",
+    if (!pageId || !email.trim()) return
+    setBusy(true)
+    setError(null)
+    const res = await sharePortalPage(pageId, {
+      recipient_email: email.trim(),
+      expires_in_hours: hours,
+      message: message.trim() || undefined,
+    })
+    setBusy(false)
+    if (!res.ok) {
+      setError(res.message)
+      return
     }
-
-    setCollaborators((prev) => [newCollab, ...prev])
-    setInviteEmail("")
+    setCreated(res.data)
+    setEmail("")
+    setMessage("")
+    void refresh()
   }
 
-  const handleRemove = (id: string) => {
-    setCollaborators((prev) => prev.filter((c) => c.id !== id))
+  const handleCopy = async () => {
+    if (!created || typeof navigator === "undefined" || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(created.share_url)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 2000)
+    } catch {
+      setError("Copy failed. Select the link and copy it manually.")
+    }
   }
+
+  const handleRevoke = async (id: string) => {
+    setError(null)
+    const res = await revokePortalShare(id)
+    if (!res.ok) setError(res.message)
+    void refresh()
+  }
+
+  const status = created ? EMAIL_STATUS_COPY[created.email_status] : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md sm:max-w-lg border-border bg-card">
+      <DialogContent className="max-w-md border-border bg-card sm:max-w-lg">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <div className="rounded-lg bg-cyan-500/20 p-2 text-cyan-400">
               <Share2 className="h-5 w-5" />
             </div>
             <div>
-              <DialogTitle className="text-base font-semibold text-foreground">
-                Share & Collaborate
-              </DialogTitle>
+              <DialogTitle className="text-base font-semibold text-foreground">Share for review</DialogTitle>
               <DialogDescription className="text-xs text-muted-foreground">
-                Invite colleagues from Marketing, Sales, and Network Operations to co-design and review{" "}
-                <span className="font-medium text-foreground">{pageTitle}</span>.
+                Creates an expiring private preview link for <span className="font-medium text-foreground">{pageTitle || "this page"}</span>. Works for drafts.
               </DialogDescription>
             </div>
           </div>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
-          {/* Shareable Link Bar */}
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground font-medium">Live Review Link</Label>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <Globe className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  readOnly
-                  value={shareUrl}
-                  className="pl-8 text-xs font-mono bg-secondary/40 text-muted-foreground"
-                />
-              </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCopy}
-                className="text-xs h-9 font-medium"
-              >
-                {copiedLink ? (
-                  <>
-                    <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-400" />
-                    Copied
-                  </>
-                ) : (
-                  <>
-                    <Copy className="mr-1.5 h-3.5 w-3.5" />
-                    Copy Link
-                  </>
-                )}
-              </Button>
-            </div>
+        {!pageId ? (
+          <div className="rounded-lg border border-dashed border-border bg-secondary/20 p-5 text-center text-xs text-muted-foreground">
+            Save the page first. Only saved pages can be shared.
           </div>
-
-          {/* Invite Employee Form */}
-          <form onSubmit={handleInvite} className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
-            <Label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-              <UserPlus className="h-3.5 w-3.5 text-cyan-400" />
-              Invite Team Member
-            </Label>
-            <div className="flex flex-col sm:flex-row gap-2">
-              <div className="relative flex-1">
-                <Mail className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  type="email"
-                  placeholder="colleague@omnidome.io"
-                  value={inviteEmail}
-                  onChange={(e) => setInviteEmail(e.target.value)}
-                  className="pl-8 text-xs h-9 bg-background"
-                />
-              </div>
-              <div className="flex gap-2">
-                <select
-                  value={inviteRole}
-                  onChange={(e) => setInviteRole(e.target.value as any)}
-                  className="h-9 rounded-md border border-border bg-background px-2.5 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="Editor">Editor</option>
-                  <option value="Reviewer">Reviewer</option>
-                  <option value="Viewer">Viewer</option>
-                </select>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="h-9 text-xs bg-cyan-500 hover:bg-cyan-400 text-cyan-950 font-semibold"
-                >
-                  Invite
-                </Button>
-              </div>
-            </div>
-          </form>
-
-          {/* Active Collaborators */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-                <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                People with Access ({collaborators.length})
+        ) : (
+          <div className="space-y-4 py-2">
+            <form onSubmit={handleShare} className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+              <Label className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                <Mail className="h-3.5 w-3.5 text-cyan-400" />
+                Recipient
               </Label>
-              <Badge variant="outline" className="text-[10px] border-border text-muted-foreground">
-                OmniDome Tenant Domain
-              </Badge>
-            </div>
-
-            <div className="max-h-48 overflow-y-auto space-y-2 divide-y divide-border/40">
-              {collaborators.map((c) => (
-                <div key={c.id} className="pt-2 first:pt-0 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2.5">
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-cyan-500/20 text-cyan-400 font-semibold text-[11px]">
-                      {c.name.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <p className="font-medium text-foreground leading-tight">{c.name}</p>
-                      <p className="text-[11px] text-muted-foreground">{c.email}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <Badge
-                      variant="secondary"
-                      className={`text-[10px] px-2 py-0.5 ${
-                        c.role === "Editor"
-                          ? "bg-purple-500/20 text-purple-300"
-                          : c.role === "Reviewer"
-                          ? "bg-blue-500/20 text-blue-300"
-                          : "bg-secondary text-muted-foreground"
-                      }`}
-                    >
-                      {c.role}
-                    </Badge>
-
-                    {c.status === "invited" && (
-                      <span className="text-[10px] text-amber-400 italic">Pending</span>
-                    )}
-
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-6 w-6 text-muted-foreground hover:text-red-400"
-                      onClick={() => handleRemove(c.id)}
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </Button>
-                  </div>
+              <Input type="email" required placeholder="name@example.com" value={email} onChange={(e) => setEmail(e.target.value)} className="h-9 bg-background text-xs" />
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Label className="text-[11px] text-muted-foreground">Expires after (hours, 1 to 720)</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={hours}
+                    onChange={(e) => setHours(Math.min(720, Math.max(1, Number(e.target.value) || 1)))}
+                    className="h-9 bg-background text-xs"
+                  />
                 </div>
-              ))}
+              </div>
+              <Input placeholder="Optional message" value={message} onChange={(e) => setMessage(e.target.value)} className="h-9 bg-background text-xs" maxLength={500} />
+              <Button type="submit" size="sm" disabled={busy || !email.trim()} className="h-9 w-full bg-cyan-500 text-xs font-semibold text-cyan-950 hover:bg-cyan-400">
+                {busy ? "Creating link..." : "Create link and email recipient"}
+              </Button>
+            </form>
+
+            {error && (
+              <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {created && status && (
+              <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+                <p className={`text-xs font-semibold ${status.tone}`}>
+                  {status.label} ({created.recipient_email})
+                </p>
+                <p className="text-[11px] text-muted-foreground">{status.detail}</p>
+                <Label className="text-[11px] text-muted-foreground">Review link (shown only now; it cannot be retrieved later)</Label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <Globe className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <Input readOnly value={created.share_url} onFocus={(e) => e.currentTarget.select()} className="bg-secondary/40 pl-8 font-mono text-xs text-muted-foreground" />
+                  </div>
+                  <Button size="sm" variant="outline" onClick={handleCopy} className="h-9 text-xs font-medium">
+                    {copied ? (
+                      <>
+                        <Check className="mr-1.5 h-3.5 w-3.5 text-emerald-400" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="mr-1.5 h-3.5 w-3.5" />
+                        Copy
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                <Users className="h-3.5 w-3.5" />
+                Existing links
+              </Label>
+              {shares.state !== "ready" ? (
+                <NotConnected loadable={shares} service="Portal Builder" onRetry={() => void refresh()} />
+              ) : shares.data.items.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">No review links created for this page yet.</p>
+              ) : (
+                <div className="max-h-48 space-y-2 divide-y divide-border/40 overflow-y-auto">
+                  {shares.data.items.map((s) => (
+                    <div key={s.id} className="flex items-center justify-between gap-2 pt-2 text-xs first:pt-0">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-foreground">{s.recipient_email}</p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {s.view_count} view{s.view_count === 1 ? "" : "s"} · expires {new Date(s.expires_at).toLocaleString()}
+                          {s.email_status ? ` · email ${s.email_status}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <Badge variant="secondary" className={`px-2 py-0.5 text-[10px] ${s.active ? "bg-emerald-500/20 text-emerald-300" : "text-muted-foreground"}`}>
+                          {s.revoked_at ? "Revoked" : s.active ? "Active" : "Expired"}
+                        </Badge>
+                        {s.active && (
+                          <Button variant="outline" size="sm" className="h-6 px-2 text-[11px]" onClick={() => void handleRevoke(s.id)}>
+                            Revoke
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
-        </div>
+        )}
 
         <DialogFooter className="border-t border-border pt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onOpenChange(false)}
-            className="text-xs"
-          >
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} className="text-xs">
             Close
           </Button>
         </DialogFooter>
