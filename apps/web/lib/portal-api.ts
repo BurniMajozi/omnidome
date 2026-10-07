@@ -265,8 +265,15 @@ export interface PortalDesignDraft {
   blocks: PortalBlock[]
   theme: Record<string, unknown>
 }
-export const suggestPortalDesign = (prompt: string, current?: PortalDesignDraft, selected_section?: number) =>
-  portalWrite<{ message: string; draft: PortalDesignDraft }>("/design/suggest", "POST", { prompt, current, selected_section }, 75_000)
+export interface PortalDesignContext {
+  brief: string
+  messages: Array<{ role: "user" | "assistant"; text: string }>
+  generated: boolean
+}
+export const loadPortalDesignContext = (id: string) => read<PortalDesignContext>(`/design/context/${encodeURIComponent(id)}`)
+export const savePortalDesignContext = (id: string, context: PortalDesignContext) => portalWrite<PortalDesignContext>(`/design/context/${encodeURIComponent(id)}`, "PUT", context)
+export const suggestPortalDesign = (prompt: string, current?: PortalDesignDraft, selected_section?: number, context?: PortalDesignContext) =>
+  portalWrite<{ message: string; warnings: string[]; draft: PortalDesignDraft }>("/design/suggest", "POST", { prompt, current, selected_section, context }, 75_000)
 
 export function loadPortalPages(opts: { page?: number; pageSize?: number; pageType?: PortalPageType; status?: PortalPageStatus; search?: string } = {}) {
   const q = new URLSearchParams()

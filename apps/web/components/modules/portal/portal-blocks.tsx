@@ -2,7 +2,7 @@ import type { ReactNode } from "react"
 import type { PortalBlock, PortalPageContent } from "@/lib/portal-api"
 
 export function plainText(value: unknown): string {
-  return typeof value === "string" ? value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : ""
+  return typeof value === "string" ? value.replace(/<[^>]*>/g, " ").replace(/\r\n?/g, "\n").replace(/[^\S\n]+/g, " ").trim() : ""
 }
 export function safeImageSrc(value: unknown): string | null {
   if (typeof value !== "string") return null
@@ -33,7 +33,7 @@ export function PortalBlockView({ block: b, compact = false, theme, renderText }
   const surface = dark ? "border-slate-700 bg-slate-900" : "border-slate-200 bg-slate-50"
   const accent = accents[String(theme?.accent)] || accents.cyan
   const text = (field: string, value: unknown, cls: string) => renderText
-    ? renderText(field, plainText(value), cls) : <span className={cls}>{plainText(value)}</span>
+    ? renderText(field, plainText(value), `${cls} whitespace-pre-wrap`) : <span className={`${cls} whitespace-pre-wrap`}>{plainText(value)}</span>
   const cta = b.cta_label ? <a href={safeLink(b.cta_url)} className={`inline-flex max-w-full items-center justify-center rounded-md px-5 py-3 text-sm font-semibold ${accent}`}>{text("cta_label", b.cta_label, "break-words")}</a> : null
   const img = safeImageSrc(b.image)
   const padding = compact ? "px-5 py-8" : "px-6 py-10 sm:px-10 sm:py-14"

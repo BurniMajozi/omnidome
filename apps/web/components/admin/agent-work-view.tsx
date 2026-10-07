@@ -141,17 +141,23 @@ export function AgentWorkView({ agents }: { agents: AgentInfo[] }) {
   // The list endpoint returns summaries only (no iteration history, result or full objective).
   // Load the full record for the selected run and keep it fresh with the list polling.
   const [detail, setDetail] = useState<AgentJob | null>(null)
-  const selectedStatus = jobs.find((job) => job.id === selected)?.status
+  const [detailError, setDetailError] = useState("")
+  const [detailRetry, setDetailRetry] = useState(0)
   useEffect(() => {
     if (!selected) { setDetail(null); return }
     let cancelled = false
-    api<AgentJob>(`/jobs/${selected}`).then((full) => { if (!cancelled) setDetail(full) }).catch(() => {})
+    setDetailError("")
+    api<AgentJob>(`/jobs/${selected}`).then((full) => { if (!cancelled) setDetail(full) }).catch((err) => {
+      if (!cancelled) { setDetail(null); setDetailError(err instanceof Error ? err.message : "Could not load full run detail") }
+    })
     return () => { cancelled = true }
-  }, [selected, selectedStatus])
+  }, [selected, jobs, detailRetry])
+  useEffect(() => { setEditing(false); setDraftObjective("") }, [selected])
+  const fullDetailReady = !!detail && detail.id === selected && !detailError
   const chosen = useMemo(() => {
     const summary = jobs.find((job) => job.id === selected)
     if (!summary) return undefined
-    return detail && detail.id === selected ? { ...summary, ...detail } : { ...summary, iteration_history: [] as AgentJob["iteration_history"] }
+    return detail && detail.id === selected ? { ...detail, ...summary, objective: detail.objective } : { ...summary, iteration_history: [] as AgentJob["iteration_history"] }
   }, [jobs, selected, detail])
   const needAttention = jobs.filter((job) => attention.has(job.status))
   const inProgress = jobs.filter((job) => active.has(job.status))
@@ -192,6 +198,7 @@ export function AgentWorkView({ agents }: { agents: AgentInfo[] }) {
   }
 
   async function reviseOrRetry(job: AgentJob, retry: boolean) {
+    if (!fullDetailReady || detail?.id !== job.id) { setActionError("Load the full run detail before editing its objective."); return }
     setBusy(job.id)
     setActionError("")
     try {
@@ -299,9 +306,10 @@ export function AgentWorkView({ agents }: { agents: AgentInfo[] }) {
     {chosen && <Card><CardHeader className="flex flex-wrap items-center justify-between gap-3"><div><CardTitle className="text-base">Run detail</CardTitle><p className="mt-1 text-xs text-muted-foreground">{chosen.id}</p></div><div className="flex flex-wrap gap-2">
       {(["queued", "running"] as JobStatus[]).includes(chosen.status) && <Button size="sm" variant="outline" disabled={busy === chosen.id} onClick={() => void changeJob(chosen.id, "pause")}><PauseCircle className="mr-1 h-4 w-4" />Pause</Button>}
       {(["paused", "interrupted", "failed", "awaiting_hitl"] as JobStatus[]).includes(chosen.status) && <Button size="sm" variant="outline" disabled={busy === chosen.id} onClick={() => void changeJob(chosen.id, "resume")}><PlayCircle className="mr-1 h-4 w-4" />Resume</Button>}
-      {((chosen.status === "queued" || chosen.status === "paused") && !chosen.total_tokens || (["awaiting_review", "max_iterations", "failed", "stopped_by_ceiling", "completed"] as JobStatus[]).includes(chosen.status)) && <Button size="sm" variant="outline" disabled={busy === chosen.id} onClick={() => { setDraftObjective(chosen.objective); setEditing(!editing) }}><Pencil className="mr-1 h-4 w-4" />{chosen.status === "queued" || chosen.status === "paused" ? "Edit prompt" : "Revise & retry"}</Button>}
+      {((chosen.status === "queued" || chosen.status === "paused") && !chosen.total_tokens || (["awaiting_review", "max_iterations", "failed", "stopped_by_ceiling", "completed"] as JobStatus[]).includes(chosen.status)) && <Button size="sm" variant="outline" disabled={busy === chosen.id || !fullDetailReady} onClick={() => { setDraftObjective(chosen.objective); setEditing(!editing) }}><Pencil className="mr-1 h-4 w-4" />{chosen.status === "queued" || chosen.status === "paused" ? "Edit prompt" : "Revise & retry"}</Button>}
       {(["awaiting_review", "max_iterations"] as JobStatus[]).includes(chosen.status) && <Button size="sm" disabled={busy === chosen.id} onClick={() => void changeJob(chosen.id, "accept")}><CheckCircle2 className="mr-1 h-4 w-4" />Accept output</Button>}
     </div></CardHeader><CardContent className="space-y-4 text-sm">
+      {detailError ? <div role="alert"><p>{detailError}</p><Button size="sm" variant="outline" onClick={() => setDetailRetry((n) => n + 1)}>Retry full detail</Button></div> : !fullDetailReady && <p role="status">Loading full run detail…</p>}
       <div className="flex flex-wrap gap-4 text-xs"><span>Status: <strong>{statusLabel(chosen.status)}</strong></span><span>Steps: {chosen.total_steps}</span><span>Tokens: {chosen.total_tokens.toLocaleString("en-ZA")}</span><span>Model: {chosen.model_calls?.length ? [...new Set(chosen.model_calls.map((call) => `${call.provider} · ${call.model}`))].join(", ") : "not reported for this run"}</span></div>
       <div className="rounded-md border p-3 text-xs space-y-1"><p>Total cost: {!chosen.model_calls?.length ? `${money(chosen.actual_cost_usd ?? chosen.estimated_cost_usd)} legacy recorded total; full provider and JEV breakdown unavailable` : chosen.cost_source === "provider" ? `${money(chosen.actual_cost_usd ?? 0)} reported` : `${money(chosen.estimated_cost_usd)} model estimate; provider cost incomplete`} · Run ceiling: {money(chosen.max_cost_usd)}</p><p>JEV review: {!chosen.jev_usage ? "Usage and cost unavailable for this historical run" : <>{chosen.jev_usage.tokens ? `${chosen.jev_usage.tokens.toLocaleString("en-ZA")} tokens` : "tokens unreported"} · {chosen.jev_usage.cost_reported === false ? "JEV provider cost unreported" : chosen.jev_usage.reported_cost_usd != null ? `${money(chosen.jev_usage.reported_cost_usd)} reported` : "no JEV charge reported"}</>}</p><p className="text-muted-foreground">Provider-reported zero can mean a free model. An estimate uses generic rates and is not a charge.</p></div>
       <div className="rounded-md border p-3 text-xs"><strong>Context used:</strong> Memory {chosen.context_used?.memory_status || "not recorded"} · Approved KPI {chosen.context_used?.kpi_status || "not recorded"} · {(chosen.context_used?.skills || []).length} skills ({(chosen.context_used?.skills || []).join(", ") || "none"}) · {(chosen.context_used?.tools_available || []).length} tools available. {chosen.parent_job_id && <span>Retry of {chosen.parent_job_id}.</span>} {(chosen.context_used?.architecture_hints || []).map((hint) => <p key={hint.source_path} className="mt-1">Component match: {hint.name} · <code>{hint.source_path}</code> (location hint, not code inspection)</p>)}<p className="mt-1 text-muted-foreground">Durable work runs through the job worker; AG-UI streaming is used by Chat. Reviewed output is written to tenant memory after acceptance.</p></div>

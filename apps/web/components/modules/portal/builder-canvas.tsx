@@ -11,7 +11,7 @@ function EditableText({ value, field, className, onChange }: { value: string; fi
   useEffect(() => { if (ref.current && document.activeElement !== ref.current) ref.current.textContent = value }, [value])
   return <span ref={ref} role="textbox" aria-label={`Edit ${field.replaceAll(".", " ")}`} aria-multiline="true" contentEditable suppressContentEditableWarning
     className={`${className} min-h-6 rounded-sm outline-none focus:ring-2 focus:ring-cyan-500 empty:before:content-['Add_text'] empty:before:opacity-40`}
-    onBlur={(e) => { const updated = e.currentTarget.textContent || ""; if (updated !== value) onChange(updated) }}
+    onBlur={(e) => { const updated = e.currentTarget.innerText; if (updated !== value) onChange(updated) }}
     onPaste={(e) => { e.preventDefault(); const selection = window.getSelection(); if (!selection?.rangeCount) return; const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(e.clipboardData.getData("text/plain")); range.insertNode(node); range.setStartAfter(node); range.collapse(true); selection.removeAllRanges(); selection.addRange(range) }} />
 }
 export function BuilderCanvas({ blocks, theme, selected, onSelect, onField, onMove, onRemove, mobile, disabled }: {

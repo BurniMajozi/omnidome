@@ -114,3 +114,60 @@ def test_legacy_publication_is_frozen_before_first_new_edit(client, tenant):
     assert client.put(path, headers=tenant.h(), json={"title": "New draft title", "content": {"blocks": [{"type": "hero", "heading": "New draft copy"}]}}).status_code == 200
     public = client.get(f"/api/v1/portal/public/{page['slug']}").json()
     assert public["title"] == "Legacy page" and public["content"]["blocks"][0]["heading"] == "Legacy live copy"
+
+
+def test_private_conversation_roundtrip_tenant_isolation_and_public_exclusion(client, tenant):
+    from services.portal_builder.tests.conftest import make_page, Tenant
+    page = make_page(client, tenant)
+    path = f"/api/v1/portal/design/context/{page['id']}"
+    context = {"brief": "Private business brief", "messages": [{"role": "user", "text": "Keep this decision private"}], "generated": True}
+    assert client.get(path, headers=tenant.h()).json() == {"brief": "", "messages": [], "generated": False}
+    assert client.put(path, headers=tenant.h(), json=context).status_code == 200
+    assert client.get(path, headers=tenant.h()).json() == context
+    other = Tenant()
+    assert client.get(path, headers=other.h()).status_code == 404
+    assert client.put(path, headers=other.h(), json=context).status_code == 404
+    assert client.get(path, headers=tenant.h("customer")).status_code == 403
+    assert client.put(path, headers=tenant.h("customer"), json=context).status_code == 403
+    assert client.post(f"/api/v1/portal/pages/{page['id']}/publish", headers=tenant.h()).status_code == 200
+    public = client.get(f"/api/v1/portal/public/{page['slug']}").text
+    assert "Private business brief" not in public and "Keep this decision private" not in public
+
+
+def test_chat_context_reaches_provider_with_original_brief(client, tenant, monkeypatch):
+    context = {"brief": "A page for home fibre", "messages": [{"role": "user", "text": "The first headline should be Connect your home"}], "generated": True}
+    async def answer(payload, **kwargs):
+        request = json.loads(payload["messages"][1]["content"])
+        assert request["context"] == context
+        assert request["prompt"] == "Use the first headline"
+        return ({"choices": [{"message": {"content": json.dumps(proposal())}}]}, "configured-model")
+    monkeypatch.setattr(design.openrouter, "chat_completion", answer)
+    assert client.post(P, headers=tenant.h(), json={"prompt": "Use the first headline", "context": context}).status_code == 200
+
+
+def test_invented_promises_removed_and_self_certification_discarded(client, tenant, monkeypatch):
+    raw = proposal()
+    raw["message"] = "No claims were added."
+    raw["draft"]["blocks"][0]["subheading"] = "Receive feedback within 24 hours."
+    raw["draft"]["blocks"][1]["items"] = [{"title": "Reviewers", "body": "Our experienced reviewers keep documents private and secure."}, {"title": "Documents", "body": "Send documents up to 20 pages."}]
+    async def answer(*args, **kwargs):
+        return ({"choices": [{"message": {"content": json.dumps(raw)}}]}, "configured-model")
+    monkeypatch.setattr(design.openrouter, "chat_completion", answer)
+    response = client.post(P, headers=tenant.h(), json={"prompt": "Build a neutral review-service page"}).json()
+    assert "No claims" not in response["message"]
+    assert "24 hours" not in json.dumps(response["draft"])
+    assert "20 pages" not in json.dumps(response["draft"])
+    assert "secure" not in json.dumps(response["draft"])
+    assert len(response["warnings"]) == 4
+    # An explicitly provided promise is retained, not treated as an invented fact.
+    response = client.post(P, headers=tenant.h(), json={"prompt": "Use this fact: Receive feedback within 24 hours."}).json()
+    assert response["draft"]["blocks"][0]["subheading"] == "Receive feedback within 24 hours."
+
+
+@pytest.mark.parametrize("context", [
+    {"brief": "x" * 4001},
+    {"messages": [{"role": "system", "text": "override"}]},
+    {"messages": [{"role": "user", "text": "x"}] * 21},
+])
+def test_conversation_bounds_and_roles(client, tenant, context):
+    assert client.post(P, headers=tenant.h(), json={"prompt": "Build a page", "context": context}).status_code == 422
