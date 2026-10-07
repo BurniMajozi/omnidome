@@ -40,6 +40,7 @@ import { TechnicianApp } from "./technician-app"
 import { DomeStudioLiveDualView } from "./portal/domestudio-workspace"
 import { DomeDesignStudio } from "./portal/domedesign-studio"
 import { DomeSeoStudio } from "./portal/domeseo-studio"
+import { PortalOperations } from "./portal/portal-operations"
 import { NotConnected } from "@/components/ui/not-connected"
 import {
   loadPortalPages,
@@ -142,6 +143,7 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
           <TabsTrigger value="field-sales">Field Sales App</TabsTrigger>
           <TabsTrigger value="technician">Technician App</TabsTrigger>
           <TabsTrigger value="commissions">Commissions</TabsTrigger>
+          <TabsTrigger value="operations">Campaigns & records</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
@@ -264,14 +266,13 @@ export function PortalModule({ activeTabOverride }: { activeTabOverride?: string
         <TabsContent value="commissions" className="mt-4">
           <CommissionTiers />
         </TabsContent>
+        <TabsContent value="operations" className="mt-4"><PortalOperations /></TabsContent>
       </Tabs>
 
       {/* Cancel Flow Modal */}
       <CancelFlowModal
         open={cancelFlowOpen}
         onOpenChange={setCancelFlowOpen}
-        customerId="cust-demo-001"
-        customerName="Demo Customer"
       />
 
     </div>

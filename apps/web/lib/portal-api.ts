@@ -300,6 +300,21 @@ export const lookupPortalKeywords = (keywords: string[]) =>
   portalWrite<PortalKeywordResult>("/seo/keywords", "POST", { keywords })
 export const loadPortalAnalytics = (days = 30) => read<PortalAnalyticsSummary>(`/analytics/summary?days=${days}`)
 
+export interface PortalCampaign {
+  id: string; name: string; page_id: string | null; campaign_type: string; status: string
+  budget_zar: number; spent_zar: number; created_at: string; stats: Record<string, unknown> | null
+}
+export interface PortalSeoProfile {
+  id: string; name: string; target_keywords: string[]; sitemap_enabled: boolean
+  robots_txt: string | null; structured_data: Record<string, unknown> | null; analytics_id: string | null
+  updated_at: string
+}
+export const loadPortalCampaigns = (page = 1) => read<{items: PortalCampaign[]; total: number; pages: number}>(`/campaigns?page=${page}&page_size=20`)
+export const createPortalCampaign = (input: {name: string; page_id?: string; campaign_type: string; budget_zar: number; content: Record<string, unknown>}) => portalWrite<PortalCampaign>("/campaigns", "POST", input)
+export const transitionPortalCampaign = (id: string, action: "launch" | "complete") => portalWrite<unknown>(`/campaigns/${encodeURIComponent(id)}/${action}`, "POST")
+export const loadPortalSeoProfiles = () => read<PortalSeoProfile[]>("/seo-profiles")
+export const createPortalSeoProfile = (input: Omit<PortalSeoProfile, "id" | "updated_at">) => portalWrite<PortalSeoProfile>("/seo-profiles", "POST", input)
+
 /** URL path (relative to the web origin) where a published page is served. */
 export function portalPublicPath(slug: string): string {
   return `/portal/${encodeURIComponent(slug)}`

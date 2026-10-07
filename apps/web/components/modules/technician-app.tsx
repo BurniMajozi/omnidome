@@ -111,6 +111,7 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
   const [notes, setNotes] = useState("")
   const [speedTest, setSpeedTest] = useState<SpeedTestResult | null>(null)
   const [runningSpeed, setRunningSpeed] = useState(false)
+  const [workError, setWorkError] = useState("")
   const [partsUsed, setPartsUsed] = useState<Array<{ product_id: string; quantity: number }>>([])
   const [partSku, setPartSku] = useState("")
   const [partQty, setPartQty] = useState("1")
@@ -119,7 +120,7 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
   const [showDocs, setShowDocs] = useState(false)
 
   useEffect(() => {
-    technicianApi.getCustomerDevices(job.customer_id).then(setDevices).catch(() => {})
+    technicianApi.getCustomerDevices(job.customer_id).then(setDevices).catch(() => setWorkError("Customer devices could not be loaded."))
   }, [job.customer_id])
 
   const handleStart = async () => {
@@ -129,8 +130,9 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
 
   const handleSpeedTest = async () => {
     setRunningSpeed(true)
+    setWorkError(""); setSpeedTest(null)
     try { const r = await technicianApi.runSpeedTest(); setSpeedTest(r) }
-    catch { setSpeedTest({ download_mbps: 0, upload_mbps: 0, latency_ms: 0, jitter_ms: 0, timestamp: new Date().toISOString() }) }
+    catch { setWorkError("Speed test failed. No measurement was recorded.") }
     finally { setRunningSpeed(false) }
   }
 
@@ -157,6 +159,7 @@ function JobWorkPanel({ job, onBack, onComplete }: { job: TechJob; onBack: () =>
 
   return (
     <div className="space-y-4">
+      {workError && <p role="alert" className="text-sm text-red-400">{workError}</p>}
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" onClick={onBack}><ArrowLeft className="h-4 w-4" /></Button>
         <div className="flex-1">
@@ -307,20 +310,22 @@ export function TechnicianApp() {
   const [tab, setTab] = useState("queue")
   const [jobs, setJobs] = useState<TechJob[]>([])
   const [selectedJob, setSelectedJob] = useState<TechJob | null>(null)
-  const [stats, setStats] = useState({ jobs_today: 0, jobs_week: 0, avg_resolution_min: 0, fcr_rate: 0, customer_rating: 0, revenue_generated: 0 })
+  const [stats, setStats] = useState<{jobs_today: number; jobs_week: number; avg_resolution_min: number | null; fcr_rate: number; customer_rating: number | null; revenue_generated: number | null}>({ jobs_today: 0, jobs_week: 0, avg_resolution_min: null, fcr_rate: 0, customer_rating: null, revenue_generated: null })
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState("")
   const [filter, setFilter] = useState<"ALL" | "OPEN" | "IN_PROGRESS">("ALL")
 
   const load = useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError("")
       const [j, s] = await Promise.all([
         technicianApi.getMyJobs(),
         technicianApi.getMyStats(),
       ])
       setJobs(j)
       if (s) setStats(s)
-    } catch (e) { console.error(e) }
+    } catch (e) { setLoadError(e instanceof Error ? e.message : "Technician data is unavailable") }
     finally { setLoading(false) }
   }, [])
 
@@ -352,6 +357,8 @@ export function TechnicianApp() {
     return <JobWorkPanel job={selectedJob} onBack={() => setSelectedJob(null)} onComplete={() => { setSelectedJob(null); load() }} />
   }
 
+  if (loadError) return <div role="alert" className="space-y-3 rounded-lg border p-4"><p className="text-sm break-words">{loadError}</p><Button onClick={() => void load()}>Retry</Button></div>
+  if (loading) return <p>Loading technician data…</p>
   return (
     <div className="space-y-4">
       {/* Stats header */}
@@ -362,11 +369,11 @@ export function TechnicianApp() {
         </CardContent></Card>
         <Card className="border-border bg-card"><CardContent className="p-3 text-center">
           <Timer className="h-4 w-4 text-blue-400 mx-auto mb-1" />
-          <p className="text-lg font-bold">{stats.avg_resolution_min}m</p><p className="text-[10px] text-muted-foreground">Avg Time</p>
+          <p className="text-lg font-bold">{stats.avg_resolution_min === null ? "—" : `${stats.avg_resolution_min}m`}</p><p className="text-[10px] text-muted-foreground">Avg Time</p>
         </CardContent></Card>
         <Card className="border-border bg-card"><CardContent className="p-3 text-center">
           <Star className="h-4 w-4 text-amber-400 mx-auto mb-1" />
-          <p className="text-lg font-bold">{stats.customer_rating}</p><p className="text-[10px] text-muted-foreground">Rating</p>
+          <p className="text-lg font-bold">{stats.customer_rating ?? "—"}</p><p className="text-[10px] text-muted-foreground">Rating</p>
         </CardContent></Card>
       </div>
 
@@ -413,12 +420,12 @@ export function TechnicianApp() {
                 <p className="text-xs text-muted-foreground">FCR Rate</p>
               </div>
               <div className="text-center bg-secondary/30 rounded-lg p-3">
-                <p className="text-2xl font-bold text-amber-400">R{stats.revenue_generated.toLocaleString()}</p>
+                <p className="text-2xl font-bold text-amber-400">{stats.revenue_generated === null ? "—" : `R${stats.revenue_generated.toLocaleString()}`}</p>
                 <p className="text-xs text-muted-foreground">Revenue Generated</p>
               </div>
               <div className="text-center bg-secondary/30 rounded-lg p-3">
                 <div className="flex items-center justify-center gap-1">
-                  <p className="text-2xl font-bold text-amber-400">{stats.customer_rating}</p>
+                  <p className="text-2xl font-bold text-amber-400">{stats.customer_rating ?? "—"}</p>
                   <span className="text-amber-400">★</span>
                 </div>
                 <p className="text-xs text-muted-foreground">Customer Rating</p>

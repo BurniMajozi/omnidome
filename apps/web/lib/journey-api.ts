@@ -16,10 +16,11 @@ async function fetchJourney<T>(path: string, options?: RequestInit): Promise<T> 
       ...options?.headers,
     },
     cache: "no-store",
+    signal: AbortSignal.timeout(20000),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || `Journey API error: ${res.status}`)
+    throw new Error(typeof err.detail === "string" ? err.detail : err.error || `Journey API error: ${res.status}`)
   }
   return res.json()
 }

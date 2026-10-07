@@ -20,7 +20,7 @@ export function PublicPortalForm({ slug }: { slug: string }) {
         method: "POST", credentials: "omit", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(20_000),
         body: JSON.stringify({ slug, consent: true, consent_text: consentText, website: String(form.get("website") || ""),
           form_data: { name: form.get("name"), email: form.get("email"), phone: form.get("phone"), message: form.get("message") },
-          utm_source: query.get("utm_source"), utm_medium: query.get("utm_medium"), utm_campaign: query.get("utm_campaign"),
+          utm_source: query.get("utm_source")?.slice(0, 100), utm_medium: query.get("utm_medium")?.slice(0, 100), utm_campaign: query.get("utm_campaign")?.slice(0, 200),
           referrer: document.referrer ? new URL(document.referrer).origin : null }),
       })
       const result = await response.json().catch(() => null)

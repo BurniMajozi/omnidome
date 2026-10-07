@@ -338,7 +338,7 @@ class CampaignCreate(BaseModel):
     target_segment: Optional[Dict[str, Any]] = None
     schedule: Optional[Dict[str, Any]] = None
     content: Dict[str, Any] = Field(default_factory=dict)
-    budget_zar: float = 0
+    budget_zar: float = Field(0, ge=0, allow_inf_nan=False)
 
 
 class CampaignUpdate(BaseModel):
@@ -1021,6 +1021,12 @@ async def analytics_summary(ctx: AuthContext = Depends(get_auth_context), days: 
 @app.post("/api/v1/portal/campaigns", response_model=CampaignRead, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("write"))])
 async def create_campaign(body: CampaignCreate, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as session:
+        if body.page_id:
+            page = (await session.execute(select(PortalPage.id).where(
+                PortalPage.id == body.page_id, PortalPage.tenant_id == ctx.tenant_id,
+            ))).scalar_one_or_none()
+            if not page:
+                raise HTTPException(404, "Page not found")
         campaign = PortalCampaign(
             tenant_id=ctx.tenant_id, name=body.name, page_id=body.page_id,
             campaign_type=body.campaign_type, target_segment=body.target_segment,

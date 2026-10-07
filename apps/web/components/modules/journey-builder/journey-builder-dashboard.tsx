@@ -27,7 +27,6 @@ import { supabase, getSessionSafe } from "@/lib/supabase/client"
 
 const COLORS = ["#4ade80", "#60a5fa", "#a855f7", "#f97316", "#ef4444", "#14b8a6", "#eab308", "#ec4899"]
 
-const FALLBACK_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 // ---------------------------------------------------------------------------
 // Empty rule template
@@ -563,7 +562,7 @@ function JourneyBuilder({
 // Main Dashboard Component
 // ---------------------------------------------------------------------------
 export function JourneyBuilderDashboard() {
-  const [tenantId, setTenantId] = useState(FALLBACK_TENANT_ID)
+  const [tenantId, setTenantId] = useState("")
   const [tab, setTab] = useState("journeys")
   const [journeys, setJourneys] = useState<Journey[]>([])
   const [offers, setOffers] = useState<Offer[]>([])
@@ -578,19 +577,21 @@ export function JourneyBuilderDashboard() {
 
   // Resolve tenant ID from Supabase session (falls back to dev default)
   useEffect(() => {
-    const resolve = (session: Parameters<Parameters<typeof supabase.auth.onAuthStateChange>[0]>[1]) => {
-      setTenantId(
-        session?.user?.user_metadata?.tenant_id ??
-        session?.user?.app_metadata?.tenant_id ??
-        FALLBACK_TENANT_ID
-      )
+    let cancelled = false
+    const resolve = () => {
+      void fetch("/api/journey-engine/context", {cache: "no-store", signal: AbortSignal.timeout(20000)}).then(async response => {
+        if (!response.ok) throw new Error("Session could not be verified")
+        const context = await response.json()
+        if (!cancelled) setTenantId(context.tenant_id || "")
+      }).catch(() => {if (!cancelled) setTenantId("")})
     }
-    getSessionSafe().then(({ data }) => resolve(data.session))
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => resolve(session))
-    return () => listener.subscription.unsubscribe()
+    getSessionSafe().then(resolve)
+    const { data: listener } = supabase.auth.onAuthStateChange(resolve)
+    return () => {cancelled = true; listener.subscription.unsubscribe()}
   }, [])
 
   const loadData = useCallback(async () => {
+    if (!tenantId) {setError("A verified tenant is required to load retention journeys."); setIsOffline(true); return}
     const safe = <T,>(p: Promise<T>) => p.catch((): null => null)
     setLoading(true)
     setError(null)
@@ -617,7 +618,7 @@ export function JourneyBuilderDashboard() {
       setRoi(rData?.roi ?? [])
     } catch (err: any) {
       console.error("Failed to load journey data:", err)
-      setError("Retention journey service is currently unreachable. Operating in offline simulation mode.")
+      setError(err instanceof Error ? err.message : "Retention journey data could not be loaded.")
       setIsOffline(true)
       setJourneys([])
       setOffers([])
@@ -749,6 +750,7 @@ export function JourneyBuilderDashboard() {
     )
   }
 
+  if (isOffline) return <div role="alert" className="space-y-3 rounded-lg border p-4"><p>{error}</p><Button onClick={() => void loadData()}>Retry journeys</Button></div>
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">

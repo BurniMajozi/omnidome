@@ -1,239 +1,54 @@
 "use client"
-
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { X, AlertTriangle, Gift, CheckCircle, XCircle } from "lucide-react"
-
-interface CancelOffer {
-  type: string
-  label: string
-  description: string
-  value: string
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { CustomerPicker, type PickedCustomer } from "./billing/invoicing/doc-editor"
+import { inputClass } from "./billing/shared"
+import { fieldSalesApi } from "@/lib/mobile-field-sales-api"
+type Offer = {name?: string; offer_type?: string; description?: string; parameters?: Record<string, unknown>}
+type Trigger = {matched: boolean; cancel_event_id?: string; offer?: Offer | null; message?: string}
+const reasons = ["price", "service", "moving", "competitor", "unused", "other"]
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`/api/journey-engine/cancel/${path}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body), signal: AbortSignal.timeout(20000)})
+  const data = await response.json()
+  if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : data.error || `Request failed (${response.status})`)
+  return data
 }
-
-interface CancelFlowModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  customerId?: string
-  customerName?: string
-}
-
-const CANCEL_REASONS = [
-  { value: "price", label: "Too expensive" },
-  { value: "service", label: "Service quality issues" },
-  { value: "moving", label: "Moving area" },
-  { value: "competitor", label: "Switching to competitor" },
-  { value: "unused", label: "Not using the service" },
-  { value: "other", label: "Other" },
-]
-
-export function CancelFlowModal({
-  open,
-  onOpenChange,
-  customerId = "cust-demo-001",
-  customerName = "Demo Customer",
-}: CancelFlowModalProps) {
-  const [step, setStep] = useState<"reason" | "offer" | "result">("reason")
-  const [reason, setReason] = useState("")
-  const [offer, setOffer] = useState<CancelOffer | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<"accepted" | "rejected" | null>(null)
-
-  const handleTriggerJourney = async () => {
-    if (!reason) return
-    setLoading(true)
-    setStep("offer")
-
+export function CancelFlowModal({open, onOpenChange, customerId, customerName}: {open: boolean; onOpenChange: (open: boolean) => void; customerId?: string; customerName?: string}) {
+  const [customer, setCustomer] = useState<PickedCustomer | null>(null)
+  const [reason, setReason] = useState(""); const [trigger, setTrigger] = useState<Trigger | null>(null)
+  const [busy, setBusy] = useState(false); const [error, setError] = useState("")
+  const [decision, setDecision] = useState<"accept" | "reject" | null>(null)
+  useEffect(() => { if (open) {setCustomer(customerId ? {id: customerId, label: customerName || customerId} : null); setReason(""); setTrigger(null); setDecision(null); setError("")} }, [open, customerId, customerName])
+  async function check() {
+    if (!customer || !reason) return
+    setBusy(true); setError("")
     try {
-      const res = await fetch("/api/journey-engine/cancel/trigger", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_id: customerId,
-          churn_reason: reason,
-        }),
-      })
-      const data = await res.json()
-      setOffer({
-        type: data.offer?.type || "discount",
-        label: data.offer?.label || "20% Discount",
-        description: data.offer?.description || "20% off your next 3 months",
-        value: data.offer?.value || "20%",
-      })
-    } catch {
-      // Fallback demo offer
-      setOffer({
-        type: "discount",
-        label: "20% Discount",
-        description: "20% off your next 3 months",
-        value: "20%",
-      })
-    }
-    setLoading(false)
+      const snapshot = await fieldSalesApi.getCustomer360(customer.id)
+      if (!snapshot.tenant_id || !snapshot.account_number) throw new Error("The customer record is missing its tenant or account number. Update the record before continuing.")
+      setTrigger(await post<Trigger>("trigger", {customer_id: customer.id, account_number: snapshot.account_number, customer_snapshot: snapshot, cancel_reason: reason, source_channel: "staff_portal"}))
+    } catch(e) {setError(e instanceof Error ? e.message : "Could not check retention offers")}
+    finally {setBusy(false)}
   }
-
-  const handleRespond = async (accepted: boolean) => {
-    setLoading(true)
-    try {
-      await fetch("/api/journey-engine/cancel/respond", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer_id: customerId,
-          accepted,
-        }),
-      })
-    } catch {
-      // Demo mode
-    }
-    setResult(accepted ? "accepted" : "rejected")
-    setStep("result")
-    setLoading(false)
+  async function respond(value: "accept" | "reject") {
+    if (!trigger?.cancel_event_id) return
+    setBusy(true); setError("")
+    try {await post("respond", {cancel_event_id: trigger.cancel_event_id, decision: value}); setDecision(value)}
+    catch(e) {setError(e instanceof Error ? e.message : "The decision could not be saved")}
+    finally {setBusy(false)}
   }
-
-  const handleClose = () => {
-    setStep("reason")
-    setReason("")
-    setOffer(null)
-    setResult(null)
-    setLoading(false)
-    onOpenChange(false)
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-md">
-        {/* Step 1: Reason */}
-        {step === "reason" && (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <AlertTriangle className="h-5 w-5 text-amber-500" />
-                Cancel Service
-              </DialogTitle>
-              <DialogDescription>
-                We're sorry to see you go, {customerName}. Help us understand why.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="py-4">
-              <Select value={reason} onValueChange={setReason}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a reason..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {CANCEL_REASONS.map((r) => (
-                    <SelectItem key={r.value} value={r.value}>
-                      {r.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <DialogFooter className="gap-2">
-              <Button variant="outline" onClick={handleClose}>
-                Go Back
-              </Button>
-              <Button
-                onClick={handleTriggerJourney}
-                disabled={!reason || loading}
-                className="bg-amber-600 hover:bg-amber-700"
-              >
-                {loading ? "Checking offers..." : "Continue"}
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-
-        {/* Step 2: Offer */}
-        {step === "offer" && offer && (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                <Gift className="h-5 w-5 text-emerald-500" />
-                We have an offer for you
-              </DialogTitle>
-              <DialogDescription>
-                Based on your situation, here's what we can do:
-              </DialogDescription>
-            </DialogHeader>
-            <div className="py-4">
-              <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <Badge className="badge-success">
-                    {offer.type}
-                  </Badge>
-                  <span className="font-semibold text-foreground">{offer.label}</span>
-                </div>
-                <p className="text-sm text-muted-foreground">{offer.description}</p>
-              </div>
-            </div>
-            <DialogFooter className="gap-2">
-              <Button
-                variant="outline"
-                onClick={() => handleRespond(false)}
-                disabled={loading}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/10"
-              >
-                <XCircle className="mr-2 h-4 w-4" />
-                No thanks, cancel
-              </Button>
-              <Button
-                onClick={() => handleRespond(true)}
-                disabled={loading}
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                <CheckCircle className="mr-2 h-4 w-4" />
-                Accept offer
-              </Button>
-            </DialogFooter>
-          </>
-        )}
-
-        {/* Step 3: Result */}
-        {step === "result" && (
-          <>
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
-                {result === "accepted" ? (
-                  <>
-                    <CheckCircle className="h-5 w-5 text-emerald-500" />
-                    Offer Accepted!
-                  </>
-                ) : (
-                  <>
-                    <XCircle className="h-5 w-5 text-red-500" />
-                    Cancellation Confirmed
-                  </>
-                )}
-              </DialogTitle>
-              <DialogDescription>
-                {result === "accepted"
-                  ? "Your offer has been applied. We're glad to keep you!"
-                  : "Your cancellation has been processed. We're sorry to see you go."}
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button onClick={handleClose}>Close</Button>
-            </DialogFooter>
-          </>
-        )}
-      </DialogContent>
-    </Dialog>
-  )
+  return <Dialog open={open} onOpenChange={value => {if (!busy) onOpenChange(value)}}><DialogContent className="sm:max-w-md">
+    <DialogHeader><DialogTitle>{decision ? "Decision recorded" : "Retention review"}</DialogTitle><DialogDescription>Select the customer and record their response to an available retention offer.</DialogDescription></DialogHeader>
+    {error && <p role="alert" className="text-sm text-red-400 break-words">{error}</p>}
+    {decision ? <p className="text-sm">{decision === "accept" ? "The customer accepted the offer." : "The customer declined the offer. Continue the cancellation workflow to process the service cancellation."}</p> : !trigger ? <div className="space-y-4">
+      <CustomerPicker value={customer} onChange={setCustomer} disabled={busy} />
+      <label className="block text-sm">Reason<select className={inputClass} value={reason} disabled={busy} onChange={e => setReason(e.target.value)}><option value="">Select a reason</option>{reasons.map(r => <option key={r} value={r}>{r}</option>)}</select></label>
+    </div> : <div className="space-y-3">
+      {trigger.offer ? <><h3 className="font-medium">{trigger.offer.name || trigger.offer.offer_type || "Retention offer"}</h3><p className="text-sm">{trigger.offer.description}</p>{trigger.offer.parameters && <dl className="text-sm">{Object.entries(trigger.offer.parameters).map(([key, value]) => <div key={key} className="break-words"><dt>{key}</dt><dd>{typeof value === "object" ? JSON.stringify(value) : String(value)}</dd></div>)}</dl>}</> : <p>{trigger.message || "No retention offer matched this customer."}</p>}
+    </div>}
+    <DialogFooter className="gap-2"><Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>Close</Button>
+      {!trigger && !decision && <Button disabled={busy || !customer || !reason} onClick={() => void check()}>{busy ? "Checking…" : "Check offers"}</Button>}
+      {trigger?.cancel_event_id && !decision && <><Button variant="outline" disabled={busy} onClick={() => void respond("reject")}>Decline offer</Button>{trigger.offer && <Button disabled={busy} onClick={() => void respond("accept")}>Accept offer</Button>}</>}
+    </DialogFooter>
+  </DialogContent></Dialog>
 }

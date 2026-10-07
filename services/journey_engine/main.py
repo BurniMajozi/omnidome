@@ -62,6 +62,7 @@ from services.journey_engine.models import (
 from services.journey_engine.rule_engine import ATTRIBUTE_TYPES
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
+from services.common.auth import AuthContext, get_auth_context
 from services.journey_engine.lifecycle_routes import router as lifecycle_router
 from services.journey_engine.routes.ab_testing import router as ab_testing_router
 
@@ -465,13 +466,16 @@ async def delete_offer(
 async def trigger_cancel(
     data: CancelTrigger,
     session: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Customer initiates cancellation → find best journey + offer.
 
     Called by the portal when a customer clicks "Cancel Service".
     Returns the journey and offer to present to the customer.
     """
-    tenant_id = data.customer_snapshot.get("tenant_id")
+    tenant_id = str(auth.tenant_id)
+    if str(data.customer_snapshot.get("tenant_id")) != tenant_id:
+        raise HTTPException(403, "Customer snapshot belongs to a different tenant")
     if not tenant_id:
         raise HTTPException(400, "tenant_id required in customer_snapshot")
 
@@ -575,6 +579,7 @@ async def trigger_cancel(
 async def respond_to_offer(
     data: CancelRespond,
     session: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(get_auth_context),
 ):
     """Customer accepts or rejects the retention offer.
 
@@ -582,7 +587,7 @@ async def respond_to_offer(
     """
     # 1. Load the cancel event
     query = select(CancelEvent).where(
-        CancelEvent.id == uuid.UUID(data.cancel_event_id)
+        CancelEvent.id == uuid.UUID(data.cancel_event_id), CancelEvent.tenant_id == auth.tenant_id,
     )
     result = await session.execute(query)
     cancel_event = result.scalar_one_or_none()

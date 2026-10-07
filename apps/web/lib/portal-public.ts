@@ -41,7 +41,7 @@ export function portalTrackingQuery(search: Record<string, string | string[] | u
   const query = new URLSearchParams()
   for (const key of ["utm_source", "utm_medium", "utm_campaign"]) {
     const value = search[key]
-    if (typeof value === "string") query.set(key, value.slice(0, 200))
+    if (typeof value === "string") query.set(key, value.slice(0, key === "utm_campaign" ? 200 : 100))
   }
   return query.toString()
 }

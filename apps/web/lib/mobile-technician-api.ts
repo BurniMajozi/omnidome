@@ -5,11 +5,12 @@
  * Aggregates data from Support, Network, IoT, Inventory services.
  */
 
-const API = "/api"
+const API = "/svc"
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, {
     cache: "no-store",
+    signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json" },
     ...init,
   })
@@ -17,7 +18,9 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "")
     throw new Error(`API error ${res.status}: ${body}`)
   }
-  return res.json()
+  const data = await res.json()
+  if (data?.simulated === true) throw new Error("This endpoint supplies simulated data. A live measurement service is required.")
+  return (Array.isArray(data?.items) ? data.items : data) as T
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -176,15 +179,15 @@ export const technicianApi = {
     fetchJSON<{
       jobs_today: number
       jobs_week: number
-      avg_resolution_min: number
+      avg_resolution_min: number | null
       fcr_rate: number
-      customer_rating: number
-      revenue_generated: number
+      customer_rating: number | null
+      revenue_generated: number | null
     }>(`/support/technicians/me/stats`),
 
   // SSE stream for real-time job dispatch
   streamJobEvents: (onEvent: (event: { event: string; data: unknown }) => void) => {
-    const evtSource = new EventSource(`/api/support/technicians/me/stream`)
+    const evtSource = new EventSource(`/svc/support/technicians/me/stream`)
     evtSource.addEventListener("connected", (e) => {
       onEvent({ event: "connected", data: JSON.parse(e.data as string) })
     })

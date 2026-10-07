@@ -25,7 +25,7 @@ function TierForm({ tier, onSave, onCancel }: {
   const [name, setName] = useState(tier?.tier_name ?? "")
   const [minDeals, setMinDeals] = useState(String(tier?.min_deals ?? 0))
   const [maxDeals, setMaxDeals] = useState(tier?.max_deals != null ? String(tier.max_deals) : "")
-  const [rate, setRate] = useState(tier?.rate_percent ?? "5.00")
+  const [rate, setRate] = useState(tier?.rate_percent ?? "")
 
   return (
     <div className="space-y-4 pt-2">
@@ -85,27 +85,25 @@ export function CommissionTiers() {
   useEffect(() => { load() }, [load])
 
   const handleCreate = async (data: { tier_name: string; min_deals: number; max_deals: number | null; rate_percent: string }) => {
-    await adminApi.createCommissionTier(data)
-    setShowCreate(false)
-    load()
+    try { await adminApi.createCommissionTier(data); setShowCreate(false); await load() }
+    catch(e) { setError(e instanceof Error ? e.message : "Could not create tier") }
   }
 
   const handleUpdate = async (data: { tier_name: string; min_deals: number; max_deals: number | null; rate_percent: string }) => {
     if (!editTier) return
-    await adminApi.updateCommissionTier(editTier.id, data)
-    setEditTier(null)
-    load()
+    try { await adminApi.updateCommissionTier(editTier.id, data); setEditTier(null); await load() }
+    catch(e) { setError(e instanceof Error ? e.message : "Could not update tier") }
   }
 
   const handleDelete = async (tierId: string) => {
     if (!confirm("Delete this commission tier?")) return
-    await adminApi.deleteCommissionTier(tierId)
-    load()
+    try { await adminApi.deleteCommissionTier(tierId); await load() }
+    catch(e) { setError(e instanceof Error ? e.message : "Could not delete tier") }
   }
 
   const handleToggleActive = async (tier: CommissionTier) => {
-    await adminApi.updateCommissionTier(tier.id, { is_active: !tier.is_active })
-    load()
+    try { await adminApi.updateCommissionTier(tier.id, { is_active: !tier.is_active }); await load() }
+    catch(e) { setError(e instanceof Error ? e.message : "Could not update tier") }
   }
 
   return (
@@ -139,16 +137,12 @@ export function CommissionTiers() {
 
       {loading ? (
         <div className="text-sm text-muted-foreground py-8 text-center">Loading tiers…</div>
-      ) : tiers.length === 0 ? (
+      ) : error ? <Button variant="outline" onClick={() => void load()}>Retry loading tiers</Button> : tiers.length === 0 ? (
         <Card className="border-border bg-card">
           <CardContent className="py-12 text-center">
             <Layers className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
             <p className="text-muted-foreground">No commission tiers configured</p>
-            <p className="text-xs text-muted-foreground mt-1">Add a tier to get started, or the system will use default rates</p>
-            <div className="mt-4 text-xs text-muted-foreground bg-secondary/30 rounded-lg p-3 max-w-md mx-auto">
-              <p className="font-medium mb-1">Default fallback tiers:</p>
-              <p>0–9 deals: 5% • 10–19 deals: 7% • 20+ deals: 10%</p>
-            </div>
+            <p className="text-xs text-muted-foreground mt-1">Add a tier to configure the commission rates.</p>
           </CardContent>
         </Card>
       ) : (

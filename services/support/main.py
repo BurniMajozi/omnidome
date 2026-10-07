@@ -515,13 +515,19 @@ async def get_my_stats(
     total_closed, fcr_count = fcr_result.one()
     fcr_rate = round((fcr_count / total_closed) * 100) if total_closed > 0 else 0
 
+    timestamps = (await db.execute(select(Ticket.created_at, Ticket.resolved_at).where(
+        Ticket.tenant_id == auth.tenant_id, Ticket.assigned_to == auth.user_id,
+        Ticket.status == "CLOSED", Ticket.resolved_at.is_not(None),
+    ))).all()
+    durations = [(resolved - created).total_seconds() / 60 for created, resolved in timestamps
+                 if created and resolved and resolved >= created]
     return {
         "jobs_today": jobs_today,
         "jobs_week": jobs_week,
-        "avg_resolution_min": 45,  # Would need timestamp diff calculation
+        "avg_resolution_min": round(sum(durations) / len(durations), 1) if durations else None,
         "fcr_rate": fcr_rate,
-        "customer_rating": 4.5,  # Would come from a ratings table
-        "revenue_generated": jobs_week * 1500,  # Simplified estimate
+        "customer_rating": None,  # No ratings source is connected.
+        "revenue_generated": None,  # Ticket completion alone does not establish billed revenue.
     }
 
 

@@ -77,7 +77,7 @@ const emptyLine = (): LineDraft => ({ product_id: "", quantity_ordered: "1", uni
  * enforced server-side. Unlike the rest of this dashboard, this section
  * reads/writes real backend state rather than canned demo data.
  */
-export function PurchasingSection() {
+export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolean} = {}) {
   const [pos, setPos] = useState<PurchaseOrder[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
@@ -104,10 +104,14 @@ export function PurchasingSection() {
 
   async function refresh() {
     setLoading(true)
-    const [poList, supplierList] = await Promise.all([listPurchaseOrders(), listSuppliers()])
-    setPos(poList)
-    setSuppliers(supplierList)
-    setLoading(false)
+    setError("")
+    try {
+      if (approvalOnly) await purchasingRequest("/approvals/inbox")
+      const [poList, supplierList] = await Promise.all([purchasingRequest<PurchaseOrder[]>("/purchase-orders"), listSuppliers()])
+      setPos(approvalOnly ? poList.filter(p => ["submitted", "pending_approval"].includes(p.status)) : poList)
+      setSuppliers(supplierList)
+    } catch(cause) {setError(cause instanceof Error ? cause.message : "Purchase orders could not be loaded"); setPos([])}
+    finally {setLoading(false)}
   }
 
   useEffect(() => {
@@ -115,7 +119,7 @@ export function PurchasingSection() {
     purchasingRequest<{ auto_approve_limit: string }>("/purchasing/settings")
       .then((settings) => setAutoApproveLimit(settings.auto_approve_limit))
       .catch((cause) => setError(String(cause.message || cause)))
-  }, [])
+  }, [approvalOnly])
 
   async function handleCreatePo() {
     if (!supplierId || !warehouseId) return
@@ -252,36 +256,36 @@ export function PurchasingSection() {
   return (
     <div className="surface-card p-6">
       {error && <p role="alert" className="text-sm text-destructive mb-3">{error}</p>}
-      <p className="text-sm text-muted-foreground mb-3">PO email is unavailable: Communication does not yet support PDF attachments.</p>
-      <div className="flex items-end gap-2 mb-4">
+      <p className="text-sm text-muted-foreground mb-3">Review submitted orders with a signed approval before supplier dispatch.</p>
+      {!approvalOnly && <div className="flex items-end gap-2 mb-4">
         <div><Label htmlFor="po-autoapprove">Autoapproval limit (ZAR including VAT; 0 disables)</Label>
           <Input id="po-autoapprove" type="number" min="0" step="0.01" value={autoApproveLimit} onChange={(event) => setAutoApproveLimit(event.target.value)} />
         </div>
         <Button variant="outline" onClick={saveSettings}>Save limit</Button>
-      </div>
+      </div>}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h4 className="card-title">Purchase Orders</h4>
+          <h4 className="card-title">{approvalOnly ? "Pending purchase approvals" : "Purchase Orders"}</h4>
           <p className="text-sm text-muted-foreground">
             Live procure-to-receive — draft → submit → approve → receive, three-way-matched against the PO.
           </p>
         </div>
-        <div className="flex gap-2">
+        {!approvalOnly && <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={() => setNewSupplierOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" /> Supplier
           </Button>
           <Button size="sm" onClick={() => setCreateOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" /> New Purchase Order
           </Button>
-        </div>
+        </div>}
       </div>
 
       <DataTable
         columns={columns}
         rows={pos}
         loading={loading}
-        emptyTitle="No purchase orders yet"
-        emptyDescription="Create one to start the procure-to-receive flow."
+        emptyTitle={error ? "Purchase orders unavailable" : approvalOnly ? "No pending approvals" : "No purchase orders yet"}
+        emptyDescription={error || (approvalOnly ? "Submitted orders will appear here for signed review." : "Create one to start the procure-to-receive flow.")}
       />
 
       {/* Create PO */}

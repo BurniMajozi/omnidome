@@ -5,6 +5,7 @@ import { ModuleLayout } from "./module-layout"
 import { Package, Warehouse, Truck, AlertTriangle } from "lucide-react"
 import { PurchasingSection } from "./purchasing-section"
 import { FieldTechVanStockView } from "./inventory/field-tech-van-stock"
+import { InventoryReports } from "./inventory/inventory-reports"
 import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
@@ -159,6 +160,7 @@ export function InventoryModule() {
                 )}
             </div>
 
+            <div className="mt-6"><InventoryReports /></div>
             {/* Stock analytics - no backing endpoint, so no charts */}
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
                 {["Stock Levels by Category", "Stock by Warehouse", "Stock Movement Trends", "Sell-Through Rate by Product"].map(

@@ -64,10 +64,12 @@ export function WebAnalyticsDashboard() {
   const [forms, setForms] = useState<FormsData | null>(null)
   const [realtime, setRealtime] = useState<RealtimeData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState("")
   const [activeTab, setActiveTab] = useState("overview")
 
   const loadData = useCallback(async () => {
     setLoading(true)
+    setError("")
     try {
       const [ov, tr, pg, dv, loc, fm, rt] = await Promise.all([
         analyticsApi.getOverview(days),
@@ -86,7 +88,7 @@ export function WebAnalyticsDashboard() {
       setForms(fm)
       setRealtime(rt)
     } catch (err) {
-      console.error("Failed to load analytics:", err)
+      setError(err instanceof Error ? err.message : "Analytics could not be loaded")
     } finally {
       setLoading(false)
     }
@@ -100,12 +102,13 @@ export function WebAnalyticsDashboard() {
       try {
         const rt = await analyticsApi.getRealtime()
         setRealtime(rt)
-      } catch { /* silent */ }
+      } catch { setRealtime(null) }
     }, 30000)
     return () => clearInterval(interval)
   }, [])
 
-  if (loading && !overview) {
+  if (error) return <div role="alert" className="space-y-3 rounded-lg border p-4"><p>{error}</p><button className="underline" onClick={() => void loadData()}>Retry analytics</button></div>
+  if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="flex items-center gap-3 text-muted-foreground">

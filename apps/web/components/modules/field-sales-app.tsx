@@ -100,7 +100,7 @@ function Customer360Panel({ contact, onClose }: { contact: Customer360; onClose:
       )}
 
       {/* Network Services */}
-      {contact.network.length > 0 && (
+      {contact.network?.length > 0 && (
         <div>
           <h4 className="text-xs font-medium text-muted-foreground mb-2">SERVICES ({contact.network.length})</h4>
           <div className="space-y-2">
@@ -160,6 +160,7 @@ export function FieldSalesApp() {
   const [deals, setDeals] = useState<MobileDeal[]>([])
   const [commissions, setCommissions] = useState<MobileCommission[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState("")
   const [search, setSearch] = useState("")
   const [selectedContact, setSelectedContact] = useState<Customer360 | null>(null)
   const [convertLead, setConvertLead] = useState<MobileLead | null>(null)
@@ -170,6 +171,7 @@ export function FieldSalesApp() {
   const load = useCallback(async () => {
     try {
       setLoading(true)
+      setLoadError("")
       const [l, c, d, co] = await Promise.all([
         fieldSalesApi.listLeads({ status: "NEW" }),
         fieldSalesApi.listContacts({ limit: 50 }),
@@ -177,7 +179,7 @@ export function FieldSalesApp() {
         fieldSalesApi.getMyCommissions(),
       ])
       setLeads(l); setContacts(c); setDeals(d); setCommissions(co)
-    } catch (e) { console.error(e) }
+    } catch (e) { setLoadError(e instanceof Error ? e.message : "Field sales data is unavailable") }
     finally { setLoading(false) }
   }, [])
 
@@ -186,8 +188,7 @@ export function FieldSalesApp() {
   // Polling fallback — refresh leads/deals every 30s
   useEffect(() => {
     const interval = setInterval(() => {
-      fieldSalesApi.listLeads({ status: "NEW" }).then(setLeads).catch(() => {})
-      fieldSalesApi.listDeals({ status: "OPEN" }).then(setDeals).catch(() => {})
+      void load()
     }, 30000)
     return () => clearInterval(interval)
   }, [])
@@ -203,7 +204,7 @@ export function FieldSalesApp() {
     try {
       const data = await fieldSalesApi.getCustomer360(contactId)
       setSelectedContact(data)
-    } catch { /* fallback: build minimal 360 from list data */ }
+    } catch(e) { setLoadError(e instanceof Error ? e.message : "The customer record could not be loaded") }
   }
 
   const handleCreateLead = async () => {
@@ -217,6 +218,8 @@ export function FieldSalesApp() {
   const filteredLeads = leads.filter(l => `${l.first_name} ${l.last_name} ${l.phone} ${l.address}`.toLowerCase().includes(search.toLowerCase()))
   const filteredContacts = contacts.filter(c => `${c.first_name} ${c.last_name} ${c.phone}`.toLowerCase().includes(search.toLowerCase()))
 
+  if (loadError) return <div role="alert" className="space-y-3 rounded-lg border p-4"><p className="text-sm break-words">{loadError}</p><Button onClick={() => void load()}>Retry</Button></div>
+  if (loading) return <p>Loading field sales…</p>
   if (selectedContact) {
     return <Customer360Panel contact={selectedContact} onClose={() => setSelectedContact(null)} />
   }

@@ -8,8 +8,10 @@
 const API = "/api"
 
 async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API}${path}`, {
+  const base = path.startsWith("/sales/") ? API : "/svc"
+  const res = await fetch(`${base}${path}`, {
     cache: "no-store",
+    signal: AbortSignal.timeout(20000),
     headers: { "Content-Type": "application/json" },
     ...init,
   })
@@ -17,7 +19,8 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     const body = await res.text().catch(() => "")
     throw new Error(`API error ${res.status}: ${body}`)
   }
-  return res.json()
+  const data = await res.json()
+  return (Array.isArray(data?.items) ? data.items : data) as T
 }
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -172,7 +175,7 @@ export const fieldSalesApi = {
 
   // Commissions
   getMyCommissions: () =>
-    fetchJSON<MobileCommission[]>(`/sales/commissions`),
+    fetchJSON<MobileCommission[]>(`/sales/commissions`).then(rows => rows.map(row => ({...row, amount_zar: Number(row.amount_zar), rate_percent: Number(row.rate_percent)}))),
 
   // Products (for quote builder)
   listProducts: () =>

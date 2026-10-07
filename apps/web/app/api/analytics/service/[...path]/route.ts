@@ -17,7 +17,7 @@ export async function GET(
 
     const res = await fetch(url, { cache: "no-store" })
     const data = await res.json()
-    return NextResponse.json(data)
+    return NextResponse.json(data, {status: res.status})
   } catch (err) {
     console.error("Analytics service proxy error:", err)
     return NextResponse.json({ error: "Analytics service unavailable" }, { status: 503 })
