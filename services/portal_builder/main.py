@@ -40,6 +40,7 @@ from services.portal_builder import fetcher, security, seo
 from services.portal_builder.access import require_tier
 from services.portal_builder.builder_ux import router as builder_ux_router
 from services.portal_builder.design import router as design_router
+from services.portal_builder.wordpress import router as wordpress_router
 
 logger = logging.getLogger("portal_builder")
 
@@ -69,6 +70,7 @@ app.add_middleware(
 
 app.include_router(builder_ux_router)
 app.include_router(design_router)
+app.include_router(wordpress_router)
 
 # ── Rate limiters / caps (per process; tune via env) ───────────────────
 
@@ -732,6 +734,12 @@ async def unpublish_page(page_id: uuid.UUID, ctx: AuthContext = Depends(get_auth
 async def delete_page(page_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as session:
         page = await _get_page(session, page_id, ctx.tenant_id, lock=True)
+        from services.portal_builder.wordpress import WordPressPageLink
+        pending = await session.scalar(select(WordPressPageLink.id).where(
+            WordPressPageLink.page_id == page_id, WordPressPageLink.tenant_id == ctx.tenant_id,
+            WordPressPageLink.pending_job.is_not(None)))
+        if pending:
+            raise HTTPException(409, "Refresh pending WordPress publication status before deleting this page")
         await session.delete(page)
         try:
             await session.flush()

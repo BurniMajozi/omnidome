@@ -14,6 +14,7 @@ import { BuilderCanvas } from "./builder-canvas"
 import { AddSection, BuilderSettings, sectionTemplates } from "./builder-settings"
 import { useDesignStudio } from "./use-design-studio"
 import { BuilderPageActions } from "./builder-page-actions"
+import { WordPressPublisher } from "./wordpress-publisher"
 
 interface Props { pages: Loadable<PortalPageSummary[]>; onChanged: () => void; onReload: () => void; newPageSignal?: number }
 export function DomeDesignStudio({ pages, onChanged, onReload, newPageSignal = 0 }: Props) {
@@ -26,6 +27,7 @@ export function DomeDesignStudio({ pages, onChanged, onReload, newPageSignal = 0
   const [importOpen, setImportOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
+  const [wordpressOpen, setWordpressOpen] = useState(false)
   const previousSignal = useRef(0)
   const busy = studio.busy !== null
   const canLeave = () => !studio.dirty || window.confirm("Discard the unsaved changes to this draft?")
@@ -45,6 +47,7 @@ export function DomeDesignStudio({ pages, onChanged, onReload, newPageSignal = 0
   }
   const feedback = <>{studio.error && <div role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{studio.error}</div>}{studio.notice && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{studio.notice}</p>}</>
   const importer = <ExistingSiteImporterModal open={importOpen} onOpenChange={setImportOpen} onApplySiteStructure={(result) => { studio.applyImport(result); setView("editor"); setSelected(null); setPanel("chat") }} />
+  const wordpress = <WordPressPublisher open={wordpressOpen} onOpenChange={setWordpressOpen} pageId={studio.pageId} pageTitle={studio.draft.title} dirty={studio.dirty} saving={busy} save={() => studio.save()} />
 
   if (view === "pages") return <section className="space-y-4 rounded-xl border border-border bg-card p-4 sm:p-6">
     <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">My pages</h2><p className="text-sm text-muted-foreground">Continue a draft or make a new version of a live page.</p></div><Button disabled={busy} onClick={newPage}><Plus className="mr-2 h-4 w-4" />New landing page</Button></div>{feedback}
@@ -53,19 +56,19 @@ export function DomeDesignStudio({ pages, onChanged, onReload, newPageSignal = 0
   </section>
 
   if (view === "start") return <section className="rounded-xl border border-border bg-card">
-    <div className="flex justify-end border-b border-border p-3"><Button variant="ghost" size="sm" disabled={busy} onClick={() => { onReload(); setView("pages") }}><FolderOpen className="mr-2 h-4 w-4" />My pages</Button></div>
+    <div className="flex justify-end border-b border-border p-3"><Button variant="ghost" size="sm" disabled={busy} onClick={() => setWordpressOpen(true)}><Globe className="mr-2 h-4 w-4" />WordPress</Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => { onReload(); setView("pages") }}><FolderOpen className="mr-2 h-4 w-4" />My pages</Button></div>
     <div className="mx-auto max-w-3xl space-y-6 px-4 py-10 sm:px-8 sm:py-16">
       <div className="space-y-3"><p className="flex items-center gap-2 text-sm font-medium text-cyan-600 dark:text-cyan-400"><Sparkles className="h-4 w-4" />DomeDesign</p><h2 className="text-3xl font-semibold tracking-tight sm:text-4xl">What would you like to build?</h2><p className="max-w-xl text-sm leading-relaxed text-muted-foreground">Describe your landing page. We’ll turn your brief into a draft you can refine in chat or edit directly in the preview.</p></div>
       {feedback}<BuilderPrompt large initial={example} busy={busy} onSubmit={generate} />
       <div className="space-y-3"><p className="text-xs text-muted-foreground">Need a starting point?</p><div className="flex flex-wrap gap-2">{starterPrompts.map((item) => <Button key={item.title} variant="outline" size="sm" disabled={busy} onClick={() => setExample(item.prompt)}>{item.title}</Button>)}</div></div>
       <div className="flex flex-wrap items-center gap-2 border-t border-border pt-5"><Button variant="ghost" size="sm" disabled={busy} onClick={() => { studio.change({ title: "Untitled landing page", description: "", theme: { appearance: "light", accent: "cyan" }, blocks: [structuredClone(sectionTemplates.hero)] }); setView("editor"); setPanel("settings"); setSelected(0) }}><Plus className="mr-2 h-4 w-4" />Start with a blank page</Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => setImportOpen(true)}><Download className="mr-2 h-4 w-4" />Use content from a website</Button></div>
-    </div>{importer}
+    </div>{importer}{wordpress}
   </section>
 
   return <section className="min-w-0 overflow-hidden rounded-xl border border-border bg-card text-foreground">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-3 sm:p-4">
       <div className="flex min-w-0 flex-wrap items-center gap-2"><Button variant="ghost" size="sm" disabled={busy} onClick={() => { onReload(); setView("pages") }}><FolderOpen className="mr-2 h-4 w-4" />My pages</Button><h2 className="max-w-xs truncate text-sm font-semibold">{studio.draft.title || "Untitled landing page"}</h2><Badge variant="outline">{studio.status === "published" ? "Live page" : "Draft"}</Badge><span className="text-xs text-muted-foreground">{!studio.pageId ? "Not saved yet" : studio.dirty ? "Unsaved changes" : "Saved"}</span></div>
-      <div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" disabled={busy || !studio.canUndo} onClick={() => { studio.undo(); setSelected(null) }}><RotateCcw className="mr-2 h-3.5 w-3.5" />Undo</Button><Button variant="outline" size="sm" title={studio.dirty || !studio.pageId ? "Save your draft before sharing" : "Share a saved preview"} disabled={busy || !studio.pageId || studio.dirty} onClick={() => setShareOpen(true)}><Share2 className="mr-2 h-3.5 w-3.5" />Share</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => void studio.save()}><Save className="mr-2 h-3.5 w-3.5" />{studio.busy === "save" ? "Saving…" : "Save draft"}</Button><Button size="sm" disabled={busy || !studio.draft.blocks.length} className="bg-cyan-500 text-cyan-950 hover:bg-cyan-400" onClick={() => setPublishOpen(true)}><Globe className="mr-2 h-3.5 w-3.5" />Publish</Button></div>
+      <div className="flex flex-wrap gap-2"><Button variant="ghost" size="sm" disabled={busy || !studio.canUndo} onClick={() => { studio.undo(); setSelected(null) }}><RotateCcw className="mr-2 h-3.5 w-3.5" />Undo</Button><Button variant="outline" size="sm" title={studio.dirty || !studio.pageId ? "Save your draft before sharing" : "Share a saved preview"} disabled={busy || !studio.pageId || studio.dirty} onClick={() => setShareOpen(true)}><Share2 className="mr-2 h-3.5 w-3.5" />Share</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => void studio.save()}><Save className="mr-2 h-3.5 w-3.5" />{studio.busy === "save" ? "Saving…" : "Save draft"}</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => setWordpressOpen(true)}><Globe className="mr-2 h-3.5 w-3.5" />WordPress</Button><Button size="sm" disabled={busy || !studio.draft.blocks.length} className="bg-cyan-500 text-cyan-950 hover:bg-cyan-400" onClick={() => setPublishOpen(true)}><Globe className="mr-2 h-3.5 w-3.5" />Publish to OmniDome</Button></div>
     </header>
     <div className="space-y-2 px-4 py-3">{feedback}{studio.generated && <p className="text-sm text-amber-700 dark:text-amber-300">AI-generated business copy needs your review. Confirm prices, turnaround times, limits, coverage, security and staff experience before publishing.</p>}{studio.status === "published" && <p className="text-xs text-muted-foreground">You’re editing a draft of your live page. Save keeps these changes private; Publish updates the live version. <a href={`/portal/${studio.slug}`} target="_blank" rel="noopener noreferrer" className="font-medium text-cyan-600 dark:text-cyan-400">View live page ↗</a></p>}</div>
     <div className="grid min-w-0 lg:grid-cols-[340px_minmax(0,1fr)]">
@@ -88,6 +91,6 @@ export function DomeDesignStudio({ pages, onChanged, onReload, newPageSignal = 0
       {studio.generated && <p className="text-sm text-amber-700 dark:text-amber-300">Before publishing, confirm every business promise in this draft. AI copy is not fact-checked; check prices, turnaround times, limits, coverage, security and staff experience.</p>}
       <div className="flex gap-2"><Button disabled={busy} onClick={async () => { if (await studio.save(true)) setPublishOpen(false) }}>{studio.busy === "publish" ? "Publishing…" : "Save and publish"}</Button><Button variant="outline" disabled={busy} onClick={() => setPublishOpen(false)}>Keep editing</Button></div>
     </div>}
-    <DomeStudioShareModal open={shareOpen} onOpenChange={setShareOpen} pageId={studio.pageId} pageTitle={studio.draft.title} />{importer}
+    <DomeStudioShareModal open={shareOpen} onOpenChange={setShareOpen} pageId={studio.pageId} pageTitle={studio.draft.title} />{importer}{wordpress}
   </section>
 }

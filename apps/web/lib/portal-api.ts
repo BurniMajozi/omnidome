@@ -16,6 +16,7 @@ import type { Loadable } from "@/lib/service-state"
 
 const API_BASE = "/svc/portal_builder/api/v1/portal"
 const TIMEOUT_MS = 20_000
+const WORDPRESS_TIMEOUT_MS = 60_000
 
 export type PortalPageType = "landing" | "campaign" | "product" | "seo"
 export type PortalPageStatus = "draft" | "published" | "archived"
@@ -286,6 +287,43 @@ export function loadPortalPages(opts: { page?: number; pageSize?: number; pageTy
   return read<PortalPageList>(`/pages${qs ? `?${qs}` : ""}`)
 }
 export const loadPortalPage = (id: string) => read<PortalPage>(`/pages/${encodeURIComponent(id)}`)
+
+export interface WordPressConnection {
+  id: string
+  site_url: string
+  site_name: string
+  username: string
+  active: boolean
+  abilities: string[]
+  checked_at: string
+  credentials_configured: boolean
+}
+export interface WordPressPublication {
+  status: "not_exported" | "draft_exported" | "published" | "external_changes" | "running" | "uncertain" | "failed"
+  exported_hash?: string | null
+  published_hash?: string | null
+  preview_url?: string | null
+  live_url?: string | null
+  warnings?: string[]
+  error?: string | null
+  local_changes: boolean
+  current_hash?: string | null
+}
+const wordpressPath = (cid: string, pid: string) => `/wordpress/connections/${encodeURIComponent(cid)}/pages/${encodeURIComponent(pid)}`
+export const loadWordPressConnections = () => read<{ items: WordPressConnection[] }>("/wordpress/connections")
+export const connectWordPress = (input: { site_url: string; username: string; application_password: string }) =>
+  portalWrite<WordPressConnection>("/wordpress/connections", "POST", input, WORDPRESS_TIMEOUT_MS)
+export const testWordPressConnection = (cid: string) =>
+  portalWrite<WordPressConnection>(`/wordpress/connections/${encodeURIComponent(cid)}/test`, "POST", undefined, WORDPRESS_TIMEOUT_MS)
+export const disconnectWordPress = (cid: string) =>
+  portalWrite<{ status: "disconnected" }>(`/wordpress/connections/${encodeURIComponent(cid)}`, "DELETE")
+export const loadWordPressPublication = (cid: string, pid: string) => read<WordPressPublication>(wordpressPath(cid, pid))
+export const exportWordPressDraft = (cid: string, pid: string) =>
+  portalWrite<WordPressPublication>(`${wordpressPath(cid, pid)}/export`, "POST", undefined, WORDPRESS_TIMEOUT_MS)
+export const publishWordPressDraft = (cid: string, pid: string, exported_hash: string) =>
+  portalWrite<WordPressPublication>(`${wordpressPath(cid, pid)}/publish`, "POST", { exported_hash }, WORDPRESS_TIMEOUT_MS)
+export const refreshWordPressPublication = (cid: string, pid: string) =>
+  portalWrite<WordPressPublication>(`${wordpressPath(cid, pid)}/refresh`, "POST", undefined, WORDPRESS_TIMEOUT_MS)
 export const createPortalPage = (input: PortalPageInput) => portalWrite<PortalPage>("/pages", "POST", input)
 export const updatePortalPage = (id: string, updates: PortalPageUpdate) =>
   portalWrite<PortalPage>(`/pages/${encodeURIComponent(id)}`, "PUT", updates)
