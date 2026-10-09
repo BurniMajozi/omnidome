@@ -10,6 +10,7 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy import text as _text
 
 from services.fno_intelligence.models import Base
+from services.fno_intelligence import analytics_models  # noqa: F401  (registers the Analytics & AI tables)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -93,6 +94,8 @@ async def get_background_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def init_tables():
     async with get_async_engine().begin() as conn:
+        # Serialise concurrent workers/containers booting at once (released at commit).
+        await conn.execute(_text("SELECT pg_advisory_xact_lock(727402)"))
         # Idempotently create PG enum types (CREATE TYPE IF NOT EXISTS) before
         # create_all. On a shared/reused database the enum types may already
         # exist, and create_all's native_enum DDL would otherwise raise a

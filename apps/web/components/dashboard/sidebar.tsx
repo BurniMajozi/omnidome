@@ -58,6 +58,19 @@ const navItems = [
   { icon: Wifi, label: "Network", href: "#network", section: "network" },
   { icon: Globe, label: "Portal Management", href: "#portal", section: "portal" },
   {
+    icon: BarChart3,
+    label: "Analytics & AI",
+    href: "#analytics",
+    section: "analytics",
+    children: [
+      { label: "Presenton AI Studio", target: "presentations" },
+      { label: "Research", target: "research" },
+      { label: "Competitor Analysis", target: "competitors" },
+      { label: "Campaign Analysis", target: "campaign-analysis" },
+    ],
+  },
+
+  {
     icon: ServerCog,
     label: "Admin",
     href: "#admin",
@@ -66,18 +79,6 @@ const navItems = [
       { label: "Admin Console", target: "admin-overview" },
       { label: "Agent Manager", href: "/dashboard/admin/agents" },
       { label: "Workflows", href: "/dashboard/admin/workflows" },
-    ],
-  },
-  // Not in the requested order — kept at the bottom so it isn't lost.
-  {
-    icon: BarChart3,
-    label: "Analytics & AI",
-    href: "#analytics",
-    section: "analytics",
-    children: [
-      { label: "Overview & Metrics", target: "overview" },
-      { label: "Presenton AI Studio", target: "presentations" },
-      { label: "Website Performance", target: "web-analytics" },
     ],
   },
 ]
@@ -110,7 +111,7 @@ export function Sidebar({
   const isCollapsed = collapsed && !mobileOpen
   const [retentionOpen, setRetentionOpen] = useState(true)
   const [portalOpen, setPortalOpen] = useState(true)
-  const [adminOpen, setAdminOpen] = useState(true)
+  const [adminOpen, setAdminOpen] = useState(false)
   const [analyticsOpen, setAnalyticsOpen] = useState(true)
   const visibleNavItems = navItems.filter((item) => {
     // Items with real routes (not hash anchors) are always visible

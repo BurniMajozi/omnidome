@@ -178,7 +178,8 @@ class FirecrawlClient:
     # ── capability wrappers (the six use cases) ──────────────────────────
     async def search(self, query: str, *, limit: int = 5,
                      lang: str = "en", country: str = "za",
-                     scrape_formats: Optional[list] = None, timeout: float = 60.0) -> dict:
+                     scrape_formats: Optional[list] = None, timeout: float = 60.0,
+                     tbs: Optional[str] = None) -> dict:
         """Web search → returns result list + optional full-page markdown.
 
         Powers: product_research, new_site_releases, competitor_analysis.
@@ -190,6 +191,8 @@ class FirecrawlClient:
             "country": country,
             "scrapeOptions": {"formats": scrape_formats or ["markdown"]},
         }
+        if tbs:  # documented v2 time filter, e.g. "qdr:w" (past week)
+            payload["tbs"] = tbs
         return await self._post("/search", payload, require_key=False, timeout=timeout)
 
     async def scrape(self, url: str, *, formats: Optional[list] = None,
