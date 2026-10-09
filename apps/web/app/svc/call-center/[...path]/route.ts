@@ -1,6 +1,7 @@
 import { joinSafePath, badPathResponse } from "@/lib/safe-path"
 import { signedFetch } from "@/lib/internal-identity"
 import { NextRequest, NextResponse } from "next/server"
+import { verifiedRoleHeaders } from "@/lib/proxy-roles"
 
 // Uses a route handler (not a rewrite) so long-running STT/TTS generation
 // doesn't hit the rewrite proxy's connection limits (ECONNRESET).
@@ -30,6 +31,13 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
     if (!headers.has("x-tenant-id")) headers.set("x-tenant-id", DEV_TENANT_ID)
     if (!headers.has("x-user-id")) headers.set("x-user-id", DEV_USER_ID)
   }
+
+  // Forward only the proxy.ts-verified roles (call_center authorises on x-roles / x-permissions; without
+  // them every caller, including a tenant admin, got 403). Minimal role when none is verified.
+  const rp = verifiedRoleHeaders(request.headers, ["call_center.read", "call_center.write", "call_center.admin"])
+  headers.set("x-roles", rp.roles)
+  if (rp.permissions) headers.set("x-permissions", rp.permissions)
+  else headers.delete("x-permissions")
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
