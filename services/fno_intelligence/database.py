@@ -11,6 +11,7 @@ from sqlalchemy import text as _text
 
 from services.fno_intelligence.models import Base
 from services.fno_intelligence import analytics_models  # noqa: F401  (registers the Analytics & AI tables)
+from services.fno_intelligence import bi_models  # noqa: F401  (registers the BI Studio / Deck Studio tables)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",

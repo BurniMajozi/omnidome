@@ -13,6 +13,7 @@ from services.fno_intelligence.market_routes import router as market_router, run
 from services.fno_intelligence.routes import router, sweep_stuck_passed_home_imports
 from services.fno_intelligence.analytics_routes import router as analytics_router, sweep_stuck_runs
 from services.fno_intelligence.competitors import run_competitor_scheduler
+from services.fno_intelligence.bi_routes import router as bi_router
 
 logger = logging.getLogger("fno_intelligence")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -29,6 +30,7 @@ app.include_router(router, prefix="/api/fno")
 app.include_router(opportunity_router, prefix="/api/fno")
 app.include_router(market_router, prefix="/api/fno")
 app.include_router(analytics_router, prefix="/api/fno")
+app.include_router(bi_router, prefix="/api/fno")  # BI Studio / Deck Studio
 
 
 @app.on_event("startup")

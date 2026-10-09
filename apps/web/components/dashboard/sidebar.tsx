@@ -63,7 +63,7 @@ const navItems = [
     href: "#analytics",
     section: "analytics",
     children: [
-      { label: "Presenton AI Studio", target: "presentations" },
+      { label: "Deck Studio", target: "presentations" },
       { label: "Research", target: "research" },
       { label: "Competitor Analysis", target: "competitors" },
       { label: "Campaign Analysis", target: "campaign-analysis" },
