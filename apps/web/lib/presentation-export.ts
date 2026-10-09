@@ -282,7 +282,7 @@ export async function exportToPowerPoint(presentation: GeneratedPresentation): P
   pptx.subject = presentation.topic
 
   const brandKit = presentation.brandKit
-  const companyName = brandKit?.companyName || "OmniDome Analytics & AI"
+  const companyName = brandKit?.companyName || "OmniDome BI Studio"
   const companyTagline = brandKit?.tagline || "Autonomous Telecom Cloud OS"
   const logoUrl = brandKit?.logoUrl
 

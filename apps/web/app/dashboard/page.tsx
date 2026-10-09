@@ -46,7 +46,7 @@ const sectionTitles: Record<string, string> = {
   finance: "Finance & FP&A",
   products: "Product Management",
   portal: "Portal Management",
-  analytics: "Analytics & AI Insights",
+  analytics: "BI Studio",
   inventory: "Inventory & Stock Management",
   iot: "IoT & Device Management",
   admin: "Platform Administration",

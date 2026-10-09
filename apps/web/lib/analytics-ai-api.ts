@@ -3,7 +3,7 @@
 import { getSessionSafe } from "@/lib/supabase/client"
 
 /**
- * Analytics & AI client (Research, Competitor analysis, Campaign analysis, credit usage).
+ * BI Studio client (Research, Competitor analysis, Campaign analysis, credit usage).
  * Contract: docs/analytics-ai-api.md. Reaches services/fno_intelligence
  * /api/fno/analytics through the /svc/fno-intelligence rewrite.
  */

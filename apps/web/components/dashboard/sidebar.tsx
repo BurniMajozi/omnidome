@@ -59,7 +59,7 @@ const navItems = [
   { icon: Globe, label: "Portal Management", href: "#portal", section: "portal" },
   {
     icon: BarChart3,
-    label: "Analytics & AI",
+    label: "BI Studio",
     href: "#analytics",
     section: "analytics",
     children: [
@@ -112,7 +112,7 @@ export function Sidebar({
   const [retentionOpen, setRetentionOpen] = useState(true)
   const [portalOpen, setPortalOpen] = useState(true)
   const [adminOpen, setAdminOpen] = useState(false)
-  const [analyticsOpen, setAnalyticsOpen] = useState(true)
+  const [analyticsOpen, setAnalyticsOpen] = useState(false)
   const visibleNavItems = navItems.filter((item) => {
     // Items with real routes (not hash anchors) are always visible
     if (item.href.startsWith("/")) return true
