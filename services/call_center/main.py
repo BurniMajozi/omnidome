@@ -32,6 +32,9 @@ from services.call_center.deepgram_service import (
     DeepgramError,
 )
 VoiceboxUnavailable = DeepgramError
+from services.call_center.telephony.confgen import ConfigError as TrunkConfigError, check_fields as check_trunk_fields  # noqa: E402
+from services.call_center.telephony.routes import router as telephony_router  # noqa: E402
+from services.call_center.telephony.service import get_runtime as get_telephony_runtime  # noqa: E402
 
 
 app = FastAPI(title="OmniDome Call Center Service", version="0.3.0")
@@ -67,7 +70,13 @@ async def _lifespan(app: FastAPI):
         )
     else:
         await run_with_db_retry(init_tables, logger=logger)
+    telephony_rt = get_telephony_runtime()
+    try:
+        await telephony_rt.start()
+    except Exception:  # noqa: BLE001 - telephony must never stop the rest of the service from booting
+        logger.exception("telephony failed to start; continuing without it")
     yield
+    await telephony_rt.stop()
 
 
 app.router.lifespan_context = _lifespan
@@ -1304,6 +1313,12 @@ async def put_provider_credentials(provider: str, body: ProviderCredentialBody,
         raise HTTPException(status_code=404, detail="Unknown provider")
     if not body.fields or len(body.fields) > 20 or any(len(k) > 50 or len(v) > 2000 for k, v in body.fields.items()):
         raise HTTPException(status_code=422, detail="fields must have 1-20 entries (names <= 50, values <= 2000 chars)")
+    if provider == "sip":
+        # refuse values that cannot be rendered safely into the PBX config (message never echoes the value)
+        try:
+            check_trunk_fields(body.fields)
+        except TrunkConfigError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
     try:
         blob = secretbox.encrypt(json.dumps(body.fields))
     except secretbox.SecretsUnavailable:
@@ -1320,6 +1335,8 @@ async def put_provider_credentials(provider: str, body: ProviderCredentialBody,
         row.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(row)
+    if provider == "sip":
+        get_telephony_runtime().reconcile_soon()
     return _credential_view(row)
 
 
@@ -1332,6 +1349,8 @@ async def delete_provider_credentials(provider: str, tenant_id: uuid.UUID = Depe
         raise HTTPException(status_code=404, detail="Credentials not found")
     await db.delete(row)
     await db.flush()
+    if provider == "sip":
+        get_telephony_runtime().reconcile_soon()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1475,6 +1494,7 @@ async def topic_detection(file: UploadFile = File(...), tenant_id: uuid.UUID = D
 
 # All HTTP routes are registered above; include the gated router last.
 app.include_router(router)
+app.include_router(telephony_router)
 
 
 if __name__ == "__main__":

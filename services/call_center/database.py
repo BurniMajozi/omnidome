@@ -80,6 +80,8 @@ class CallSession(Base):
     retention_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     # Provider/CDR call id; unique per tenant so CDR imports are idempotent.
     external_call_id: Mapped[Optional[str]] = mapped_column(String(100))
+    # Set to "asterisk" for calls placed/received through the telephony bridge.
+    provider: Mapped[Optional[str]] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -169,6 +171,57 @@ class VoiceAgentDeployment(Base):
     stopped_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
 
+# ── Telephony (Asterisk) ────────────────────────────────────────────────
+
+class TelephonySettings(Base):
+    """One row per tenant: dial policy, limits, DIDs and recording consent for the Asterisk trunk."""
+    __tablename__ = "call_center_telephony_settings"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True, unique=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    dids: Mapped[Optional[str]] = mapped_column(JSON, default=list)  # ["+27211234567"]
+    inbound_queue_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    allowed_prefixes: Mapped[Optional[str]] = mapped_column(JSON, default=list)  # ["+27"]
+    blocked_prefixes: Mapped[Optional[str]] = mapped_column(JSON, default=list)
+    max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=5)
+    max_call_seconds: Mapped[int] = mapped_column(Integer, default=3600)
+    max_calls_per_agent_hour: Mapped[int] = mapped_column(Integer, default=30)
+    recording_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Admin attests the legally required "this call may be recorded" announcement is played (POPIA).
+    recording_announcement_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TelephonyAudit(Base):
+    """Every originate attempt (accepted or refused) and inbound call outcome."""
+    __tablename__ = "call_center_telephony_audit"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # originate | inbound | transfer
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+    agent_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), index=True)
+    to_number: Mapped[Optional[str]] = mapped_column(String(40))
+    result: Mapped[str] = mapped_column(String(60), nullable=False)
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True))
+
+
+class WebrtcEndpointRow(Base):
+    """Short-lived PJSIP endpoint for an agent's browser softphone. Only md5_cred is stored."""
+    __tablename__ = "call_center_webrtc_endpoints"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    agent_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    endpoint_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    md5_cred: Mapped[str] = mapped_column(String(32), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 # ── Session factory ────────────────────────────────────────────────────
 
 _session_factory: Optional[async_sessionmaker] = None
@@ -206,6 +259,7 @@ _ALTERS = (
     "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS retention_until TIMESTAMPTZ",
     "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS external_call_id VARCHAR(100)",
     "ALTER TABLE call_center_agents ADD COLUMN IF NOT EXISTS user_id UUID",
+    "ALTER TABLE call_sessions ADD COLUMN IF NOT EXISTS provider VARCHAR(20)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ux_call_sessions_tenant_external "
     "ON call_sessions (tenant_id, external_call_id) WHERE external_call_id IS NOT NULL",
 )

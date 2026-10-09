@@ -2,7 +2,7 @@
 
     agent  call-center staff (and anyone above): everything not listed as admin
     admin  owner/admin/manager level: delete session/agent/queue, provider credentials, CDR import/export,
-           recording download (recording_url is redacted from responses for non-admins)
+           telephony settings/trunk/audit, recording download (recording_url is redacted from responses for non-admins)
 
 Roles come from the signed identity headers (AUTH_MODE=signed). CALL_CENTER_ENFORCE_ROLES=false switches
 the gates off (local development only).
@@ -48,7 +48,8 @@ def has_tier(auth: AuthContext, tier: str) -> bool:
     return _have(auth, AGENT_ROLES, AGENT_PERMS)
 
 
-_ADMIN_PATH = re.compile(r"^/(provider-credentials(/|$)|reports/import$)|/export(/|$)|/recordings?(/|$)")
+_ADMIN_PATH = re.compile(r"^/(provider-credentials(/|$)|reports/import$)|/export(/|$)|/recordings?(/|$)"
+                         r"|^/telephony/(settings|trunk|audit)(/|$)")
 
 
 def required_tier(method: str, path: str) -> str:

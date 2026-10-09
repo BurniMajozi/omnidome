@@ -189,12 +189,51 @@ services:
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - VOICEBOX_SERVICE_URL=${VOICEBOX_SERVICE_URL:-http://voicebox:8027}
       - OLLAMA_URL=${OLLAMA_URL:-http://ollama:11434}
+      # Telephony (Asterisk). Inactive unless ASTERISK_ARI_PASSWORD is set; see docs/call-center-telephony.md
+      - ASTERISK_ARI_URL=${ASTERISK_ARI_URL:-http://asterisk:8088}
+      - ASTERISK_ARI_USER=${ASTERISK_ARI_USER:-omnidome}
+      - ASTERISK_ARI_PASSWORD=${ASTERISK_ARI_PASSWORD:-}
+      - ASTERISK_ARI_APP=${ASTERISK_ARI_APP:-omnidome}
+      - ASTERISK_ADMIN_URL=${ASTERISK_ADMIN_URL:-http://asterisk:8099}
+      - ASTERISK_ADMIN_TOKEN=${ASTERISK_ADMIN_TOKEN:-}
+      - TELEPHONY_WSS_URL=${TELEPHONY_WSS_URL:-}
+      - TELEPHONY_SIP_DOMAIN=${TELEPHONY_SIP_DOMAIN:-}
+      - TELEPHONY_STUN_URLS=${TELEPHONY_STUN_URLS:-stun:stun.l.google.com:19302}
+      - TELEPHONY_TURN_URL=${TELEPHONY_TURN_URL:-}
+      - TELEPHONY_TURN_USERNAME=${TELEPHONY_TURN_USERNAME:-}
+      - TELEPHONY_TURN_CREDENTIAL=${TELEPHONY_TURN_CREDENTIAL:-}
+      - TELEPHONY_AUTO_TRANSCRIBE=${TELEPHONY_AUTO_TRANSCRIBE:-false}
     ports:
       - "127.0.0.1:8007:8007"
     depends_on:
       - db
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
+      - asterisk_generated:/asterisk-generated
+      - asterisk_recordings:/asterisk-recordings:ro
+
+  # Asterisk PBX for the Call Center. OPT-IN: `docker compose --profile telephony up -d asterisk`.
+  # Publishes NOTHING to the host: ARI/WebSocket (8088) and the admin sidecar (8099) are reachable only
+  # from other containers on this compose network. Public SIP/RTP publishing is a VPS-only step, see
+  # docs/call-center-telephony.md. Refuses to start without ASTERISK_ARI_PASSWORD / ASTERISK_ADMIN_TOKEN.
+  asterisk:
+    build:
+      context: services/asterisk
+    profiles: ["telephony"]
+    environment:
+      - ASTERISK_ARI_USER=${ASTERISK_ARI_USER:-omnidome}
+      - ASTERISK_ARI_PASSWORD=${ASTERISK_ARI_PASSWORD:-}
+      - ASTERISK_ARI_APP=${ASTERISK_ARI_APP:-omnidome}
+      - ASTERISK_ADMIN_TOKEN=${ASTERISK_ADMIN_TOKEN:-}
+      - ASTERISK_RTP_START=${ASTERISK_RTP_START:-10000}
+      - ASTERISK_RTP_END=${ASTERISK_RTP_END:-10100}
+      - ASTERISK_EXTERNAL_IP=${ASTERISK_EXTERNAL_IP:-}
+      - ASTERISK_LOCAL_NET=${ASTERISK_LOCAL_NET:-}
+      - ASTERISK_STUN_SERVER=${ASTERISK_STUN_SERVER:-stun.l.google.com:19302}
+    volumes:
+      - asterisk_generated:/etc/asterisk/generated:ro
+      - asterisk_recordings:/var/spool/asterisk/recording
+    restart: unless-stopped
 
   support:
     build:
@@ -770,3 +809,5 @@ volumes:
   voicebox_models:
   voicebox_data:
   presenton_data:
+  asterisk_generated:
+  asterisk_recordings:

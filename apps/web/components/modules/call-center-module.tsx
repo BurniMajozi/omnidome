@@ -61,6 +61,7 @@ import { PageHeader } from "@/components/ui/page-header"
 import { VoiceAIPanel } from "@/components/modules/voice-ai-panel"
 import { VoiceStudioTab } from "@/components/modules/voice-studio-tab"
 import { AsteriskTelephonyView } from "./call-center/asterisk-telephony-view"
+import { TelephonyDock, TelephonySettingsPanel } from "./call-center-telephony"
 import { AstppBillingView } from "./call-center/astpp-billing-view"
 import { CallSeekerView } from "./call-center/call-seeker-view"
 import { SmartIvrStudio } from "./call-center/smart-ivr-studio"
@@ -1331,6 +1332,10 @@ export function CallCenterModule() {
             <Sparkles className="h-3.5 w-3.5" />
             Voice Studio
           </TabsTrigger>
+          <TabsTrigger value="telephony" className="gap-1.5 text-xs data-[state=active]:text-emerald-400">
+            <Phone className="h-3.5 w-3.5" />
+            Telephony
+          </TabsTrigger>
           <TabsTrigger value="asterisk" className="gap-1.5 text-xs data-[state=active]:text-cyan-400">
             <Server className="h-3.5 w-3.5" />
             Asterisk Core &amp; CDRs
@@ -1377,6 +1382,10 @@ export function CallCenterModule() {
           <VoiceStudioTab />
         </TabsContent>
 
+        <TabsContent value="telephony">
+          <TelephonySettingsPanel />
+        </TabsContent>
+
         <TabsContent value="asterisk">
           {CALL_CENTER_SIMULATED_TELEPHONY_ENABLED ? <AsteriskTelephonyView /> : <SimulatedTelephonyOff label="Asterisk core and CDRs" />}
         </TabsContent>
@@ -1405,6 +1414,7 @@ export function CallCenterModule() {
           <Customer360Tab />
         </TabsContent>
       </Tabs>
+      <TelephonyDock />
     </div>
   )
 }
