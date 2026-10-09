@@ -97,7 +97,9 @@ returned; `stripped_claims` counts model statements removed for lacking a valid 
   `409` duplicate name or limit (`ANALYTICS_MAX_COMPETITORS_PER_TENANT`, default 25). If pricing/promo URLs are omitted the scan discovers them.
 * `GET /competitors` (viewer) -> `[Competitor]`
 * `GET /competitors/{id}` (viewer)
-* `PUT /competitors/{id}` (analyst): same fields, all optional, plus `active`. `null` for pricing/promo URL clears it.
+* `PUT /competitors/{id}` (analyst): same fields, all optional, plus `active`. `null` for pricing/promo URL clears it. Also accepts the auto-scan schedule fields below.
+* `POST /competitors/{id}/seen` (viewer): marks the competitor's changes as seen (tenant-wide `last_seen_at`); returns the competitor with `new_changes_since_last_view: 0`.
+* `POST /competitors/{id}/resume` (analyst): un-pauses an auto-paused schedule (resets `consecutive_failures`, reschedules). 409 if no schedule is set.
 * `DELETE /competitors/{id}` (admin) -> 204 (removes snapshots and changes).
 
 ### `POST /competitors/{id}/scan` (analyst) -> 202
@@ -155,13 +157,48 @@ Points are oldest first (chart-ready).
 ### `GET /competitors/overview` (viewer)
 ```json
 { "count": 1, "competitors": [ { /* Competitor fields */ "plans_count": 6, "promotions_count": 1,
-  "latest_snapshot_at": "...", "latest_changes": [ /* up to 3 change objects */ ] } ] }
+  "latest_snapshot_at": "...", "latest_changes": [ /* up to 3 change objects */ ],
+  "new_changes_since_last_view": 2 } ], "estimated_credits_per_scan": 16 }
 ```
 
 ### `GET /competitors/activity?limit=50` (viewer)
 Newest-first mixed feed: `{"items": [ {"kind": "change", "at": "...", ...change fields} , {"kind": "scan", "at": "...", "competitor_id", "competitor_name", "snapshot_id", "plans_count", "promotions_count"} ]}`.
 
-Optional daily re-scan scheduler: off by default (`ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=true` to enable).
+### Auto-scan schedule (per competitor, chosen by the user)
+
+**Default is manual only**: a competitor is never scanned automatically until a user sets a schedule. The
+background loop is global but only acts on competitors with a schedule, an `active` flag and a due `next_scan_at`.
+
+Request fields (`POST /competitors`, `PUT /competitors/{id}`):
+
+| Field | Values |
+|---|---|
+| `schedule_frequency` | `null` (manual only / turn off), `"12h"`, `"daily"`, `"weekly"`, `"monthly"` |
+| `schedule_time` | `"HH:MM"` 24h, **Africa/Johannesburg** local time (daily/weekly/monthly; default `06:00`) |
+| `schedule_weekday` | `0` (Mon) .. `6` (Sun), required for weekly |
+| `schedule_day_of_month` | `1`..`28`, required for monthly |
+| `scan_interval_hours` | legacy shortcut: `12`/`24`/`168`/`720` map to 12h/daily/weekly/monthly (other values 422); `null` = off |
+
+Invalid combinations return 422. `next_scan_at` is computed from the local wall-clock time via `zoneinfo` (DST-safe) and
+is the next occurrence after "now" (setting a schedule does not trigger an immediate scan; use *Scan now*). `12h` runs 12 hours after the last scan (or from now).
+Turning the schedule off (`schedule_frequency: null`) clears `next_scan_at` and the failure counter.
+
+Response fields on every competitor: `schedule_frequency`, `schedule_time`, `schedule_weekday`, `schedule_day_of_month`,
+`schedule_timezone`, `scan_interval_hours`, `next_scan_at`, `last_scanned_at`, `last_status`
+(`queued|scanning|ok|capped|failed|blocked`), `last_error` (short, secrets redacted), `consecutive_failures`,
+`auto_scan_paused`, `estimated_credits_per_month` (scans per month x up to 16 credits; an estimate), `last_seen_at`.
+
+Scheduler behaviour:
+
+* Tick every `ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS`; each due competitor is claimed with one atomic `UPDATE`
+  (safe with several uvicorn workers; a claim older than 15 min is recoverable). Each scan uses its own DB sessions.
+* Credit caps: if the tenant cannot afford a scan the competitor is **not** scanned; `last_status='capped'` and
+  `next_scan_at` moves to the next day/month start (plus up to 30 min jitter). No retry storm.
+* Failures: exponential backoff (base 30 min, doubling, capped at the interval); after `ANALYTICS_COMPETITOR_MAX_FAILURES` (5)
+  consecutive scheduled failures the schedule auto-pauses (`next_scan_at=null`, `last_status='failed'`, `last_error` explains) until `POST .../resume`.
+  A website that is no longer allowed to be fetched is paused as `blocked`. Manual scan failures never pause a schedule.
+* Small jitter is added after each scheduled run so tenants do not fire at the same instant.
+* Scheduled scans record snapshots and `competitor_changes` exactly like manual scans.
 
 ---
 
@@ -257,9 +294,13 @@ a platform admin may set any value (use `X-Org-Id` to target a tenant). Returns 
 | `ANALYTICS_ENFORCE_ROLES` | `true` | `false` disables role gates (dev only) |
 | `ANALYTICS_ALLOW_HTTP` | `false` | allow `http://` user URLs |
 | `ANALYTICS_MAX_COMPETITORS_PER_TENANT` | `25` | competitor limit |
-| `ANALYTICS_COMPETITOR_SCHEDULER_ENABLED` | `false` | daily re-scan worker |
-| `ANALYTICS_COMPETITOR_SCAN_INTERVAL_HOURS` | `24` | re-scan age threshold |
-| `ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS` | `3600` | scheduler tick |
+| `ANALYTICS_COMPETITOR_SCHEDULER_ENABLED` | `true` | kill switch for the global auto-scan loop (it only scans competitors a user scheduled) |
+| `ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS` | `600` | scheduler tick |
+| `ANALYTICS_COMPETITOR_SCHEDULER_STARTUP_DELAY_SECONDS` | `90` | delay before the first tick |
+| `ANALYTICS_COMPETITOR_MAX_SCANS_PER_TICK` | `5` | max scans started per tick |
+| `ANALYTICS_COMPETITOR_MAX_PARALLEL` | `2` | max concurrent scheduled scans |
+| `ANALYTICS_COMPETITOR_MAX_FAILURES` | `5` | consecutive failures before auto-pause |
+| `ANALYTICS_COMPETITOR_BACKOFF_BASE_MINUTES` | `30` | first retry delay after a failure |
 | `ANALYTICS_CAMPAIGN_MAX_QUERIES` / `_MAX_PAGES` / `_MAX_ITEMS` | `4` / `12` / `300` | campaign analysis bounds |
 | `ANALYTICS_LLM_TIMEOUT` | `90` | seconds per LLM call |
 
@@ -267,7 +308,7 @@ a platform admin may set any value (use `X-Org-Id` to target a tenant). Returns 
 
 `analytics_credit_ledger`, `analytics_credit_limits`, `analytics_research_runs`, `analytics_competitors`,
 `analytics_competitor_snapshots` (insert-only), `analytics_competitor_changes`, `analytics_campaign_analyses`,
-`analytics_campaign_items`. Runs left `queued/running` by a restart are marked `failed` at startup.
+`analytics_campaign_items`. The scheduler columns on `analytics_competitors` (`schedule_*`, `scan_interval_hours`, `next_scan_at`, `last_status`, `consecutive_failures`, `last_seen_at`) are added by idempotent `ADD COLUMN IF NOT EXISTS` in `init_tables`. Runs left `queued/running` by a restart are marked `failed` at startup.
 
 ## Known limits
 

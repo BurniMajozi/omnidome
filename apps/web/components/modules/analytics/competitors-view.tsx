@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ArrowLeft, Loader2, Pencil, Plus, RefreshCcw, Trash2 } from "lucide-react"
+import { ArrowLeft, Loader2, Pencil, Play, Plus, PowerOff, RefreshCcw, Trash2 } from "lucide-react"
 import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
@@ -16,6 +16,8 @@ import {
   getPricingHistory,
   getPromotions,
   getSnapshots,
+  markCompetitorSeen,
+  resumeCompetitorSchedule,
   safeHttpUrl,
   scanCompetitor,
   updateCompetitor,
@@ -23,6 +25,7 @@ import {
   type Competitor,
   type CompetitorInput,
   type CompetitorOverviewItem,
+  type ScheduleFrequency,
   type PlanChange,
   type PricingHistory,
   type PromotionsView,
@@ -53,6 +56,111 @@ const scanLabel: Record<Competitor["scan_status"], string> = {
   ok: "Scanned",
   no_data: "No pricing found",
   failed: "Scan failed",
+}
+
+// ── Auto-scan schedule (user chosen; default is manual only) ────────
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+const SCANS_PER_MONTH: Record<ScheduleFrequency, number> = { "12h": 60, daily: 30, weekly: 4.3, monthly: 1 }
+const TZ = "Africa/Johannesburg"
+
+function fmtLocal(iso: string | null | undefined) {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return "—"
+  return d.toLocaleString("en-ZA", { timeZone: TZ, weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })
+}
+
+interface ScheduleDraft {
+  freq: ScheduleFrequency | ""
+  time: string
+  weekday: number
+  dom: number
+}
+function draftOf(c?: Competitor): ScheduleDraft {
+  return {
+    freq: c?.schedule_frequency ?? "",
+    time: c?.schedule_time ?? "06:00",
+    weekday: c?.schedule_weekday ?? 0,
+    dom: c?.schedule_day_of_month ?? 1,
+  }
+}
+function scheduleBody(d: ScheduleDraft) {
+  if (!d.freq) return { schedule_frequency: null, schedule_time: null, schedule_weekday: null, schedule_day_of_month: null }
+  return {
+    schedule_frequency: d.freq,
+    schedule_time: d.freq === "12h" ? null : d.time,
+    schedule_weekday: d.freq === "weekly" ? d.weekday : null,
+    schedule_day_of_month: d.freq === "monthly" ? d.dom : null,
+  }
+}
+function scheduleSummary(c: Pick<Competitor, "schedule_frequency" | "schedule_time" | "schedule_weekday" | "schedule_day_of_month">) {
+  const f = c.schedule_frequency
+  if (!f) return "Manual only"
+  if (f === "12h") return "Every 12 hours"
+  const at = `at ${c.schedule_time ?? "06:00"}`
+  if (f === "daily") return `Daily ${at}`
+  if (f === "weekly") return `Weekly on ${WEEKDAYS[c.schedule_weekday ?? 0]} ${at}`
+  return `Monthly on day ${c.schedule_day_of_month ?? 1} ${at}`
+}
+
+function ScheduleFields({ value, onChange }: { value: ScheduleDraft; onChange: (v: ScheduleDraft) => void }) {
+  const perMonth = value.freq ? Math.round(SCANS_PER_MONTH[value.freq] * 16) : null
+  return (
+    <div className="space-y-2 rounded-lg border border-border bg-secondary/20 p-3">
+      <p className="text-xs font-medium text-muted-foreground">Auto-scan</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <label className="text-xs font-medium text-muted-foreground">
+          Frequency
+          <select
+            className={cn(inputCls, "mt-1")}
+            value={value.freq}
+            onChange={(e) => onChange({ ...value, freq: e.target.value as ScheduleDraft["freq"] })}
+          >
+            <option value="">Manual only</option>
+            <option value="12h">Every 12 hours</option>
+            <option value="daily">Daily</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </label>
+        {value.freq === "weekly" && (
+          <label className="text-xs font-medium text-muted-foreground">
+            Day of week
+            <select className={cn(inputCls, "mt-1")} value={value.weekday} onChange={(e) => onChange({ ...value, weekday: Number(e.target.value) })}>
+              {WEEKDAYS.map((w, i) => (
+                <option key={w} value={i}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {value.freq === "monthly" && (
+          <label className="text-xs font-medium text-muted-foreground">
+            Day of month (1-28)
+            <select className={cn(inputCls, "mt-1")} value={value.dom} onChange={(e) => onChange({ ...value, dom: Number(e.target.value) })}>
+              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {(value.freq === "daily" || value.freq === "weekly" || value.freq === "monthly") && (
+          <label className="text-xs font-medium text-muted-foreground">
+            Time (South Africa, 24h)
+            <input type="time" className={cn(inputCls, "mt-1")} value={value.time} onChange={(e) => onChange({ ...value, time: e.target.value })} />
+          </label>
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {value.freq
+          ? `Scans use Firecrawl credits. Estimate: up to ~${perMonth} credits per month (about ${SCANS_PER_MONTH[value.freq]} scans x up to 16 credits). Estimate only; scans stop if your credit cap is reached.`
+          : "Nothing is scanned automatically. Use Scan now whenever you want fresh data."}
+      </p>
+    </div>
+  )
 }
 
 function money(n: number | null | undefined, cur?: string | null) {
@@ -135,6 +243,7 @@ function CompetitorForm({ initial, onSaved, onCancel }: { initial?: Competitor; 
   const [pricing, setPricing] = useState(initial?.pricing_page_url ?? "")
   const [promo, setPromo] = useState(initial?.promo_page_url ?? "")
   const [active, setActive] = useState(initial?.active ?? true)
+  const [sched, setSched] = useState<ScheduleDraft>(draftOf(initial))
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -143,6 +252,7 @@ function CompetitorForm({ initial, onSaved, onCancel }: { initial?: Competitor; 
     if (!name.trim() || name.trim().length > 120) return setErr("Enter a name (max 120 characters).")
     const e = validateUrl("Website", website, true) ?? validateUrl("Pricing page", pricing, false) ?? validateUrl("Promotions page", promo, false)
     if (e) return setErr(e)
+    if (sched.freq && sched.freq !== "12h" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(sched.time)) return setErr("Choose a valid scan time (HH:MM).")
     setBusy(true)
     try {
       const body: CompetitorInput = {
@@ -150,6 +260,7 @@ function CompetitorForm({ initial, onSaved, onCancel }: { initial?: Competitor; 
         website: website.trim(),
         pricing_page_url: pricing.trim() || null,
         promo_page_url: promo.trim() || null,
+        ...(initial || sched.freq ? scheduleBody(sched) : {}),
       }
       const saved = initial ? await updateCompetitor(initial.id, { ...body, active }) : await createCompetitor(body)
       onSaved(saved)
@@ -182,6 +293,7 @@ function CompetitorForm({ initial, onSaved, onCancel }: { initial?: Competitor; 
           <input className={cn(inputCls, "mt-1")} value={promo} onChange={(e) => setPromo(e.target.value)} />
         </label>
       </div>
+      <ScheduleFields value={sched} onChange={setSched} />
       {initial && (
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
@@ -297,6 +409,32 @@ function CompetitorDetail({ id, onBack, onChanged }: { id: string; onBack: () =>
   useEffect(() => {
     void loadAll()
   }, [loadAll])
+  // Opening the detail clears the "N new changes" badge on the list.
+  useEffect(() => {
+    markCompetitorSeen(id)
+      .then(() => onChanged())
+      .catch(() => undefined)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+
+  async function turnOffSchedule() {
+    try {
+      setComp(await updateCompetitor(id, scheduleBody(draftOf())))
+      onChanged()
+    } catch (e) {
+      if (e instanceof AnalyticsApiError && e.forbidden) markDenied()
+      setErr(errText(e))
+    }
+  }
+  async function resume() {
+    try {
+      setComp(await resumeCompetitorSchedule(id))
+      onChanged()
+    } catch (e) {
+      if (e instanceof AnalyticsApiError && e.forbidden) markDenied()
+      setErr(errText(e))
+    }
+  }
 
   const scanning = comp?.scan_status === "scanning"
   usePoll(scanning, async () => {
@@ -383,6 +521,41 @@ function CompetitorDetail({ id, onBack, onChanged }: { id: string; onBack: () =>
         </div>
       </div>
       <UsageIndicator refreshKey={usageKey} />
+      <div className="space-y-1 rounded-lg border border-border bg-secondary/20 p-3 text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-foreground">Auto-scan: {scheduleSummary(comp)}</span>
+          {comp.schedule_frequency && comp.last_status === "ok" && <Pill tone="good">OK</Pill>}
+          {comp.schedule_frequency && comp.last_status === "scanning" && <Pill tone="info">Scanning</Pill>}
+          {comp.schedule_frequency && comp.last_status === "queued" && <Pill tone="muted">Waiting for first scan</Pill>}
+          {comp.last_status === "capped" && <Pill tone="warn">Paused until credits reset</Pill>}
+          {comp.last_status === "failed" && comp.schedule_frequency && (
+            <Pill tone="bad">{comp.auto_scan_paused ? "Auto-scan paused" : "Last scan failed"}</Pill>
+          )}
+          {comp.last_status === "blocked" && <Pill tone="bad">Blocked</Pill>}
+          {comp.schedule_frequency && (
+            <Button variant="ghost" size="sm" onClick={turnOffSchedule} disabled={denied} title={denied ? NO_RUN_TIP : "Stop scanning automatically"}>
+              <PowerOff className="h-3.5 w-3.5" />
+              Turn off schedule
+            </Button>
+          )}
+          {comp.auto_scan_paused && (
+            <Button variant="outline" size="sm" onClick={resume} disabled={denied}>
+              <Play className="h-3.5 w-3.5" />
+              Resume
+            </Button>
+          )}
+        </div>
+        <p>
+          Last scanned: {comp.last_scanned_at ? fmtLocal(comp.last_scanned_at) : "Not scanned yet"}
+          {comp.schedule_frequency && !comp.auto_scan_paused && <> · Next scan: {fmtLocal(comp.next_scan_at)} (South Africa time)</>}
+        </p>
+        {comp.schedule_frequency && comp.estimated_credits_per_month != null && (
+          <p>Estimated credits: up to ~{comp.estimated_credits_per_month} per month at this schedule (estimate only).</p>
+        )}
+        {comp.schedule_frequency && (comp.last_status === "failed" || comp.last_status === "blocked" || comp.last_status === "capped") && comp.last_error && (
+          <p className="text-amber-300">{comp.last_error}</p>
+        )}
+      </div>
       {scanMsg && <p className="text-xs text-muted-foreground">{scanMsg}</p>}
       {comp.scan_status === "failed" && comp.last_error && <ErrorNote message={comp.last_error} />}
       {comp.scan_status === "no_data" && (
@@ -635,6 +808,17 @@ export function CompetitorsView() {
               <p className="text-xs text-muted-foreground">
                 Last scanned: {c.last_scanned_at ? fmtDateTime(c.last_scanned_at) : "Not scanned yet"}
               </p>
+              <p className="text-xs text-muted-foreground">
+                Auto-scan: {scheduleSummary(c)}
+                {c.schedule_frequency && c.next_scan_at && !c.auto_scan_paused ? ` · next ${fmtLocal(c.next_scan_at)}` : ""}
+                {c.last_status === "capped" ? " · paused until credits reset" : ""}
+                {c.auto_scan_paused ? " · paused" : ""}
+              </p>
+              {(c.new_changes_since_last_view ?? 0) > 0 && (
+                <Pill tone="info">
+                  {c.new_changes_since_last_view} new change{c.new_changes_since_last_view === 1 ? "" : "s"}
+                </Pill>
+              )}
               {c.last_scanned_at && (
                 <p className="text-xs text-foreground/80">
                   {c.plans_count} plans · {c.promotions_count} promotions

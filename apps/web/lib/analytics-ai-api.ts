@@ -180,13 +180,32 @@ export interface Competitor {
   last_error: string | null
   last_scanned_at: string | null
   created_at: string
+  // Auto-scan schedule. Default is manual only (schedule_frequency === null); the user chooses when.
+  schedule_frequency?: ScheduleFrequency | null
+  schedule_time?: string | null // HH:MM, Africa/Johannesburg
+  schedule_weekday?: number | null // 0 = Monday .. 6 = Sunday
+  schedule_day_of_month?: number | null // 1-28
+  schedule_timezone?: string
+  next_scan_at?: string | null
+  last_status?: ScheduleStatus | null
+  consecutive_failures?: number
+  auto_scan_paused?: boolean
+  estimated_credits_per_month?: number | null
+  last_seen_at?: string | null
+  new_changes_since_last_view?: number
 }
+export type ScheduleFrequency = "12h" | "daily" | "weekly" | "monthly"
+export type ScheduleStatus = "queued" | "scanning" | "ok" | "capped" | "failed" | "blocked"
 export interface CompetitorInput {
   name: string
   website: string
   pricing_page_url?: string | null
   promo_page_url?: string | null
   active?: boolean
+  schedule_frequency?: ScheduleFrequency | null // null = manual only
+  schedule_time?: string | null
+  schedule_weekday?: number | null
+  schedule_day_of_month?: number | null
 }
 export interface PlanChange {
   id: string
@@ -272,11 +291,13 @@ export type ActivityItem =
   | ({ kind: "change"; at: string } & PlanChange)
   | { kind: "scan"; at: string; competitor_id: string; competitor_name: string; snapshot_id: string; plans_count: number; promotions_count: number }
 
-export const getCompetitorOverview = () => call<{ count: number; competitors: CompetitorOverviewItem[] }>("/competitors/overview")
+export const getCompetitorOverview = () => call<{ count: number; estimated_credits_per_scan?: number; competitors: CompetitorOverviewItem[] }>("/competitors/overview")
 export const getCompetitorActivity = (limit = 50) => call<{ items: ActivityItem[] }>(`/competitors/activity${qs({ limit })}`)
 export const createCompetitor = (b: CompetitorInput) => post<Competitor>("/competitors", b)
 export const updateCompetitor = (id: string, b: Partial<CompetitorInput>) => put<Competitor>(`/competitors/${id}`, b)
 export const getCompetitor = (id: string) => call<Competitor>(`/competitors/${id}`)
+export const markCompetitorSeen = (id: string) => post<Competitor>(`/competitors/${id}/seen`)
+export const resumeCompetitorSchedule = (id: string) => post<Competitor>(`/competitors/${id}/resume`)
 export const deleteCompetitor = (id: string) => del(`/competitors/${id}`)
 export const scanCompetitor = (id: string) =>
   post<{ competitor_id: string; scan_status: ScanStatus; estimated_credits: number; message: string }>(`/competitors/${id}/scan`)

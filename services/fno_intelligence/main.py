@@ -42,7 +42,7 @@ async def startup():
     swept_runs = await sweep_stuck_runs()
     if swept_runs:
         logger.info("Marked %d interrupted analytics run(s) as failed", swept_runs)
-    schedule_background(run_competitor_scheduler())  # returns at once unless ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=true
+    schedule_background(run_competitor_scheduler())  # global loop; only scans competitors a user gave a schedule (kill switch: ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=false)
     logger.info("FNO Intelligence service started")
 
 

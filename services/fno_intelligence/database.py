@@ -120,3 +120,18 @@ async def init_tables():
                               f"END $$;")
                     )
         await conn.run_sync(Base.metadata.create_all)
+        # create_all never ALTERs existing tables: idempotent column adds (still under the advisory lock).
+        for ddl in (
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS scan_interval_hours INTEGER",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS schedule_frequency VARCHAR(10)",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS schedule_time VARCHAR(5)",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS schedule_weekday INTEGER",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS schedule_day_of_month INTEGER",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS next_scan_at TIMESTAMPTZ",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS last_status VARCHAR(12)",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS consecutive_failures INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE analytics_competitors ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ",
+            "CREATE INDEX IF NOT EXISTS ix_analytics_competitors_due ON analytics_competitors (next_scan_at) "
+            "WHERE scan_interval_hours IS NOT NULL",
+        ):
+            await conn.execute(_text(ddl))

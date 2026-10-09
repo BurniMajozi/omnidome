@@ -103,6 +103,16 @@ class AiCompetitor(Base):
     scan_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_scanned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Auto-scan scheduler (added by migration in database.init_tables; NULL interval = manual only)
+    scan_interval_hours: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 12|24|168|720
+    schedule_frequency: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 12h|daily|weekly|monthly; NULL = manual only
+    schedule_time: Mapped[Optional[str]] = mapped_column(String(5), nullable=True)  # HH:MM Africa/Johannesburg
+    schedule_weekday: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 0=Mon..6=Sun (weekly)
+    schedule_day_of_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1-28 (monthly)
+    next_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)  # queued|scanning|ok|capped|failed|blocked
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)  # tenant-level "seen" mark
     created_at: Mapped[datetime] = _ts()
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

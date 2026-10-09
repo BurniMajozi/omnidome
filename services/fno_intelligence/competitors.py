@@ -14,9 +14,10 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -387,19 +388,201 @@ def _provenance(pg: dict) -> dict:
                                "excerpt_hash", "extraction")}
 
 
-async def claim_scan(db: AsyncSession, tenant_id: uuid.UUID, competitor_id: uuid.UUID) -> bool:
+# ── auto-scan scheduling (pure helpers, unit tested) ──────────────────────
+
+SCAN_INTERVALS = (12, 24, 168, 720)  # hours: 12h, daily, weekly, monthly (null = manual only)
+_SECRET_RE = re.compile(r"(?i)(bearer\s+[\w\-.~+/=]+|\bfc-[\w-]+|(?:api[_-]?key|token|secret|password)=[^\s&]+|"
+                        r"https?://[^\s]*[?&](?:key|token|apikey)=[^\s&]+)")
+
+
+def _env_num(key: str, default: float, minimum: float = 0) -> float:
+    try:
+        return max(minimum, float(os.getenv(key, str(default))))
+    except ValueError:
+        return default
+
+
+def max_consecutive_failures() -> int:
+    return int(_env_num("ANALYTICS_COMPETITOR_MAX_FAILURES", 5, 1))
+
+
+def sanitize_error(msg: Optional[str], limit: int = 240) -> Optional[str]:
+    """Short, single-line, secret-free error text for the UI."""
+    if not msg:
+        return None
+    t = _SECRET_RE.sub("[redacted]", ac.norm_ws(str(msg)))
+    return (t[: limit - 1] + "…") if len(t) > limit else t
+
+
+def aware(dt: Optional[datetime]) -> Optional[datetime]:
+    """SQLite hands back naive datetimes; everything we store is UTC."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _jitter(interval_hours: float, rand, max_minutes: float = 30) -> timedelta:
+    """Up to 10% of the interval (max `max_minutes`) so tenants do not all fire at once."""
+    return timedelta(minutes=rand() * min(0.1 * interval_hours * 60, max_minutes))
+
+
+def next_period_start(now: datetime, scope: str) -> datetime:
+    if scope == "monthly":
+        m = ac._month_start(now)
+        return m.replace(year=m.year + 1, month=1) if m.month == 12 else m.replace(month=m.month + 1)
+    return ac._day_start(now) + timedelta(days=1)
+
+
+# ── schedule: the USER chooses when (Africa/Johannesburg local time); default is manual only ──
+
+TENANT_TZ_NAME = "Africa/Johannesburg"
+FREQUENCIES = ("12h", "daily", "weekly", "monthly")
+INTERVAL_OF = {"12h": 12, "daily": 24, "weekly": 168, "monthly": 720}
+FREQ_OF_INTERVAL = {v: k for k, v in INTERVAL_OF.items()}
+SCANS_PER_MONTH = {"12h": 60.0, "daily": 30.0, "weekly": 4.3, "monthly": 1.0}
+DEFAULT_TIME = "06:00"
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def _tz():
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(TENANT_TZ_NAME)
+    except Exception:  # tzdata missing (e.g. Windows): South Africa has no DST, UTC+2 is exact
+        return timezone(timedelta(hours=2))
+
+
+def normalize_schedule(frequency: Optional[str], time_: Optional[str] = None, weekday: Optional[int] = None,
+                       day_of_month: Optional[int] = None) -> dict:
+    """Validate and normalise a schedule. frequency None/'off'/'manual' = manual only. Raises ValueError."""
+    if frequency in (None, "", "off", "manual"):
+        return {"schedule_frequency": None, "schedule_time": None, "schedule_weekday": None,
+                "schedule_day_of_month": None, "scan_interval_hours": None}
+    if frequency not in FREQUENCIES:
+        raise ValueError(f"schedule_frequency must be one of {', '.join(FREQUENCIES)} or null (manual only)")
+    out = {"schedule_frequency": frequency, "schedule_time": None, "schedule_weekday": None,
+           "schedule_day_of_month": None, "scan_interval_hours": INTERVAL_OF[frequency]}
+    if frequency == "12h":
+        return out
+    t = time_ or DEFAULT_TIME
+    if not _TIME_RE.match(t):
+        raise ValueError("schedule_time must be HH:MM (24-hour, South Africa time)")
+    out["schedule_time"] = t
+    if frequency == "weekly":
+        if weekday is None or not isinstance(weekday, int) or isinstance(weekday, bool) or not 0 <= weekday <= 6:
+            raise ValueError("schedule_weekday is required for weekly scans (0=Monday ... 6=Sunday)")
+        out["schedule_weekday"] = weekday
+    if frequency == "monthly":
+        if day_of_month is None or not isinstance(day_of_month, int) or isinstance(day_of_month, bool)                 or not 1 <= day_of_month <= 28:
+            raise ValueError("schedule_day_of_month is required for monthly scans (1-28)")
+        out["schedule_day_of_month"] = day_of_month
+    return out
+
+
+def next_run_at(after: datetime, frequency: Optional[str], time_: Optional[str] = None, weekday: Optional[int] = None,
+                day_of_month: Optional[int] = None) -> Optional[datetime]:
+    """Next UTC instant strictly after `after` matching the schedule in Africa/Johannesburg local time.
+    The local wall-clock time is built first and converted afterwards, so DST zones stay correct."""
+    if frequency is None:
+        return None
+    after = aware(after)
+    if frequency == "12h":
+        return after + timedelta(hours=12)
+    tz = _tz()
+    local = after.astimezone(tz)
+    hh, mm = (int(x) for x in (time_ or DEFAULT_TIME).split(":"))
+
+    def at(d):
+        return datetime(d.year, d.month, d.day, hh, mm, tzinfo=tz)
+
+    if frequency == "daily":
+        cand = at(local)
+        while cand.astimezone(timezone.utc) <= after:
+            cand = at(local.date() + timedelta(days=1)) if cand.date() == local.date() else at(cand.date() + timedelta(days=1))
+        return cand.astimezone(timezone.utc)
+    if frequency == "weekly":
+        days = ((weekday or 0) - local.weekday()) % 7
+        d = local.date() + timedelta(days=days)
+        cand = at(d)
+        while cand.astimezone(timezone.utc) <= after:
+            d += timedelta(days=7)
+            cand = at(d)
+        return cand.astimezone(timezone.utc)
+    # monthly
+    y, m = local.year, local.month
+    while True:
+        cand = at(datetime(y, m, day_of_month or 1))
+        if cand.astimezone(timezone.utc) > after:
+            return cand.astimezone(timezone.utc)
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+
+
+def schedule_of(c) -> dict:
+    return {"frequency": c.schedule_frequency, "time_": c.schedule_time, "weekday": c.schedule_weekday,
+            "day_of_month": c.schedule_day_of_month}
+
+
+def estimated_credits_per_month(frequency: Optional[str]) -> Optional[int]:
+    return round(SCANS_PER_MONTH[frequency] * SCAN_CREDIT_ESTIMATE) if frequency in SCANS_PER_MONTH else None
+
+
+def plan_next_scan(*, now: datetime, schedule: Optional[dict], outcome: str, failures: int,
+                   scheduled: bool, cap_scope: str = "daily", rand=None) -> dict:
+    """What to store after a scan. outcome: ok | no_data | capped | failed. `schedule` is schedule_of(c)
+    (frequency None = manual only: next_scan_at is never set). Returns last_status, consecutive_failures and
+    (only when it should change) next_scan_at."""
+    rand = rand or (lambda: random.random())
+    freq = (schedule or {}).get("frequency")
+    ih = INTERVAL_OF.get(freq) if freq else None
+
+    def regular(after: datetime) -> datetime:
+        base = next_run_at(after, **schedule)
+        return base + (_jitter(ih, rand) if freq == "12h" else timedelta(minutes=rand() * 5))
+
+    if outcome in ("ok", "no_data"):
+        out = {"last_status": "ok", "consecutive_failures": 0}
+        if ih:
+            out["next_scan_at"] = regular(now)
+        return out
+    if outcome == "capped":
+        out = {"last_status": "capped", "consecutive_failures": failures}
+        if ih:
+            out["next_scan_at"] = regular(next_period_start(now, cap_scope) - timedelta(seconds=1))
+        return out
+    f = failures + 1 if scheduled else failures
+    out = {"last_status": "failed", "consecutive_failures": f}
+    if ih and scheduled:
+        if f >= max_consecutive_failures():
+            out["next_scan_at"] = None  # auto-paused until the user resumes
+        else:
+            base = _env_num("ANALYTICS_COMPETITOR_BACKOFF_BASE_MINUTES", 30, 1)
+            delay = min(base * (2 ** (f - 1)), ih * 60)
+            out["next_scan_at"] = now + timedelta(minutes=delay) + _jitter(ih, rand)
+    return out
+
+
+# ── scanning ──────────────────────────────────────────────────────────────
+
+def _claimable(t: datetime):
+    return ((AiCompetitor.scan_status != "scanning") | (AiCompetitor.scan_started_at.is_(None))
+            | (AiCompetitor.scan_started_at < t - _STUCK_AFTER))
+
+
+async def claim_scan(db: AsyncSession, tenant_id: uuid.UUID, competitor_id: uuid.UUID, *, due_only: bool = False) -> bool:
+    """Atomic claim (one UPDATE). Safe across uvicorn workers; a claim older than _STUCK_AFTER is recoverable.
+    due_only (scheduler): additionally requires an active, scheduled, due competitor."""
     t = ac.now()
-    res = await db.execute(
-        update(AiCompetitor)
-        .where(AiCompetitor.id == competitor_id, AiCompetitor.tenant_id == tenant_id,
-               (AiCompetitor.scan_status != "scanning") | (AiCompetitor.scan_started_at.is_(None))
-               | (AiCompetitor.scan_started_at < t - _STUCK_AFTER))
-        .values(scan_status="scanning", scan_started_at=t, last_error=None))
+    conds = [AiCompetitor.id == competitor_id, AiCompetitor.tenant_id == tenant_id, _claimable(t)]
+    if due_only:
+        conds += [AiCompetitor.active.is_(True), AiCompetitor.scan_interval_hours.is_not(None),
+                  AiCompetitor.next_scan_at.is_not(None), AiCompetitor.next_scan_at <= t]
+    res = await db.execute(update(AiCompetitor).where(*conds)
+                           .values(scan_status="scanning", scan_started_at=t, last_error=None, last_status="scanning"))
     await db.commit()
     return res.rowcount == 1
 
 
-async def execute_scan(tenant_id: uuid.UUID, competitor_id: uuid.UUID) -> dict:
+async def execute_scan(tenant_id: uuid.UUID, competitor_id: uuid.UUID, scheduled: bool = False) -> dict:
     """Run a scan whose claim was already taken. Own DB sessions; records the outcome on the competitor."""
     async with database.get_session_factory()() as db:
         c = await db.get(AiCompetitor, competitor_id)
@@ -407,7 +590,7 @@ async def execute_scan(tenant_id: uuid.UUID, competitor_id: uuid.UUID) -> dict:
             return {"status": "missing"}
         comp = {"website": c.website, "pricing_page_url": c.pricing_page_url, "promo_page_url": c.promo_page_url}
     mf = ac.MeteredFirecrawl(tenant_id, "competitor", competitor_id)
-    status, error, new_changes, snap_id = "failed", None, 0, None
+    status, error, new_changes, snap_id, cap_scope = "failed", None, 0, None, "daily"
     try:
         pages = await collect_pages(mf, comp)
         ok = [p for p in pages if p["status"] == "ok"]
@@ -438,49 +621,110 @@ async def execute_scan(tenant_id: uuid.UUID, competitor_id: uuid.UUID) -> dict:
                         new_changes += 1
                 status = "ok"
             await db.commit()
+    except ac.CreditCapExceeded as exc:
+        status, error = "capped", sanitize_error(ac.err_text(exc))
+        cap_scope = "monthly" if "monthly" in str(exc.detail) else "daily"
+        logger.info("competitor scan %s stopped by credit cap (%s)", competitor_id, cap_scope)
     except Exception as exc:
-        error = ac.err_text(exc)
+        error = sanitize_error(ac.err_text(exc))
         logger.warning("competitor scan %s failed: %s", competitor_id, error)
     async with database.get_session_factory()() as db:
         c = await db.get(AiCompetitor, competitor_id)
         if c is not None:
-            c.scan_status, c.last_error, c.last_scanned_at = status, error, ac.now()
+            t = ac.now()
+            plan = plan_next_scan(now=t, schedule=schedule_of(c), outcome=status,
+                                  failures=c.consecutive_failures or 0, scheduled=scheduled, cap_scope=cap_scope)
+            c.scan_status = "failed" if status == "capped" else status
+            c.last_error = error
+            if status != "capped":
+                c.last_scanned_at = t
+            c.last_status = plan["last_status"]
+            c.consecutive_failures = plan["consecutive_failures"]
+            if "next_scan_at" in plan:
+                c.next_scan_at = plan["next_scan_at"]
+            if (plan["last_status"] == "failed" and scheduled and c.schedule_frequency
+                    and plan["consecutive_failures"] >= max_consecutive_failures()):
+                c.last_error = sanitize_error(f"Auto-scan paused after {plan['consecutive_failures']} failed scans "
+                                              f"in a row. Last error: {error}", 300)
             await db.commit()
     return {"status": status, "error": error, "new_changes": new_changes, "snapshot_id": str(snap_id) if snap_id else None,
             "credits": mf.spent}
 
 
-# ── optional daily scheduler (default OFF) ────────────────────────────────
+# ── always-on auto-scan scheduler ─────────────────────────────────────────
 
 def scheduler_enabled() -> bool:
-    return os.getenv("ANALYTICS_COMPETITOR_SCHEDULER_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+    """Kill switch: ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=false turns the loop off (default ON)."""
+    return os.getenv("ANALYTICS_COMPETITOR_SCHEDULER_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+
+
+async def _push_capped(tenant_id: uuid.UUID, cid: uuid.UUID, scope: str, message: str) -> None:
+    t = ac.now()
+    when = next_period_start(t, scope) + timedelta(minutes=random.random() * 30)
+    async with database.get_session_factory()() as db:
+        await db.execute(update(AiCompetitor).where(
+            AiCompetitor.id == cid, AiCompetitor.tenant_id == tenant_id, AiCompetitor.next_scan_at <= t)
+            .values(next_scan_at=when, last_status="capped",
+                    last_error=sanitize_error(f"Paused until credits reset ({scope} cap). {message}", 300)))
+        await db.commit()
+
+
+async def _pause_blocked(tenant_id: uuid.UUID, cid: uuid.UUID) -> None:
+    async with database.get_session_factory()() as db:
+        await db.execute(update(AiCompetitor).where(AiCompetitor.id == cid, AiCompetitor.tenant_id == tenant_id)
+                         .values(next_scan_at=None, last_status="blocked",
+                                 last_error="Auto-scan paused: the website address is not allowed to be fetched. "
+                                            "Check the URL, then resume."))
+        await db.commit()
+
+
+async def run_scheduler_tick(max_scans: Optional[int] = None, parallel: Optional[int] = None) -> list[dict]:
+    """One pass: scan up to `max_scans` due competitors, at most `parallel` at a time. Returns the outcomes
+    of the scans that actually ran (claims lost to another worker are skipped)."""
+    max_scans = max_scans or int(_env_num("ANALYTICS_COMPETITOR_MAX_SCANS_PER_TICK", 5, 1))
+    parallel = parallel or int(_env_num("ANALYTICS_COMPETITOR_MAX_PARALLEL", 2, 1))
+    t = ac.now()
+    async with database.get_session_factory()() as db:
+        rows = (await db.execute(select(AiCompetitor.tenant_id, AiCompetitor.id, AiCompetitor.website).where(
+            AiCompetitor.active.is_(True), AiCompetitor.scan_interval_hours.is_not(None),
+            AiCompetitor.next_scan_at.is_not(None), AiCompetitor.next_scan_at <= t, _claimable(t))
+            .order_by(AiCompetitor.next_scan_at).limit(max_scans))).all()
+    sem = asyncio.Semaphore(parallel)
+    results: list[dict] = []
+
+    async def one(tenant_id: uuid.UUID, cid: uuid.UUID, website: str) -> None:
+        async with sem:
+            try:
+                try:
+                    await ac.check_headroom(tenant_id, SCAN_CREDIT_ESTIMATE)
+                except ac.CreditCapExceeded as exc:
+                    await _push_capped(tenant_id, cid, "monthly" if "monthly" in str(exc.detail) else "daily",
+                                       str(exc.detail))
+                    return
+                if not await ac.is_safe_to_fetch(website):
+                    await _pause_blocked(tenant_id, cid)
+                    return
+                async with database.get_session_factory()() as db:
+                    if not await claim_scan(db, tenant_id, cid, due_only=True):
+                        return
+                results.append(await execute_scan(tenant_id, cid, scheduled=True))
+            except Exception:
+                logger.exception("scheduled competitor scan %s crashed", cid)
+
+    await asyncio.gather(*(one(*r) for r in rows))
+    return results
 
 
 async def run_competitor_scheduler() -> None:
-    """Re-scan active competitors not scanned within ANALYTICS_COMPETITOR_SCAN_INTERVAL_HOURS (default 24).
-    Returns immediately unless ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=true. Own sessions per scan; a tenant
-    at its credit cap is skipped, never overrun."""
+    """Always-on loop (every ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS, default 600) mirroring the tender
+    scheduler. Runs in each uvicorn worker; the atomic claim guarantees each scan runs once."""
     if not scheduler_enabled():
         return
-    interval = float(os.getenv("ANALYTICS_COMPETITOR_SCAN_INTERVAL_HOURS", "24"))
-    period = int(os.getenv("ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS", "3600"))
-    await asyncio.sleep(120)
+    period = int(_env_num("ANALYTICS_COMPETITOR_SCHEDULER_PERIOD_SECONDS", 600, 5))
+    await asyncio.sleep(int(_env_num("ANALYTICS_COMPETITOR_SCHEDULER_STARTUP_DELAY_SECONDS", 90, 0)))
     while True:
         try:
-            cutoff = ac.now() - timedelta(hours=interval)
-            async with database.get_session_factory()() as db:
-                rows = (await db.execute(select(AiCompetitor.tenant_id, AiCompetitor.id).where(
-                    AiCompetitor.active.is_(True),
-                    (AiCompetitor.last_scanned_at.is_(None)) | (AiCompetitor.last_scanned_at < cutoff)).limit(20))).all()
-            for tenant_id, cid in rows:
-                try:
-                    await ac.check_headroom(tenant_id, SCAN_CREDIT_ESTIMATE)
-                except ac.CreditCapExceeded:
-                    continue
-                async with database.get_session_factory()() as db:
-                    if not await claim_scan(db, tenant_id, cid):
-                        continue
-                await execute_scan(tenant_id, cid)
+            await run_scheduler_tick()
         except Exception:
             logger.exception("competitor scheduler tick failed")
         await asyncio.sleep(period)
@@ -491,7 +735,7 @@ async def sweep_stuck(db: AsyncSession) -> int:
     rows = (await db.execute(select(AiCompetitor).where(
         AiCompetitor.scan_status == "scanning", AiCompetitor.scan_started_at < cutoff))).scalars().all()
     for c in rows:
-        c.scan_status, c.last_error = "failed", "Interrupted (service restarted) - scan again."
+        c.scan_status, c.last_status, c.last_error = "failed", "failed", "Interrupted (service restarted) - scan again."
     return len(rows)
 
 
@@ -510,6 +754,13 @@ class CompetitorIn(BaseModel):
     pricing_page_url: Optional[str] = Field(None, max_length=2000)
     promo_page_url: Optional[str] = Field(None, max_length=2000)
     social_urls: Optional[list[str]] = Field(None, max_length=6)
+    schedule_frequency: Optional[Literal["12h", "daily", "weekly", "monthly"]] = Field(
+        None, description="null = manual only (default)")
+    schedule_time: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="HH:MM, Africa/Johannesburg")
+    schedule_weekday: Optional[int] = Field(None, ge=0, le=6, description="0=Monday .. 6=Sunday (weekly)")
+    schedule_day_of_month: Optional[int] = Field(None, ge=1, le=28, description="monthly")
+    scan_interval_hours: Optional[Literal[12, 24, 168, 720]] = Field(
+        None, description="legacy shortcut for schedule_frequency (12h/daily/weekly/monthly)")
 
 
 class CompetitorPatch(BaseModel):
@@ -519,6 +770,49 @@ class CompetitorPatch(BaseModel):
     promo_page_url: Optional[str] = Field(None, max_length=2000)
     social_urls: Optional[list[str]] = Field(None, max_length=6)
     active: Optional[bool] = None
+    schedule_frequency: Optional[Literal["12h", "daily", "weekly", "monthly"]] = Field(
+        None, description="null = manual only (default)")
+    schedule_time: Optional[str] = Field(None, pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="HH:MM, Africa/Johannesburg")
+    schedule_weekday: Optional[int] = Field(None, ge=0, le=6, description="0=Monday .. 6=Sunday (weekly)")
+    schedule_day_of_month: Optional[int] = Field(None, ge=1, le=28, description="monthly")
+    scan_interval_hours: Optional[Literal[12, 24, 168, 720]] = Field(
+        None, description="legacy shortcut for schedule_frequency (12h/daily/weekly/monthly)")
+
+
+_SCHED_KEYS = ("schedule_frequency", "schedule_time", "schedule_weekday", "schedule_day_of_month", "scan_interval_hours")
+
+
+def apply_schedule(c: AiCompetitor, data: dict, *, creating: bool = False) -> None:
+    """Merge schedule fields from a request onto the competitor and (re)compute next_scan_at. Raises 422."""
+    if not any(k in data for k in _SCHED_KEYS):
+        return
+    freq = data["schedule_frequency"] if "schedule_frequency" in data else (
+        FREQ_OF_INTERVAL.get(data["scan_interval_hours"]) if data.get("scan_interval_hours") else
+        (None if "scan_interval_hours" in data else c.schedule_frequency))
+    cur = {"time": c.schedule_time, "weekday": c.schedule_weekday, "dom": c.schedule_day_of_month}
+    try:
+        norm = normalize_schedule(freq, data.get("schedule_time", cur["time"]),
+                                  data.get("schedule_weekday", cur["weekday"]),
+                                  data.get("schedule_day_of_month", cur["dom"]))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    for k, v in norm.items():
+        setattr(c, k, v)
+    if norm["schedule_frequency"] is None:  # turned off: nothing may scan this competitor automatically
+        c.next_scan_at, c.consecutive_failures = None, 0
+        if c.last_status in ("queued", "capped", "blocked"):
+            c.last_status = None
+        return
+    t = ac.now()
+    if norm["schedule_frequency"] == "12h":
+        c.next_scan_at = (aware(c.last_scanned_at) or t) + timedelta(hours=12)
+    else:
+        c.next_scan_at = next_run_at(t, **schedule_of(c))
+    c.consecutive_failures = 0
+    if c.last_status != "scanning":
+        c.last_status = "queued"
+        if c.scan_status != "scanning":
+            c.last_error = None
 
 
 async def _validate_urls(data: dict) -> None:
@@ -535,6 +829,14 @@ def comp_dict(c: AiCompetitor) -> dict:
         "promo_page_url": c.promo_page_url, "social_urls": c.social_urls or [], "active": c.active,
         "scan_status": c.scan_status, "last_error": c.last_error,
         "last_scanned_at": c.last_scanned_at.isoformat() if c.last_scanned_at else None,
+        "scan_interval_hours": c.scan_interval_hours, "schedule_frequency": c.schedule_frequency,
+        "schedule_time": c.schedule_time, "schedule_weekday": c.schedule_weekday,
+        "schedule_day_of_month": c.schedule_day_of_month, "schedule_timezone": TENANT_TZ_NAME,
+        "next_scan_at": c.next_scan_at.isoformat() if c.next_scan_at else None,
+        "last_status": c.last_status, "consecutive_failures": c.consecutive_failures or 0,
+        "auto_scan_paused": bool(c.schedule_frequency and c.next_scan_at is None),
+        "estimated_credits_per_month": estimated_credits_per_month(c.schedule_frequency),
+        "last_seen_at": c.last_seen_at.isoformat() if c.last_seen_at else None,
         "created_at": c.created_at.isoformat() if c.created_at else None,
     }
 
@@ -565,6 +867,14 @@ async def _get(db: AsyncSession, tenant_id: uuid.UUID, cid: uuid.UUID) -> AiComp
     return c
 
 
+async def _new_changes(db: AsyncSession, tenant_id: uuid.UUID, c: AiCompetitor) -> int:
+    q = select(func.count()).select_from(AiCompetitorChange).where(
+        AiCompetitorChange.tenant_id == tenant_id, AiCompetitorChange.competitor_id == c.id)
+    if c.last_seen_at is not None:
+        q = q.where(AiCompetitorChange.detected_at > c.last_seen_at)
+    return int((await db.execute(q)).scalar_one() or 0)
+
+
 async def _latest_snapshot(db: AsyncSession, tenant_id: uuid.UUID, cid: uuid.UUID) -> Optional[AiCompetitorSnapshot]:
     return (await db.execute(select(AiCompetitorSnapshot).where(
         AiCompetitorSnapshot.tenant_id == tenant_id, AiCompetitorSnapshot.competitor_id == cid)
@@ -583,7 +893,9 @@ async def create_competitor(body: CompetitorIn, auth: AuthContext = Depends(ac.r
     if (await db.execute(select(AiCompetitor.id).where(
             AiCompetitor.tenant_id == auth.tenant_id, func.lower(AiCompetitor.name) == body.name.strip().lower()))).first():
         raise HTTPException(409, "A competitor with that name already exists")
+    sched = {k: data.pop(k) for k in _SCHED_KEYS}
     c = AiCompetitor(tenant_id=auth.tenant_id, **{**data, "name": body.name.strip()})
+    apply_schedule(c, {k: v for k, v in sched.items() if k in body.model_fields_set}, creating=True)
     db.add(c)
     await db.flush()
     await db.refresh(c)
@@ -612,8 +924,9 @@ async def overview(tenant_id: uuid.UUID = Depends(get_current_tenant_id),
         out.append({**comp_dict(c), "plans_count": len(snap.plans or []) if snap else 0,
                     "promotions_count": len(snap.promotions or []) if snap else 0,
                     "latest_snapshot_at": snap.scanned_at.isoformat() if snap else None,
-                    "latest_changes": [change_dict(x, c.name) for x in ch]})
-    return {"competitors": out, "count": len(out)}
+                    "latest_changes": [change_dict(x, c.name) for x in ch],
+                    "new_changes_since_last_view": await _new_changes(db, tenant_id, c)})
+    return {"competitors": out, "count": len(out), "estimated_credits_per_scan": SCAN_CREDIT_ESTIMATE}
 
 
 @router.get("/activity")
@@ -639,7 +952,8 @@ async def activity(limit: int = Query(50, ge=1, le=200), tenant_id: uuid.UUID = 
 @router.get("/{competitor_id}")
 async def get_competitor(competitor_id: uuid.UUID, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
                          _: AuthContext = Depends(ac.require_viewer), db: AsyncSession = Depends(database.get_session)):
-    return comp_dict(await _get(db, tenant_id, competitor_id))
+    c = await _get(db, tenant_id, competitor_id)
+    return {**comp_dict(c), "new_changes_since_last_view": await _new_changes(db, tenant_id, c)}
 
 
 @router.put("/{competitor_id}")
@@ -652,6 +966,8 @@ async def update_competitor(competitor_id: uuid.UUID, body: CompetitorPatch, aut
         if (await db.execute(select(AiCompetitor.id).where(
                 AiCompetitor.tenant_id == auth.tenant_id, func.lower(AiCompetitor.name) == data["name"].strip().lower()))).first():
             raise HTTPException(409, "A competitor with that name already exists")
+    sched = {k: data.pop(k) for k in _SCHED_KEYS if k in data}
+    apply_schedule(c, sched)
     for k, v in data.items():
         if k == "name" and v:
             c.name = v.strip()
@@ -671,6 +987,30 @@ async def delete_competitor(competitor_id: uuid.UUID, tenant_id: uuid.UUID = Dep
         for row in (await db.execute(select(model).where(model.competitor_id == c.id))).scalars().all():
             await db.delete(row)
     await db.delete(c)
+
+
+@router.post("/{competitor_id}/seen")
+async def mark_seen(competitor_id: uuid.UUID, auth: AuthContext = Depends(ac.require_viewer),
+                    db: AsyncSession = Depends(database.get_session)):
+    """Clears the 'N new changes' badge (tenant-wide: one mark per competitor, not per user)."""
+    c = await _get(db, auth.tenant_id, competitor_id)
+    c.last_seen_at = ac.now()
+    await db.flush()
+    return {**comp_dict(c), "new_changes_since_last_view": 0}
+
+
+@router.post("/{competitor_id}/resume")
+async def resume_schedule(competitor_id: uuid.UUID, auth: AuthContext = Depends(ac.require_analyst),
+                          db: AsyncSession = Depends(database.get_session)):
+    """Un-pause an auto-paused schedule (after repeated failures / blocked URL): resets failures."""
+    c = await _get(db, auth.tenant_id, competitor_id)
+    if not c.schedule_frequency:
+        raise HTTPException(409, "No auto-scan schedule is set for this competitor")
+    c.consecutive_failures, c.last_error = 0, None
+    c.last_status = "queued"
+    c.next_scan_at = next_run_at(ac.now(), **schedule_of(c)) if c.schedule_frequency != "12h" else ac.now()
+    await db.flush()
+    return comp_dict(c)
 
 
 @router.post("/{competitor_id}/scan", status_code=202)

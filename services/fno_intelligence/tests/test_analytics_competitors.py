@@ -292,6 +292,8 @@ def test_concurrent_scan_is_rejected_and_scheduler_is_off_by_default(tmp_path, m
             r = await e.req("POST", f"/competitors/{cid}/scan")
             assert r.status_code == 409
             monkeypatch.delenv("ANALYTICS_COMPETITOR_SCHEDULER_ENABLED", raising=False)
+            assert cp.scheduler_enabled() is True        # loop is global but only acts on user-chosen schedules
+            monkeypatch.setenv("ANALYTICS_COMPETITOR_SCHEDULER_ENABLED", "false")
             assert cp.scheduler_enabled() is False
-            await asyncio.wait_for(cp.run_competitor_scheduler(), timeout=1)   # returns immediately when disabled
+            await asyncio.wait_for(cp.run_competitor_scheduler(), timeout=1)   # returns immediately when switched off
     asyncio.run(go())
