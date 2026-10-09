@@ -429,12 +429,70 @@ services:
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://localhost:3001}
+      # Knowledge layer (optional; empty KNOWLEDGE_DB_URL = disabled, recall stays keyword-only)
+      - KNOWLEDGE_DB_URL=${KNOWLEDGE_DB_URL:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
     ports:
       - "127.0.0.1:8025:8025"
     depends_on:
       - db
     volumes:
       - ./licenses/license.json:/etc/coreconnect/license.json:ro
+
+  # ── Knowledge layer (profile "knowledge": not started by a plain `docker compose up`) ──
+  # Derived, rebuildable vector store. No published ports: reachable only on the compose network.
+  # POSTGRES_PASSWORD empty => the postgres image refuses to initialise (fail closed).
+  knowledge_db:
+    image: pgvector/pgvector:pg16
+    profiles: ["knowledge"]
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=knowledge
+      - POSTGRES_USER=knowledge_owner
+      - POSTGRES_PASSWORD=${KNOWLEDGE_DB_PASSWORD:-}
+    command: ["postgres", "-c", "shared_buffers=128MB", "-c", "maintenance_work_mem=128MB", "-c", "max_connections=30"]
+    volumes:
+      - knowledge_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge_owner -d knowledge"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # One worker (same image as tenant_memory): migrations, incremental indexing, reconcile, consolidation.
+  knowledge_indexer:
+    build:
+      context: .
+      dockerfile: services/tenant_memory/Dockerfile
+    profiles: ["knowledge"]
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "-m", "services.tenant_memory.knowledge.worker"]
+    environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - DATABASE_URL=${DATABASE_URL}
+      - KNOWLEDGE_DB_URL=${KNOWLEDGE_DB_URL:-}
+      - KNOWLEDGE_DB_ADMIN_URL=${KNOWLEDGE_DB_ADMIN_URL:-}
+      - KNOWLEDGE_APP_PASSWORD=${KNOWLEDGE_APP_PASSWORD:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - INDEX_BATCH_SIZE=${INDEX_BATCH_SIZE:-50}
+      - INDEX_CONCURRENCY=${INDEX_CONCURRENCY:-1}
+      - INDEX_SLEEP_S=${INDEX_SLEEP_S:-1.0}
+    depends_on:
+      - db
+      - knowledge_db
+      - ollama
+    deploy:
+      resources:
+        limits:
+          memory: 384M
 
   portal-builder:
     build:
@@ -805,6 +863,7 @@ services:
 
 volumes:
   postgres_data:
+  knowledge_data:
   ollama_data:
   voicebox_models:
   voicebox_data:

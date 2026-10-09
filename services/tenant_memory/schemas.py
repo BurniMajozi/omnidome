@@ -91,6 +91,9 @@ class MemorySummaryRead(BaseModel):
 class MemoryRecallResponse(BaseModel):
     summaries: list[MemorySummaryRead]
     entries: list[MemoryEntryRead]
+    # Only filled for mode=hybrid: semantic hits across the knowledge cards, each with a citation.
+    knowledge: list[dict[str, Any]] = Field(default_factory=list)
+    knowledge_note: Optional[str] = None
 
 
 class AgentSkillCreate(BaseModel):

@@ -16,6 +16,7 @@ from services.common.db import get_async_session, session_scope
 from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.tenant_memory.database import init_tables
+from services.tenant_memory.knowledge.routes import router as knowledge_router
 from services.tenant_memory.schemas import (
     AgentSkillCreate,
     AgentSkillListResponse,
@@ -41,6 +42,7 @@ app = FastAPI(
 
 guard = EntitlementGuard(module_id="memory")
 configure_production(app)
+app.include_router(knowledge_router)
 
 
 def require_skill_admin(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
@@ -353,6 +355,7 @@ async def recall(
     q: Optional[str] = Query(None, min_length=2),
     match: Literal["all", "any"] = Query("all", description="any: entries matching any word of q, best match first"),
     limit: int = Query(10, ge=1, le=50),
+    mode: Literal["keyword", "hybrid"] = Query("keyword", description="hybrid: also return semantic knowledge-card hits"),
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
@@ -404,10 +407,33 @@ async def recall(
         ),
         params,
     )
+    knowledge: list[dict] = []
+    note = None
+    if mode == "hybrid" and q:
+        knowledge, note = await _hybrid_recall(q, module, limit, ctx)
     return MemoryRecallResponse(
         summaries=[_summary_from_row(row) for row in summaries_result.mappings().all()],
         entries=[_entry_from_row(row) for row in entries_result.mappings().all()],
+        knowledge=knowledge,
+        knowledge_note=note,
     )
+
+
+async def _hybrid_recall(q: str, module: Optional[str], limit: int, ctx: AuthContext) -> tuple[list[dict], Optional[str]]:
+    """Fail-open: knowledge hits are a help, never a dependency of recall."""
+    try:
+        from services.tenant_memory.knowledge.kdata import AccessScope, Filters
+        from services.tenant_memory.knowledge.retrieval import KnowledgeRetriever
+        from services.tenant_memory.knowledge.routes import get_runtime
+
+        store, embedder = get_runtime()
+        res = await KnowledgeRetriever(store, embedder).search(q, AccessScope.from_ctx(ctx), Filters(modules=[module] if module else None), k=limit)
+        return [{**c, "markdown": h.chunk.markdown} for c, h in zip(res.citations(), res.hits)], res.degraded
+    except HTTPException:
+        return [], "knowledge layer not configured"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hybrid recall unavailable: %s", exc)
+        return [], "knowledge layer unavailable"
 
 
 # ── OKF Skill Sharing Endpoints ─────────────────────────────────────────────
