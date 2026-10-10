@@ -1,31 +1,79 @@
-# Live agent activity
+# Agent stream: live activity, questions, approvals (AG-UI CUSTOM events)
 
-Both `POST /api/protocols/ag-ui/run` (the web chat) and `POST /api/agents/invoke/stream` emit SSE frames with the existing AGUI envelope. Live activity uses `type: CUSTOM` and `data: {name, value}`.
+Endpoints that stream: `POST /api/agents/invoke/stream` and `POST /api/protocols/ag-ui/run` (web chat). SSE frames:
+`data: {"type", "run_id", "tenant_id", "conversation_id", "timestamp", "data"}`.
 
-| Event name | Value |
-|---|---|
-| `omnidome.step` | `id`, `kind`, `title`, `status` (`running`, `done`, `error`), timestamps, `duration_ms`, `result_summary`; reserved `detail` and `meta` are currently empty |
-| `omnidome.status` | Current phase text and `elapsed_ms`; sent on step start and every three seconds |
-| `omnidome.question` | `run_id`, `question_id`, one to three questions (header, question, two to four labelled options, optional multi_select), expires_at, ttl_seconds=1800 |
-| `omnidome.question_resolved` | run_id, question_id, status (`answered`, `expired`, `cancelled`) |
-| `omnidome.approval` | approval_id, reference, tool, generic summary, requested_by_me=true, status=pending, risk |
+Unchanged events: `RUN_STARTED`, `TOOL_CALL_START|RESULT|END` (sent after the agent finishes, one triple per tool call),
+`TEXT_MESSAGE_CONTENT`, `RUN_FINISHED`, `RUN_ERROR`. New: `type:"CUSTOM"` with `data = {"name": "<event>", "value": {...}}`.
+Clients must ignore unknown CUSTOM names. CUSTOM events arrive live, before the first `TEXT_MESSAGE_CONTENT`.
+All strings are redacted (emails, bearer/token patterns, long digit runs) and clipped to 700 chars; render as text, never HTML.
+Hermes chat (`chat_backend=hermes`) does not emit these events: the UI must work with none.
 
-Replace a step by id and preserve arrival order. Ignore unknown custom events. React text rendering is required. Public summaries redact emails, token patterns and long number sequences; they never include model reasoning, system prompts or tool arguments.
-
-Preparation emits skill selection, memory recall and company RAG retrieval before the first model call. Further steps show model activity, governed data queries, tools and verification. RAG status is reported honestly; retrieval failure does not become invented evidence. The grounding timeout defaults to 30 seconds to accommodate local Ollama embeddings.
-
-Clarification answers use `POST /api/agents/runs/{run_id}/answer`:
-
+## `omnidome.step`
+Same `id` is sent twice (`running`, then `done|error`): upsert by id, keep arrival order.
 ```json
-{"question_id":"uuid","answers":[{"question":"Which period?","selected":["Month"],"other":null}]}
+{"id":"s_1a2b3c4d5e","kind":"skill|memory|knowledge|reasoning|data|tool|verify|approval","title":"Querying governed data",
+ "detail":"","status":"running|done|error","started_at":"ISO","ended_at":null,"duration_ms":null,
+ "result_summary":null,"meta":{}}
 ```
+`detail` and `meta` are currently always empty (reserved). Titles emitted today: `Choosing skills`, `Recalling team memory`,
+`Searching company memory (RAG)` (summary e.g. `ready: 2 source cards`), `Preparing the next step` (each model call),
+`Listing available datasets`, `Querying governed data` (summary `N rows`), `Searching company knowledge`,
+`Running an approved tool`, `Waiting for your answer` (kind `approval`, stays running until the question closes),
+`Checking the answer` (verifier). A failed tool ends with `status:"error"`, summary `Could not complete this step`.
 
-Answers are validated against the displayed questions, saved in `agent_pending_questions` and polled by the waiting worker. Only the signed user who owns the run, in the same tenant, can answer. Expired, cancelled and already answered questions are rejected. Disconnecting cancels the native agent task and closes its pending question.
+## `omnidome.status`
+`{"text":"Still working: querying governed data (6s)","elapsed_ms":6120}`. Sent on each step start and every 3 s while
+the run works. Replace the previous status line, do not append.
 
-Clarification is never approval. Existing approval endpoints retain their approver-role and no-self-approval gates. A gated action ends the turn awaiting human review; it does not keep a live task paused for approval. The requester sees an inline waiting card. Existing approval management remains the decision surface for managers.
+## `omnidome.thinking`
+Not emitted (no safe reasoning summary is available). Reserved name; ignore.
 
-The web chat shows collapsible activity, elapsed time, clarification choices with free text and a Stop action. Live activity is transient; conversation messages remain persisted. Hermes chat does not currently emit the native per-step events.
+## `omnidome.question` (agent asks the user, via the `ask_user` tool)
+```json
+{"run_id":"uuid","question_id":"uuid","questions":[{"header":"<=12 chars","question":"...",
+  "options":[{"label":"..","description":".."}],"multi_select":false}],"expires_at":"ISO","ttl_seconds":1800}
+```
+1-3 questions, 2-4 options each (unique labels). Free text ("Other") is always allowed via `other`. The run is paused
+(worker polls the durable record) for up to 30 min. Keep the stream open. Answer with:
 
-`data.datasets` discovers panel-authorised datasets. `data.query` accepts governed specs only: aggregate mode for exact counts/totals, or list mode for registered columns with a hard 200-row cap and matching_rows total. No raw SQL is accepted. Provider tool names such as data_query are resolved to registered names before checking the agent allow-list.
+`POST /api/agents/runs/{run_id}/answer`
+```json
+{"question_id":"uuid","answers":[{"question":"<exact question text, one per question, same order>","selected":["Label"],"other":null}]}
+```
+Each answer needs at least one `selected` label (must exist; max 1 unless `multi_select`) or non-empty `other` (<=500 chars).
+Responses: `200 {"ok":true}`; `403` caller is not the run's owner; `404` unknown run/question, other tenant, expired or
+cancelled; `409` already answered; `422` invalid answers. Answers reach the model as the tool result (user input).
+A clarification answer is never an approval.
 
-The knowledge `capabilities` snapshot source indexes dataset columns and tool policy metadata. Its cards contain no customer rows. Run an administrator reindex of that source after deploying registry changes.
+Then: `omnidome.question_resolved` `{"run_id","question_id","status":"answered|expired|cancelled"}`. On `expired` the
+agent is told not to assume an answer. Closing the stream cancels the run and the question.
+
+## `omnidome.approval`
+Emitted when a mutating tool is held by the existing approval gate (the turn then ends `awaiting_hitl`; the run is NOT
+paused).
+```json
+{"approval_id":"uuid","reference":"APR-..","tool":"support_create_ticket","summary":"This action requires a manager's approval",
+ "requested_by_me":true,"status":"pending","risk":"review|<jev risk level>"}
+```
+Show an inline "waiting for a manager" card. Decisions use the existing endpoints unchanged (`/api/approvals/{id}/approve`
+`{notes}` and `/reject` `{reason}`; manager/admin/executive/owner or `agents.approve`; requesters cannot approve their own
+request). `GET /api/approvals/{id}` for status. Args preview and JEV probabilities are NOT in the event: fetch the approval.
+
+## Governed data (what the agent can now answer)
+Tools: `data.datasets` (datasets and allowed columns for the caller's panels; restricted ones listed with the panel name)
+and `data.query` (maps to `GET /api/fno/bi/datasets`, `POST /api/fno/bi/query`, signed with tenant/user/roles). No raw SQL
+tool exists in the registry. A dataset in a panel the user lacks returns 403 `Access to the <Panel> panel is required for this dataset`.
+List mode (`mode:"list"`): registered columns only (no email/phone/ID/address/names/free text), tenant-scoped, text filters
+case-insensitive, hard cap 200 rows, `totals.matching_rows` = exact match count. Datasets with list mode: `sales_pipeline`,
+`sales_leads`, `billing_invoices`, `support_tickets`.
+
+"Open deals older than 14 days":
+```json
+{"dataset":"sales_pipeline","mode":"list",
+ "columns":["name","stage","value_zar","created_at","age_days"],
+ "filters":[{"field":"status","op":"eq","value":"OPEN"},{"field":"age_days","op":"gt","value":14}],
+ "order_by":[{"field":"age_days","dir":"desc"}],"limit":50}
+```
+Capability cards (knowledge source `capabilities`, snapshot) describe datasets (measures, dimensions, list columns) and
+tool policies, without customer rows; reindex that source after registry changes.

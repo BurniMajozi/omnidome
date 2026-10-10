@@ -8,7 +8,7 @@ from __future__ import annotations
 # name -> (changes_data, requires_approval)
 KNOWN_TOOLS: dict[str, tuple[bool, bool]] = {
     "data.datasets": (False, False), "data.query": (False, False), "ask_user": (False, False),
-    "analytics.query": (False, False), "artifacts.find": (False, False), "analytics_get_executive_summary": (False, False),
+    "artifacts.find": (False, False), "analytics_get_executive_summary": (False, False),
     "analytics_get_mrr_trends": (False, False), "analytics_get_network_health": (False, False),
     "billing_get_balance": (False, False), "billing_get_invoice": (False, False),
     "billing_get_payment_history": (False, False),

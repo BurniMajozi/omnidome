@@ -18,7 +18,22 @@ from services.fno_intelligence import database
 from services.fno_intelligence import metric_catalog as mc
 from services.fno_intelligence.forecast_models import FORECAST_TABLES
 from services.fno_intelligence.models import Base
-from services.fno_intelligence.tests.bi_harness import TENANT_A, TENANT_B, env, resp_json, run, seed_billing
+from contextlib import asynccontextmanager
+
+from services.fno_intelligence.tests.bi_harness import TENANT_A, TENANT_B, env as base_env, resp_json, run, seed_billing
+
+
+@asynccontextmanager
+async def env(tmp_path, monkeypatch):
+    # authorised operator by default so the dataset panel gate is not what these tests exercise
+    async with base_env(tmp_path, monkeypatch) as e:
+        original = e.req
+
+        async def request(method, path, **kw):
+            kw.setdefault("roles", "admin")
+            return await original(method, path, **kw)
+        e.req = request
+        yield e
 
 TODAY = date(2026, 4, 15)       # seed_billing has invoices in Jan, Feb, Mar 2026
 INV = "billing.revenue_invoiced.month"

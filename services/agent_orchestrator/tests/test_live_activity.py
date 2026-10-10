@@ -130,3 +130,12 @@ def test_capability_cards_are_registered_and_have_no_sql_or_customer_rows():
     assert "capabilities" in SOURCES and SOURCES["capabilities"].snapshot
     assert any(c.source_id == "dataset:sales_pipeline" and c.module == "sales" and "age_days" in c.markdown for c in cards)
     assert not any(c.source_id.startswith("tool:analytics.query") for c in cards)
+
+
+def test_no_raw_sql_tool_is_registered_for_any_agent():
+    from services.agent_orchestrator.tools import tool_registry
+    names = {t.name for t in tool_registry.list_tools()}
+    assert not {n for n in names if "sql" in n.lower() or n in {"analytics.query", "analytics_query"}}
+    for agent in ("auto", "orchestrator", "executive", "analytics", "assistant"):
+        assert not {"analytics.query", "analytics_query"} & {t.name for t in tool_registry.filter_for_agent(agent)}
+    assert {"data.query", "data.datasets"} <= {t.name for t in tool_registry.filter_for_agent("analytics")}

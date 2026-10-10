@@ -47,7 +47,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
-import { AgentActivity, activityEvent, emptyActivity, type Activity } from "@/components/chat/agent-activity"
+import { AgentActivity, activityEvent, emptyActivity, finishActivity, type Activity } from "@/components/chat/agent-activity"
+import { humanizeTool } from "@/lib/agent-activity"
 import { artifactItemsFromToolCalls, openAppPath, safeAppPath, safeExternalUrl } from "@/lib/artifact-links"
 import {
   invokeAgentAGUI,
@@ -446,12 +447,8 @@ function formatActionChip(toolName?: string, args?: Record<string, unknown>): {
   const a = args || {}
 
   if (name.includes("consult_specialist")) {
-    const specialist = String(a.specialist || "Specialist").toUpperCase()
-    return {
-      label: `Consulted Specialist: ${specialist}`,
-      detail: a.query ? String(a.query).slice(0, 80) : undefined,
-      icon: "👥",
-    }
+    const specialist = typeof a.specialist === "string" ? a.specialist : "Specialist"
+    return { label: `Consulted ${specialist.charAt(0).toUpperCase() + specialist.slice(1)} specialist`, icon: "👥" }
   }
 
   if (name.includes("coverage") || name.includes("network")) {
@@ -521,13 +518,8 @@ function formatActionChip(toolName?: string, args?: Record<string, unknown>): {
     }
   }
 
-  // Generic clean fallback
-  const cleanName = name.replace(/^(crm|billing|support|network|sales|orchestrator)\./, "").replace(/_/g, " ")
-  return {
-    label: cleanName.charAt(0).toUpperCase() + cleanName.slice(1),
-    detail: Object.keys(a).length > 0 ? JSON.stringify(a).slice(0, 60) : undefined,
-    icon: "⚡",
-  }
+  // Generic fallback: readable title, never raw JSON
+  return { label: humanizeTool(toolName), icon: "⚡" }
 }
 
 // ── Component ────────────────────────────────────────────────────────────
@@ -603,8 +595,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
     return () => window.removeEventListener("open-agent-chat", handleOpenChat)
   }, [])
 
+  // Follow the stream only while the user is already at the bottom.
+  const nearBottomRef = useRef(true)
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
+    if (!nearBottomRef.current) return
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [])
 
   const startVoiceRecording = useCallback(async () => {
@@ -955,6 +950,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       setInputValue("")
     }
     setIsSending(true)
+    nearBottomRef.current = true
     const controller = new AbortController()
     runController.current = controller
     setStreamState({ runId: "", status: "running", content: "", toolCalls: [], memoryWrites: [] })
@@ -1083,7 +1079,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 setMessages((prevMsgs) =>
                   prevMsgs.map((m) =>
                     m.id === assistantId
-                      ? { ...m, isStreaming: false, activity: m.activity ? { ...m.activity, elapsed: Date.now() - m.activity.started } : undefined }
+                      ? { ...m, isStreaming: false, activity: m.activity ? finishActivity(m.activity) : undefined }
                       : m,
                   ),
                 )
@@ -1100,6 +1096,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                           ...m,
                           content: `⚠️ Error: ${event.data.error}`,
                           isStreaming: false,
+                          activity: m.activity ? finishActivity(m.activity) : undefined,
                         }
                       : m,
                   ),
@@ -1121,7 +1118,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 ...m,
                 content: stopped ? m.content || "Stopped." : `⚠️ Error: ${err instanceof Error ? err.message : "Failed to reach agent"}`,
                 isStreaming: false,
-                activity: m.activity ? { ...m.activity, elapsed: Date.now() - m.activity.started } : undefined,
+                activity: m.activity ? finishActivity(m.activity, Date.now(), stopped) : undefined,
               }
             : m,
         ),
@@ -1130,7 +1127,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       setStreamState((prev) => ({ ...prev, status: "error" }))
     } finally {
       runController.current = null
-      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, isStreaming: false } : m))
+      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, isStreaming: false, activity: m.activity ? finishActivity(m.activity) : undefined } : m))
       setIsSending(false)
     }
   }
@@ -1396,7 +1393,13 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
         ) : (
           <>
             {/* Messages List */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div
+              className="flex-1 overflow-y-auto p-4 space-y-4"
+              onScroll={(e) => {
+                const el = e.currentTarget
+                nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+              }}
+            >
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
               <div className="rounded-2xl bg-secondary/80 p-4 shadow-inner">
@@ -1576,7 +1579,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 </div>
 
                 {/* Visual Action Chips */}
-                {message.toolCalls && message.toolCalls.length > 0 && (
+                {message.toolCalls && message.toolCalls.length > 0 && !(message.activity?.steps.length) && (
                   <div className="mt-2.5 flex flex-wrap gap-1.5">
                     {message.toolCalls.map((tc, idx) => {
                       const chip = formatActionChip(tc.toolName, tc.arguments as Record<string, unknown>)
@@ -1593,7 +1596,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                               ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
                               : "bg-muted/50 border-border/60 text-foreground"
                           )}
-                          title={`${tc.toolName}: ${JSON.stringify(tc.arguments || {})}`}
+                          title={humanizeTool(tc.toolName)}
                         >
                           <span className="text-xs select-none">{chip.icon}</span>
                           <span className="font-semibold text-foreground/90">{chip.label}</span>
@@ -1821,7 +1824,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                   onClick={() => isSending ? runController.current?.abort() : void handleSendMessage()}
                   disabled={!isSending && !inputValue.trim()}
                   aria-label={isSending ? "Stop agent" : "Send message"}
-                  title="Send message"
+                  title={isSending ? "Stop" : "Send message"}
                 >
                   {isSending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}
                 </Button>
