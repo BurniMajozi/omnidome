@@ -6,6 +6,7 @@
  */
 
 import { createTtlCache } from "@/lib/request-cache"
+import type { PricingSelection, PlatformPricingState, PlatformOrder, PlatformQuote } from "@/lib/platform-pricing"
 
 const ADMIN_API = "/api/admin"
 
@@ -145,6 +146,7 @@ export interface CommissionTierUpdate {
 }
 
 export interface Tenant {
+  settings?: { platform_pricing?: { selection?: PricingSelection } }
   id: string
   name: string
   domain?: string
@@ -296,8 +298,9 @@ export const TENANT_ROLE_RANKS: Record<string, number> = {
 const ALIAS_RANKS: Record<string, number> = { admin: 80, tenant_admin: 80, super_admin: 80, line_manager: 50, hr_admin: 50, hr: 50 }
 
 export const ROLE_LABELS: Record<string, string> = {
-  owner: "Owner",
-  org_admin: "Org admin",
+  platform_admin: "Platform Owner",
+  owner: "Organisation Owner",
+  org_admin: "Organisation Admin",
   manager: "Manager",
   hr_manager: "HR manager",
   org_user: "User",
@@ -322,6 +325,19 @@ export function grantableRoles(actorRoles: string[]): string[] {
 // API methods
 
 export const adminApi = {
+  getPricing: (tenant: string) => fetchAdmin<PlatformPricingState>(`/tenants/${tenant}/pricing`),
+  setPricing: (tenant: string, selection: PricingSelection, key: string) => fetchAdmin<{ quote: PlatformQuote; order: PlatformOrder }>(`/tenants/${tenant}/pricing`, { method: "PUT", body: JSON.stringify({ selection, intent: "invoice", idempotency_key: key }) }),
+  createPlatformOrder: (tenant: string, selection: PricingSelection, intent: "invoice" | "subscription", key: string) => fetchAdmin<PlatformOrder>(`/tenants/${tenant}/pricing/orders`, { method: "POST", body: JSON.stringify({ selection, intent, idempotency_key: key }) }),
+  platformCheckout: (tenant: string, order: string) => fetchAdmin<{ authorization_url: string }>(`/tenants/${tenant}/pricing/checkout`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
+  platformVerify: (tenant: string, order: string) => fetchAdmin<{ status: string }>(`/tenants/${tenant}/pricing/verify`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
+  cancelPlatformSubscription: (tenant: string, order: string) => fetchAdmin<{ status: string }>(`/tenants/${tenant}/pricing/cancel`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
+  downloadPlatformInvoice: async (tenant: string, order: PlatformOrder) => {
+    const res = await fetch(`${ADMIN_API}/tenants/${tenant}/pricing/orders/${order.id}/document`, { headers: await authHeader() })
+    if (!res.ok) throw new AdminApiError(res.status, await res.text())
+    const url = URL.createObjectURL(await res.blob())
+    const link = document.createElement("a"); link.href = url; link.download = `${order.reference}.html`; link.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  },
   listTenants: () =>
     fetchAdmin<Tenant[]>("/tenants"),
 
@@ -400,6 +416,7 @@ export const adminApi = {
     }),
 
   createTenant: (data: {
+    pricing_selection?: PricingSelection
     name: string
     domain: string
     seat_limit?: number

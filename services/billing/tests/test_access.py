@@ -191,6 +191,10 @@ def test_every_post_is_gated_or_deliberately_public():
     from services.billing.main import app
     # "/delivery/webhook-event" checks the internal key itself; "/public/" routes are share-token + per-IP rate limited
     public = {"/payments/paystack/webhook", "/dunning/process", "/billing/finance-outbox/retry", "/delivery/webhook-event"}
+    # SaaS checkout bypasses the tenant's ISP Billing panel entitlement. Each
+    # endpoint checks organisation-admin RBAC and tenant membership itself.
+    from services.billing.routes.platform_checkout import PUBLIC_PATHS
+    public |= PUBLIC_PATHS
     seats = "/billing/seats"          # seats.py keeps its own operator / billing-reader checks
     ungated = []
     for route in all_routes(app):

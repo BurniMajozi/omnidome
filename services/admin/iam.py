@@ -653,6 +653,9 @@ async def set_seats(
     session: AsyncSession = Depends(get_async_session),
 ):
     await require_platform_admin(ctx, session)
+    pricing_settings = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t": str(tenant_id)})).scalar_one_or_none() or {}
+    if pricing_settings.get("platform_pricing") and {"seat_limit", "seat_price"} & payload.model_fields_set:
+        raise HTTPException(409, "Change seats through the pricing editor so the invoice stays aligned")
     fields = payload.model_fields_set
     if not fields:
         raise HTTPException(status_code=400, detail="No updates provided")

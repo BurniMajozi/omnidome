@@ -12,6 +12,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { PricingSelector } from "@/components/pricing/tenant-pricing"
+import { defaultSelection, type PricingSelection } from "@/lib/platform-pricing"
 import { AlertCircle, CheckCircle2, Crown, Loader2, Lock, MailPlus, RefreshCw, RotateCcw, ShieldPlus, Trash2, UserCog, UserMinus, UserPlus, UserCheck } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -138,8 +140,7 @@ const slug = (s: string) =>
 export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("")
   const [subdomain, setSubdomain] = useState("")
-  const [seatLimit, setSeatLimit] = useState("10")
-  const [seatPrice, setSeatPrice] = useState("")
+  const [selection, setSelection] = useState<PricingSelection>(defaultSelection)
   const [ownerEmail, setOwnerEmail] = useState("")
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -148,17 +149,13 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setErr(null)
-    const limit = Number(seatLimit)
     if (!name.trim()) return setErr("Organization name is required")
-    if (!Number.isInteger(limit) || limit < 1) return setErr("Seat limit must be a whole number of at least 1")
-    if (seatPrice && (Number.isNaN(Number(seatPrice)) || Number(seatPrice) < 0)) return setErr("Seat price must be zero or more")
     setBusy(true)
     try {
       const res = await adminApi.createTenant({
         name: name.trim(),
         domain: subdomain.trim() || slug(name),
-        seat_limit: limit,
-        seat_price: seatPrice ? Number(seatPrice) : undefined,
+        pricing_selection: selection,
         owner_email: ownerEmail.trim() || undefined,
         send_owner_invite_email: true,
       })
@@ -178,7 +175,7 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Create tenant</CardTitle>
-        <CardDescription>Allocate an organization, its seat limit and price per seat, and invite its owner.</CardDescription>
+        <CardDescription>Choose its plan, seats and panels, create its platform invoice, and invite its Organisation Owner.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -194,14 +191,7 @@ export function CreateTenantCard({ onCreated }: { onCreated: () => void }) {
             <Label htmlFor="ct-owner">Owner email</Label>
             <Input id="ct-owner" type="email" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} placeholder="owner@acme.example" />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="ct-limit">Seat limit</Label>
-            <Input id="ct-limit" type="number" min={1} value={seatLimit} onChange={(e) => setSeatLimit(e.target.value)} required />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="ct-price">Seat price per month</Label>
-            <Input id="ct-price" type="number" min={0} step="0.01" value={seatPrice} onChange={(e) => setSeatPrice(e.target.value)} placeholder="0.00" />
-          </div>
+          <div className="col-span-full"><PricingSelector value={selection} onChange={setSelection} disabled={busy} /></div>
           <div className="flex items-end gap-4">
             <Button type="submit" disabled={busy} className="ml-auto gap-1.5">
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}

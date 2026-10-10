@@ -48,6 +48,10 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 app = FastAPI(title="OmniDome Admin Service", version="1.0.0")
 app.include_router(iam.router)
+from services.admin.pricing import router as pricing_router
+from services.common import platform_commerce
+from services.common.platform_pricing import Selection
+app.include_router(pricing_router)
 _SEAT_READ_RE = re.compile(r"^/(tenants/[0-9a-fA-F-]{36}/seats|platform/seat-usage)$")
 
 
@@ -66,7 +70,7 @@ class AdminGuard(EntitlementGuard):
         return await super().middleware(request, call_next)
 
 
-guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept", "/invites/claim"})
+guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept", "/invites/claim", "/pricing/catalog", "/pricing/quote"})
 
 configure_production(app)
 
@@ -103,6 +107,9 @@ async def startup() -> None:
     if os.getenv("ADMIN_RUN_MIGRATIONS", "true").lower() == "true":
         # advisory-locked + idempotent: safe with several workers, safe to restart
         await run_with_db_retry(lambda: migrations.run_migrations(get_async_engine()), logger=logger)
+        async with get_async_engine().begin() as conn:
+            await conn.execute(text("SELECT pg_advisory_xact_lock(70198432)"))
+            await platform_commerce.ensure_schema(conn)
     if os.getenv("ADMIN_SYNC_RETRY", "true").lower() == "true":
         app.state.sync_task = asyncio.create_task(supabase_sync.retry_loop())
 
@@ -117,6 +124,7 @@ async def entitlement_middleware(request, call_next):
 # ---------------------------------------------------------------------------
 
 class TenantCreate(BaseModel):
+    pricing_selection: Optional[Selection] = None
     name: str
     domain: Optional[str] = None
     subdomain: Optional[str] = None
@@ -308,6 +316,12 @@ async def create_tenant(
         {"l": seat_limit, "p": payload.seat_price, "t": str(tenant_id)},
     )
 
+    platform_order = None
+    if payload.pricing_selection:
+        priced, _ = await platform_commerce.save_choice(session, tenant_id, payload.pricing_selection, ctx.user_id, enable=True)
+        seat_limit = priced["seats"]
+        platform_order = await platform_commerce.create_order(session, tenant_id, ctx.user_id, payload.pricing_selection, "invoice", uuid.uuid4())
+
     owner_invite = None
     if payload.owner_email:
         if payload.send_owner_invite_email and not iam.agentmail.is_configured():
@@ -330,6 +344,11 @@ async def create_tenant(
     response = _tenant_response(row)
     response["seat_limit"] = seat_limit
     response["seat_price"] = str(payload.seat_price) if payload.seat_price is not None else None
+    if platform_order:
+        response["platform_order"] = {"id": str(platform_order["id"]), "reference": platform_order["reference"], "quote": platform_order["quote"]}
+        response["settings"] = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t": str(tenant_id)})).scalar_one()
+        response["tier"] = platform_order["quote"]["tier"]
+        response["seat_price"] = str(platform_order["quote"]["seat_price"])
     if owner_invite:
         delivery = await iam.deliver_invite(
             owner_invite["invite_id"], owner_invite["email"], owner_invite["code"], payload.send_owner_invite_email
@@ -398,12 +417,19 @@ async def update_tenant(
     if payload.name is not None:
         updates["name"] = payload.name
     if payload.settings is not None:
-        updates["settings"] = json.dumps(payload.settings)
+        current_settings = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t FOR UPDATE"), {"t": str(tenant_id)})).scalar_one_or_none() or {}
+        if "platform_pricing" in payload.settings and payload.settings["platform_pricing"] != current_settings.get("platform_pricing"):
+            raise HTTPException(403, "Use the pricing editor to change commercial settings")
+        settings = dict(payload.settings)
+        if "platform_pricing" in current_settings: settings["platform_pricing"] = current_settings["platform_pricing"]
+        updates["settings"] = json.dumps(settings)
     if payload.branding is not None:
         updates["branding"] = json.dumps(payload.branding)
     if payload.org_code is not None:
         updates["org_code"] = payload.org_code
     if payload.tier is not None:
+        priced_settings = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t": str(tenant_id)})).scalar_one_or_none() or {}
+        if priced_settings.get("platform_pricing"): raise HTTPException(409, "Change the tier through the pricing editor")
         updates["tier"] = payload.tier
     if payload.vat_number is not None:
         updates["vat_number"] = payload.vat_number
@@ -768,7 +794,13 @@ async def list_tenant_modules(
     ctx: AuthContext = Depends(get_auth_context),
     session: AsyncSession = Depends(get_async_session),
 ):
-    await _ensure_tenant_scope(ctx, tenant_id, session)
+    if ctx.is_platform_admin:
+        pass
+    elif tenant_id != ctx.tenant_id:
+        raise HTTPException(403, "Cross-tenant access denied")
+    else:
+        member = (await session.execute(text("SELECT 1 FROM users WHERE id=:u AND tenant_id=:t AND is_active=true"), {"u": str(ctx.user_id), "t": str(tenant_id)})).first()
+        if not member: raise HTTPException(403, "Active tenant membership required")
     result = await session.execute(
         text(
             """
@@ -829,7 +861,7 @@ async def update_tenant_modules(
             text(
                 """
                 insert into tenant_modules (tenant_id, module_id, status, enabled_by, enabled_at, disabled_at, config)
-                values (:tenant_id, :module_id, :status, :enabled_by, now(), :disabled_at, :config)
+                values (:tenant_id, :module_id, :status, :enabled_by, now(), :disabled_at, CAST(:config AS jsonb))
                 on conflict (tenant_id, module_id)
                 do update set
                     status = excluded.status,
@@ -845,10 +877,11 @@ async def update_tenant_modules(
                 "status": status_value,
                 "enabled_by": str(ctx.user_id) if (await session.execute(text("select 1 from users where id = :u"), {"u": str(ctx.user_id)})).first() else None,
                 "disabled_at": None if module.enabled else datetime.utcnow(),
-                "config": module.config,
+                "config": json.dumps(module.config or {}),
             },
         )
 
+    await platform_commerce.capture_module_edits(session, tenant_id, ctx.user_id)
     await _log_audit(
         session,
         ctx,

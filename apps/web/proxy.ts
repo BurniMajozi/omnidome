@@ -67,6 +67,8 @@ const IDENTITY_HEADERS = [
 // Public by design. Each of these is protected by its own secret/signature (or
 // carries no tenant data). Method-scoped where possible.
 const PUBLIC_ROUTES: Array<{ methods: string[]; pattern: RegExp }> = [
+  { methods: ["GET"], pattern: /^\/api\/pricing\/catalog$/ },
+  { methods: ["POST"], pattern: /^\/api\/pricing\/quote$/ },
   // Workflow webhook trigger (optional X-Webhook-Key checked in the handler)
   { methods: ["POST"], pattern: /^\/api\/workflows\/hook\/[A-Za-z0-9_-]+$/ },
   // Anonymous site analytics beacon (analytics-provider.tsx)

@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { useIsClient } from "@/lib/use-is-client"
+import { catalog, canonicalModule, bundleSelection, startCheckout, type PricingSelection } from "@/lib/platform-pricing"
 
 // All 14 modules (excluding Dashboard Overview)
 const modules = [
@@ -205,7 +206,10 @@ const modules = [
         customers: null,
         color: "from-blue-600 to-cyan-500"
     },
-]
+].map(mod => {
+    const prices = catalog.modules.find(m => m.id === canonicalModule(mod.id))!.prices
+    return { ...mod, starterPrice: prices.starter, professionalPrice: prices.professional, enterprisePrice: prices.enterprise }
+})
 
 type TierType = "starter" | "professional" | "enterprise"
 type ViewType = "customer-platform" | "create-bundle" | "individual" | "usage-limits" | string
@@ -399,20 +403,20 @@ const customerPlatformBundles = {
     professional: {
         name: "Professional",
         description: "Comprehensive ISP management software for growing businesses.",
-        basePrice: 3500,
-        annualPrice: 2800,
-        seats: 6,
-        extraSeatPrice: 45,
+        basePrice: catalog.bundles.professional.monthly_price,
+        annualPrice: Math.round(catalog.bundles.professional.monthly_price * 0.8),
+        seats: catalog.bundles.professional.seats,
+        extraSeatPrice: catalog.bundles.professional.extra_seat_price,
         credits: 5000,
         includedModules: ["marketing", "sales", "service", "crm", "billing", "portal"]
     },
     enterprise: {
         name: "Enterprise",
         description: "Our most powerful platform with advanced features and unlimited customization.",
-        basePrice: 9500,
-        annualPrice: 7600,
-        seats: 8,
-        extraSeatPrice: 75,
+        basePrice: catalog.bundles.enterprise.monthly_price,
+        annualPrice: Math.round(catalog.bundles.enterprise.monthly_price * 0.8),
+        seats: catalog.bundles.enterprise.seats,
+        extraSeatPrice: catalog.bundles.enterprise.extra_seat_price,
         credits: 10000,
         includedModules: ["marketing", "sales", "service", "crm", "billing", "portal", "retention", "network", "compliance"]
     }
@@ -430,7 +434,7 @@ const individualPlans = {
     growth: {
         name: "Growth",
         description: "Everything you need to scale your first 1,000 customers.",
-        basePrice: 999,
+        basePrice: catalog.bundles.growth.monthly_price,
         features: ["Up to 1,000 customers", "Full CRM + Sales Hub", "Phone support", "3 user seats", "Basic reporting", "API access"],
         limitations: []
     }
@@ -546,8 +550,8 @@ export default function PricingPage() {
                                         </button>
                                     </div>
 
-                                    <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all mb-4">
-                                        Talk to Sales
+                                    <Button onClick={() => startCheckout(bundleSelection(key, billingPeriod))} className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all mb-4">
+                                        Choose {bundle.name}
                                     </Button>
 
                                     <p className="text-xs text-muted-foreground mb-6">{!isClient ? "--" : bundle.credits.toLocaleString()} OmniDome Credits</p>
@@ -720,8 +724,8 @@ export default function PricingPage() {
                                                 <div className="text-xs text-muted-foreground">/month</div>
                                             </div>
                                         </div>
-                                        <Button className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
-                                            Buy now
+                                        <Button disabled={!selectedProducts.length} onClick={() => startCheckout({ modules: Object.fromEntries(selectedProducts.map(p => [canonicalModule(p.id), p.selectedTier])) as PricingSelection["modules"], period: billingPeriod, seats: 1 })} className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
+                                            Review selection
                                         </Button>
                                         <p className="text-xs text-center text-muted-foreground mt-3">
                                             Prices shown are subject to applicable tax.
@@ -913,22 +917,20 @@ export default function PricingPage() {
                                     <div className="mb-6">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-4xl font-bold">
-                                                {plan.basePrice === 0 ? "Free" : `R${!isClient ? "--" : plan.basePrice.toLocaleString()}`}
+                                                {plan.basePrice === 0 ? "Free" : `R${!isClient ? "--" : (billingPeriod === "annually" ? Math.round(plan.basePrice * 0.8) : plan.basePrice).toLocaleString()}`}
                                             </span>
                                             {plan.basePrice > 0 && <span className="text-muted-foreground">/mo</span>}
                                         </div>
                                     </div>
 
-                                    <Link href="/auth">
-                                        <Button className={cn(
+                                        <Button onClick={() => startCheckout(bundleSelection(key, billingPeriod))} className={cn(
                                             "w-full mb-6",
                                             key === "growth"
                                                 ? "bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all"
                                                 : "bg-secondary"
                                         )}>
-                                            {plan.basePrice === 0 ? "Get started free" : "Start trial"}
+                                            {plan.basePrice === 0 ? "Get started free" : "Choose Growth"}
                                         </Button>
-                                    </Link>
 
                                     <ul className="space-y-3">
                                         {plan.features.map((feat, idx) => (
@@ -1018,13 +1020,13 @@ export default function PricingPage() {
                                             </button>
                                         </div>
 
-                                        <Button className={cn(
+                                        <Button onClick={() => startCheckout({ modules: { [canonicalModule(product.id)]: tier }, period: billingPeriod, seats: 1 })} className={cn(
                                             "w-full mb-3",
                                             tier === "enterprise"
                                                 ? "bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all"
                                                 : "bg-secondary"
                                         )}>
-                                            {tier === "enterprise" ? "Talk to Sales" : "Buy now"}
+                                            Review {tier}
                                         </Button>
 
                                         {tier === "professional" && (

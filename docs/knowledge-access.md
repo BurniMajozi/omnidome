@@ -32,10 +32,15 @@ No user-profile table carries them (`users`/`employees` have none). Timezone def
 So per-user panel access is, today, an approximation: tenant entitlement + the user's role permissions. The knowledge layer therefore
 derives each caller's modules as follows (`knowledge/access.py`, single place; `PANELS` is the canonical MODULE -> PANEL map):
 
-1. admin (platform admin or `admin/org_admin/tenant_admin/owner`) -> all modules, no module gate;
+1. Platform Owner (`platform_admin`) -> all modules in the selected tenant;
+   Organisation Admin / Organisation Owner -> all modules **enabled for their tenant**;
 2. explicit `x-modules` / JWT `modules` -> exactly that list (authoritative the day the web tier starts signing it);
 3. else roles (`x-roles`) and RBAC permissions (looked up from the admin RBAC tables, cached 60 s) -> `derive_modules`;
 4. else only `general`, `memory`, `personal`.
+
+All non-platform callers are then intersected with the live `tenant_modules` ENABLED/TRIAL rows.
+An entitlement lookup failure denies panel cards. Shared and personal memory remain available;
+private ownership checks continue to apply to platform and tenant administrators.
 
 `communication` is granted to every authenticated staff user (the product has no per-user gate for the chat panel); `portal` and
 `products` need a matching role. A failed RBAC lookup never widens access.
@@ -45,7 +50,7 @@ derives each caller's modules as follows (`knowledge/access.py`, single place; `
 A card is returned only if ALL hold (Python: `AccessScope.allows`; SQL: `store_pg.access_clause`; both enforced):
 (a) card module in the caller's allowed modules, (b) role tag (`required_roles`) and permission tag (`required_permission`) match,
 (c) `private` cards only for `owner_id == caller` - **admins included**. Admins see every module of their tenant, never other users'
-private cards. Applies to search, context, graph (unreadable nodes are no longer listed at all), recall (hybrid) and metric facts.
+private cards. Tenant administrators are limited to enabled tenant panels. Applies to search, context, graph (unreadable nodes are no longer listed at all), recall (hybrid) and metric facts.
 Responses carry `meta.allowed_modules / allowed_panels / denied_panels` and `GET /api/v1/knowledge/access` returns the same, so a UI
 or agent can say "you do not have access to the X panel".
 

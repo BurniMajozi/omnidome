@@ -15,6 +15,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY services/admin/ ./services/admin/
 COPY services/common/ ./services/common/
+COPY apps/web/lib/platform-pricing.json ./services/common/platform-pricing.json
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1

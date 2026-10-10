@@ -33,6 +33,7 @@ from services.billing.routes.delivery import PUBLIC_PATHS as DELIVERY_PUBLIC_PAT
 from services.billing.routes.movements import router as movements_router
 from services.billing.routes.customer_app import router as customer_app_router
 from services.billing.routes.fee_policies import router as fee_policies_router
+from services.billing.routes.platform_checkout import router as platform_checkout_router, PUBLIC_PATHS as PLATFORM_CHECKOUT_PATHS
 
 logger = logging.getLogger("billing")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
@@ -50,7 +51,7 @@ app = FastAPI(
 # Paystack webhook is public (no auth required)
 guard = EntitlementGuard(
     module_id="billing",
-    public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS | DELIVERY_PUBLIC_PATHS,  # the latter authorize themselves (internal key / admin)
+    public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS | DELIVERY_PUBLIC_PATHS | PLATFORM_CHECKOUT_PATHS,
     public_prefixes=("/public/",),  # share-token routes: per-IP rate limited, generic 404, sanitised (routes/public_invoices.py)
 )
 
@@ -106,6 +107,7 @@ app.include_router(plans_router)
 app.include_router(seats_router)
 app.include_router(outbox_router)
 app.include_router(fee_policies_router)
+app.include_router(platform_checkout_router)
 app.include_router(invoice_documents_router)
 app.include_router(quotes_router)
 app.include_router(public_invoices_router)

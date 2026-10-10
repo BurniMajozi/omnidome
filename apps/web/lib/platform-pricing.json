@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "currency": "ZAR",
+  "annual_discount_percent": 20,
+  "modules": [
+    {"id":"communication","page_id":"communication","name":"Communication Hub","prices":{"starter":199,"professional":499,"enterprise":1499}},
+    {"id":"sales","page_id":"sales","name":"Sales Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
+    {"id":"crm","page_id":"crm","name":"CRM Hub","prices":{"starter":249,"professional":749,"enterprise":2499}},
+    {"id":"support","page_id":"service","name":"Service Hub","prices":{"starter":199,"professional":599,"enterprise":1999}},
+    {"id":"retention","page_id":"retention","name":"Retention Hub","prices":{"starter":399,"professional":1199,"enterprise":3999}},
+    {"id":"network","page_id":"network","name":"Network Ops Hub","prices":{"starter":499,"professional":1499,"enterprise":4999}},
+    {"id":"call_center","page_id":"call-center","name":"Call Center Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
+    {"id":"marketing","page_id":"marketing","name":"Marketing Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
+    {"id":"compliance","page_id":"compliance","name":"Compliance Hub","prices":{"starter":199,"professional":599,"enterprise":1999}},
+    {"id":"hr","page_id":"talent","name":"Staff Dome","prices":{"starter":149,"professional":449,"enterprise":1499}},
+    {"id":"billing","page_id":"billing","name":"Billing Hub","prices":{"starter":249,"professional":749,"enterprise":2499}},
+    {"id":"finance","page_id":"finance","name":"Finance & FP&A Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
+    {"id":"products","page_id":"products","name":"Product Hub","prices":{"starter":149,"professional":449,"enterprise":1499}},
+    {"id":"portal","page_id":"portal","name":"Portal Hub","prices":{"starter":199,"professional":599,"enterprise":1999}}
+  ],
+  "bundles": {
+    "professional":{"name":"Professional","monthly_price":3500,"seats":6,"extra_seat_price":45,"credits":5000,"tier":"professional","modules":["marketing","sales","support","crm","billing","portal"]},
+    "enterprise":{"name":"Enterprise","monthly_price":9500,"seats":8,"extra_seat_price":75,"credits":10000,"tier":"enterprise","modules":["marketing","sales","support","crm","billing","portal","retention","network","compliance"]},
+    "starter":{"name":"Starter","monthly_price":0,"seats":1,"extra_seat_price":45,"credits":0,"tier":"starter","modules":["crm"]},
+    "growth":{"name":"Growth","monthly_price":999,"seats":3,"extra_seat_price":45,"credits":0,"tier":"starter","modules":["crm","sales"]}
+  }
+}

@@ -94,6 +94,7 @@ import {
 } from "@/lib/admin-state"
 import type { Loadable } from "@/lib/service-state"
 import { CreateTenantCard, SeatsBillingTab, TeamTab, TenantSeatControls } from "@/components/modules/admin-team"
+import { TenantPricingCard } from "@/components/pricing/tenant-pricing"
 import { cn } from "@/lib/utils"
 
 const LOADING: Loadable<never> = { state: "loading" }
@@ -763,6 +764,7 @@ export function AdminModule() {
             </Card>
           </div>
 
+          <p className="text-sm text-muted-foreground">{isPlatformAdmin ? "Platform Owner · Manage all organisations, pricing and panel access." : canManageTeam ? "Organisation Admin · Manage your organisation and its enabled panels." : "Organisation member · Panel access is inherited from your organisation."}</p>
           <Tabs value={currentTab} onValueChange={setActiveTab} className="space-y-4">
             <TabsList className="flex w-full justify-start overflow-x-auto" aria-label="Administration sections">
               {isPlatformAdmin && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
@@ -823,11 +825,12 @@ export function AdminModule() {
                           <DataRow label="Tier" value={tenant.tier || "-"} />
                           <DataRow label="Org Code" value={tenant.org_code || "-"} />
                           <DataRow label="Created" value={fmtDate(tenant.created_at)} />
-                          <TenantSeatControls
+                          {!tenant.settings?.platform_pricing && <TenantSeatControls
                             tenant={tenant}
                             usage={readyData(seatRows).find((r) => r.tenant_id === tenant.id)}
                             onChanged={() => void bootstrap()}
-                          />
+                          />}
+                          <TenantPricingCard tenant={tenant.id} editable={isPlatformAdmin} onChanged={() => void bootstrap()} />
 
                           <div className="flex items-center justify-end gap-2 pt-2 border-t border-border/60">
                             <Button size="sm" variant="outline" className="text-xs h-8 gap-1.5" onClick={() => goInvite(tenant.id)}>
@@ -863,7 +866,7 @@ export function AdminModule() {
                       <CardTitle className="text-base">Tenant Module Entitlements</CardTitle>
                       <CardDescription>
                         {isPlatformAdmin
-                          ? "Grant or revoke functional platform modules per organization"
+                          ? "Tick panels to grant or revoke access. Changes create a revised invoice; removing a bundled panel switches to modular pricing."
                           : "Modules enabled for your organization. Only the platform team can change these."}
                       </CardDescription>
                     </div>
@@ -882,6 +885,7 @@ export function AdminModule() {
                   </div>
                 </CardHeader>
                 <CardContent>
+                  {!isPlatformAdmin && canManageTeam && selectedTenant && <TenantPricingCard tenant={selectedTenant.id} editable={false} />}
                   {tenantModules.state !== "ready" ? (
                     <SectionState
                       state={tenantModules}
@@ -901,18 +905,10 @@ export function AdminModule() {
                       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {modulesList.map((item) => {
                           const key = item.module_name || item.key || item.name
-                          const Wrapper: React.ElementType = isPlatformAdmin ? "button" : "div"
+                          const Wrapper: React.ElementType = "div"
                           return (
                             <Wrapper
                               key={key}
-                              {...(isPlatformAdmin
-                                ? {
-                                    type: "button" as const,
-                                    onClick: () => void toggleTenantModule(item),
-                                    disabled: moduleBusy !== null,
-                                    "aria-pressed": !!item.enabled,
-                                  }
-                                : {})}
                               className={`rounded-lg border border-border bg-card p-4 text-left transition-colors group ${isPlatformAdmin ? "hover:border-primary/50 disabled:opacity-60" : ""}`}
                             >
                               <div className="flex items-start justify-between gap-3">
@@ -920,7 +916,7 @@ export function AdminModule() {
                                   <p className="font-medium text-foreground group-hover:text-primary transition-colors">{item.name || key}</p>
                                   <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.description || key}</p>
                                 </div>
-                                {item.enabled ? <ToggleRight className="h-6 w-6 text-emerald-400 shrink-0" /> : <ToggleLeft className="h-6 w-6 text-muted-foreground shrink-0" />}
+                                <input type="checkbox" checked={!!item.enabled} aria-label={`${item.name || key} access`} disabled={!isPlatformAdmin || moduleBusy !== null} onChange={() => void toggleTenantModule(item)} className="h-5 w-5 shrink-0 accent-primary" />
                               </div>
                             </Wrapper>
                           )

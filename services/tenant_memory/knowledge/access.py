@@ -10,7 +10,7 @@ store_pg.access_clause, which mirror each other):
       users' PRIVATE cards.
 
 Where "allowed modules" come from, in order:
-  1. admin (platform admin or a tenant admin role)  -> every module (no module gate; private rule still applies);
+  1. platform admin -> every module; tenant administrators -> their tenant's enabled modules;
   2. an explicit allow-list on the signed identity (x-modules / JWT `modules`) -> exactly that list;
   3. otherwise derived from the caller's roles (x-roles, resolved by the web tier from the admin DB) and
      permissions (`<module>.read|write|admin` rows of the admin RBAC tables, loaded by `load_scope`);
@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Iterable, Optional
 
 from services.tenant_memory.knowledge.cards.base import DEFAULT_MODULE_ACCESS
@@ -134,7 +134,7 @@ def _db_lookup_enabled() -> bool:
     return os.getenv("AUTH_DB_ENFORCE", "true").strip().lower() not in {"0", "false", "no", "off"}
 
 
-async def load_scope(ctx: Any) -> AccessScope:
+async def _load_role_scope(ctx: Any) -> AccessScope:
     """The AccessScope for a request. Sync derivation from the signed identity first; when the identity carries no
     explicit module list, also look up the caller's RBAC rows (cached 60 s). A failed lookup never widens access:
     the scope simply keeps what the signed identity already proved."""
@@ -162,6 +162,31 @@ async def load_scope(ctx: Any) -> AccessScope:
             logger.warning("RBAC lookup for knowledge scope failed (%s); using signed identity only", type(exc).__name__)
             return scope
     return build_scope(ctx, roles, perms)
+
+
+def restrict_to_tenant(scope: AccessScope, enabled: Iterable[str]) -> AccessScope:
+    """A tenant administrator's permissions never exceed purchased panel access."""
+    entitled = normalise_modules(enabled) | ALWAYS_MODULES
+    if scope.is_admin: entitled |= {"admin"}
+    entitled |= frozenset(a for a, target in ALIASES.items() if target in entitled)
+    modules = entitled if scope.modules is None else scope.modules & entitled
+    return replace(scope, modules=frozenset(modules))
+
+
+async def load_scope(ctx: Any) -> AccessScope:
+    scope = await _load_role_scope(ctx)
+    if not _db_lookup_enabled() or getattr(ctx, "is_platform_admin", False) or "platform_admin" in scope.roles:
+        return scope
+    try:
+        from sqlalchemy import text
+        from services.common.db import session_scope
+        async with session_scope(ctx.tenant_id) as db:
+            rows = (await db.execute(text("""SELECT m.key FROM tenant_modules tm JOIN modules m ON m.id=tm.module_id
+              WHERE tm.tenant_id=:t AND tm.status IN ('ENABLED','TRIAL')"""), {"t": str(ctx.tenant_id)})).all()
+        return restrict_to_tenant(scope, [r[0] for r in rows])
+    except Exception as exc:
+        logger.warning("Tenant knowledge entitlements unavailable (%s); panel access denied", type(exc).__name__)
+        return restrict_to_tenant(scope, [])
 
 
 def clear_cache() -> None:

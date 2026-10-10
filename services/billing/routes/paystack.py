@@ -247,6 +247,11 @@ async def paystack_webhook(
     event = payload.get("event", "")
     data = payload.get("data", {}) or {}
 
+    from services.billing.routes.platform_checkout import handle_event
+    platform_outcome = await handle_event(event, data)
+    if platform_outcome is not None:
+        return {"status": platform_outcome}
+
     logger.info("Paystack webhook: event=%s ref=%s", event, data.get("reference"))
     outcome = "accepted"
 
