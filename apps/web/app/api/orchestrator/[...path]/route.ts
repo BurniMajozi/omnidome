@@ -89,6 +89,7 @@ async function proxy(request: NextRequest, { params }: { params: Promise<{ path:
       method: request.method,
       headers,
       body,
+      signal: request.signal,
     })
 
     const contentType = res.headers.get("content-type") || ""

@@ -61,7 +61,7 @@ SERVICE_URLS = {
     "call_center": os.getenv("CALL_CENTER_SERVICE_URL", "http://call_center:8007"),
     "communication": os.getenv("COMMUNICATION_SERVICE_URL", "http://communication:8020"),
     "memory": os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025"),
-    "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno-intelligence:8024"),
+    "fno_intelligence": os.getenv("FNO_INTELLIGENCE_SERVICE_URL", "http://fno_intelligence:8024"),
     "hr": os.getenv("HR_SERVICE_URL", "http://hr:8009"),
     "portal": os.getenv("PORTAL_BUILDER_SERVICE_URL", "http://portal_builder:8018"),
 }
@@ -97,6 +97,9 @@ _WEB_READ = ToolPolicy(mutates=False, timeout_s=120, max_output_chars=12000)
 
 # Every registered tool has an explicit entry (enforced by tests/test_tool_policy.py).
 TOOL_POLICIES: Dict[str, ToolPolicy] = {
+    "data.datasets": _READ,
+    "data.query": ToolPolicy(mutates=False, timeout_s=30, max_output_chars=16000),
+    "ask_user": ToolPolicy(mutates=False, timeout_s=1810),
     # CRM
     "crm_get_customer": _READ,
     "crm_get_customer_360": _READ,
@@ -327,6 +330,20 @@ class ToolRegistry:
 
     def _register_default_tools(self):
         """Register all built-in OmniDome service tools."""
+
+        self.register(Tool(name="data.datasets", description="Discover governed datasets and allowed columns for your panels. Use before data.query.", service="fno_intelligence", method="GET", endpoint="/api/fno/bi/datasets", parameters={"type": "object", "properties": {}, "additionalProperties": False}))
+        self.register(Tool(name="data.query", description="Query current tenant data using an approved dataset. No SQL. Use mode=list for records, aggregate for counts and totals. Lists are capped at 200 rows.", service="fno_intelligence", method="POST", endpoint="/api/fno/bi/query", parameters={
+            "type": "object", "additionalProperties": False, "required": ["dataset"], "properties": {
+                "dataset": {"type": "string"}, "mode": {"type": "string", "enum": ["list", "aggregate"]},
+                "time": {"type": "object", "additionalProperties": False, "properties": {
+                    "dimension": {"type": "string"}, "grain": {"type": "string", "enum": ["day", "week", "month", "quarter", "year"]},
+                    "from": {"type": "string", "description": "Inclusive YYYY-MM-DD"}, "to": {"type": "string", "description": "Inclusive YYYY-MM-DD"},
+                }},
+                "columns": {"type": "array", "items": {"type": "string"}}, "measures": {"type": "array", "items": {"type": "string"}}, "dimensions": {"type": "array", "items": {"type": "string"}},
+                "filters": {"type": "array", "items": {"type": "object", "required": ["field", "op"], "properties": {"field": {"type": "string"}, "op": {"type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in", "contains", "between", "is_null", "not_null"]}, "value": {}}, "additionalProperties": False}},
+                "order_by": {"type": "array", "items": {"type": "object", "required": ["field"], "properties": {"field": {"type": "string"}, "dir": {"type": "string", "enum": ["asc", "desc"]}}, "additionalProperties": False}}, "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+            }}))
+        self.register(Tool(name="ask_user", description="Pause this live chat and ask 1–3 concrete questions with 2–4 options. Wait for the user's answer; never assume an approval.", service="internal", method="POST", endpoint="", parameters={"type": "object", "required": ["questions"], "additionalProperties": False, "properties": {"questions": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "required": ["header", "question", "options"], "additionalProperties": False, "properties": {"header": {"type": "string", "maxLength": 12}, "question": {"type": "string", "maxLength": 500}, "options": {"type": "array", "minItems": 2, "maxItems": 4, "items": {"type": "object", "required": ["label", "description"], "properties": {"label": {"type": "string"}, "description": {"type": "string"}}, "additionalProperties": False}}, "multi_select": {"type": "boolean"}}}}}}))
 
         # ── CRM Tools ─────────────────────────────────────────────
         self.register(Tool(
@@ -1055,6 +1072,9 @@ class ToolRegistry:
         # filter for customer_facing is enforced in knowledge_client); read-only metric facts go to the
         # agents that report on numbers.
         for _agent, _tools in AGENT_TOOL_PERMISSIONS.items():
+            if _agent != "customer_facing":
+                _tools.extend(t for t in ("data.datasets", "data.query", "ask_user") if t not in _tools)
+                _tools[:] = [t for t in _tools if t not in SQL_TOOL_NAMES]
             _tools.extend(t for t in KNOWLEDGE_TOOLS if t not in _tools)
             if _agent != "customer_facing":
                 _tools.extend(t for t in ("skills.find", "skills.get") if t not in _tools)   # read-only; guidance, not capability
@@ -1066,7 +1086,7 @@ class ToolRegistry:
                 _tools.extend(t for t in PERSONAL_TOOLS_LIST if t not in _tools)
 
         if agent_type in ("auto", "orchestrator", "master"):
-            return list(self._tools.values())
+            return [t for t in self._tools.values() if t.name not in SQL_TOOL_NAMES]
 
         allowed = AGENT_TOOL_PERMISSIONS.get(agent_type, AGENT_TOOL_PERMISSIONS.get("customer_facing", []))
         return [t for t in self._tools.values() if t.name in allowed]

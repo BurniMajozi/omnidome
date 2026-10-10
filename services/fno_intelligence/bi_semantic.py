@@ -19,7 +19,7 @@ import re
 import time as _time
 import uuid
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Callable, Literal, Optional, Union
@@ -41,6 +41,8 @@ MAX_DIMENSIONS = 4
 MAX_FILTERS = 20
 MAX_IN_VALUES = 100
 STATEMENT_TIMEOUT_MS = 8000
+LIST_MAX_ROWS = 200            # hard cap for row-level (list mode) queries
+LIST_MAX_COLUMNS = 12
 TIMEZONE = "Africa/Johannesburg"
 
 Dialect = str  # "postgresql" | "sqlite"
@@ -66,6 +68,12 @@ def today(d: Dialect) -> str:
 
 def days_since(col: str) -> Callable[[Dialect], str]:
     return lambda d: f"(CURRENT_DATE - {col})" if d == "postgresql" else f"(julianday('now') - julianday({col}))"
+
+
+def age_days(col: str) -> Callable[[Dialect], str]:
+    """Whole days between a timestamp/date column and today (integer; negative when the column is in the future)."""
+    return lambda d: (f"(CURRENT_DATE - CAST({col} AS DATE))" if d == "postgresql"
+                      else f"CAST(julianday(date('now')) - julianday(date({col})) AS INTEGER)")
 
 
 def hours_between(a: str, b: str) -> Callable[[Dialect], str]:
@@ -101,6 +109,21 @@ class Measure:
 
 
 @dataclass(frozen=True)
+class ListColumn:
+    """A column a row-level (list mode) query may return. ONLY registered columns can be selected, filtered or sorted:
+    free column names never reach SQL. `pii=True` columns (emails, phones, ID numbers, street addresses) are refused
+    unless the dataset sets list_pii_ok (no dataset does)."""
+    id: str
+    label: str
+    type: str                       # category | number | time
+    expr: Frag
+    kind: str = "ts"                # time columns: 'ts' | 'date'
+    format: Optional[str] = None
+    description: str = ""
+    pii: bool = False
+
+
+@dataclass(frozen=True)
 class Dataset:
     id: str
     label: str
@@ -114,6 +137,21 @@ class Dataset:
     base_where: Optional[Frag] = None
     default_time: Optional[str] = None
     notes: str = ""
+    list_columns: tuple = ()        # ListColumn allow-list; empty = the dataset has no row-level mode
+    list_default: tuple = ()        # column ids returned when the caller names none
+    list_order: tuple = ()          # ((column id, 'asc'|'desc'), ...) default sort
+    list_pii_ok: bool = False
+
+    def list_col(self, i: str) -> Optional[ListColumn]:
+        c = next((x for x in self.list_columns if x.id == i), None)
+        return c if c is not None and (self.list_pii_ok or not c.pii) else None
+
+    def list_dim(self, i: str) -> Optional[Dimension]:
+        """A list column viewed as a filterable Dimension (used by the shared filter compiler)."""
+        c = self.list_col(i)
+        if c is None:
+            return None
+        return Dimension(c.id, c.label, c.type, c.expr, kind=c.kind, description=c.description)
 
     def dim(self, i: str) -> Optional[Dimension]:
         return next((x for x in self.dimensions if x.id == i), None)
@@ -510,7 +548,65 @@ def _build() -> dict[str, Dataset]:
             ratio_measure("positive_share", "Positive share", pos, items),
             ratio_measure("negative_share", "Negative share", neg, items),
         )))
-    return {d.id: d for d in ds}
+    return {d.id: _with_list_mode(d) for d in ds}
+
+
+def _with_list_mode(d: Dataset) -> Dataset:
+    spec = LIST_MODES.get(d.id)
+    if not spec:
+        return d
+    cols, default, order = spec
+    return replace(d, list_columns=cols, list_default=default, list_order=order)
+
+
+def _lc(id_: str, label: str, type_: str, expr: Frag, **kw) -> ListColumn:
+    return ListColumn(id_, label, type_, expr, **kw)
+
+
+# Row-level (list mode) allow-lists. Deliberately NO emails, phones, ID numbers, street addresses or person names.
+# Free-text fields (ticket subjects, deal notes) are excluded too: they routinely contain personal data.
+LIST_MODES: dict = {
+    "sales_pipeline": ((
+        _lc("id", "Deal id", "category", "CAST(d.id AS TEXT)"),
+        _lc("name", "Deal name", "category", "d.name"),
+        _lc("stage", "Stage", "category", "COALESCE(ds.name, 'No stage')"),
+        _lc("status", "Status", "category", "UPPER(d.status)"),
+        _lc("value_zar", "Value (ZAR)", "number", "COALESCE(d.value_zar, 0)", format="currency_zar"),
+        _lc("created_at", "Created", "time", "d.created_at"),
+        _lc("close_date", "Expected close date", "time", "d.close_date", kind="date"),
+        _lc("closed_at", "Closed", "time", "d.closed_at"),
+        _lc("age_days", "Age in days", "number", age_days("d.created_at"), description="Whole days since the deal was created, as of today"),
+        _lc("days_past_expected_close", "Days past expected close", "number", age_days("d.close_date"),
+            description="Whole days since the expected close date (negative = still in the future); empty when none is set"),
+    ), ("name", "stage", "status", "value_zar", "created_at", "age_days"), (("age_days", "desc"),)),
+    "sales_leads": ((
+        _lc("id", "Lead id", "category", "CAST(l.id AS TEXT)"),
+        _lc("status", "Status", "category", "UPPER(l.status)"),
+        _lc("source", "Source", "category", "COALESCE(l.source, 'Unknown')"),
+        _lc("created_at", "Created", "time", "l.created_at"),
+        _lc("converted_at", "Converted", "time", "l.converted_at"),
+        _lc("age_days", "Age in days", "number", age_days("l.created_at")),
+    ), ("id", "status", "source", "created_at", "age_days"), (("created_at", "desc"),)),
+    "billing_invoices": ((
+        _lc("id", "Invoice id", "category", "CAST(i.id AS TEXT)"),
+        _lc("number", "Invoice number", "category", "i.number"),
+        _lc("status", "Status", "category", "CAST(i.status AS TEXT)"),
+        _lc("total_zar", "Total (ZAR)", "number", "i.total_zar", format="currency_zar"),
+        _lc("balance_zar", "Balance due (ZAR)", "number", "(i.total_zar - i.amount_paid_zar)", format="currency_zar"),
+        _lc("created_at", "Invoice date", "time", "i.created_at"),
+        _lc("due_date", "Due date", "time", "i.due_date", kind="date"),
+        _lc("days_overdue", "Days past due", "number", age_days("i.due_date"), description="Whole days past the due date (negative = not yet due)"),
+    ), ("number", "status", "total_zar", "balance_zar", "due_date", "days_overdue"), (("due_date", "asc"),)),
+    "support_tickets": ((
+        _lc("id", "Ticket id", "category", "CAST(t.id AS TEXT)"),
+        _lc("priority", "Priority", "category", "COALESCE(UPPER(t.priority), 'NORMAL')"),
+        _lc("category", "Category", "category", "COALESCE(t.category, 'Uncategorised')"),
+        _lc("status", "Status", "category", "UPPER(t.status)"),
+        _lc("created_at", "Opened", "time", "t.created_at"),
+        _lc("resolved_at", "Resolved", "time", "t.resolved_at"),
+        _lc("age_days", "Age in days", "number", age_days("t.created_at")),
+    ), ("id", "priority", "category", "status", "created_at", "age_days"), (("created_at", "desc"),)),
+}
 
 
 DATASETS: dict[str, Dataset] = _build()
@@ -567,8 +663,11 @@ class QuerySpec(BaseModel):
     time: Optional[TimeSpec] = None
     order_by: list[OrderSpec] = Field(default_factory=list, max_length=4)
     limit: int = Field(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)
+    # Row-level mode: returns individual records (registered `columns` only, at most LIST_MAX_ROWS rows, no measures).
+    mode: Literal["aggregate", "list"] = "aggregate"
+    columns: list[str] = Field(default_factory=list, max_length=LIST_MAX_COLUMNS)
 
-    @field_validator("measures", "dimensions")
+    @field_validator("measures", "dimensions", "columns")
     @classmethod
     def _ids(cls, v):
         for i in v:
@@ -578,8 +677,11 @@ class QuerySpec(BaseModel):
 
 
 def canonical_key(spec: QuerySpec) -> str:
-    return hashlib.sha256(json.dumps(spec.model_dump(by_alias=True, mode="json"), sort_keys=True,
-                                     separators=(",", ":")).encode()).hexdigest()[:24]
+    dump = spec.model_dump(by_alias=True, mode="json")
+    if dump.get("mode") == "aggregate":          # keep the keys of existing aggregate specs (decks, metric facts) stable
+        dump.pop("mode", None)
+        dump.pop("columns", None)
+    return hashlib.sha256(json.dumps(dump, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:24]
 
 
 # ── compiler ──────────────────────────────────────────────────────────────
@@ -679,6 +781,124 @@ def _tenant_value(tenant_id: uuid.UUID, d: Dialect):
     return tenant_id.hex if d == "sqlite" else tenant_id
 
 
+def _apply_filters(filters, ds: "Dataset", d: Dialect, add, where: list, ci: bool = False) -> None:
+    """Append one WHERE fragment per filter (shared by aggregate and list mode). ci = case-insensitive category
+    comparison and list-column filters (list mode only)."""
+    for f in filters:
+        dim = ds.dim(f.field) or (ds.list_dim(f.field) if ci else None)
+        if dim is None:
+            raise BiQueryError(f"Unknown filter field {f.field!r} for dataset {ds.id!r}")
+        if f.op not in OPS:
+            raise BiQueryError(f"Unknown filter operator {f.op!r}")
+        if f.op not in OPS_BY_TYPE[dim.type]:
+            raise BiQueryError(f"Operator {f.op!r} is not allowed on {dim.type} field {f.field!r}")
+        e = _f(dim.expr, d)
+        if ci and dim.type == "category" and f.op in ("eq", "neq", "in", "not_in"):
+            e = f"LOWER({e})"
+            f = f.model_copy(update={"value": [str(v).lower() for v in f.value] if isinstance(f.value, (list, tuple)) else str(f.value).lower()})
+        if f.op == "is_null":
+            where.append(f"{e} IS NULL"); continue
+        if f.op == "not_null":
+            where.append(f"{e} IS NOT NULL"); continue
+        if dim.type == "time":
+            if f.op == "between":
+                if not isinstance(f.value, (list, tuple)) or len(f.value) != 2:
+                    raise BiQueryError(f"between on {f.field!r} needs [from, to]")
+                lo, hi = _coerce_time(f.value[0], f.field), _coerce_time(f.value[1], f.field)
+                ph1, v1 = _time_param(lo, dim, d)
+                ph2, v2 = _time_param(hi + timedelta(days=1), dim, d)
+                where.append(f"({e} >= {ph1.format(n=add(v1))} AND {e} < {ph2.format(n=add(v2))})")
+                continue
+            day = _coerce_time(f.value, f.field)
+            lo_day, hi_day = day, day + timedelta(days=1)
+            op, bound = {"gte": (">=", lo_day), "gt": (">=", hi_day), "lt": ("<", lo_day), "lte": ("<", hi_day)}.get(f.op, (None, None))
+            if f.op == "eq":
+                ph1, v1 = _time_param(lo_day, dim, d); ph2, v2 = _time_param(hi_day, dim, d)
+                where.append(f"({e} >= {ph1.format(n=add(v1))} AND {e} < {ph2.format(n=add(v2))})")
+            else:
+                ph, v = _time_param(bound, dim, d)
+                where.append(f"{e} {op} " + ph.format(n=add(v)))
+            continue
+        if f.op in ("in", "not_in"):
+            vals = f.value
+            if not isinstance(vals, (list, tuple)) or not vals or len(vals) > MAX_IN_VALUES:
+                raise BiQueryError(f"{f.op} on {f.field!r} needs a non-empty list of at most {MAX_IN_VALUES} values")
+            names = [":" + add(_coerce_number(v, f.field, d) if dim.type == "number" else _coerce_text(v, f.field)) for v in vals]
+            where.append(f"{e} {'NOT ' if f.op == 'not_in' else ''}IN ({', '.join(names)})")
+            continue
+        if f.op == "between":
+            if not isinstance(f.value, (list, tuple)) or len(f.value) != 2:
+                raise BiQueryError(f"between on {f.field!r} needs [low, high]")
+            a, b = (_coerce_number(v, f.field, d) for v in f.value)
+            where.append(f"{e} BETWEEN :{add(a)} AND :{add(b)}")
+            continue
+        if f.op == "contains":
+            s = _coerce_text(f.value, f.field).lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            where.append(f"LOWER({e}) LIKE :{add('%' + s + '%')} ESCAPE '\\'")
+            continue
+        val = _coerce_number(f.value, f.field, d) if dim.type == "number" else _coerce_text(f.value, f.field)
+        sym = {"eq": "=", "neq": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[f.op]
+        where.append(f"{e} {sym} :{add(val)}")
+
+
+def _compile_list(spec: QuerySpec, ds: Dataset, d: Dialect, params: dict, where: list, add) -> Compiled:
+    """Row-level query: registered columns only, tenant-scoped, case-insensitive text filters, hard row cap."""
+    if not ds.list_columns:
+        raise BiQueryError(f"Dataset {ds.id!r} has no row-level list mode; use aggregate mode (measures and dimensions)")
+    if spec.measures or spec.dimensions:
+        raise BiQueryError("list mode returns rows: use columns, not measures or dimensions")
+    ids = list(spec.columns) or list(ds.list_default)
+    cols = []
+    for cid in ids:
+        c = ds.list_col(cid)
+        if c is None:
+            raise BiQueryError(f"Unknown or not allowed column {cid!r} for dataset {ds.id!r}. Allowed: "
+                               + ", ".join(x.id for x in ds.list_columns if not x.pii))
+        if cid in [x.id for x in cols]:
+            raise BiQueryError(f"Duplicate column {cid!r}")
+        cols.append(c)
+    t = spec.time
+    if t is not None:
+        if t.grain:
+            raise BiQueryError("list mode does not group by time; pass time.from / time.to only")
+        tdim_id = t.dimension or ds.default_time
+        tdm = ds.dim(tdim_id) if tdim_id else None
+        if tdm is None or tdm.type != "time":
+            raise BiQueryError(f"Unknown time dimension {t.dimension!r} for dataset {ds.id!r}")
+        if t.from_ and t.to and t.from_ > t.to:
+            raise BiQueryError("time.from must be on or before time.to")
+        texpr = _f(tdm.expr, d)
+        if t.from_:
+            ph, val = _time_param(t.from_, tdm, d)
+            where.append(f"{texpr} >= " + ph.format(n=add(val)))
+        if t.to:
+            ph, val = _time_param(t.to + timedelta(days=1), tdm, d)
+            where.append(f"{texpr} < " + ph.format(n=add(val)))
+    _apply_filters(spec.filters, ds, d, add, where, ci=True)
+    columns, select, alias_for = [], [], {}
+    for c in cols:
+        alias = f"c{len(select)}"
+        select.append(f"{_f(c.expr, d)} AS {alias}")
+        alias_for[c.id] = alias
+        columns.append(Column(c.id, c.label, "column", c.type, c.format))
+    order_sql: list[str] = []
+    for o in spec.order_by:
+        oc = ds.list_col(o.field)
+        if oc is None:
+            raise BiQueryError(f"order_by field {o.field!r} must be one of the list columns")
+        order_sql.append(f"{_f(oc.expr, d)} {o.dir.upper()} NULLS LAST")
+    if not order_sql:
+        for cid, direction in ds.list_order:
+            oc = ds.list_col(cid)
+            if oc is not None:
+                order_sql.append(f"{_f(oc.expr, d)} {direction.upper()} NULLS LAST")
+    order_sql.append(f"{_f(ds.list_col('id').expr, d)} ASC" if ds.list_col("id") else "1 ASC")   # stable paging
+    limit = min(int(spec.limit), LIST_MAX_ROWS)
+    from_where = f"FROM {ds.from_sql} WHERE " + " AND ".join(where)
+    sql = f"SELECT {', '.join(select)} {from_where} ORDER BY {', '.join(order_sql)} LIMIT {limit + 1}"
+    return Compiled(sql, f"SELECT COUNT(*) AS t0 {from_where}", params, columns, limit, d, None)
+
+
 def compile_query(spec: QuerySpec, dialect: str, tenant_id: uuid.UUID) -> Compiled:
     ds = DATASETS.get(spec.dataset)
     if ds is None:
@@ -698,6 +918,10 @@ def compile_query(spec: QuerySpec, dialect: str, tenant_id: uuid.UUID) -> Compil
     where = [f"{ds.tenant_expr} = :tenant"]
     if ds.base_where:
         where.append(f"({_f(ds.base_where, d)})")
+    if spec.mode == "list":
+        return _compile_list(spec, ds, d, params, where, add)
+    if spec.columns:
+        raise BiQueryError("columns are only used with mode 'list'")
 
     # dimensions
     seen: set[str] = set()
@@ -775,59 +999,7 @@ def compile_query(spec: QuerySpec, dialect: str, tenant_id: uuid.UUID) -> Compil
         alias_for[m.id] = alias
         columns.append(Column(m.id, m.label, "measure", "number", m.format, m.unit, None, m.agg, m.additive))
 
-    # filters
-    for f in spec.filters:
-        dim = ds.dim(f.field)
-        if dim is None:
-            raise BiQueryError(f"Unknown filter field {f.field!r} for dataset {ds.id!r}")
-        if f.op not in OPS:
-            raise BiQueryError(f"Unknown filter operator {f.op!r}")
-        if f.op not in OPS_BY_TYPE[dim.type]:
-            raise BiQueryError(f"Operator {f.op!r} is not allowed on {dim.type} field {f.field!r}")
-        e = _f(dim.expr, d)
-        if f.op == "is_null":
-            where.append(f"{e} IS NULL"); continue
-        if f.op == "not_null":
-            where.append(f"{e} IS NOT NULL"); continue
-        if dim.type == "time":
-            if f.op == "between":
-                if not isinstance(f.value, (list, tuple)) or len(f.value) != 2:
-                    raise BiQueryError(f"between on {f.field!r} needs [from, to]")
-                lo, hi = _coerce_time(f.value[0], f.field), _coerce_time(f.value[1], f.field)
-                ph1, v1 = _time_param(lo, dim, d)
-                ph2, v2 = _time_param(hi + timedelta(days=1), dim, d)
-                where.append(f"({e} >= {ph1.format(n=add(v1))} AND {e} < {ph2.format(n=add(v2))})")
-                continue
-            day = _coerce_time(f.value, f.field)
-            lo_day, hi_day = day, day + timedelta(days=1)
-            op, bound = {"gte": (">=", lo_day), "gt": (">=", hi_day), "lt": ("<", lo_day), "lte": ("<", hi_day)}.get(f.op, (None, None))
-            if f.op == "eq":
-                ph1, v1 = _time_param(lo_day, dim, d); ph2, v2 = _time_param(hi_day, dim, d)
-                where.append(f"({e} >= {ph1.format(n=add(v1))} AND {e} < {ph2.format(n=add(v2))})")
-            else:
-                ph, v = _time_param(bound, dim, d)
-                where.append(f"{e} {op} " + ph.format(n=add(v)))
-            continue
-        if f.op in ("in", "not_in"):
-            vals = f.value
-            if not isinstance(vals, (list, tuple)) or not vals or len(vals) > MAX_IN_VALUES:
-                raise BiQueryError(f"{f.op} on {f.field!r} needs a non-empty list of at most {MAX_IN_VALUES} values")
-            names = [":" + add(_coerce_number(v, f.field, d) if dim.type == "number" else _coerce_text(v, f.field)) for v in vals]
-            where.append(f"{e} {'NOT ' if f.op == 'not_in' else ''}IN ({', '.join(names)})")
-            continue
-        if f.op == "between":
-            if not isinstance(f.value, (list, tuple)) or len(f.value) != 2:
-                raise BiQueryError(f"between on {f.field!r} needs [low, high]")
-            a, b = (_coerce_number(v, f.field, d) for v in f.value)
-            where.append(f"{e} BETWEEN :{add(a)} AND :{add(b)}")
-            continue
-        if f.op == "contains":
-            s = _coerce_text(f.value, f.field).lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            where.append(f"LOWER({e}) LIKE :{add('%' + s + '%')} ESCAPE '\\'")
-            continue
-        val = _coerce_number(f.value, f.field, d) if dim.type == "number" else _coerce_text(f.value, f.field)
-        sym = {"eq": "=", "neq": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<="}[f.op]
-        where.append(f"{e} {sym} :{add(val)}")
+    _apply_filters(spec.filters, ds, d, add, where, ci=spec.mode == "list")
 
     # ordering
     order_sql: list[str] = []
@@ -926,7 +1098,9 @@ async def run_query(db: AsyncSession, tenant_id: uuid.UUID, spec: QuerySpec, *, 
     rows = [[_jsonable(v) for v in r] for r in raw[: cq.limit]]
     measure_cols = [c for c in cq.columns if c.kind == "measure"]
     totals = None
-    if totals_row is not None:
+    if totals_row is not None and spec.mode == "list":
+        totals = {"matching_rows": _jsonable(totals_row[0])}
+    elif totals_row is not None:
         totals = {c.id: _jsonable(totals_row[i]) for i, c in enumerate(measure_cols)}
     result = {
         "columns": [c.public() for c in cq.columns],
@@ -934,6 +1108,7 @@ async def run_query(db: AsyncSession, tenant_id: uuid.UUID, spec: QuerySpec, *, 
         "totals": totals,
         "meta": {"dataset": spec.dataset, "generated_at": datetime.now(timezone.utc).isoformat(),
                  "row_count": len(rows), "truncated": truncated, "timezone": TIMEZONE, "time": cq.time_info,
+                 "mode": spec.mode, "row_cap": cq.limit,
                  "query_key": canonical_key(spec)},
     }
     # Metric-facts hook (bi_metrics_writer): best effort, rate limited, never affects the query result.
@@ -964,9 +1139,13 @@ def catalog() -> dict:
             "measures": [{"id": m.id, "label": m.label, "agg": m.agg, "format": m.format, "unit": m.unit,
                           "description": m.description, "additive": m.additive}
                          for m in ds.measures if not m.id.startswith("_")],
+            "list_mode": bool(ds.list_columns),
+            "list_columns": [{"id": c.id, "label": c.label, "type": c.type, "format": c.format, "description": c.description,
+                              "filter_ops": sorted(OPS_BY_TYPE[c.type])} for c in ds.list_columns if ds.list_col(c.id)],
+            "list_default_columns": list(ds.list_default),
         })
     return {"datasets": out, "skipped": SKIPPED_DATASETS, "grains": list(GRAINS), "filter_ops": sorted(OPS),
-            "limits": {"max_rows": MAX_LIMIT, "default_rows": DEFAULT_LIMIT, "max_measures": MAX_MEASURES,
+            "limits": {"max_rows": MAX_LIMIT, "list_max_rows": LIST_MAX_ROWS, "default_rows": DEFAULT_LIMIT, "max_measures": MAX_MEASURES,
                        "max_dimensions": MAX_DIMENSIONS, "max_filters": MAX_FILTERS, "queries_per_minute": rate_limit_per_minute(),
                        "statement_timeout_ms": STATEMENT_TIMEOUT_MS}}
 

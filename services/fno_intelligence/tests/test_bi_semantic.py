@@ -1,21 +1,69 @@
 """Semantic layer: registry validation, parameterised SQL, injection resistance, tenant isolation, caps."""
 
 import uuid
+from contextlib import asynccontextmanager
 
 import pytest
 
 from services.fno_intelligence import bi_semantic as sem
-from services.fno_intelligence.tests.bi_harness import TENANT_A, TENANT_B, env, resp_json, run, seed_billing
+from services.fno_intelligence.tests.bi_harness import TENANT_A, TENANT_B, env as base_env, resp_json, run, seed_billing
+
+
+@asynccontextmanager
+async def env(tmp_path, monkeypatch):
+    # All-dataset semantic checks use an authorised operator. Explicit roles
+    # below still test the production panel gate.
+    async with base_env(tmp_path, monkeypatch) as e:
+        original = e.req
+        async def request(method, path, **kw):
+            kw.setdefault("roles", "admin")
+            return await original(method, path, **kw)
+        e.req = request
+        yield e
 
 
 def q(**kw):
     return {"dataset": "billing_invoices", **kw}
 
 
+def test_row_lists_are_capped_allowlisted_and_tenant_scoped(tmp_path, monkeypatch):
+    async def scenario():
+        async with env(tmp_path, monkeypatch) as e:
+            await seed_billing(e)
+            for n in range(205):
+                await e.insert("invoices", id=uuid.uuid4(), tenant_id=TENANT_A, customer_id=uuid.uuid4(),
+                               number=f"CAP-{n}", status="issued", total_zar=10, amount_paid_zar=0, due_date="2026-01-01", created_at="2026-01-01 00:00:00")
+            result = resp_json(await e.req("POST", "/query", json=q(mode="list", columns=["number", "status", "days_overdue"], limit=1000)))
+            assert len(result["rows"]) == 200 and result["meta"]["truncated"]
+            assert result["totals"]["matching_rows"] == 209
+            assert all(row[0] != "B-1" for row in result["rows"])
+            assert all(isinstance(row[2], (int, float)) for row in result["rows"])
+            for columns in [["email"], ["phone"], ["number", "number"], ["number; DROP TABLE invoices"]]:
+                assert (await e.req("POST", "/query", json=q(mode="list", columns=columns))).status_code == 422
+            assert (await e.req("POST", "/query", json=q(mode="list", sql="SELECT * FROM invoices"))).status_code == 422
+            result = resp_json(await e.req("POST", "/query", json=q(mode="list", filters=[{"field": "status", "op": "eq", "value": "ISSUED"}])))
+            assert result["totals"]["matching_rows"] == 205
+            for dataset, mode in sem.LIST_MODES.items():
+                result = resp_json(await e.req("POST", "/query", json={"dataset": dataset, "mode": "list"}))
+                assert result["meta"]["mode"] == "list"
+    run(scenario())
+
+
+def test_dataset_discovery_respects_panels(tmp_path, monkeypatch):
+    async def scenario():
+        async with env(tmp_path, monkeypatch) as e:
+            cat = resp_json(await e.req("GET", "/datasets", roles="viewer", headers={"X-Permissions": "billing.read"}))
+            assert {d["category"] for d in cat["datasets"]} == {"Billing"}
+            assert any(d["id"] == "sales_pipeline" and d["panel"] == "Sales Management" for d in cat["restricted"])
+            denied = await e.req("POST", "/query", roles="viewer", headers={"X-Permissions": "billing.read"}, json={"dataset": "sales_pipeline", "mode": "list"})
+            assert denied.status_code == 403 and "Sales Management" in denied.text
+    run(scenario())
+
+
 def test_catalog_has_datasets_skips_and_limits(tmp_path, monkeypatch):
     async def scenario():
         async with env(tmp_path, monkeypatch) as e:
-            cat = resp_json(await e.req("GET", "/datasets", roles="viewer"))
+            cat = resp_json(await e.req("GET", "/datasets"))
             ids = {d["id"] for d in cat["datasets"]}
             assert {"billing_invoices", "billing_payments", "billing_subscriptions", "crm_customers", "sales_leads", "sales_pipeline",
                     "support_tickets", "network_services", "marketing_campaigns", "social_daily", "social_posts", "competitor_changes",
@@ -215,7 +263,8 @@ def test_rate_limit_per_tenant(tmp_path, monkeypatch):
 def test_roles_and_auth(tmp_path, monkeypatch):
     async def scenario():
         async with env(tmp_path, monkeypatch) as e:
-            assert (await e.req("POST", "/query", roles="viewer", json={"dataset": "crm_customers", "measures": ["customer_count"]})).status_code == 200
+            assert (await e.req("POST", "/query", roles="viewer", json={"dataset": "crm_customers", "measures": ["customer_count"]})).status_code == 403
+            assert (await e.req("POST", "/query", roles="viewer", headers={"X-Permissions": "crm.read"}, json={"dataset": "crm_customers", "measures": ["customer_count"]})).status_code == 200
             r = await e.client.post("http://t/api/fno/bi/query", json={"dataset": "crm_customers", "measures": ["customer_count"]})
             assert r.status_code in (401, 403)
     run(scenario())

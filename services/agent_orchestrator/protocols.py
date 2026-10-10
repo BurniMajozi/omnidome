@@ -60,6 +60,7 @@ class AGUIEvent(BaseModel):
         "MEMORY_WRITE",
         "RUN_FINISHED",
         "RUN_ERROR",
+        "CUSTOM",
     ]
     run_id: uuid.UUID
     tenant_id: Optional[uuid.UUID] = None

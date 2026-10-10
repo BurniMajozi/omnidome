@@ -23,6 +23,7 @@ def test_ag_ui_hired_agent_uses_read_only_roster_context(monkeypatch):
                                    employee_id=employee_id)
 
     class Session:
+        def add(self, value): pass
         async def execute(self, _query):
             return Result()
 
@@ -34,7 +35,7 @@ def test_ag_ui_hired_agent_uses_read_only_roster_context(monkeypatch):
         def __init__(self, agent_type, tenant_id, context):
             seen.update(agent_type=agent_type, tenant_id=tenant_id, context=context)
 
-        async def run(self, _message, _history, max_tool_calls=None):
+        async def run(self, _message, _history, max_tool_calls=None, conversation_id=None):
             seen["max_tool_calls"] = max_tool_calls
             return {"content": "Draft only", "tool_calls": []}
 

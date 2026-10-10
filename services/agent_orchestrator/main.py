@@ -108,7 +108,8 @@ async def startup() -> None:
         from services.agent_orchestrator.models import Base as MainBase, AgentJob, AgentTenantBudget, RegisteredAgent
 
         def _ensure_control_plane() -> None:
-            MainBase.metadata.create_all(bind=get_engine(), tables=[RegisteredAgent.__table__, AgentTenantBudget.__table__, AgentJob.__table__])
+            from services.agent_orchestrator.ask_user import PendingQuestion
+            MainBase.metadata.create_all(bind=get_engine(), tables=[RegisteredAgent.__table__, AgentTenantBudget.__table__, AgentJob.__table__, PendingQuestion.__table__])
 
         await run_with_db_retry(lambda: asyncio.to_thread(_ensure_control_plane), logger=logger)
         if os.getenv("AGENT_JOB_WORKER_ENABLED", "true").lower() == "true":

@@ -183,6 +183,7 @@ export type AGUIEventType =
   | "MEMORY_WRITE"
   | "RUN_FINISHED"
   | "RUN_ERROR"
+  | "CUSTOM"
 
 export interface AGUIEvent {
   type: AGUIEventType
@@ -462,8 +463,10 @@ export async function invokeAgentStream(
 export async function invokeAgentAGUI(
   req: AGUIRunRequest,
   onEvent: (event: AGUIEvent) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const res = await authFetch(`${ORCHESTRATOR_BASE}/protocols/ag-ui/run`, {
+    signal,
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -491,18 +494,28 @@ export async function invokeAgentAGUI(
       if (line.startsWith("data: ")) {
         const data = line.slice(6)
         if (data === "[DONE]") continue
-        try {
-          const event: AGUIEvent = JSON.parse(data)
-          onEvent(event)
-        } catch {
-          // Skip malformed events
-        }
+        let event: AGUIEvent
+        try { event = JSON.parse(data) } catch { continue }
+        onEvent(event)
       }
     }
   }
 }
 
 // ── A2UI API ─────────────────────────────────────────────────────────────
+export async function answerAgentQuestion(runId: string, questionId: string, answers: Array<{ question: string; selected: string[]; other: string | null }>): Promise<void> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/agents/runs/${encodeURIComponent(runId)}/answer`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question_id: questionId, answers }),
+  })
+  if (!res.ok) throw new Error(`Could not submit answer (${res.status})`)
+}
+
+export async function decideAgentApproval(id: string, action: "approve" | "reject"): Promise<void> {
+  const res = await authFetch(`${ORCHESTRATOR_BASE}/approvals/${encodeURIComponent(id)}/${action}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+  })
+  if (!res.ok) throw new Error(`Could not record approval (${res.status})`)
+}
 
 export async function validateA2UI(payload: A2UIPayload): Promise<A2UIValidationResult> {
   const res = await fetch(`${ORCHESTRATOR_BASE}/protocols/a2ui/validate`, {

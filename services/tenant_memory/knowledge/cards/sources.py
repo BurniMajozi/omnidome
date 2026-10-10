@@ -493,3 +493,4 @@ def source_enabled(name: str, raw: Optional[str] = None) -> bool:
 
 
 from services.tenant_memory.knowledge.cards import sources_ext as _sources_ext  # noqa: E402,F401  registers EXT_SOURCES into SOURCES
+from services.tenant_memory.knowledge.cards import builders_capabilities as _builders_capabilities  # noqa: E402,F401

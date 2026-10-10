@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+import asyncio
 from typing import Any, Optional
 
 import httpx
@@ -40,7 +41,7 @@ from services.agent_orchestrator.protocol_models import (
 )
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session, session_scope as get_session
-from services.agent_orchestrator.conversation.models import AgentConversation
+from services.agent_orchestrator.conversation.models import AgentConversation, AgentMessage
 from services.agent_orchestrator.tools import tool_registry
 from services.agent_orchestrator.hermes_client import hermes_client
 from services.agent_orchestrator.routes.agents import _hermes_system_note, _persist_messages
@@ -183,7 +184,8 @@ async def a2a_message(body: A2AMessage, ctx: AuthContext = Depends(get_auth_cont
 @router.post("/api/protocols/ag-ui/run")
 async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_context)):
     runtime_type = body.agent_type
-    safe_context = {**body.context, "user_id": str(ctx.user_id)}
+    from services.agent_orchestrator.identity import sanitize_client_context, check_conversation_access, OWNER_KEY
+    safe_context = sanitize_client_context(body.context, ctx)
     if body.agent_type.startswith("custom_"):
         roles = {role.lower() for role in ctx.roles}
         permissions = {permission.lower() for permission in ctx.permissions}
@@ -218,9 +220,24 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
         try:
             conv_uuid = uuid.UUID(str(body.conversation_id))
         except (ValueError, TypeError):
-            conv_uuid = run_id
+            raise HTTPException(status_code=422, detail="Invalid conversation id")
+        async with get_session(ctx.tenant_id) as session:
+            existing = (await session.execute(select(AgentConversation).where(
+                AgentConversation.id == conv_uuid, AgentConversation.tenant_id == ctx.tenant_id,
+            ))).scalar_one_or_none()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            check_conversation_access(existing, ctx)
+            rows = (await session.execute(select(AgentMessage).where(
+                AgentMessage.conversation_id == conv_uuid, AgentMessage.role.in_(["user", "assistant"]),
+            ).order_by(AgentMessage.created_at.desc()).limit(50))).scalars().all()
+            safe_context["history"] = [{"role": row.role, "content": row.content[:8000]} for row in reversed(rows)]
     else:
         conv_uuid = run_id
+        async with get_session(ctx.tenant_id) as session:
+            session.add(AgentConversation(id=conv_uuid, tenant_id=ctx.tenant_id,
+                        agent_type=body.agent_type, channel="ag-ui",
+                        context={**safe_context, OWNER_KEY: str(ctx.user_id)}))
 
     async def emit(event: AGUIEvent) -> str:
         return f"data: {event.model_dump_json()}\n\n"
@@ -240,7 +257,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 tenant_id=ctx.tenant_id,
                 context=safe_context,
             )
-            history = body.context.get("history", [])
+            history = safe_context.get("history", [])
 
             # Stream tokens and emit AG-UI events
             full_content = ""
@@ -262,8 +279,28 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 # agent's tools, executes them (CRM/billing/support/etc.) against
                 # OmniDome services, and loops to a final answer. Non-streaming, so
                 # we emit each tool call + the final text as AG-UI events.
-                run_result = await agent.run(body.message, history,
-                                             max_tool_calls=5 if body.agent_type.startswith("custom_") else None)
+                from services.agent_orchestrator import steps
+                progress = steps.Steps(run_id, ctx.tenant_id, ctx.user_id)
+                async def run_with_progress():
+                    token = steps.current.set(progress)
+                    try:
+                        return await agent.run(body.message, history, conversation_id=conv_uuid,
+                                               max_tool_calls=5 if body.agent_type.startswith("custom_") else None)
+                    finally:
+                        steps.current.reset(token)
+                task = asyncio.create_task(run_with_progress())
+                try:
+                    while not task.done() or not progress.queue.empty():
+                        try:
+                            event = await asyncio.wait_for(progress.queue.get(), timeout=3)
+                        except asyncio.TimeoutError:
+                            if not task.done(): progress.heartbeat()
+                            continue
+                        yield await emit(AGUIEvent(type="CUSTOM", run_id=run_id, tenant_id=ctx.tenant_id, conversation_id=conv_uuid, data=event))
+                    run_result = await task
+                finally:
+                    if not task.done(): task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
                 for tc in run_result.get("tool_calls", []):
                     yield await emit(AGUIEvent(
                         type="TOOL_CALL_START",
@@ -315,7 +352,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                 async with get_session() as session:
                     # Ensure conversation exists
                     conv_res = await session.execute(
-                        select(AgentConversation).where(AgentConversation.id == conv_uuid)
+                        select(AgentConversation).where(AgentConversation.id == conv_uuid, AgentConversation.tenant_id == ctx.tenant_id)
                     )
                     conv = conv_res.scalar_one_or_none()
                     if not conv:
@@ -324,7 +361,7 @@ async def ag_ui_run(body: AGUIRunRequest, ctx: AuthContext = Depends(get_auth_co
                             tenant_id=ctx.tenant_id,
                             agent_type=body.agent_type,
                             channel="ag-ui",
-                            context=body.context,
+                            context={**safe_context, OWNER_KEY: str(ctx.user_id)},
                         )
                         session.add(conv)
                         await session.flush()

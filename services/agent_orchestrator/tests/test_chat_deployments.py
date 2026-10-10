@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 
 def test_validate_identifier_accepts_and_rejects():
-    from routes.chat_deployments import validate_identifier
+    from services.agent_orchestrator.routes.chat_deployments import validate_identifier
 
     assert validate_identifier("domebot-help") is True
     assert validate_identifier("AB") is False
@@ -15,7 +15,7 @@ def test_validate_identifier_accepts_and_rejects():
 
 
 def test_hash_verify_key_roundtrip():
-    from routes.chat_deployments import hash_key, verify_key
+    from services.agent_orchestrator.routes.chat_deployments import hash_key, verify_key
 
     h = hash_key("supersecret123")
     assert h != "supersecret123"

@@ -3,6 +3,7 @@
 import json
 import uuid
 import logging
+import asyncio
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -37,6 +38,8 @@ from services.agent_orchestrator.audit_actions import GUARDRAILS_INPUT, GUARDRAI
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+from services.agent_orchestrator.ask_user import answer_question
+router.add_api_route("/runs/{run_id}/answer", answer_question, methods=["POST"])
 
 
 # ---------------------------------------------------------------------------
@@ -928,12 +931,27 @@ async def invoke_agent_stream(
             try:
                 import asyncio
 
-                result = await agent.run(
-                    user_message=safe_message,
-                    history=history,
-                    conversation_id=conv_id,
-                    compaction_state=compaction_state,
-                )
+                from services.agent_orchestrator import steps
+                progress = steps.Steps(run_id, tenant_id, ctx.user_id)
+                async def run_with_progress():
+                    token = steps.current.set(progress)
+                    try:
+                        return await agent.run(user_message=safe_message, history=history, conversation_id=conv_id, compaction_state=compaction_state)
+                    finally:
+                        steps.current.reset(token)
+                task = asyncio.create_task(run_with_progress())
+                try:
+                    while not task.done() or not progress.queue.empty():
+                        try:
+                            event = await asyncio.wait_for(progress.queue.get(), timeout=3)
+                        except asyncio.TimeoutError:
+                            if not task.done(): progress.heartbeat()
+                            continue
+                        yield emit(AGUIEvent(type="CUSTOM", run_id=run_id, tenant_id=tenant_id, conversation_id=conv_id, data=event))
+                    result = await task
+                finally:
+                    if not task.done(): task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
                 full_content = result.get("content") or ""
                 executed_tool_calls = result.get("tool_calls", [])
 

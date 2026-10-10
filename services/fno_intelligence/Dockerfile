@@ -15,6 +15,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY services/fno_intelligence/ ./services/fno_intelligence/
 COPY services/common/ ./services/common/
+# Dataset tools use the knowledge layer's canonical signed panel-access rules.
+COPY services/tenant_memory/knowledge/ ./services/tenant_memory/knowledge/
 
 # fno_intelligence directly imports these services' SQLAlchemy models for
 # cross-service reads against the shared DB (all services point at the same

@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
+import { AgentActivity, activityEvent, emptyActivity, type Activity } from "@/components/chat/agent-activity"
 import { artifactItemsFromToolCalls, openAppPath, safeAppPath, safeExternalUrl } from "@/lib/artifact-links"
 import {
   invokeAgentAGUI,
@@ -73,6 +74,7 @@ interface AGUIMessage {
   role: "user" | "assistant"
   content: string
   isStreaming?: boolean
+  activity?: Activity
   toolCalls?: ToolCallEvent[]
   memoryWrites?: { correlationId?: string; status?: string }[]
   routedAgent?: string
@@ -542,6 +544,8 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const [messages, setMessages] = useState<AGUIMessage[]>([])
   const [inputValue, setInputValue] = useState(initialDraft || "")
   const [isSending, setIsSending] = useState(false)
+  const runController = useRef<AbortController | null>(null)
+  useEffect(() => () => runController.current?.abort(), [])
   const [selectedAgent, setSelectedAgent] = useState<AgentType>(initialAgent || "auto")
   const [showAgentPicker, setShowAgentPicker] = useState(false)
   const [panelSize, setPanelSize] = useState<"compact" | "wide" | "expanded">("compact")
@@ -943,6 +947,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       isStreaming: true,
       toolCalls: [],
       memoryWrites: [],
+      activity: emptyActivity(),
     }
 
     setMessages((prev) => [...prev, userMessage, streamingMessage])
@@ -950,6 +955,8 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       setInputValue("")
     }
     setIsSending(true)
+    const controller = new AbortController()
+    runController.current = controller
     setStreamState({ runId: "", status: "running", content: "", toolCalls: [], memoryWrites: [] })
 
     try {
@@ -970,6 +977,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             next.runId = event.run_id
 
             switch (event.type) {
+              case "CUSTOM":
+                setMessages(prevMsgs => prevMsgs.map(m => m.id === assistantId ? {
+                  ...m, activity: activityEvent(m.activity || emptyActivity(), String(event.data.name), event.data.value as Record<string, unknown> || {}),
+                } : m))
+                break
               case "RUN_STARTED":
                 next.status = "running"
                 if (event.conversation_id) {
@@ -1071,7 +1083,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 setMessages((prevMsgs) =>
                   prevMsgs.map((m) =>
                     m.id === assistantId
-                      ? { ...m, isStreaming: false }
+                      ? { ...m, isStreaming: false, activity: m.activity ? { ...m.activity, elapsed: Date.now() - m.activity.started } : undefined }
                       : m,
                   ),
                 )
@@ -1098,22 +1110,27 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
             return next
           })
         },
+        controller.signal,
       )
     } catch (err) {
+      const stopped = controller.signal.aborted
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
             ? {
                 ...m,
-                content: `⚠️ Error: ${err instanceof Error ? err.message : "Failed to reach agent"}`,
+                content: stopped ? m.content || "Stopped." : `⚠️ Error: ${err instanceof Error ? err.message : "Failed to reach agent"}`,
                 isStreaming: false,
+                activity: m.activity ? { ...m.activity, elapsed: Date.now() - m.activity.started } : undefined,
               }
             : m,
         ),
       )
-      setError(err instanceof Error ? err.message : "Agent error")
+      if (!stopped) setError(err instanceof Error ? err.message : "Agent error")
       setStreamState((prev) => ({ ...prev, status: "error" }))
     } finally {
+      runController.current = null
+      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, isStreaming: false } : m))
       setIsSending(false)
     }
   }
@@ -1408,7 +1425,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                         : "bg-secondary text-foreground",
                     )}
                   >
-                    {message.content === "" && message.isStreaming && (
+                    {message.content === "" && message.isStreaming && !message.activity && (
                       <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
                         Generating response...
@@ -1417,6 +1434,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
 
                     {message.role === "assistant" ? (
                       <div className="space-y-2">
+                        {message.activity && <AgentActivity activity={message.activity} streaming={!!message.isStreaming} />}
                         {message.routedAgent && (
                           <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-cyan-400 font-medium bg-cyan-500/10 border border-cyan-500/20 px-2.5 py-0.5 rounded-full w-fit">
                             <Sparkles className="h-3 w-3 text-cyan-400 shrink-0" />
@@ -1800,8 +1818,9 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                 <Button
                   size="icon"
                   className="h-8 w-8 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground"
-                  onClick={() => void handleSendMessage()}
-                  disabled={isSending || !inputValue.trim()}
+                  onClick={() => isSending ? runController.current?.abort() : void handleSendMessage()}
+                  disabled={!isSending && !inputValue.trim()}
+                  aria-label={isSending ? "Stop agent" : "Send message"}
                   title="Send message"
                 >
                   {isSending ? <Square className="h-3.5 w-3.5" /> : <Send className="h-3.5 w-3.5" />}

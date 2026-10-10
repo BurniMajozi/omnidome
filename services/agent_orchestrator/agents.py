@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from services.agent_orchestrator import compaction, tool_call_log, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
-from services.agent_orchestrator import artifacts, knowledge_client
+from services.agent_orchestrator import artifacts, knowledge_client, steps
 from services.agent_orchestrator.tools import ARTIFACT_TOOL_NAMES, KNOWLEDGE_TOOL_NAMES, SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
@@ -216,7 +216,7 @@ class Agent:
         """Messages for this turn: skills applied (M2), long history compacted
         (M4, compaction_state = what the conversation stored last time), tenant
         memory recalled (M1). Used by Agent.run and every chat path."""
-        await self.load_skills(user_message)
+        await steps.track("skill", "Choosing skills", self.load_skills(user_message))
         if history:
             tenant = str(self.tenant_id) if self.tenant_id else None
             history, self.compaction_update, self.compacted = await compaction.compact(
@@ -235,9 +235,14 @@ class Agent:
         if "artifacts.find" in self.available_tool_names and artifacts.ARTIFACT_POLICY not in self.skills_prompt:
             self.skills_prompt = "\n\n".join(x for x in (self.skills_prompt, artifacts.ARTIFACT_POLICY) if x)
 
-        memory_block = await self.recall_memory(user_message)
+        memory_block = await steps.track("memory", "Recalling team memory", self.recall_memory(user_message))
         self.context["_memory_recalled"] = bool(memory_block)
-        knowledge_block = await self.ground_knowledge(user_message)
+        knowledge_block = await steps.track("knowledge", "Searching company memory (RAG)", self.ground_knowledge(user_message),
+                                           summary_from=lambda _: f"{self.context.get('_knowledge_info', {}).get('status', 'unavailable')}: {len(self.context.get('_knowledge_info', {}).get('cards', []))} source cards")
+        retrieval_status = self.context.get("_knowledge_info", {}).get("status", "unavailable")
+        self.skills_prompt += (f"\nCompany memory/RAG was consulted before this answer; retrieval status: {retrieval_status}. "
+                               "Use the retrieved evidence and citations first. If disabled or unavailable, say company memory is unavailable; "
+                               "do not claim to have searched it successfully or invent remembered facts. Use governed tools for exact current data.")
         try:    # the injected knowledge + memory is evidence for the answer verifier, not only tool outputs
             from services.agent_orchestrator import jev_retrieval
             self.context["_grounding_evidence"] = jev_retrieval.evidence_from_text(knowledge_block, memory_block)
@@ -345,13 +350,13 @@ class Agent:
             is_mock_llm = hasattr(llm_client, "replies")
             if not is_mock_llm and not unavailable and content_str.strip() and settings.jev_gate_enabled:
                 from services.agent_orchestrator.jev_gate import verify_agent_response
-                v = await verify_agent_response(
+                v = await steps.track("verify", "Checking the answer", verify_agent_response(
                     customer_message=user_message,
                     draft_response=content_str,
                     tool_records=tool_call_log,
                     agent_type=self.agent_type,
                     evidence=self.context.get("_grounding_evidence"),
-                )
+                ))
                 verif_data = v.to_dict()
             if not is_mock_llm and not unavailable and content_str.strip():
                 try:    # retrieval telemetry for the nightly relevance learner (jev_retrieval.retrieval_log)
@@ -367,7 +372,7 @@ class Agent:
             return done(content_str, stopped_by=stopped_by, unavailable=unavailable, verification=verif_data)
 
         while tool_count < tool_limit:
-            result = await llm_client.chat(
+            result = await steps.track("reasoning", "Preparing the next step", llm_client.chat(
                 agent_type=self.agent_type,
                 messages=messages,
                 tools=tools_for_llm,
@@ -378,7 +383,7 @@ class Agent:
                                                     self.context.get("run_guidance", ""),
                                                     self.context.get("architecture_briefing", ""),
                                                     self.context.get("kpi_briefing", "")])),
-            )
+            ))
             turn["rounds"] += 1
             p_tokens, c_tokens, total_tokens = usage.tokens_from(result)
             turn["tokens"] += total_tokens
@@ -463,7 +468,7 @@ class Agent:
     def _is_read_call(tc: Dict[str, Any]) -> bool:
         """Known tool whose policy says it does not change anything (spec A6)."""
         tool = tool_registry.get(tc.get("name", ""))
-        return bool(tool) and getattr(tool, "mutates", True) is False
+        return bool(tool) and tc.get("name") != "ask_user" and getattr(tool, "mutates", True) is False
 
     async def _final_answer(self, messages, tools_for_llm, tenant, done, stopped_by: str) -> Dict[str, Any]:
         """One last call with tools disabled: answer from what was gathered
@@ -493,6 +498,23 @@ class Agent:
         return done(content, stopped_by=stopped_by, unavailable=bool(result.get("unavailable")))
 
     async def _execute_call(
+        self, tc, call_counts, tenant, conversation_id=None,
+    ):
+        # Providers receive data_query/knowledge_context. Resolve that spelling
+        # back to a registered name before the per-agent allow-list check.
+        registered = tool_registry.get(tc.get("name", ""))
+        if registered:
+            tc = {**tc, "name": registered.name}
+        name = tc.get("name", "")
+        title = {"data.datasets": "Listing available datasets", "data.query": "Querying governed data", "ask_user": "Waiting for your answer", "knowledge.search": "Searching company knowledge"}.get(name, "Running an approved tool")
+        result = await steps.track("approval" if name == "ask_user" else "data" if name.startswith("data.") else "tool", title, self._execute_call_impl(tc, call_counts, tenant, conversation_id))
+        progress = steps.current.get()
+        outcome = result[2]
+        if progress and isinstance(outcome, dict) and outcome.get("requires_approval"):
+            progress.emit("omnidome.approval", {"approval_id": outcome["approval_id"], "reference": outcome.get("reference"), "tool": name, "summary": "This action requires a manager's approval", "requested_by_me": True, "status": "pending", "risk": (outcome.get("jev_gate") or {}).get("risk_level", "review")})
+        return result
+
+    async def _execute_call_impl(
         self,
         tc: Dict[str, Any],
         call_counts: Dict[str, int],
@@ -532,6 +554,13 @@ class Agent:
 
         if tool_name in ("orchestrator_consult_specialist", "orchestrator.consult_specialist"):
             return tool_name, tool_args, await self._consult_specialist(tool_args)
+
+        if tool_name == "ask_user":
+            from services.agent_orchestrator.ask_user import ask
+            try:
+                return tool_name, tool_args, await ask(tool_args)
+            except ValueError:
+                return tool_name, tool_args, {"success": False, "error": "Use 1–3 questions with 2–4 unique options each."}
 
         if tool_name in ("openrouter:subagent", "openrouter_subagent"):
             return tool_name, tool_args, {"success": True, "status": "ok", "outcome": "Server-side delegation completed."}

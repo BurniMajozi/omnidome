@@ -20,7 +20,7 @@ SERVICE_DIRS = {
     "call_center": "call_center", "communication": "communication", "memory": "tenant_memory",
     "fno_intelligence": "fno_intelligence", "hr": "hr", "portal": "portal_builder",
 }
-IN_PROCESS = {"orchestrator"}  # handled inside the agent loop, no HTTP call
+IN_PROCESS = {"orchestrator", "internal"}  # handled inside the agent loop, no HTTP call
 METHODS = {"get", "post", "put", "patch", "delete"}
 
 

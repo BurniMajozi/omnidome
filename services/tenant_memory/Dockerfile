@@ -15,6 +15,8 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY services/tenant_memory/ ./services/tenant_memory/
 COPY services/common/ ./services/common/
+# Capability cards read the pure governed registry, without importing the BI app.
+COPY services/fno_intelligence/bi_semantic.py ./services/fno_intelligence/bi_semantic.py
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1

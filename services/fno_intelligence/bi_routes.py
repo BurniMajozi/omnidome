@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_current_tenant_id
@@ -23,10 +23,29 @@ from services.fno_intelligence.bi_deck_model import CHART_TYPES, LAYOUTS, MAX_BL
 router = APIRouter(prefix="/bi", tags=["BI Studio"])
 
 
+async def dataset_access(ctx: AuthContext, dataset: str | None = None):
+    from services.tenant_memory.knowledge.access import load_scope, PANELS
+    scope = await load_scope(ctx)
+    modules = {"Billing": "billing", "CRM": "crm", "Sales": "sales", "Support": "support", "Network": "network", "Marketing": "marketing", "Inventory": "inventory", "Finance": "finance", "HR": "hr"}
+    allowed, restricted = [], []
+    for item in sem.catalog()["datasets"]:
+        module = modules.get(item["category"], "analytics")
+        if scope.modules is None or module in scope.modules:
+            allowed.append(item)
+        else:
+            restricted.append({"id": item["id"], "panel": PANELS[module].label})
+    if dataset and dataset not in {d["id"] for d in allowed}:
+        denial = next((d for d in restricted if d["id"] == dataset), None)
+        if denial: raise HTTPException(403, f"Access to the {denial['panel']} panel is required for this dataset")
+        raise HTTPException(422, "Unknown dataset")
+    return allowed, restricted
+
+
 @router.get("/datasets")
-async def datasets(_: AuthContext = Depends(ac.require_viewer)):
+async def datasets(ctx: AuthContext = Depends(ac.require_viewer)):
     """Catalog of governed datasets with their dimensions, measures, formats and limits."""
-    return sem.catalog()
+    allowed, restricted = await dataset_access(ctx)
+    return {**sem.catalog(), "datasets": allowed, "restricted": restricted}
 
 
 @router.get("/meta")
@@ -40,7 +59,8 @@ async def meta(_: AuthContext = Depends(ac.require_viewer)):
 
 @router.post("/query")
 async def query(spec: sem.QuerySpec, tenant_id: uuid.UUID = Depends(get_current_tenant_id),
-                _: AuthContext = Depends(ac.require_viewer), db: AsyncSession = Depends(database.get_session)):
+                ctx: AuthContext = Depends(ac.require_viewer), db: AsyncSession = Depends(database.get_session)):
+    await dataset_access(ctx, spec.dataset)
     return await sem.run_query(db, tenant_id, spec)
 
 

@@ -100,6 +100,32 @@ def run(agent, message="hello"):
     return asyncio.run(agent.run(message))
 
 
+def test_rag_is_consulted_before_model_answer(harness, monkeypatch):
+    llm, agent = harness([reply("Grounded answer")])
+    events = []
+    async def recall(message):
+        events.append("recall")
+    async def ground(message):
+        events.append("RAG")
+        assert not llm.requests
+        agent._knowledge_info = {"status": "ready", "cards": [{"id": "card"}]}
+    monkeypatch.setattr(agent, "recall_memory", recall)
+    monkeypatch.setattr(agent, "ground_knowledge", ground)
+    result = run(agent)
+    assert events == ["recall", "RAG"]
+    assert result["content"] == "Grounded answer"
+    assert "RAG" in llm.requests[0]["system_extra"]
+
+
+def test_provider_tool_spelling_resolves_before_allowlist(harness, monkeypatch):
+    tool = FakeTool("data.query", result={"success": True, "rows": [[3]]})
+    llm, agent = harness([reply(tool_calls=[call("data_query", {"dataset": "sales_pipeline"})]), reply("Three deals")], tool)
+    monkeypatch.setattr(agents.tool_registry, "get", lambda name: tool if name in {"data_query", "data.query"} else None)
+    result = run(agent)
+    assert tool.calls == [{"dataset": "sales_pipeline"}]
+    assert result["tool_calls"][0]["name"] == "data.query"
+
+
 def tool_messages(request):
     return [m for m in request["messages"] if m.get("role") == "tool"]
 
