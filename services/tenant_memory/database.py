@@ -157,8 +157,8 @@ async def init_tables(session: AsyncSession) -> None:
         statement = part.strip()
         # Skip chunks that are only SQL comments (a ';' inside a comment splits one off); asyncpg cannot
         # prepare a statement with no command.
-        if not "
-".join(l for l in statement.splitlines() if not l.strip().startswith("--")).strip():
+        has_command = any(l.strip() and not l.strip().startswith("--") for l in statement.splitlines())
+        if not has_command:
             continue
         await session.execute(text(statement))
 
