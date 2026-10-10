@@ -276,6 +276,16 @@ class OutlineIn(BaseModel):
     use_knowledge: bool = True
 
 
+def bi_ai_model() -> Optional[str]:
+    """Primary model for Deck Studio AI. Free OpenRouter models are rate-limited and weak at strict JSON, so the BI
+    capability defaults to a reliable paid model (BI_AI_MODEL; empty string = use the shared env chain). The shared
+    OPENROUTER_MODEL / OPENROUTER_FALLBACK_MODELS chain still follows as fallback."""
+    value = os.getenv("BI_AI_MODEL")
+    if value is None:
+        return "anthropic/claude-haiku-4.5"
+    return value.strip() or None
+
+
 OUTLINE_SYSTEM = (
     "You are a senior analyst building a board-quality presentation for an internet service provider. You design the "
     "outline and propose data queries against a governed catalog; the platform executes them and resolves all figures. "
@@ -512,7 +522,7 @@ async def outline(body: OutlineIn, auth: AuthContext = Depends(ac.require_analys
             + "\n\nReturn the JSON object now.")
     await reserve_ai_call(tenant_id, "ai_outline", None, body.brief[:80])
     system = OUTLINE_SYSTEM + ("\n" + KNOWLEDGE_RULES if knowledge["block"] else "")
-    res = await ac.llm_complete(system, user, max_tokens=5000, temperature=0.2)
+    res = await ac.llm_complete(system, user, max_tokens=5000, temperature=0.2, primary=bi_ai_model())
     if res is None:
         raise HTTPException(503, "No language model is available right now (check the OpenRouter key and models).")
     content, model = res
@@ -670,7 +680,7 @@ async def ai_slide(body: SlideAiIn, auth: AuthContext = Depends(ac.require_analy
             + "\n\nReturn the JSON object now.")
     await reserve_ai_call(tenant_id, "ai_slide", deck.id, body.instruction[:80])
     system = SLIDE_SYSTEM + ("\n" + KNOWLEDGE_RULES if knowledge["block"] else "")
-    res = await ac.llm_complete(system, user, max_tokens=3500, temperature=0.2)
+    res = await ac.llm_complete(system, user, max_tokens=3500, temperature=0.2, primary=bi_ai_model())
     if res is None:
         raise HTTPException(503, "No language model is available right now (check the OpenRouter key and models).")
     content, model = res
@@ -766,7 +776,7 @@ async def narrative(body: NarrativeIn, auth: AuthContext = Depends(ac.require_an
         facts = "\n".join(f"<fact>{i['sentence']}</fact>" for i in usable)
         user = (f"Slide title (data): {ac.clean_untrusted(slide.title, 200)}\n{_voice_rules(kit)}\nFACTS:\n{facts}\n"
                 + (knowledge["block"] + "\n" if knowledge["block"] else "") + "\nReturn the JSON object now.")
-        res = await ac.llm_complete(NARRATIVE_SYSTEM, user, max_tokens=900, temperature=0.3)
+        res = await ac.llm_complete(NARRATIVE_SYSTEM, user, max_tokens=900, temperature=0.3, primary=bi_ai_model())
         parsed = ac.parse_json_loose(res[0]) if res else None
         if isinstance(parsed, dict) and isinstance(parsed.get("notes"), str):
             llm_used, model = True, res[1]

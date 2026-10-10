@@ -325,11 +325,12 @@ def get_firecrawl():
 
 
 async def llm_complete(system: str, user: str, *, max_tokens: int = 3000,
-                       temperature: float = 0.1) -> Optional[tuple[str, str]]:
+                       temperature: float = 0.1, primary: Optional[str] = None) -> Optional[tuple[str, str]]:
     """OpenRouter model chain (services/common/openrouter). Returns (text, model) or None."""
     res = await chat_completion(
         {"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
          "temperature": temperature, "max_tokens": max_tokens},
+        primary=primary,
         timeout=float(os.getenv("ANALYTICS_LLM_TIMEOUT", "90")),
     )
     if res is None:
