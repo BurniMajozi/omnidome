@@ -21,6 +21,7 @@ import { mergeTheme } from "./theme"
 import { useDeckData } from "./use-deck-data"
 import { useBrandKit } from "./use-kit"
 import { LAYOUT_LABELS } from "./layout"
+import { KnowledgeChips, KnowledgeToggle } from "./knowledge-ui"
 
 const TONES = ["Professional", "Executive and concise", "Persuasive", "Friendly", "Technical", "Analytical"]
 
@@ -40,6 +41,7 @@ export function AiWizard({ onClose, onCreated }: { onClose: () => void; onCreate
   const [datasetIds, setDatasetIds] = useState<string[]>([])
   const [dsFilter, setDsFilter] = useState("")
   const [kitId, setKitId] = useState<string>("")
+  const [useKnowledge, setUseKnowledge] = useState(true)
   const [research, setResearch] = useState<ResearchRun[]>([])
   const [competitors, setCompetitors] = useState<CompetitorOverviewItem[]>([])
   const [campaigns, setCampaigns] = useState<CampaignAnalysis[]>([])
@@ -93,6 +95,7 @@ export function AiWizard({ onClose, onCreated }: { onClose: () => void; onCreate
         competitor_ids: competitorIds.length ? competitorIds : undefined,
         campaign_analysis_ids: campaignIds.length ? campaignIds : undefined,
         brand_kit_id: kitId || undefined,
+        use_knowledge: useKnowledge,
       })
       setResult(r)
       setDoc(r.deck)
@@ -191,6 +194,7 @@ export function AiWizard({ onClose, onCreated }: { onClose: () => void; onCreate
               </select>
             </Field>
           </div>
+          <KnowledgeToggle id="wz-knowledge" checked={useKnowledge} onChange={setUseKnowledge} disabled={step === "generating"} />
           <AttachList
             title="Attach earlier research"
             empty="No completed research runs yet."
@@ -330,7 +334,20 @@ function Review({ result, doc, setDoc, sel, setSel, kitId }: { result: OutlineRe
             </span>
           </div>
         )}
-        {result.citations.length > 0 && <p className="text-xs text-muted-foreground">{result.citations.length} research citation(s) are included in speaker notes.</p>}
+        {result.citations.filter((c) => c.kind !== "knowledge").length > 0 && (
+          <p className="text-xs text-muted-foreground">{result.citations.filter((c) => c.kind !== "knowledge").length} research citation(s) are included in speaker notes.</p>
+        )}
+        <div className="rounded-md border border-border p-3">
+          <div className="mb-1 text-xs font-semibold text-foreground">Company knowledge (memory)</div>
+          <KnowledgeChips meta={result} showUnused />
+          {result.use_knowledge === false && <p className="text-[11px] text-muted-foreground">Turned off for this outline.</p>}
+        </div>
+        {slide && (
+          <div className="rounded-md border border-border p-3">
+            <div className="mb-1 text-xs font-semibold text-foreground">Speaker notes and sources (slide {doc.slides.indexOf(slide) + 1})</div>
+            {slide.notes ? <p className="whitespace-pre-wrap break-words text-[11px] text-muted-foreground">{slide.notes}</p> : <p className="text-[11px] text-muted-foreground">No speaker notes on this slide.</p>}
+          </div>
+        )}
       </div>
     </div>
   )

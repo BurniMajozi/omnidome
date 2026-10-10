@@ -5,6 +5,7 @@ import { AlertTriangle, Check, Loader2, Sparkles, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { aiErrorMessage, aiNarrative, aiSlide, getAiUsage, type DeckDoc, type NarrativeResult, type Slide, type SlideAiResult } from "@/lib/bi-studio-api"
 import { ErrorNote } from "../shared"
+import { KnowledgeChips, KnowledgeToggle } from "./knowledge-ui"
 import { Section, textareaCls } from "./ui"
 import { replaceSlide } from "./doc-ops"
 import { SlideRenderer } from "./slide-renderer"
@@ -44,6 +45,7 @@ export function AiPanel({
   onAddTakeaways: (items: string[]) => void
 }) {
   const [instruction, setInstruction] = useState("")
+  const [useKnowledge, setUseKnowledge] = useState(true)
   const [busy, setBusy] = useState<"slide" | "narr" | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<SlideAiResult | null>(null)
@@ -71,7 +73,7 @@ export function AiPanel({
     try {
       // The server edits the saved version, so make sure it is current first.
       if (!(await saveNow())) throw new Error("Save your changes first (autosave failed).")
-      const r = await aiSlide({ deck_id: deckId, slide_id: slide.id, instruction: instruction.trim(), include_doc: true })
+      const r = await aiSlide({ deck_id: deckId, slide_id: slide.id, instruction: instruction.trim(), include_doc: true, use_knowledge: useKnowledge })
       setResult(r)
       void loadUsage()
     } catch (e) {
@@ -86,7 +88,7 @@ export function AiPanel({
     setNarr(null)
     try {
       if (!(await saveNow())) throw new Error("Save your changes first (autosave failed).")
-      setNarr(await aiNarrative({ deck_id: deckId, slide_id: slide.id }))
+      setNarr(await aiNarrative({ deck_id: deckId, slide_id: slide.id, use_knowledge: useKnowledge }))
       void loadUsage()
     } catch (e) {
       setError(aiErrorMessage(e))
@@ -115,6 +117,7 @@ export function AiPanel({
             </button>
           ))}
         </div>
+        <KnowledgeToggle id="ai-knowledge" checked={useKnowledge} onChange={setUseKnowledge} disabled={readOnly || busy !== null} />
         <Button size="sm" className="h-8 w-full" disabled={readOnly || busy !== null || !instruction.trim()} onClick={runSlide}>
           {busy === "slide" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
           {busy === "slide" ? "Thinking (up to a minute)…" : "Propose a change"}
@@ -141,6 +144,7 @@ export function AiPanel({
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> {result.ungrounded_numbers.length} figure(s) written outside a data reference were replaced with “[add figure]”.
             </p>
           )}
+          <KnowledgeChips meta={result} />
           {result.dropped.length > 0 && (
             <ul className="list-disc pl-4 text-[11px] text-muted-foreground">
               {result.dropped.map((d, i) => (
@@ -200,6 +204,7 @@ export function AiPanel({
                 <p className="whitespace-pre-wrap text-muted-foreground">{narr.notes_resolved}</p>
               </div>
             )}
+            <KnowledgeChips meta={narr} />
             {narr.ungrounded_numbers.length > 0 && (
               <p className="flex gap-1 text-[11px] text-amber-300">
                 <AlertTriangle className="h-3.5 w-3.5 shrink-0" /> Some figures lacked a data reference and were replaced with placeholders.

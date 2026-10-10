@@ -23,7 +23,14 @@ async function proxy(
       if (value) headers[header] = value
     }
 
-    const init: RequestInit = { method, headers, cache: "no-store" }
+    // Fail closed: proxy.ts always injects the verified identity (and strips any client-supplied x-roles /
+    // x-permissions, re-injecting x-roles from the verified user). Roles are forwarded as verified so the
+    // knowledge layer can apply its role-aware card filtering and admin checks; none are ever invented here.
+    if (!headers["x-tenant-id"] || !headers["x-user-id"]) {
+      return NextResponse.json({ error: "unauthorized" }, { status: 401 })
+    }
+
+    const init: RequestInit = { method, headers, cache: "no-store", signal: AbortSignal.timeout(30_000) }
     if (method !== "GET" && method !== "HEAD") {
       init.body = await req.text()
       headers["Content-Type"] = req.headers.get("content-type") || "application/json"

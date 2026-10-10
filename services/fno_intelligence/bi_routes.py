@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_current_tenant_id
 from services.fno_intelligence import analytics_common as ac
-from services.fno_intelligence import bi_ai, bi_brand, bi_deck, database
+from services.fno_intelligence import bi_ai, bi_brand, bi_deck, bi_metrics_routes, database
 from services.fno_intelligence import bi_semantic as sem
 from services.fno_intelligence.bi_deck_model import CHART_TYPES, LAYOUTS, MAX_BLOCKS, MAX_BLOCKS_PER_SLIDE, MAX_SLIDES
 
@@ -65,3 +65,4 @@ async def chart_suggestions_get(dataset: str = Query(..., max_length=50), measur
 router.include_router(bi_brand.router)
 router.include_router(bi_deck.router)
 router.include_router(bi_ai.router)
+router.include_router(bi_metrics_routes.router)  # metric catalog / snapshot / forecast-run queue

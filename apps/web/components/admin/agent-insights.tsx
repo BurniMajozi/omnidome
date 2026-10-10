@@ -32,6 +32,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { KnowledgeIndexSection } from "@/components/admin/knowledge-index"
 import {
   archiveMemoryEntry,
   approveApproval,
@@ -565,6 +566,8 @@ export function MemoryManagementView() {
           </div>
         </div>
       )}
+
+      <KnowledgeIndexSection />
 
       {/* Memory Entries List */}
       <div className="space-y-2">

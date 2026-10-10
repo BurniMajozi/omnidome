@@ -13,6 +13,7 @@ from services.fno_intelligence.market_routes import router as market_router, run
 from services.fno_intelligence.routes import router, sweep_stuck_passed_home_imports
 from services.fno_intelligence.analytics_routes import router as analytics_router, sweep_stuck_runs
 from services.fno_intelligence.competitors import run_competitor_scheduler
+from services.fno_intelligence.bi_metrics_writer import run_metrics_scheduler
 from services.fno_intelligence.bi_routes import router as bi_router
 
 logger = logging.getLogger("fno_intelligence")
@@ -45,6 +46,7 @@ async def startup():
     if swept_runs:
         logger.info("Marked %d interrupted analytics run(s) as failed", swept_runs)
     schedule_background(run_competitor_scheduler())  # global loop; only scans competitors a user gave a schedule (kill switch: ANALYTICS_COMPETITOR_SCHEDULER_ENABLED=false)
+    schedule_background(run_metrics_scheduler())  # daily governed-metric snapshots -> metric facts (BI_METRICS_SNAPSHOT_ENABLED=false to disable)
     logger.info("FNO Intelligence service started")
 
 

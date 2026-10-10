@@ -853,6 +853,117 @@ export const getHousekeepingStatus = () =>
 export const getCompactionStats = () =>
   getJson<CompactionStats>("/memory/compaction/stats")
 
+// ── Knowledge index (docs/knowledge-layer.md) ─────────────────────────────
+// Served by tenant_memory through the /svc/memory proxy (verified identity + roles are injected by proxy.ts).
+
+const MEMORY_SVC_BASE = "/svc/memory/api/v1"
+
+export class KnowledgeApiError extends Error {
+  status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function knowledgeJson<T>(path: string, init?: RequestInit): Promise<T> {
+  let res: Response
+  try {
+    res = await authFetch(`${MEMORY_SVC_BASE}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(20000),
+      ...init,
+      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    })
+  } catch (e) {
+    throw new KnowledgeApiError(e instanceof Error ? e.message : "Memory service unreachable", 0)
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    let detail = text
+    try {
+      const j = JSON.parse(text)
+      detail = j?.detail ?? j?.error ?? text
+    } catch { /* not JSON */ }
+    throw new KnowledgeApiError(typeof detail === "string" && detail ? detail : `Memory service error ${res.status}`, res.status)
+  }
+  return res.json()
+}
+
+export interface KnowledgeEmbeddingHealth {
+  ok: boolean
+  model?: string
+  dim?: number
+  reachable?: boolean
+  circuit_open?: boolean
+  hint?: string | null
+  error?: string
+}
+export interface KnowledgeHealth {
+  enabled: boolean
+  store_ok?: boolean
+  embedding?: KnowledgeEmbeddingHealth
+}
+export interface KnowledgeCoverageRow {
+  source_type: string
+  module: string
+  chunks: number
+  tombstoned?: number
+  last_indexed?: string | null
+}
+export interface KnowledgeWatermark {
+  source: string
+  last_ts?: string | null
+  last_full_at?: string | null
+}
+export interface KnowledgeFailure {
+  source: string
+  source_ref?: unknown
+  error: string
+  created_at?: string | null
+}
+export interface KnowledgeCoverage {
+  sources: KnowledgeCoverageRow[]
+  watermarks: KnowledgeWatermark[]
+  failures: KnowledgeFailure[]
+  queue: { queued: number; running: number }
+  not_yet_indexed?: string[]
+  embedding?: KnowledgeEmbeddingHealth
+}
+export interface KnowledgeHit {
+  source_type: string
+  source_id: string
+  chunk_no?: number
+  title: string
+  module: string
+  as_of?: string | null
+  age_days?: number | null
+  stale: boolean
+  score: number
+  via?: string
+  deep_link?: string | null
+  tags?: string[]
+  markdown: string
+}
+export interface KnowledgeSearchResult {
+  degraded?: string | null
+  results: KnowledgeHit[]
+}
+
+export const getKnowledgeHealth = () => knowledgeJson<KnowledgeHealth>("/knowledge/health")
+export const getKnowledgeCoverage = () => knowledgeJson<KnowledgeCoverage>("/knowledge/admin/coverage")
+export const reindexKnowledge = (modules: string[], full = false) =>
+  knowledgeJson<{ job_id: string; status: string }>("/knowledge/admin/reindex", {
+    method: "POST",
+    body: JSON.stringify({ modules, full }),
+  })
+/** Same hybrid retrieval an agent gets, run as the signed-in user (so the same role filtering applies). */
+export const searchKnowledge = (query: string, modules?: string[], k = 8) =>
+  knowledgeJson<KnowledgeSearchResult>("/knowledge/search", {
+    method: "POST",
+    body: JSON.stringify({ query, k, ...(modules?.length ? { modules } : {}) }),
+  })
+
 // ── Approval Gate (Spec A8) ────────────────────────────────────────────────
 
 export interface ApprovalItem {

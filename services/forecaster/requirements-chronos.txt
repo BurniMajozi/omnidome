@@ -1,0 +1,5 @@
+# Optional foundation-model path (Apache-2.0 Chronos-Bolt / Chronos-2). Installed AFTER the CPU-only torch wheel:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements-chronos.txt
+# Pin the exact version you validated; chronos-forecasting pulls transformers/accelerate.
+chronos-forecasting>=2.0.0,<3

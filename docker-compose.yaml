@@ -839,6 +839,9 @@ services:
       - LICENSE_PATH=${LICENSE_PATH}
       - LICENSE_PUBLIC_KEY=${LICENSE_PUBLIC_KEY}
       - LICENSE_ENFORCEMENT=${LICENSE_ENFORCEMENT}
+      # Governed-metric snapshots are written as metric facts through tenant_memory (deterministic path, metrics.write).
+      - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
+      - BI_METRICS_SNAPSHOT_ENABLED=${BI_METRICS_SNAPSHOT_ENABLED:-true}
     ports:
       - "127.0.0.1:8024:8024"
     depends_on:
@@ -846,9 +849,42 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ── Forecast batch job (profile "forecast": never started by `docker compose up`) ──
+  # One-shot, no ports, no always-on API:  docker compose --profile forecast run --rm forecaster
+  # Reads ACTUAL metric facts, writes FORECAST facts through tenant_memory. Chronos is used only if its weights are on the
+  # `forecast_models` volume (pull once, see docs/forecasting.md); otherwise numpy baselines run (no torch needed).
+  forecaster:
+    build:
+      context: .
+      dockerfile: services/forecaster/Dockerfile
+    profiles: ["forecast"]
+    restart: "no"
+    env_file:
+      - .env
+    environment:
+      - AUTH_MODE=${AUTH_MODE:-signed}
+      - INTERNAL_AUTH_SECRET=${INTERNAL_AUTH_SECRET:-}
+      - DATABASE_URL=${DATABASE_URL}
+      - TENANT_MEMORY_SERVICE_URL=${TENANT_MEMORY_SERVICE_URL:-http://tenant_memory:8025}
+      - FORECAST_MODEL_DIR=/models
+      - FORECAST_CHRONOS=${FORECAST_CHRONOS:-auto}
+      - FORECAST_CHRONOS_MODEL=${FORECAST_CHRONOS_MODEL:-chronos-bolt-small}
+    volumes:
+      - forecast_models:/models
+    depends_on:
+      db:
+        condition: service_healthy
+      tenant_memory:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1536M
+
 volumes:
   postgres_data:
   knowledge_data:
+  forecast_models:
   ollama_data:
   voicebox_models:
   voicebox_data:

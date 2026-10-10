@@ -520,6 +520,23 @@ export const exportDeckJson = (id: string, p: { run_id?: string; refresh?: boole
   call<ExportBundle>(`/decks/${id}/export/json${qs(p)}`, undefined, 90000)
 
 // ── AI assist ────────────────────────────────────────────────────────
+/** A company-knowledge (memory) card the AI was given as untrusted background. */
+export interface KnowledgeCardRef {
+  card_id: string
+  title: string
+  module?: string | null
+  as_of?: string | null
+  stale?: boolean
+  deep_link?: string | null
+}
+/** Added to every AI response: which cards were supplied / cited, and whether the layer was unavailable. */
+export interface KnowledgeMeta {
+  use_knowledge?: boolean
+  knowledge_used?: KnowledgeCardRef[]
+  knowledge_cited?: string[]
+  degraded?: string | null
+}
+
 export interface AiOutlineInput {
   brief: string
   audience?: string
@@ -530,6 +547,7 @@ export interface AiOutlineInput {
   competitor_ids?: string[]
   campaign_analysis_ids?: string[]
   brand_kit_id?: string | null
+  use_knowledge?: boolean
 }
 export interface Dropped {
   alias?: string
@@ -537,18 +555,18 @@ export interface Dropped {
   reason?: string
   [k: string]: unknown
 }
-export interface OutlineResult {
+export interface OutlineResult extends KnowledgeMeta {
   deck: DeckDoc
   dropped: { queries?: Dropped[]; blocks?: Dropped[] }
   ungrounded_numbers: Ungrounded[]
   invalid_tokens: unknown[]
-  citations: { slide?: string | number; tag?: string; title?: string; url?: string }[]
+  citations: { slide?: string | number; tag?: string; title?: string; url?: string; kind?: string }[]
   queries_tested: number
   queries_kept: number
   model?: string
   ai_calls_today?: { used: number; cap: number; remaining: number }
 }
-export interface SlideAiResult {
+export interface SlideAiResult extends KnowledgeMeta {
   patch: unknown[]
   slide: Slide
   dropped: Dropped[]
@@ -558,7 +576,7 @@ export interface SlideAiResult {
   doc_after?: DeckDoc
   model?: string
 }
-export interface NarrativeResult {
+export interface NarrativeResult extends KnowledgeMeta {
   insights: { alias: string; kind: string; measure: string; sentence: string; sentence_resolved: string; data?: unknown }[]
   notes: string
   notes_resolved: string
@@ -572,9 +590,9 @@ export interface NarrativeResult {
   as_of?: string
 }
 export const aiOutline = (b: AiOutlineInput) => post<OutlineResult>("/ai/outline", b, undefined, 150000)
-export const aiSlide = (b: { deck_id: string; slide_id: string; instruction: string; include_doc?: boolean }) =>
+export const aiSlide = (b: { deck_id: string; slide_id: string; instruction: string; include_doc?: boolean; use_knowledge?: boolean }) =>
   post<SlideAiResult>("/ai/slide", { include_doc: true, ...b }, undefined, 150000)
-export const aiNarrative = (b: { deck_id: string; slide_id: string; refresh?: boolean }) =>
+export const aiNarrative = (b: { deck_id: string; slide_id: string; refresh?: boolean; use_knowledge?: boolean }) =>
   post<NarrativeResult>("/ai/narrative", b, undefined, 150000)
 export const getAiUsage = () => call<{ ai_calls_today: { used: number; cap: number; remaining: number } }>("/ai/usage")
 

@@ -10,7 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from services.agent_orchestrator import compaction, tool_call_log, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
-from services.agent_orchestrator.tools import SQL_TOOL_NAMES, tool_registry
+from services.agent_orchestrator import knowledge_client
+from services.agent_orchestrator.tools import KNOWLEDGE_TOOL_NAMES, SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
 from services.agent_orchestrator.config import settings
@@ -112,6 +113,7 @@ class Agent:
         user_message: str,
         history: Optional[List[Dict[str, str]]] = None,
         memory_block: str = "",
+        knowledge_block: str = "",
     ) -> List[Dict[str, str]]:
         """Build message list from user input + conversation history. Recalled
         tenant memory (M1) goes just before the question, marked as reference."""
@@ -125,6 +127,9 @@ class Agent:
         # The user's task is an instruction at user priority. Retrieved memory
         # is reference data; it must not be promoted into a system instruction.
         bounded_user_message = f"<user_request>\n{user_message}\n</user_request>"
+        if knowledge_block:
+            # Untrusted, delimited reference data with citation ids (never instructions).
+            bounded_user_message = f"{knowledge_block}\n\n{bounded_user_message}"
         if memory_block:
             bounded_user_message = f"{memory_block}\n\n{bounded_user_message}"
         messages.append({"role": "user", "content": bounded_user_message})
@@ -143,6 +148,27 @@ class Agent:
                 user_message, actor_id=self.context.get("user_id"), diagnostics=diagnostics)
         except Exception as exc:
             logger.warning("Memory recall failed for %s: %s", self.agent_type, exc)
+            return ""
+
+    async def ground_knowledge(self, user_message: str) -> str:
+        """Small budgeted knowledge-card pack for this turn (knowledge layer), or "" when the layer is
+        off/down/empty. Records what was used in context["_knowledge_info"]; never fails the turn."""
+        info: Dict[str, Any] = {"status": "disabled", "cards": [], "used_tokens": 0, "degraded": None}
+        self.context["_knowledge_info"] = info
+        if not self.tenant_id:
+            return ""
+        try:
+            block, info = await knowledge_client.grounding_block(
+                str(self.tenant_id), self.agent_type, user_message,
+                user_id=self.context.get("user_id"), roles=self.context.get("roles"))
+            self.context["_knowledge_info"] = info
+            if info.get("cards"):
+                logger.info("Knowledge grounding for %s: %d cards, %s tokens", self.agent_type,
+                            len(info["cards"]), info.get("used_tokens"))
+            return block
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Knowledge grounding failed for %s: %s", self.agent_type, exc)
+            self.context["_knowledge_info"] = {**info, "status": "unavailable", "degraded": "grounding error"}
             return ""
 
     async def load_skills(self) -> None:
@@ -194,7 +220,8 @@ class Agent:
 
         memory_block = await self.recall_memory(user_message)
         self.context["_memory_recalled"] = bool(memory_block)
-        return self._build_messages(user_message, history, memory_block)
+        knowledge_block = await self.ground_knowledge(user_message)
+        return self._build_messages(user_message, history, memory_block, knowledge_block)
 
     async def run(
         self,
@@ -274,6 +301,7 @@ class Agent:
                 "jev_calls": jev_calls,
                 "context_used": {"memory_recalled": bool(self.context.get("_memory_recalled")),
                                  "memory_status": self.context.get("_memory_diagnostics", {}).get("status", "unknown"),
+                                 "knowledge": self.context.get("_knowledge_info") or {"status": "disabled", "cards": []},
                                  "skills": list(self.skill_names), "tools_available": list(self.available_tool_names),
                                  "architecture_hints": list(self.context.get("architecture_hints") or []),
                                  "requested_model": self.context.get("requested_model"),
@@ -302,6 +330,8 @@ class Agent:
                     agent_type=self.agent_type,
                 )
                 verif_data = v.to_dict()
+            if content_str.strip() and not unavailable:
+                await self._record_working_turn(user_message, content_str, tool_call_log)
             return done(content_str, stopped_by=stopped_by, unavailable=unavailable, verification=verif_data)
 
         while tool_count < tool_limit:
@@ -379,6 +409,23 @@ class Agent:
 
         logger.warning("Agent %s reached the step limit (%d)", self.agent_type, tool_limit)
         return await self._final_answer(messages, tools_for_llm, tenant, done, "step_limit")
+
+    async def _record_working_turn(self, user_message: str, answer: str, tool_calls: List[Dict[str, Any]]) -> None:
+        """Turn + tool outcomes into short-term working memory (fail-open, bounded by a short timeout)."""
+        key = knowledge_client.session_key(self.context, self.agent_type, self.external_id)
+        if not self.tenant_id or not key:
+            return
+        outcomes = [{"name": tc.get("name", "?"),
+                     "ok": bool(isinstance(tc.get("result"), dict) and tc["result"].get("success", True)
+                                and not tc["result"].get("refused"))}
+                    for tc in tool_calls]
+        try:
+            await asyncio.wait_for(knowledge_client.record_turn(
+                str(self.tenant_id), key, user_id=self.context.get("user_id"), roles=self.context.get("roles"),
+                user_message=user_message, answer=answer, tool_outcomes=outcomes, agent_type=self.agent_type),
+                timeout=knowledge_client.GROUNDING_TIMEOUT_S + 0.5)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Working memory not recorded for %s: %s", self.agent_type, exc)
 
     @staticmethod
     def _is_read_call(tc: Dict[str, Any]) -> bool:
@@ -463,6 +510,11 @@ class Agent:
 
         # Inject context IDs into tool input
         enriched_args = dict(tool_args)
+        if tool_name in KNOWLEDGE_TOOL_NAMES:
+            # Bound by the orchestrator; the model cannot choose another conversation's scratchpad.
+            key = knowledge_client.session_key(self.context, self.agent_type, self.external_id)
+            if key:
+                enriched_args["_session_key"] = key
         if "customer_id" in self.context and "customer_id" not in enriched_args:
             enriched_args["customer_id"] = self.context["customer_id"]
 
@@ -555,7 +607,8 @@ class Agent:
                 tool.execute(tool_input=enriched_args, tenant_id=tenant,
                              user_id=str(self.context.get("user_id", "")),
                              **({"roles": self.context["roles"]} if self.context.get("roles") else {}),
-                             **({"agent_type": self.agent_type} if tool_name in SQL_TOOL_NAMES else {})),
+                             **({"agent_type": self.agent_type} if (tool_name in SQL_TOOL_NAMES
+                                                                     or tool_name in KNOWLEDGE_TOOL_NAMES) else {})),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:

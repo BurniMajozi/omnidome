@@ -928,7 +928,7 @@ async def run_query(db: AsyncSession, tenant_id: uuid.UUID, spec: QuerySpec, *, 
     totals = None
     if totals_row is not None:
         totals = {c.id: _jsonable(totals_row[i]) for i, c in enumerate(measure_cols)}
-    return {
+    result = {
         "columns": [c.public() for c in cq.columns],
         "rows": rows,
         "totals": totals,
@@ -936,6 +936,13 @@ async def run_query(db: AsyncSession, tenant_id: uuid.UUID, spec: QuerySpec, *, 
                  "row_count": len(rows), "truncated": truncated, "timezone": TIMEZONE, "time": cq.time_info,
                  "query_key": canonical_key(spec)},
     }
+    # Metric-facts hook (bi_metrics_writer): best effort, rate limited, never affects the query result.
+    try:
+        from services.fno_intelligence import bi_metrics_writer as _mw
+        _mw.maybe_record_after_query(tenant_id, spec, result)
+    except Exception:  # noqa: BLE001
+        pass
+    return result
 
 
 def validate_spec_only(spec: QuerySpec) -> None:
