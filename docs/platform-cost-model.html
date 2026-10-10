@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OminiDome · Platform cost model</title>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#0b1020;color:#e8edf7}body{max-width:1080px;margin:36px auto;padding:0 20px}h1{font-size:30px}p{color:#b4bfd6;line-height:1.6}a{color:#70d7ed}.grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{background:#141d31;padding:24px;border:1px solid #293750;border-radius:16px}label{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:14px 0;font-size:14px}input,select{background:#0b1020;color:#fff;border:1px solid #3c4f70;border-radius:6px;padding:9px;width:130px;font:inherit}select{width:170px}.metric{font-size:28px;font-weight:700;margin:10px 0}small{color:#a9b8cf}table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:12px 0;text-align:right;border-bottom:1px solid #293750}td:first-child,th:first-child{text-align:left}.warning{padding:12px;border-radius:8px;background:#332b17;color:#ffe3a3}.good{color:#79e4bd}.bad{color:#ffa3a3}@media(max-width:720px){.grid{grid-template-columns:1fr}body{margin-top:20px}label{flex-wrap:wrap}}
+</style>
+<h1>What can a plan afford to deliver?</h1>
+<p>Subscription, AI, research, hosting and payment costs in one editable model. This is a design calculator, not a connected billing screen. Delivery costs are illustrative until measured. All revenue and delivery-cost inputs are in Rand, excluding recoverable VAT.</p>
+<div class="grid">
+<section class="card"><h2>Commercial assumptions</h2>
+<label>Starting plan <select id="plan"><option value="3500">Professional</option><option value="9500">Enterprise</option><option value="999">Growth</option><option value="0">Starter</option></select></label>
+<label>Net revenue per service month <input id="revenue" type="number" min="0" value="3500"></label>
+<label>Target contribution margin % <input id="target" type="number" min="0" max="100" value="70"></label>
+<label>Hosting / support allocation <input id="fixed" type="number" min="0" value="500"></label>
+<label>Other included service costs <input id="other" type="number" min="0" value="0"></label>
+<label>Sales VAT % <input id="vat" type="number" min="0" value="15"></label>
+<label>Gateway percentage fee % <input id="fee" type="number" min="0" value="2.9" step="0.1"></label>
+<label>Fixed fee per collection <input id="flat" type="number" min="0" value="1" step="0.1"></label>
+<label>Collections per service month <input id="collections" type="number" min="0" value="1" step="0.01"></label>
+<small>For annual plans use discounted monthly net revenue and 1/12 collections per month. This models gateway fees allocated across the service period; it does not model monthly cash flow. Fee VAT is assumed recoverable, and the merchant's actual gateway agreement should replace these assumptions.</small>
+</section>
+<section class="card"><h2>Delivery assumptions</h2>
+<label>AI operations / month <input id="aiQty" type="number" min="0" value="1000"></label>
+<label>Cost per AI operation <input id="aiCost" type="number" min="0" step="0.01" value="0.20"></label>
+<label>Research jobs / month <input id="researchQty" type="number" min="0" value="20"></label>
+<label>Cost per research job <input id="researchCost" type="number" min="0" step="0.1" value="5"></label>
+<label>Extra runtime units / month <input id="runtimeQty" type="number" min="0" value="100"></label>
+<label>Cost per extra runtime unit <input id="runtimeCost" type="number" min="0" step="0.01" value="0.10"></label>
+<p>AI/research unit costs must include their own model, tool and normal execution cost. Extra runtime is only additional execution not already counted above. Avoid counting it twice.</p>
+<label>Credits included / month <input id="credits" type="number" min="0" value="5000"></label>
+<p>Credit count alone says nothing about delivery cost. A weighted rate card must explain how many credits each operation uses.</p>
+</section>
+<section class="card"><h2>Monthly result</h2><div id="margin" class="metric"></div><small>Contribution margin after the specified costs</small><table id="breakdown"></table><p id="status" class="warning"></p></section>
+<section class="card"><h2>Allowance budget</h2><div id="budget" class="metric"></div><small>Remaining variable-work budget at the target margin</small><p id="capacity"></p><p>This ceiling must cover research and other variable work too. Use representative costs and peak utilization; a cheap average can conceal expensive research jobs.</p><a href="platform-commercial-architecture-2026-10-10.md">Read the architecture and billing design</a></section>
+</div>
+<script>
+const ids=['revenue','target','fixed','other','vat','fee','flat','collections','aiQty','aiCost','researchQty','researchCost','runtimeQty','runtimeCost','credits'];
+const money=n=>new Intl.NumberFormat('en-ZA',{style:'currency',currency:'ZAR'}).format(n);
+function calculate(x){const gross=x.revenue*(1+x.vat/100),gateway=x.revenue===0?0:gross*x.fee/100+x.flat*x.collections;const ai=x.aiQty*x.aiCost,research=x.researchQty*x.researchCost,runtime=x.runtimeQty*x.runtimeCost;const total=x.fixed+x.other+gateway+ai+research+runtime;const budget=x.revenue*(1-x.target/100)-x.fixed-x.other-gateway;return{gateway,ai,research,runtime,total,budget,profit:x.revenue-total,margin:x.revenue>0?(x.revenue-total)/x.revenue*100:null};}
+function render(){const x=Object.fromEntries(ids.map(id=>[id,Math.max(0,Number(document.getElementById(id).value)||0)]));x.target=Math.min(100,x.target);const r=calculate(x);const m=document.getElementById('margin');m.textContent=r.margin===null?'No paid revenue':r.margin.toFixed(1)+'%';m.className='metric '+(r.margin!==null&&r.margin>=x.target?'good':'bad');const rows=[['Net revenue',x.revenue],['Hosting / support',x.fixed],['Other services',x.other],['Gateway cost',r.gateway],['AI work',r.ai],['Research',r.research],['Extra runtime',r.runtime],['Total delivery cost',r.total],['Contribution',r.profit]];document.getElementById('breakdown').innerHTML=rows.map(([name,n])=>'<tr><td>'+name+'</td><td>'+money(n)+'</td></tr>').join('');document.getElementById('budget').textContent=money(r.budget);document.getElementById('capacity').textContent=r.budget<=0?'No budget remains for variable work at this target.':(x.credits>0?'At full use of '+x.credits.toLocaleString()+' credits, the average delivery cost must stay below '+money(r.budget/x.credits)+' per credit. ':'')+(x.aiCost>0?'If only standard AI operations used this budget, it would fund about '+Math.floor(r.budget/x.aiCost).toLocaleString()+' operations.':'');document.getElementById('status').textContent=r.margin===null?'A free plan needs a separately funded acquisition/support budget.':r.margin<x.target?'This scenario misses the target. Adjust prices, limits or delivery cost.':'This scenario meets the target with these illustrative inputs.';}
+ids.forEach(id=>document.getElementById(id).addEventListener('input',render));document.getElementById('plan').addEventListener('change',e=>{document.getElementById('revenue').value=e.target.value;document.getElementById('credits').value=e.target.value==='9500'?10000:e.target.value==='3500'?5000:0;render();});render();
+</script>
+</html>
