@@ -432,7 +432,7 @@ services:
       # Knowledge layer (optional; empty KNOWLEDGE_DB_URL = disabled, recall stays keyword-only)
       - KNOWLEDGE_DB_URL=${KNOWLEDGE_DB_URL:-}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_BASE_URL=${KNOWLEDGE_OLLAMA_URL:-http://ollama:11434}
     ports:
       - "127.0.0.1:8025:8025"
     depends_on:
@@ -481,7 +481,7 @@ services:
       - KNOWLEDGE_DB_ADMIN_URL=${KNOWLEDGE_DB_ADMIN_URL:-}
       - KNOWLEDGE_APP_PASSWORD=${KNOWLEDGE_APP_PASSWORD:-}
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
+      - OLLAMA_BASE_URL=${KNOWLEDGE_OLLAMA_URL:-http://ollama:11434}
       - INDEX_BATCH_SIZE=${INDEX_BATCH_SIZE:-50}
       - INDEX_CONCURRENCY=${INDEX_CONCURRENCY:-1}
       - INDEX_SLEEP_S=${INDEX_SLEEP_S:-1.0}
