@@ -14,6 +14,8 @@ const nextConfig = {
   },
   experimental: {
     turbopackUseSystemTlsCerts: true,
+    // Rewritten service calls (e.g. BI Studio AI outline generation) can take well over the 30s default.
+    proxyTimeout: 180_000,
   },
   async rewrites() {
     return [
