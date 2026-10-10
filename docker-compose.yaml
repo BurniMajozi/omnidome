@@ -846,27 +846,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  presenton:
-    image: ghcr.io/presenton/presenton:latest
-    container_name: omnidome-presenton
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:5000:80"
-    environment:
-      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-      - MIGRATE_DATABASE_ON_STARTUP=true
-      - CAN_CHANGE_KEYS=true
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-    volumes:
-      - presenton_data:/app_data
-
 volumes:
   postgres_data:
   knowledge_data:
   ollama_data:
   voicebox_models:
   voicebox_data:
-  presenton_data:
   asterisk_generated:
   asterisk_recordings:
