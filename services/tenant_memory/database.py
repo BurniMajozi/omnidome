@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS idx_memory_working_expiry ON tenant_memory_working(ex
 CREATE INDEX IF NOT EXISTS idx_memory_working_key ON tenant_memory_working(tenant_id, content_key);
 
 -- Deterministic metric facts. Written ONLY by deterministic code (BI semantic-layer runs, forecast
--- jobs) - never by an LLM. Cards rendered from these rows are embedded for context; exact values are
+-- jobs) - never by an LLM. Cards rendered from these rows are embedded for context, so exact values are
 -- always re-fetched through the governed query referenced in source_query.
 CREATE TABLE IF NOT EXISTS tenant_metric_facts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -153,6 +153,12 @@ CREATE INDEX IF NOT EXISTS idx_metric_facts_updated ON tenant_metric_facts(tenan
 
 
 async def init_tables(session: AsyncSession) -> None:
-    for statement in [part.strip() for part in CREATE_TABLES_SQL.split(";") if part.strip()]:
+    for part in CREATE_TABLES_SQL.split(";"):
+        statement = part.strip()
+        # Skip chunks that are only SQL comments (a ';' inside a comment splits one off); asyncpg cannot
+        # prepare a statement with no command.
+        if not "
+".join(l for l in statement.splitlines() if not l.strip().startswith("--")).strip():
+            continue
         await session.execute(text(statement))
 
