@@ -20,7 +20,7 @@ from services.common.db import run_with_db_retry, session_scope
 from services.tenant_memory.knowledge import consolidation
 from services.tenant_memory.knowledge.config import get_settings
 from services.tenant_memory.knowledge.embeddings import OllamaEmbedder
-from services.tenant_memory.knowledge.indexer import Indexer
+from services.tenant_memory.knowledge.indexer import EmbeddingBlocked, Indexer
 from services.tenant_memory.knowledge.store import KnowledgeStore
 from services.tenant_memory.knowledge.store_pg import PgVectorStore
 
@@ -50,11 +50,18 @@ async def process_job(indexer: Indexer, store: KnowledgeStore, job: dict) -> dic
 async def sweep(indexer: Indexer, store: KnowledgeStore, tenants: list[str]) -> None:
     now = datetime.now(timezone.utc)
     for tenant in tenants:
-        for name in indexer.sources:
+        for name in indexer.enabled_names():
             wm = await store.get_watermark(tenant, name)
             full = indexer.needs_full(wm, now)
-            res = await indexer.run_source(tenant, name, full=full)
-            if res.get("blocked") or res.get("error"):
+            try:
+                res = await indexer.run_source(tenant, name, full=full)
+            except EmbeddingBlocked:
+                return                                   # embedding service is down: stop the whole sweep, retry later
+            except Exception as exc:  # noqa: BLE001 - one broken source must not starve the others
+                logger.exception("source %s failed for tenant %s", name, tenant)
+                await store.record_failure(tenant, name, "-", f"{type(exc).__name__}: {exc}")
+                continue
+            if res.get("blocked"):
                 return
         cwm = await store.get_watermark(tenant, "consolidation")
         last = (cwm or {}).get("last_full_at")

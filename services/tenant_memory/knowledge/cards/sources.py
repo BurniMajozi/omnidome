@@ -15,6 +15,7 @@ Two shapes:
 """
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -468,3 +469,21 @@ async def ids_metric_facts(session, tenant: str) -> dict:
 
 
 SOURCES["metric_facts"] = Source("metric_facts", "analytics", ("metric_fact",), fetch_metric_facts, ids_metric_facts)
+
+
+# ── enable flags + broad-coverage sources ───────────────────────────────────
+
+def source_enabled(name: str, raw: Optional[str] = None) -> bool:
+    """KNOWLEDGE_SOURCES: empty/'all' = every verified source; otherwise a comma list of source names. A '-name' entry
+    removes a source ('all,-hr_org'). Evaluated lazily so the setting can change without a code change."""
+    raw = (os.getenv("KNOWLEDGE_SOURCES", "") if raw is None else raw).strip().lower()
+    if not raw:
+        return True
+    items = [i.strip() for i in raw.split(",") if i.strip()]
+    if f"-{name}" in items:
+        return False
+    positives = [i for i in items if not i.startswith("-")]
+    return not positives or "all" in positives or name in positives
+
+
+from services.tenant_memory.knowledge.cards import sources_ext as _sources_ext  # noqa: E402,F401  registers EXT_SOURCES into SOURCES

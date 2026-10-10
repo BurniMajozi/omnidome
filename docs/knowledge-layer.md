@@ -39,7 +39,7 @@ Cards: YAML frontmatter (`source`, `source_id`, `module`, ids, `as_of`, `tags`) 
 customers (+subscriptions, balance, last tickets, tags), leads, deals, pipeline digests, billing digests (month x segment),
 support tickets (public replies only), marketing campaigns, social analytics digests (month x platform), BI research runs,
 competitors (latest snapshot + changes + source URLs), campaign analyses, tenant memory entries, memory summaries,
-OKF skills (description/tools only, never `guidance_prompt`), metric facts.
+OKF skills (description/tools only, never `guidance_prompt`), metric facts - plus the broad-coverage sources in the table further down.
 
 PII minimisation: per-builder allow-lists (`KNOWLEDGE_FIELDS_<SOURCE>=a,b,c` can only **narrow**), a hard `NEVER_INDEX` set
 (email, phone, id_number, address, passwords/tokens/keys, bank/card, Paystack refs...), people shown as "Thandi M.", all free text
@@ -104,6 +104,8 @@ referenced spec. The forecasting service that writes `forecast` rows does not ex
 | `HNSW_M` 12, `HNSW_EF_CONSTRUCTION` 48, `HNSW_EF_SEARCH` 40 | | small on purpose |
 | `KNOWLEDGE_TENANTS` | all active | comma list to restrict the worker |
 | `KNOWLEDGE_MODULE_ACCESS`, `KNOWLEDGE_FIELDS_<SOURCE>` | | see above |
+| `KNOWLEDGE_SOURCES` | empty = all | comma list of source names to index (`invoices,leads`), or `all,-hr_org` to remove some. Names: see the broad-coverage table and `GET /knowledge/admin/coverage` (`sources_available`). Applies to the sweep, manual reindex and coverage. |
+| `KNOWLEDGE_DIGEST_MONTHS` | 3 | months looked back by the monthly digest sources (1-24) |
 
 ## Start it (exact commands)
 
@@ -124,9 +126,70 @@ docker compose --profile knowledge up -d --build knowledge_indexer tenant_memory
 `python -m pytest services/tenant_memory -q` (no network, no DB; fake `HashEmbedder`, in-memory store). Optional real-server test:
 `KNOWLEDGE_TEST_DB_URL=... EMBEDDING_DIM=64 python -m pytest services/tenant_memory/knowledge/tests/test_pg_integration.py`.
 
+## Broad-coverage sources (added 2026-10-10)
+
+All verified against the owning service's models (and, where the same table is also in `config/master_schema.sql` with an older
+shape - `iot_devices`, `inventory_*`, `rica_verifications`, `employees`, `journal_entries`, `knowledge_base` - only columns present
+in both shapes or added by that service's startup migration are read). Code: `cards/sources_ext.py` (readers), `cards/builders_ext.py`
+(cards). Each reader uses explicit column lists, an explicit tenant filter on every query/join, `begin_nested()`, and a
+`to_regclass` guard: a table that does not exist yet (its service never started) yields an empty page, and reconcile **refuses** to run
+against a missing table so it can never tombstone indexed cards. Sources run one at a time, in `INDEX_BATCH_SIZE` pages, with the
+usual sleep between them; digests are recomputed windows (last `KNOWLEDGE_DIGEST_MONTHS` months) deduplicated by content hash.
+The worker sweep now isolates failures per source (a broken source is recorded in `knowledge_failures` and the rest continue).
+`GET /knowledge/admin/coverage` lists every source (`sources_available`: name, module, card types, enabled, snapshot) and the skipped list
+(`sources_skipped`); `POST /knowledge/admin/reindex {"sources":[...]}` accepts any of the names below.
+
+| Source name (`KNOWLEDGE_SOURCES`) | Card types | Visibility / role tags | Notes and exclusions |
+|---|---|---|---|
+| `compliance_documents` | `compliance_document` | team: compliance, compliance_officer, legal, risk | OCR text split into `## Section N` blocks, legal wording kept as written (identifiers scrubbed only), capped at 40k chars. NOT read: file path, uploader, extracted_data JSON, file size |
+| `compliance_obligations`, `compliance_breaches` | `compliance_obligation`, `compliance_breach` | same | NOT read: responsible person, evidence_provided, regulator reference numbers |
+| `compliance_cipc`, `compliance_tax_returns`, `compliance_tax_registrations` | `cipc_filing`, `tax_return`, `tax_registration` | same | NOT read: tax/registration numbers, SARS/CIPC/filing/confirmation references |
+| `compliance_emp201` | `emp201` | team: compliance + finance + hr_manager | company totals per period only. NOT read: PRN, receipt reference, preparer, payroll run ids, assumptions |
+| `compliance_consents` | `consent_digest` | compliance roles | POPIA consents as counts per purpose. NOT read: data-subject name/id, notes. DSAR table skipped (identities) |
+| `hr_org` | `hr_org` | team: hr, hr_manager, hr_admin | headcount per department x role title of active staff. No names |
+| `hr_training` | `training_course` | hr roles | course facts + aggregate enrolled/completed. NOT read: individual enrolments, progress, scores |
+| `hr_company_kpi` | `company_kpi` | hr roles | company-level objectives for a fiscal year (budget vs actual). Individual KPI sheets are not indexed |
+| `network_services` | `network_service` | tenant | status, technology, speed, city/province, FNO provider, customer link. NOT read: street address, GPS, FNO order/account ids, ONT serial |
+| `network_sla_digests`, `network_incident_digests` | `sla_digest`, `incident_digest` | tenant | monthly SLA breach counts/duration, FNO SLA measurement breaches/penalties, notification counts by trigger/severity |
+| `network_fleet` | `fleet_digest` | tenant | counts by type/manufacturer/model/status + "not seen in 24h" for network and IoT devices. NOT read: serials, MACs, IPs, firmware strings, credentials, attributes. IoT uses only columns common to both table shapes |
+| `rica_digests` | `rica_digest` | tenant | monthly verification and RICA-flow status counts. NOT read: ID numbers, names, addresses, job ids, response payloads |
+| `inventory_products`, `inventory_packages` | `product`, `package` | tenant | catalogue (SKU, name, category, RRP, active). NOT read: cost price, markup, barcode, weight, preferred supplier |
+| `stock_levels`, `stock_movement_digests` | `stock_digest`, `stock_movement_digest` | tenant | per warehouse levels + lowest-vs-reorder products; movements per month by type |
+| `purchase_orders`, `inventory_suppliers` | `purchase_order`, `supplier` | team: inventory, inventory_manager, procurement, procurement_officer, finance, finance_manager | NOT read: supplier contact person/e-mail/phone/address/tax id/spend limit/notes, creator/approver ids, send metadata, approval hash. Suppliers carry PO count/total |
+| `finance_chart`, `journal_digests` | `chart_of_accounts`, `journal_digest` | team: finance, finance_manager, accountant | COA code+name; posted journals per month by account group and busiest accounts; line descriptions and references are not read |
+| `invoices`, `subscriptions`, `payment_arrangements`, `dunning_digests` | `invoice`, `subscription`, `payment_arrangement`, `dunning_digest` | team: billing, finance, billing_admin, finance_manager, accountant | invoice lines (<= 12), customer link. Drafts/voided have no card. NOT read: invoice notes, payment refs, Paystack codes/tokens, subscription metadata, arrangement notes |
+| `call_sessions` | `call_session` | team: call_center, call_center_agent, call_center_manager, supervisor | transcript scrubbed and indexed **only** when `recording_consent` is `given`/`not_required` and the retention window has not passed (gate applied in SQL, so other transcripts never leave the DB). Agents shown as initials. NOT read: recording URL, live transcript, provider/external ids, phone numbers |
+| `call_center_digest` | `call_center_digest` | same | queue state, agent CSAT/MTTR (initials), monthly call volume |
+| `kb_articles` | `kb_article` | tenant | published articles of the tenant only (the shared system-tenant KB is not duplicated per tenant). `knowledge_base` has no `updated_at`: edits are picked up by the daily full reconcile |
+| `retention_journeys`, `retention_offers`, `lifecycle_summaries`, `cancellation_digests` | `retention_journey`, `retention_offer`, `lifecycle_summary`, `cancellation_digest` | tenant | cancellation digest = reasons, workflow states, offer outcomes per month. NOT read: customer ids/snapshots/features, router serials, FNO references, internal notes |
+| `churn_batches` | `churn_batch` | team: retention, customer_success, sales_manager, support_manager, manager | per completed batch (last 120 days): level counts, reasons, top 15 at-risk customers as `[[customer:id]]` links. NOT read: customer name, contact data, risk factor payloads |
+| `portal_pages` | `portal_page` | tenant (public copy) | published pages only; visible copy of the published version. NOT read: custom CSS/JS, URLs, images, SEO/share tokens |
+| `portal_submission_digests` | `portal_submissions_digest` | tenant | monthly counts per page/utm source of **consented** submissions only. NOT read: form payload, IP hash, consent text |
+| `audience_segments` | `audience_segment` | tenant | name, description, rules, member count (`marketing_audience_segments` has no `updated_at`: refreshed on the daily reconcile) |
+
+Graph edges added (foreign keys only, existing edge writer): invoice->customer/subscription/credited invoice, subscription->customer,
+payment_arrangement->customer, network_service->customer, call_session->customer, purchase_order->supplier/product, package->product,
+stock_digest->low-stock product, churn_batch->customer, retention_journey->offers, portal digest->page. The existing
+campaign->audience_segment edge now resolves to the new segment cards.
+
+Role tags are defaults in `cards/base.py` `DEFAULT_MODULE_ACCESS` (keys `compliance`, `compliance.payroll_tax`, `call_center`,
+`inventory.procurement`, `retention`, `hr`, `billing`, `finance`; a card can name a finer `access_key`) and can be overridden with
+`KNOWLEDGE_MODULE_ACCESS`; re-run with `force` after changing them. Admins always pass.
+
+### Skipped (and why)
+
+| Source | Reason |
+|---|---|
+| Communication / AgentMail threads | No thread or summary table: `agent_emails` holds only raw bodies and the agent's raw reply, so nothing safe to index. Raw e-mail bodies are never indexed |
+| HR individual records (payroll, payslips, performance reviews, employee KPI sheets, disciplinary, exits, leave, schedules, employees' own rows) | Named-individual or sensitive data; no tenant-visibility marker for the talent module was found, so HR cards default to hr/admin roles and contain org facts only |
+| Compliance DSAR / anonymisation logs | Identify data subjects; only the consent digest is indexed |
+| Campaign -> lead edges | No verified foreign key (leads carry a free-text `source`; portal submissions carry `utm_campaign` text, not an id) |
+| Anything not listed | Orders, store, loyalty, web analytics etc. were not verified and are not indexed |
+
+All of the above is verified against code and unit-tested with fakes; it has **not** been run against a live database. First reindex per
+source with `POST /knowledge/admin/reindex {"sources":["<name>"],"full":true}` and watch `knowledge_failures` and `GET /knowledge/admin/coverage`.
+
 ## Not covered yet (follow-ups)
 
-Compliance documents (no verified document table), HR (module access defaults exist, no builder), network/IoT alerts, inventory,
-call-centre transcripts, finance journals, RICA, subscription/invoice-level cards (only digests and the customer card), entity extraction
-for graph edges beyond foreign keys and `scope_key`, per-user scoping of conversation memory, a UI for coverage, orchestrator wiring,
-the forecasting service, and any caller that writes `bi_semantic` metric facts from query runs.
+Entity extraction for graph edges beyond foreign keys and `scope_key`, per-user scoping of conversation memory, a UI for coverage,
+orchestrator wiring, the forecasting service, any caller that writes `bi_semantic` metric facts from query runs, and the unverified tables above.

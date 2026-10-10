@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Optional
 
 from services.tenant_memory.knowledge.cards.base import Card, stable_text
-from services.tenant_memory.knowledge.cards.sources import SOURCES, Page, Source
+from services.tenant_memory.knowledge.cards.sources import SOURCES, Page, Source, source_enabled
 from services.tenant_memory.knowledge.config import Settings, get_settings
 from services.tenant_memory.knowledge.embeddings import (
     Embedder, EmbeddingModelMissing, EmbeddingUnavailable,
@@ -61,6 +61,10 @@ class Indexer:
         self._session_factory = session_factory
         self._sleep = sleep
         self._sem = asyncio.Semaphore(self.s.index_concurrency)
+
+    def enabled_names(self) -> list[str]:
+        """Sources switched on by KNOWLEDGE_SOURCES, in registration order (sequential, never parallel)."""
+        return [n for n in self.sources if source_enabled(n)]
 
     @asynccontextmanager
     async def _session(self):
@@ -167,7 +171,8 @@ class Indexer:
     async def run_tenant(self, tenant: str, *, modules: Optional[list[str]] = None, names: Optional[list[str]] = None,
                          full: bool = False, force: bool = False) -> list[dict]:
         out = []
-        for name, src in self.sources.items():
+        for name in self.enabled_names():
+            src = self.sources[name]
             if modules and src.module not in modules:
                 continue
             if names and name not in names:

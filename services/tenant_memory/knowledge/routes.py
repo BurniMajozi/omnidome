@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
 from services.tenant_memory.knowledge import consolidation, tiers
-from services.tenant_memory.knowledge.cards.sources import SOURCES
+from services.tenant_memory.knowledge.cards.sources import SOURCES, source_enabled
+from services.tenant_memory.knowledge.cards.sources_ext import SKIPPED as SKIPPED_SOURCES
 from services.tenant_memory.knowledge.config import get_settings, knowledge_enabled
 from services.tenant_memory.knowledge.embeddings import Embedder, OllamaEmbedder
 from services.tenant_memory.knowledge.kdata import ADMIN_ROLES, AccessScope, Filters
@@ -150,7 +151,10 @@ async def coverage(ctx: AuthContext = Depends(require_admin)):
     store, embedder = get_runtime()
     cov = await store.coverage(str(ctx.tenant_id))
     covered = {s["source_type"] for s in cov["sources"]}
-    cov["not_yet_indexed"] = sorted(t for name, src in SOURCES.items() for t in src.source_types if t not in covered)
+    cov["not_yet_indexed"] = sorted(t for name, src in SOURCES.items() if source_enabled(name) for t in src.source_types if t not in covered)
+    cov["sources_available"] = [{"source": name, "module": src.module, "source_types": list(src.source_types),
+                                 "enabled": source_enabled(name), "snapshot": src.snapshot} for name, src in SOURCES.items()]
+    cov["sources_skipped"] = SKIPPED_SOURCES
     cov["embedding"] = await embedder.health()
     return cov
 

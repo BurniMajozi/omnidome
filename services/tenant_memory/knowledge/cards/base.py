@@ -30,6 +30,12 @@ DEFAULT_MODULE_ACCESS: dict[str, tuple[str, list[str]]] = {
     "billing": ("team", ["billing", "finance", "billing_admin", "finance_manager", "accountant"]),
     "finance": ("team", ["finance", "finance_manager", "accountant"]),
     "hr": ("team", ["hr", "hr_manager", "hr_admin"]),
+    # Added with the broad-coverage sources. Keys may be a module or a finer "module.area" access_key on a card.
+    "compliance": ("team", ["compliance", "compliance_officer", "legal", "risk"]),
+    "compliance.payroll_tax": ("team", ["compliance", "compliance_officer", "finance", "finance_manager", "accountant", "hr_manager"]),
+    "call_center": ("team", ["call_center", "call_center_agent", "call_center_manager", "supervisor"]),
+    "inventory.procurement": ("team", ["inventory", "inventory_manager", "procurement", "procurement_officer", "finance", "finance_manager"]),
+    "retention": ("team", ["retention", "customer_success", "sales_manager", "support_manager", "manager"]),
 }
 
 
@@ -137,9 +143,10 @@ class Card:
     owner_id: Optional[str] = None
     visibility: Optional[str] = None            # None -> module default
     required_roles: Optional[list[str]] = None
+    access_key: Optional[str] = None            # finer access table key than the module (e.g. "inventory.procurement")
 
     def access(self) -> tuple[str, list[str]]:
-        vis, roles = module_access(self.module)
+        vis, roles = module_access(self.access_key or self.module)
         return (self.visibility or vis, self.required_roles if self.required_roles is not None else roles)
 
 
