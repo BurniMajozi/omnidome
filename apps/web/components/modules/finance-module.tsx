@@ -98,6 +98,7 @@ export function FinanceModule() {
   return (
     <ModuleLayout
       title="Finance & FP&A"
+      insightsModule="finance"
         icon={<DollarSign className="h-5 w-5" />}
         subtitle="Financial planning, P&L, cash flow, and FP&A reporting"
       flashcardKPIs={flashcardKPIs}

@@ -66,13 +66,23 @@ export default function Dashboard() {
   const [authChecked, setAuthChecked] = useState(false)
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
+    // Deep links: /dashboard?section=analytics&sub=presentations&deck=<id>. Read on load and on in-app
+    // navigation (the chat's "Open" button pushes the URL and fires popstate; no full reload).
+    const applyLocation = () => {
+      if (typeof window === "undefined") return
       const params = new URLSearchParams(window.location.search)
       const sec = params.get("section") || params.get("tab")
-      if (sec && sectionTitles[sec]) {
-        setActiveSection(sec)
-      }
+      if (!sec || !sectionTitles[sec]) return
+      setActiveSection(sec)
+      const sub = params.get("sub")
+      const safeSub = sub && /^[a-z0-9-]{1,40}$/.test(sub) ? sub : null
+      setRetentionTab(sec === "retention" ? safeSub : null)
+      setPortalTab(sec === "portal" ? safeSub : null)
+      setAnalyticsTab(sec === "analytics" ? safeSub : null)
     }
+    applyLocation()
+    window.addEventListener("popstate", applyLocation)
+    return () => window.removeEventListener("popstate", applyLocation)
   }, [])
 
   useEffect(() => {

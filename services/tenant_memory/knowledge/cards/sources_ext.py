@@ -575,8 +575,8 @@ EXT_SOURCES: list[Source] = [*COMPLIANCE_SOURCES, *HR_SOURCES, *NETWORK_SOURCES,
 
 # Verified-but-not-indexed sources and why (surfaced by the coverage endpoint and docs/knowledge-layer.md).
 SKIPPED: dict[str, str] = {
-    "communication_threads": "no thread/summary table: agent_emails only holds raw bodies and the agent's raw reply; raw e-mail bodies are never indexed",
-    "hr_individual_records": "payroll, payslips, performance reviews, KPI sheets, disciplinary, exits, leave and schedules are named-individual or sensitive: excluded by design",
+    "communication_threads": "indexed as a derived per-thread DIGEST only (mail_threads source: counts, display names, <=300-char scrubbed last-inbound excerpt, no bodies/attachments/links); see docs/knowledge-access.md",
+    "hr_individual_records": "payroll, payslips, performance reviews, disciplinary, exits and leave are named-individual or sensitive: excluded by design. A user's OWN KPI sheet is indexed only as a PRIVATE card readable by that user (personal_context)",
     "campaign_lead_edges": "no verified campaign->lead foreign key (leads carry a free-text source only); portal submissions carry utm_campaign text, not an id",
     "compliance_popia_dsar": "data-subject requests hold personal identities; only the consent digest (counts) is indexed",
 }
@@ -588,3 +588,11 @@ def register(sources: dict) -> None:
 
 
 register(S.SOURCES)
+
+# Artifact registry cards (BI decks, brand kits). The module registers itself into SOURCES on import.
+from services.tenant_memory.knowledge.cards import builders_artifacts as _builders_artifacts  # noqa: E402,F401
+
+# Personalised layer (private per-user cards) + Communication panel thread digests (services/tenant_memory/knowledge/personal.py).
+from services.tenant_memory.knowledge.cards import sources_personal as _sources_personal  # noqa: E402
+register_personal = {s.name: s for s in _sources_personal.PERSONAL_SOURCES}
+S.SOURCES.update(register_personal)

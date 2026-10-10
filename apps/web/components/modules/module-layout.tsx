@@ -21,6 +21,7 @@ import { TableShell } from "@/components/ui/table-shell"
 import { cn } from "@/lib/utils"
 import { invokeAgent } from "@/lib/orchestrator-api"
 import { buildCsv } from "@/lib/csv"
+import { InsightsRecommendations, InsightsSummary } from "@/components/dashboard/insights-card"
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -75,6 +76,12 @@ interface ModuleLayoutProps {
    * no real data for a panel never shows placeholder rows.
    */
   panelStates?: Partial<Record<"kpis" | "activity" | "issues" | "summary" | "tasks" | "recommendations", ReactNode>>
+  /**
+   * Panel key for the insights engine (e.g. "sales"). When set, the Summary tab and the AI Recommendations column show the
+   * personalised, evidence-grounded briefing (components/dashboard/insights-card.tsx); the lists passed in above are kept
+   * only as the fallback when the engine is unreachable.
+   */
+  insightsModule?: string
 }
 
 // ─── Badge helpers ────────────────────────────────────────────────────────────
@@ -134,6 +141,7 @@ export function ModuleLayout({
   hideHeaderExport = false,
   readOnlyRecords = false,
   panelStates,
+  insightsModule,
 }: ModuleLayoutProps) {
   const [activeInfoTab, setActiveInfoTab] = useState("activity")
   const [localTableData, setLocalTableData] = useState<TableRow[]>(tableData)
@@ -266,6 +274,45 @@ Format each proposal as a separate markdown code block with a clear title header
     a.click()
     URL.revokeObjectURL(url)
   }
+
+  const legacyRecommendations = (
+    <>
+                {panelStates?.recommendations ?? (localRecommendations.length === 0 ? <EmptyPanel text="No recommendations" /> : null)}
+                {!panelStates?.recommendations && localRecommendations.map((rec) => (
+                  <div key={rec.id} className="rounded-lg border border-border bg-secondary/20 p-3 group">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm font-medium text-foreground">{rec.title}</p>
+                      <div className="flex items-center gap-1 shrink-0">
+                        <ImpactBadge impact={rec.impact} />
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                              <MoreVertical className="h-3.5 w-3.5" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleCreateTaskFromRec(rec)}>
+                              <ClipboardList className="h-3.5 w-3.5" />Create Task
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleScheduleActionFromRec(rec)}>
+                              <Calendar className="h-3.5 w-3.5" />Schedule Action
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleAssignToAgent(rec)}>
+                              <UserPlus className="h-3.5 w-3.5" />Assign to Agent
+                            </DropdownMenuItem>
+                            <DropdownMenuItem className="gap-2 text-muted-foreground cursor-pointer" onClick={() => handleDismissRec(rec.id)}>
+                              <CheckCircle className="h-3.5 w-3.5" />Dismiss
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{rec.description}</p>
+                    <Badge variant="outline" className="badge-neutral mt-2 text-[10px]">{rec.category}</Badge>
+                  </div>
+                ))}
+    </>
+  )
 
   return (
     <div className="space-y-6">
@@ -418,7 +465,13 @@ Format each proposal as a separate markdown code block with a clear title header
                 </TabsContent>
 
                 <TabsContent value="summary" className="mt-4 pb-4">
-                  {panelStates?.summary ?? (
+                  {insightsModule ? (
+                    <InsightsSummary module={insightsModule} title={title} fallback={panelStates?.summary ?? (
+                      <div className="surface-sunken rounded-lg p-4">
+                        <p className="text-sm leading-relaxed text-muted-foreground">{summary}</p>
+                      </div>
+                    )} />
+                  ) : panelStates?.summary ?? (
                   <div className="surface-sunken rounded-lg p-4">
                     <p className="text-sm leading-relaxed text-muted-foreground">{summary}</p>
                   </div>
@@ -470,40 +523,9 @@ Format each proposal as a separate markdown code block with a clear title header
                   {actionFeedback}
                 </div>
               )}
-              {panelStates?.recommendations ?? (localRecommendations.length === 0 ? <EmptyPanel text="No recommendations" /> : null)}
-              {!panelStates?.recommendations && localRecommendations.map((rec) => (
-                <div key={rec.id} className="rounded-lg border border-border bg-secondary/20 p-3 group">
-                  <div className="flex items-start justify-between gap-2">
-                    <p className="text-sm font-medium text-foreground">{rec.title}</p>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <ImpactBadge impact={rec.impact} />
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon-sm" className="opacity-0 group-hover:opacity-100 transition-opacity">
-                            <MoreVertical className="h-3.5 w-3.5" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-44">
-                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleCreateTaskFromRec(rec)}>
-                            <ClipboardList className="h-3.5 w-3.5" />Create Task
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleScheduleActionFromRec(rec)}>
-                            <Calendar className="h-3.5 w-3.5" />Schedule Action
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 cursor-pointer" onClick={() => handleAssignToAgent(rec)}>
-                            <UserPlus className="h-3.5 w-3.5" />Assign to Agent
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="gap-2 text-muted-foreground cursor-pointer" onClick={() => handleDismissRec(rec.id)}>
-                            <CheckCircle className="h-3.5 w-3.5" />Dismiss
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-                  <p className="mt-1 text-xs text-muted-foreground">{rec.description}</p>
-                  <Badge variant="outline" className="badge-neutral mt-2 text-[10px]">{rec.category}</Badge>
-                </div>
-              ))}
+              {insightsModule ? (
+                <InsightsRecommendations module={insightsModule} title={title} fallback={legacyRecommendations} />
+              ) : legacyRecommendations}
             </CardContent>
           </Card>
         </div>

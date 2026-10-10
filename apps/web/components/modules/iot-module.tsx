@@ -178,6 +178,7 @@ export function IoTModule() {
     return (
         <ModuleLayout
             title="IoT & Device Management"
+            insightsModule="iot"
             icon={<Cpu className="h-5 w-5" />}
             subtitle="Device fleet, sensor telemetry, and IoT connectivity status"
             headerActions={

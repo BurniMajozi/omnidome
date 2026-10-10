@@ -104,6 +104,7 @@ export function InventoryModule() {
     return (
         <ModuleLayout
             title="Inventory & Stock Management"
+            insightsModule="inventory"
             icon={<Package className="h-5 w-5" />}
             subtitle="Stock levels, procurement, warehouse, and asset tracking"
             flashcardKPIs={flashcardKPIs}

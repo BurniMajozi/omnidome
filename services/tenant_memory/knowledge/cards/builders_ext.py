@@ -816,7 +816,7 @@ def portal_page_card(row: dict, content: Any, as_of: Optional[datetime]) -> Opti
     lines += ["", "## Page copy"] + [f"- {_s(p, 400)}" for p in parts[:80]]
     md = frontmatter("portal_page", pid, "portal", as_of, ["portal", "public", str(row.get("page_type") or "landing")], {"page_id": pid}) + "\n".join(lines) + "\n"
     return Card("portal_page", pid, "portal", f"Portal page: {_s(row.get('title'), 100)}", md, as_of, ["portal", "public"], IMPORTANCE["normal"],
-                {"deep_link": f"/dashboard/portal?page={pid}"})
+                {"deep_link": f"/dashboard?section=portal&sub=website&page={pid}"})
 
 
 def portal_submissions_digest_card(month: str, rows: list[dict], as_of: Optional[datetime]) -> Card:

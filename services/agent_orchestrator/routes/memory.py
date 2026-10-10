@@ -41,11 +41,26 @@ MEMORY_URL = os.getenv("TENANT_MEMORY_SERVICE_URL", "http://tenant_memory:8025")
 class SkillCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=120)
     description: str = Field(..., min_length=1)
-    source_agent_type: str = Field(..., min_length=1, max_length=80)
+    source_agent_type: str = Field(default="shared", min_length=1, max_length=80)
     target_agent_types: List[str] = Field(default_factory=list)
-    guidance_prompt: str
+    guidance_prompt: str = ""
     tools_required: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    # Skills v2 (docs/skills.md). All optional so the first OKF form keeps working.
+    instructions: Optional[str] = None
+    slug: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    tools_optional: Optional[List[str]] = None
+    inputs: Optional[List[Dict[str, Any]]] = None
+    triggers: Optional[List[str]] = None
+    examples: Optional[List[Dict[str, Any]]] = None
+    safety_class: Optional[str] = None
+    version: Optional[str] = None
+    changelog: Optional[str] = None
+    visibility_roles: Optional[List[str]] = None
+    scope: Optional[str] = None
+    status: Optional[str] = None
 
 
 class SkillTransferRequest(BaseModel):
@@ -74,16 +89,10 @@ def require_skill_admin(ctx: AuthContext = Depends(get_auth_context)) -> AuthCon
     return ctx
 
 
-def skill_forward_headers(ctx: AuthContext) -> Dict[str, str]:
-    roles = set(ctx.roles)
-    if ctx.is_platform_admin:
-        roles.add("platform_admin")
-    return {
-        "X-Tenant-Id": str(ctx.tenant_id),
-        "X-User-Id": str(ctx.user_id or ctx.tenant_id),
-        "X-Roles": ",".join(sorted(roles)),
-        "X-Permissions": ",".join(ctx.permissions),
-    }
+def skill_forward_headers(ctx: AuthContext, method: str = "GET", path: str = "/api/v1/skills") -> Dict[str, str]:
+    """Identity for tenant memory: signed when INTERNAL_AUTH_SECRET is set, plain headers otherwise."""
+    from services.agent_orchestrator.routes.skills import signed_headers
+    return signed_headers(method, path, ctx)
 
 
 @router.post("/strategy", status_code=status.HTTP_201_CREATED)
@@ -247,16 +256,26 @@ async def update_entry(
 async def list_skills(
     agent_type: Optional[str] = Query(None),
     ctx: AuthContext = Depends(get_auth_context),
+    scope: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+    category: Optional[str] = Query(None),
+    safety_class: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    mine: bool = Query(False),
 ):
-    """List active OKF skills for this tenant, optionally filtered by agent type."""
-    headers = {"X-Tenant-Id": str(ctx.tenant_id), "X-User-Id": str(ctx.user_id or ctx.tenant_id)}
-    params = {}
-    if agent_type:
-        params["target_agent_type"] = agent_type
+    """List skills this user can see (platform library, organisation, team, their own), with filters."""
+    params: Dict[str, Any] = {}
+    for key, value in (("target_agent_type", agent_type), ("scope", scope), ("status", status_filter), ("category", category),
+                       ("safety_class", safety_class), ("q", q)):
+        if value:
+            params[key] = value
+    if mine:
+        params["mine"] = "true"
 
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
-            resp = await client.get(f"{MEMORY_URL}/api/v1/skills", headers=headers, params=params)
+            resp = await client.get(f"{MEMORY_URL}/api/v1/skills", headers=skill_forward_headers(ctx, "GET", "/api/v1/skills"),
+                                    params=params)
             resp.raise_for_status()
             return resp.json()
     except Exception as exc:
@@ -267,19 +286,14 @@ async def list_skills(
 @router.post("/skills", status_code=status.HTTP_201_CREATED)
 async def create_skill(
     payload: SkillCreateRequest,
-    ctx: AuthContext = Depends(require_skill_admin),
+    ctx: AuthContext = Depends(get_auth_context),
 ):
-    """Register a new OKF skill for this tenant."""
-    headers = skill_forward_headers(ctx)
-    body = {
-        "skill_name": payload.name,
-        "description": payload.description,
-        "source_agent_type": payload.source_agent_type,
-        "target_agent_types": payload.target_agent_types,
-        "guidance_prompt": payload.guidance_prompt,
-        "tools_required": payload.tools_required,
-        "metadata": payload.metadata,
-    }
+    """Register a new skill. Admins publish organisation skills; analysts and managers create private skills and drafts
+    (tenant memory enforces the tiers)."""
+    headers = skill_forward_headers(ctx, "POST", "/api/v1/skills")
+    body = payload.model_dump(exclude_none=True)
+    body["skill_name"] = body.pop("name")
+    body["guidance_prompt"] = payload.instructions or payload.guidance_prompt
 
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
@@ -297,7 +311,7 @@ async def deactivate_skill(
     ctx: AuthContext = Depends(require_skill_admin),
 ):
     """Deactivate an OKF skill so agents stop loading it."""
-    headers = skill_forward_headers(ctx)
+    headers = skill_forward_headers(ctx, "POST", f"/api/v1/skills/{skill_id}/deactivate")
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(f"{MEMORY_URL}/api/v1/skills/{skill_id}/deactivate", headers=headers)
@@ -319,7 +333,7 @@ async def transfer_skill(
     ctx: AuthContext = Depends(require_skill_admin),
 ):
     """Transfer or assign an OKF skill to another agent type."""
-    headers = skill_forward_headers(ctx)
+    headers = skill_forward_headers(ctx, "POST", f"/api/v1/skills/{skill_id}/transfer")
     try:
         async with httpx.AsyncClient(timeout=4.0) as client:
             resp = await client.post(

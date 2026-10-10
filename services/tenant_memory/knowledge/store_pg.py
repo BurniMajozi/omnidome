@@ -131,6 +131,9 @@ def access_clause(access: AccessScope, alias: str = "c") -> tuple[str, dict]:
         params["user_id"] = access.user_id
     else:
         clauses.append(f"{a}.visibility <> 'private'")
+    if access.modules is not None:                       # panel gate, deny-by-default (mirrors AccessScope.allows)
+        clauses.append(f"split_part({a}.module, '.', 1) = ANY(CAST(:acc_modules AS text[]))")
+        params["acc_modules"] = sorted(access.modules)
     if not access.is_admin:
         clauses.append(f"({a}.required_permission IS NULL OR lower({a}.required_permission) = ANY(CAST(:perms AS text[])))")
         clauses.append(f"(cardinality({a}.required_roles) = 0 OR {a}.required_roles && CAST(:roles AS text[]))")
@@ -359,6 +362,14 @@ class PgVectorStore(KnowledgeStore):
                 "UPDATE knowledge_chunks SET deleted_at = now() WHERE tenant_id = CAST(:t AS uuid) AND source_type = :st "
                 "AND source_id = :sid AND deleted_at IS NULL AND NOT (chunk_no = ANY(CAST(:keep AS int[])))"),
                 {"t": tenant, "st": source_type, "sid": source_id, "keep": list(keep_chunk_nos)})
+        return r.rowcount
+
+    async def refresh_valid_to(self, tenant, source_type, source_id, valid_to):
+        async with self._tx(tenant) as c:
+            r = await c.execute(text(
+                "UPDATE knowledge_chunks SET valid_to = :vt WHERE tenant_id = CAST(:t AS uuid) AND source_type = :st "
+                "AND source_id = :sid AND deleted_at IS NULL AND valid_to IS DISTINCT FROM :vt"),
+                {"t": tenant, "st": source_type, "sid": source_id, "vt": valid_to})
         return r.rowcount
 
     async def tombstone_source(self, tenant, source_type, source_id):

@@ -455,6 +455,9 @@ async def execute_analysis(tenant_id: uuid.UUID, analysis_id: uuid.UUID) -> None
         row.run_count = (row.run_count or 0) + 1
         row.last_run_at = ac.now()
         await db.commit()
+        if row.status == "done":
+            from services.fno_intelligence import bi_artifact_events
+            bi_artifact_events.notify_system(tenant_id, getattr(row, "created_by", None), "campaign_analysis", row.id)
 
 
 def _item_dict_full(i: AiCampaignItem) -> dict:

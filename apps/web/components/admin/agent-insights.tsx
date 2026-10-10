@@ -20,7 +20,6 @@ import {
   Loader2,
   Lock,
   PenLine,
-  Plus,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -33,26 +32,22 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { KnowledgeIndexSection } from "@/components/admin/knowledge-index"
+import { DreamStateSection } from "@/components/admin/dream-state"
 import {
   archiveMemoryEntry,
   approveApproval,
-  createOKFSkill,
   createStrategyEntry,
-  deactivateOKFSkill,
   dryRunHousekeeping,
   getCompactionStats,
   getHousekeepingStatus,
   getLlmUsage,
   getWorkflowRun,
-  listAgents,
   listApprovals,
   listMemoryEntries,
-  listOKFSkills,
   listWorkflowRuns,
   recallMemory,
   rejectApproval,
   runHousekeeping,
-  transferOKFSkill,
   type AgentUsage,
   type ApprovalItem,
   type CompactionStats,
@@ -61,7 +56,6 @@ import {
   type MemoryEntry,
   type MemoryRecallResult,
   type ModelUsage,
-  type OKFSkill,
   type ToolPolicyInfo,
   type WorkflowRunDetail,
   type WorkflowRunSummary,
@@ -569,6 +563,8 @@ export function MemoryManagementView() {
 
       <KnowledgeIndexSection />
 
+      <DreamStateSection />
+
       {/* Memory Entries List */}
       <div className="space-y-2">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
@@ -616,239 +612,9 @@ export function MemoryManagementView() {
   )
 }
 
-// ── OKF Skills Management (M2) ─────────────────────────────────────────────
-
-export function OKFSkillsView() {
-  const [skills, setSkills] = useState<OKFSkill[]>([])
-  const [agentOptions, setAgentOptions] = useState<Array<{ agent_type: string; name?: string | null; tools: string[] }>>([])
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [newName, setNewName] = useState("")
-  const [newDesc, setNewDesc] = useState("")
-  const [newSource, setNewSource] = useState("")
-  const [newTarget, setNewTarget] = useState("")
-  const [newPrompt, setNewPrompt] = useState("")
-  const [newTools, setNewTools] = useState("")
-  const [transferringId, setTransferringId] = useState<string | null>(null)
-  const [transferTarget, setTransferTarget] = useState("")
-  const [msg, setMsg] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setLoadError(null)
-    try {
-      const [items, agents] = await Promise.all([listOKFSkills(), listAgents()])
-      setSkills(items)
-      setAgentOptions(agents.map(({ agent_type, name, tools }) => ({ agent_type, name, tools })))
-    } catch (err) {
-      setLoadError(err instanceof Error ? err.message : "Could not load OKF skills")
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  const handleCreate = async () => {
-    if (!newName.trim() || !newDesc.trim() || !newPrompt.trim() || !newSource || !newTarget) return
-    const requiredTools = newTools.split(",").map((name) => name.trim()).filter(Boolean)
-    const targetTools = agentOptions.find((agent) => agent.agent_type === newTarget)?.tools || []
-    const missingTools = requiredTools.filter((name) => !targetTools.includes(name))
-    if (missingTools.length) {
-      setMsg(`Target agent does not have these tools: ${missingTools.join(", ")}`)
-      return
-    }
-    try {
-      await createOKFSkill({
-        name: newName.trim(),
-        description: newDesc.trim(),
-        source_agent_type: newSource,
-        target_agent_types: [newTarget],
-        guidance_prompt: newPrompt.trim(),
-        tools_required: requiredTools,
-      })
-      setCreating(false)
-      setNewName("")
-      setNewDesc("")
-      setNewPrompt("")
-      setNewTools("")
-      setMsg("Skill registered successfully")
-      await load()
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Failed to register skill")
-    }
-  }
-
-  const handleDeactivate = async (id: string) => {
-    try {
-      await deactivateOKFSkill(id)
-      setSkills((prev) => prev.filter((s) => s.id !== id))
-      setMsg("Skill deactivated")
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Deactivate failed")
-    }
-  }
-
-  const handleTransfer = async (id: string) => {
-    try {
-      await transferOKFSkill(id, transferTarget)
-      setTransferringId(null)
-      setMsg(`Skill transferred to ${transferTarget}`)
-      await load()
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Transfer failed")
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold">OKF Dynamic Skills Runtime</h2>
-          <p className="text-xs text-muted-foreground">
-            Registered guidance for selected agents. Skills use only tools already assigned to each agent.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setCreating(!creating)} className="text-xs gap-1">
-          <Plus className="h-3.5 w-3.5" />
-          {creating ? "Cancel" : "Register Skill"}
-        </Button>
-      </div>
-
-      {msg && (
-        <div className="rounded-lg border border-primary/30 bg-primary/10 p-3 text-xs text-primary flex items-center justify-between">
-          <span>{msg}</span>
-          <button type="button" onClick={() => setMsg(null)} className="text-muted-foreground hover:text-foreground">✕</button>
-        </div>
-      )}
-
-      {/* Registration Form */}
-      {creating && (
-        <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-          <h3 className="text-sm font-semibold">Register New Agent Skill</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] font-medium text-muted-foreground">Skill Name</label>
-              <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. churn_prevention_discount" className="h-8 text-xs mt-1" />
-            </div>
-            <div>
-              <label className="text-[11px] font-medium text-muted-foreground">Source agent</label>
-              <select value={newSource} onChange={(e) => setNewSource(e.target.value)} className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs mt-1">
-                <option value="">Select source agent</option>
-                {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[11px] font-medium text-muted-foreground">Agent to receive skill</label>
-              <select value={newTarget} onChange={(e) => setNewTarget(e.target.value)} className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs mt-1">
-                <option value="">Select target agent</option>
-                {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="text-[11px] font-medium text-muted-foreground">Description</label>
-            <Input value={newDesc} onChange={(e) => setNewDesc(e.target.value)} placeholder="Brief summary of what this skill enables" className="h-8 text-xs mt-1" />
-          </div>
-          <div>
-            <label className="text-[11px] font-medium text-muted-foreground">Guidance Prompt (Injected into Agent Prompt)</label>
-            <textarea
-              value={newPrompt}
-              onChange={(e) => setNewPrompt(e.target.value)}
-              placeholder="Instructions and policies for the agent when applying this skill..."
-              className="w-full h-20 rounded-md border border-border bg-background p-2 text-xs mt-1"
-            />
-          </div>
-          <div>
-            <label className="text-[11px] font-medium text-muted-foreground">Existing tools required (optional)</label>
-            <Input value={newTools} onChange={(e) => setNewTools(e.target.value)} placeholder="Tool IDs already assigned to the target agent" className="h-8 text-xs mt-1" />
-          </div>
-          <Button size="sm" onClick={() => void handleCreate()} disabled={!newName.trim() || !newDesc.trim() || !newPrompt.trim() || !newSource || !newTarget} className="text-xs">
-            Save &amp; Activate Skill
-          </Button>
-        </div>
-      )}
-
-      {/* Skills Table */}
-      {loading ? (
-        <div className="flex items-center justify-center py-10">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-        </div>
-      ) : loadError ? (
-        <div className="rounded-lg border border-destructive/40 p-4 text-xs text-destructive">
-          {loadError} <Button size="sm" variant="outline" onClick={() => void load()} className="ml-2">Retry</Button>
-        </div>
-      ) : skills.length === 0 ? (
-        <p className="text-xs text-muted-foreground py-6 text-center border rounded-lg">No active OKF skills registered.</p>
-      ) : (
-        <div className="divide-y divide-border rounded-lg border border-border">
-          {skills.map((s) => (
-            <div key={s.id} className="p-3 text-xs space-y-2 hover:bg-muted/20">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-foreground font-mono">{s.skill_name}</span>
-                  <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">Active</Badge>
-                  <span className="text-muted-foreground text-[11px]">{s.description}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setTransferringId(transferringId === s.id ? null : s.id)}
-                    className="h-7 text-xs"
-                  >
-                    Transfer
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void handleDeactivate(s.id)}
-                    className="h-7 text-xs text-muted-foreground hover:text-destructive"
-                  >
-                    Deactivate
-                  </Button>
-                </div>
-              </div>
-
-              {transferringId === s.id && (
-                <div className="flex items-center gap-2 rounded bg-muted/40 p-2 text-xs">
-                  <span>Transfer to:</span>
-                  <select
-                    value={transferTarget}
-                    onChange={(e) => setTransferTarget(e.target.value)}
-                    className="h-7 w-40 rounded-md border border-border bg-background px-2 text-xs"
-                  >
-                    <option value="">Select agent</option>
-                    {agentOptions.map((agent) => <option key={agent.agent_type} value={agent.agent_type}>{agent.name || agent.agent_type}</option>)}
-                  </select>
-                  <Button size="sm" onClick={() => void handleTransfer(s.id)} disabled={!transferTarget} className="h-7 text-xs">
-                    Confirm
-                  </Button>
-                </div>
-              )}
-
-              <div className="rounded bg-muted/30 p-2 text-[11px] text-muted-foreground font-mono">
-                {s.guidance_prompt}
-              </div>
-
-              <div className="flex flex-wrap gap-2 text-[10px] text-muted-foreground">
-                <span>Source: {s.source_agent_type}</span>
-                <span>Targets: {(s.target_agent_types || []).join(", ") || "(all agents)"}</span>
-                {(s.tools_required || []).length > 0 && (
-                  <span>· Tools: {(s.tools_required || []).join(", ")}</span>
-                )}
-                <span>· Created: {formatWhen(s.created_at)}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
+// ── OKF Skills (docs/skills.md) ─────────────────────────────────────────────
+// The panel moved to components/admin/okf-skills.tsx; re-exported so existing imports keep working.
+export { OKFSkillsView } from "@/components/admin/okf-skills"
 
 // ── Stage 3: Agent Approvals Queue View (Spec A8) ──────────────────────────
 

@@ -611,10 +611,18 @@ async def verify_agent_response(
     draft_response: str,
     tool_records: Optional[List[Dict[str, Any]]] = None,
     agent_type: str = "assistant",
+    evidence: Optional[List[Dict[str, Any]]] = None,
 ) -> JevVerificationVerdict:
     """Verify that an agent's drafted answer actually answers the customer, is strictly
-    grounded in retrieved tool data without hallucination, and adheres to ISP safety policy."""
+    grounded in retrieved data (tool results AND the injected knowledge/memory `evidence`) without
+    hallucination, and adheres to ISP safety policy."""
+    from services.agent_orchestrator import jev_retrieval
     provider, api_key, endpoint = _get_credentials()
+    if not jev_retrieval.egress_allowed():
+        return JevVerificationVerdict(
+            passed=True, action="accept", answers_inquiry=1.0, grounded_in_facts=1.0, policy_compliant=1.0,
+            reason="Verification skipped (JEV_DATA_EGRESS=false: no tenant data leaves the platform).",
+            critique=None, evaluated_by_jev=False)
     if not settings.jev_gate_enabled or not api_key:
         return JevVerificationVerdict(
             passed=True,
@@ -643,6 +651,8 @@ async def verify_agent_response(
         "customer_inquiry": customer_message[:1500],
         "agent_type": agent_type,
         "tool_records": compact_records,
+        "evidence": [{"id": str(e.get("id", ""))[:40], "title": str(e.get("title", ""))[:160],
+                      "excerpt": str(e.get("excerpt", ""))[:450]} for e in (evidence or [])[:10]],
         "draft_response": draft_response[:2500],
         "isp_policy": (
             "ISP communication standards: Agents must be professional, polite, truthful, and helpful. "
@@ -659,7 +669,7 @@ async def verify_agent_response(
         },
         "grounded_in_facts": {
             "type": "noul",
-            "instructions": "All specific numbers, currency amounts, dates, and technical network statuses in `draft_response` are supported by `tool_records` or standard knowledge, without hallucinating non-existent facts or false outage claims.",
+            "instructions": "All specific numbers, currency amounts, dates, and technical network statuses in `draft_response` are supported by `tool_records`, by `evidence` (company knowledge and memory that was provided to the agent) or by standard knowledge, without hallucinating non-existent facts or false outage claims.",
         },
         "policy_compliant": {
             "type": "noul",

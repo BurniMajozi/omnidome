@@ -234,6 +234,7 @@ export function RetentionModule({ activeTabOverride }: { activeTabOverride?: str
     return (
         <ModuleLayout
             title="Retention"
+            insightsModule="retention"
             icon={<Heart className="h-5 w-5" />}
             subtitle="Churn prevention, win-back campaigns, and loyalty management"
             headerActions={

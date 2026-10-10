@@ -271,7 +271,7 @@ def research_card(run: dict, as_of: Optional[datetime]) -> Card:
             lines.append(f"- [{k}] {clip(s.get('title') or s.get('url') or '', 120)} - {s.get('url', '')}")
     md = frontmatter("research", rid, "analytics", as_of, ["research", "bi-studio"], {"run_id": rid}) + "\n".join(lines) + "\n"
     return Card("research", rid, "analytics", f"Research {clip(scrub(run.get('question')), 90)}", md, as_of,
-                ["research", "bi-studio"], IMPORTANCE["high"], {"deep_link": f"/dashboard/analytics?research={rid}",
+                ["research", "bi-studio"], IMPORTANCE["high"], {"deep_link": f"/dashboard?section=analytics&sub=research&research={rid}",
                                                               "cited_urls": [s.get("url") for s in srcs.values() if s.get("url")][:10]})
 
 
@@ -302,7 +302,7 @@ def competitor_card(comp: dict, snapshot: Optional[dict], changes: list[dict], a
                          + (f" {ch['source_url']}" if ch.get("source_url") else ""))
     md = frontmatter("competitor", cid, "analytics", as_of, ["competitor", "bi-studio"], {"competitor_id": cid}) + "\n".join(lines) + "\n"
     return Card("competitor", cid, "analytics", f"Competitor {clip(comp.get('name'), 80)}", md, as_of, ["competitor", "bi-studio"],
-                IMPORTANCE["high"], {"deep_link": f"/dashboard/analytics?competitor={cid}", "website": comp.get("website")})
+                IMPORTANCE["high"], {"deep_link": f"/dashboard?section=analytics&sub=competitors&competitor={cid}", "website": comp.get("website")})
 
 
 def campaign_analysis_card(a: dict, as_of: Optional[datetime]) -> Card:
@@ -331,7 +331,7 @@ def campaign_analysis_card(a: dict, as_of: Optional[datetime]) -> Card:
         edges.append(Edge("campaign_analysis", aid, "competitor", str(a["competitor_id"]), "analyses", 1.0, as_of))
     md = frontmatter("campaign_analysis", aid, "analytics", as_of, ["campaign-analysis", "sentiment", "bi-studio"], {"analysis_id": aid}) + "\n".join(lines) + "\n"
     return Card("campaign_analysis", aid, "analytics", f"Campaign analysis {clip(scrub(a.get('name')), 80)}", md, as_of,
-                ["campaign-analysis", "bi-studio"], IMPORTANCE["high"], {"deep_link": f"/dashboard/analytics?analysis={aid}"}, edges)
+                ["campaign-analysis", "bi-studio"], IMPORTANCE["high"], {"deep_link": f"/dashboard?section=analytics&sub=campaign-analysis&analysis={aid}"}, edges)
 
 
 # ── Tenant memory + OKF skills ─────────────────────────────────────────────
@@ -371,15 +371,25 @@ def memory_summary_card(s: dict, as_of: Optional[datetime]) -> Card:
 
 
 def skill_card(sk: dict, as_of: Optional[datetime]) -> Card:
-    """Procedural memory: embeds what a skill is FOR (description, tools, targets), never its guidance prompt."""
+    """Procedural memory: embeds what a skill is FOR (description, triggers, tools, safety), never its instructions."""
     kid = str(sk["id"])
-    lines = [f"# Skill: {sk.get('skill_name')} v{sk.get('version')}", "", f"- Category: {sk.get('category')}  |  Source agent: {sk.get('source_agent_type')}",
+    scope = sk.get("scope") or "tenant"
+    triggers = [clip(scrub(t), 80) for t in (sk.get("triggers") or [])[:12]]
+    lines = [f"# Skill: {sk.get('skill_name')} v{sk.get('version')}", "",
+             f"- Category: {sk.get('category')}  |  Scope: {scope}  |  Safety: {sk.get('safety_class') or 'read_only'}",
              f"- Available to: {', '.join(sk.get('target_agent_types') or []) or 'all agents'}",
-             f"- Tools: {', '.join(sk.get('tools_required') or []) or 'none'}", "", "## What it does", clip(scrub(sk.get("description")), 1200)]
-    md = frontmatter("skill", kid, "memory", as_of, ["skill", "procedural", str(sk.get("category") or "")],
-                     {"skill_name": sk.get("skill_name"), "memory_tier": "procedural"}) + "\n".join(lines) + "\n"
+             f"- Tools: {', '.join(sk.get('tools_required') or []) or 'none'}"]
+    if triggers:
+        lines.append(f"- Triggers: {'; '.join(triggers)}")
+    lines += ["", "## When to use it", clip(scrub(sk.get("description")), 1200)]
+    tags = ["skill", "procedural", str(sk.get("category") or "")] + [str(t) for t in (sk.get("tags") or [])[:6]]
+    md = frontmatter("skill", kid, "memory", as_of, tags,
+                     {"skill_name": sk.get("skill_name"), "memory_tier": "procedural", "scope": scope,
+                      "slug": sk.get("slug")}) + "\n".join(lines) + "\n"
+    roles = [str(r) for r in (sk.get("visibility_roles") or [])] if scope == "team" else []
     return Card("skill", kid, "memory", f"Skill {sk.get('skill_name')}", md, as_of, ["skill", "procedural"], IMPORTANCE["normal"],
-                {"deep_link": "/dashboard/admin?tab=skills", "skill_name": sk.get("skill_name")}, required_roles=[], visibility="tenant")
+                {"deep_link": "/dashboard/admin?tab=skills", "skill_name": sk.get("skill_name"), "slug": sk.get("slug"),
+                 "scope": scope}, required_roles=roles, visibility="team" if roles else "tenant")
 
 
 # ── Metric facts (deterministic numbers, rendered as context cards) ────────

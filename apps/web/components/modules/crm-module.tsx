@@ -1,5 +1,7 @@
 "use client"
 
+import { InsightsRecommendations } from "@/components/dashboard/insights-card"
+
 import type { JSX } from "react"
 import { useEffect, useState, useCallback, useMemo } from "react"
 import {
@@ -754,9 +756,13 @@ export function CrmModule() {
                   <Sparkles className="h-4 w-4 text-emerald-400" />
                   <CardTitle className="text-sm font-semibold text-foreground">Agent Recommendations</CardTitle>
                 </div>
-                <CardDescription>Automated retention & sales actions</CardDescription>
+                <CardDescription>Personalised for you, from your CRM data</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
+                <InsightsRecommendations
+                  module="crm"
+                  title="CRM"
+                  fallback={<>
                 {aiRecommendations.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-10 text-center">No high-risk churn signals detected.</p>
                 ) : (
@@ -772,6 +778,8 @@ export function CrmModule() {
                     </div>
                   ))
                 )}
+                  </>}
+                />
               </CardContent>
             </Card>
           </div>

@@ -214,6 +214,7 @@ export function ServiceModule() {
       {activeTab === "operations" && settled && (
         <ModuleLayout
           title="Service"
+          insightsModule="support"
           icon={<Headset className="h-5 w-5" />}
           subtitle="Tickets, SLAs, field service, and customer satisfaction scores"
           headerActions={

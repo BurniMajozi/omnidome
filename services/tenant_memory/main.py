@@ -17,6 +17,9 @@ from services.common.entitlements import EntitlementGuard
 from services.common.middleware import configure_production
 from services.tenant_memory.database import init_tables
 from services.tenant_memory.knowledge.routes import router as knowledge_router
+from services.tenant_memory.knowledge.personal_routes import router as personal_router
+from services.tenant_memory.skills import store as skills_store
+from services.tenant_memory.skills.router import router as skills_router
 from services.tenant_memory.schemas import (
     AgentSkillCreate,
     AgentSkillListResponse,
@@ -43,6 +46,8 @@ app = FastAPI(
 guard = EntitlementGuard(module_id="memory")
 configure_production(app)
 app.include_router(knowledge_router)
+app.include_router(personal_router)
+app.include_router(skills_router)
 
 
 def require_skill_admin(ctx: AuthContext = Depends(get_auth_context)) -> AuthContext:
@@ -61,6 +66,9 @@ async def startup() -> None:
         async with session_scope() as session:
             await init_tables(session)
         logger.info("Tenant memory tables ensured")
+    if os.getenv("SKILLS_AUTO_MIGRATE", "true").lower() == "true":
+        # Extends tenant_agent_skills and loads the platform skill library; idempotent, advisory-locked, never fatal.
+        logger.info("Skills migration/seed: %s", await skills_store.bootstrap(session_scope))
 
 
 @app.middleware("http")
@@ -422,12 +430,13 @@ async def recall(
 async def _hybrid_recall(q: str, module: Optional[str], limit: int, ctx: AuthContext) -> tuple[list[dict], Optional[str]]:
     """Fail-open: knowledge hits are a help, never a dependency of recall."""
     try:
-        from services.tenant_memory.knowledge.kdata import AccessScope, Filters
+        from services.tenant_memory.knowledge.access import load_scope
+        from services.tenant_memory.knowledge.kdata import Filters
         from services.tenant_memory.knowledge.retrieval import KnowledgeRetriever
         from services.tenant_memory.knowledge.routes import get_runtime
 
         store, embedder = get_runtime()
-        res = await KnowledgeRetriever(store, embedder).search(q, AccessScope.from_ctx(ctx), Filters(modules=[module] if module else None), k=limit)
+        res = await KnowledgeRetriever(store, embedder).search(q, await load_scope(ctx), Filters(modules=[module] if module else None), k=limit)
         return [{**c, "markdown": h.chunk.markdown} for c, h in zip(res.citations(), res.hits)], res.degraded
     except HTTPException:
         return [], "knowledge layer not configured"
@@ -438,102 +447,8 @@ async def _hybrid_recall(q: str, module: Optional[str], limit: int, ctx: AuthCon
 
 # ── OKF Skill Sharing Endpoints ─────────────────────────────────────────────
 
-@app.post("/api/v1/skills", response_model=AgentSkillRead, status_code=status.HTTP_201_CREATED)
-async def create_agent_skill(
-    payload: AgentSkillCreate,
-    ctx: AuthContext = Depends(require_skill_admin),
-    session: AsyncSession = Depends(get_async_session),
-):
-    skill_id = uuid.uuid4()
-    result = await session.execute(
-        text(
-            """
-            insert into tenant_agent_skills (
-                id, tenant_id, skill_name, description, category, source_agent_type,
-                target_agent_types, protocol_schema, tools_required, guidance_prompt,
-                version, metadata, is_active
-            )
-            values (
-                :id, :tenant_id, :skill_name, :description, :category, :source_agent_type,
-                :target_agent_types, :protocol_schema, :tools_required, :guidance_prompt,
-                :version, :metadata, true
-            )
-            on conflict (tenant_id, skill_name, version)
-            do update set
-                description = excluded.description,
-                category = excluded.category,
-                source_agent_type = excluded.source_agent_type,
-                target_agent_types = excluded.target_agent_types,
-                protocol_schema = excluded.protocol_schema,
-                tools_required = excluded.tools_required,
-                guidance_prompt = excluded.guidance_prompt,
-                metadata = excluded.metadata,
-                is_active = true,
-                updated_at = current_timestamp
-            returning *
-            """
-        ).bindparams(
-            bindparam("target_agent_types", type_=ARRAY(String())),
-            bindparam("tools_required", type_=ARRAY(String())),
-            bindparam("protocol_schema", type_=JSONB),
-            bindparam("metadata", type_=JSONB),
-        ),
-        {
-            "id": skill_id,
-            "tenant_id": ctx.tenant_id,
-            "skill_name": payload.skill_name,
-            "description": payload.description,
-            "category": payload.category,
-            "source_agent_type": payload.source_agent_type,
-            "target_agent_types": payload.target_agent_types,
-            "protocol_schema": payload.protocol_schema,
-            "tools_required": payload.tools_required,
-            "guidance_prompt": payload.guidance_prompt,
-            "version": payload.version,
-            "metadata": payload.metadata,
-        },
-    )
-    row = result.mappings().one()
-    logger.info("OKF skill registered: %s (tenant=%s)", payload.skill_name, ctx.tenant_id)
-    return _skill_from_row(row)
-
-
-@app.get("/api/v1/skills", response_model=AgentSkillListResponse)
-async def list_agent_skills(
-    source_agent_type: Optional[str] = Query(None),
-    target_agent_type: Optional[str] = Query(None),
-    category: Optional[str] = Query(None),
-    q: Optional[str] = Query(None),
-    ctx: AuthContext = Depends(get_auth_context),
-    session: AsyncSession = Depends(get_async_session),
-):
-    clauses = ["tenant_id = :tenant_id", "is_active = true"]
-    params: dict[str, Any] = {"tenant_id": ctx.tenant_id}
-
-    if source_agent_type:
-        clauses.append("source_agent_type = :source_agent_type")
-        params["source_agent_type"] = source_agent_type
-    if target_agent_type:
-        clauses.append("(:target_agent_type = any(target_agent_types) or target_agent_types = '{}'::text[])")
-        params["target_agent_type"] = target_agent_type
-    if category:
-        clauses.append("category = :category")
-        params["category"] = category
-    if q:
-        clauses.append("(skill_name ilike :q or description ilike :q)")
-        params["q"] = f"%{q}%"
-
-    sql = f"""
-        select *
-        from tenant_agent_skills
-        where {' and '.join(clauses)}
-        order by updated_at desc
-    """
-    result = await session.execute(text(sql), params)
-    rows = result.mappings().all()
-    skills = [_skill_from_row(r) for r in rows]
-    return AgentSkillListResponse(items=skills, count=len(skills))
-
+# Create / list / get / edit / activate / deprecate / fork / share / import / export / usage live in skills/router.py.
+# Their paths are the same as the first OKF endpoints, which stay backwards compatible.
 
 @app.post("/api/v1/skills/{skill_id}/transfer", response_model=AgentSkillRead)
 async def transfer_agent_skill(
@@ -621,31 +536,6 @@ async def transfer_agent_skill(
         ctx.tenant_id,
     )
     return _skill_from_row(updated_row)
-
-
-@app.post("/api/v1/skills/{skill_id}/deactivate", response_model=AgentSkillRead)
-async def deactivate_agent_skill(
-    skill_id: uuid.UUID,
-    ctx: AuthContext = Depends(require_skill_admin),
-    session: AsyncSession = Depends(get_async_session),
-):
-    """Stop a skill applying to any agent (the Agent Manager's OKF skills tab).
-    Registering the same name + version again reactivates it."""
-    result = await session.execute(
-        text(
-            """
-            update tenant_agent_skills set is_active = false, updated_at = current_timestamp
-            where id = :id and tenant_id = :tenant_id
-            returning *
-            """
-        ),
-        {"id": skill_id, "tenant_id": ctx.tenant_id},
-    )
-    row = result.mappings().one_or_none()
-    if not row:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-    logger.info("Skill '%s' deactivated (tenant=%s)", row["skill_name"], ctx.tenant_id)
-    return _skill_from_row(row)
 
 
 if __name__ == "__main__":

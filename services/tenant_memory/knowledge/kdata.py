@@ -23,13 +23,15 @@ class AccessScope:
     roles: frozenset = frozenset()
     permissions: frozenset = frozenset()
     is_admin: bool = False
+    # Panel gate. None = not applied (admins, and trusted in-process callers such as the indexer/tests).
+    # A frozenset is the exact list of modules the caller may read; request paths always build one (access.py),
+    # so a missing x-modules fails closed to the always-allowed modules only.
+    modules: Optional[frozenset] = None
 
     @classmethod
     def from_ctx(cls, ctx: Any) -> "AccessScope":
-        roles = frozenset(r.lower() for r in (ctx.roles or []))
-        perms = frozenset(p.lower() for p in (ctx.permissions or []))
-        admin = bool(getattr(ctx, "is_platform_admin", False)) or bool(roles & ADMIN_ROLES)
-        return cls(str(ctx.tenant_id), str(ctx.user_id) if ctx.user_id else None, roles, perms, admin)
+        from services.tenant_memory.knowledge.access import build_scope
+        return build_scope(ctx)
 
     def allows(self, c: "Chunk") -> bool:
         """The single source of truth for visibility; the SQL clause mirrors it."""
@@ -37,6 +39,8 @@ class AccessScope:
             return False
         if c.visibility == "private" and (c.owner_id is None or c.owner_id != self.user_id):
             return False                      # private means the owner only, admins included
+        if self.modules is not None and (c.module or "general").split(".")[0] not in self.modules:
+            return False                      # panel gate (deny-by-default)
         if self.is_admin:
             return True
         if c.required_permission and c.required_permission.lower() not in self.permissions:

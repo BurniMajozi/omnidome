@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageHeader } from "@/components/ui/page-header"
+import { InsightsCard } from "@/components/dashboard/insights-card"
 import { TableShell } from "@/components/ui/table-shell"
 import {
   Receipt,
@@ -304,6 +305,7 @@ export function BillingModule() {
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
+          <InsightsCard module="billing" title="Billing & Collection briefing" />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Revenue Chart */}
             <Card className="border-border bg-card">

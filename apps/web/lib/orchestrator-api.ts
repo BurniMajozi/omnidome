@@ -696,7 +696,13 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const text = await res.text().catch(() => "")
     let detail = text
-    try { detail = JSON.parse(text)?.detail ?? text } catch { /* not JSON */ }
+    try {
+      const parsed = JSON.parse(text)?.detail ?? text
+      // FastAPI validation errors arrive as [{loc, msg}]; show them as readable sentences.
+      detail = Array.isArray(parsed)
+        ? parsed.map((e: { loc?: unknown[]; msg?: string }) => `${(e.loc ?? []).filter((p) => p !== "body").join(".")}${e.loc?.length ? ": " : ""}${e.msg ?? ""}`).join("; ")
+        : parsed
+    } catch { /* not JSON */ }
     throw new Error(detail || `Orchestrator error ${res.status}`)
   }
   return res.json()
@@ -757,16 +763,124 @@ export interface MemoryRecallResult {
   entries: MemoryEntry[]
 }
 
+export type SkillScope = "platform" | "tenant" | "team" | "user"
+export type SkillStatus = "draft" | "active" | "deprecated"
+export type SkillSafety = "read_only" | "drafts_only" | "can_act"
+
+export interface SkillInputDef {
+  name: string
+  type: "string" | "number" | "integer" | "boolean" | "date" | "list"
+  description?: string
+  required?: boolean
+}
+
+export interface SkillExample {
+  title?: string
+  input?: string
+  output?: string
+}
+
+/** A skill as the API returns it (docs/skills.md). Legacy fields (guidance_prompt, is_active) are kept. */
 export interface OKFSkill {
   id: string
+  tenant_id?: string | null
+  slug: string
   skill_name: string
   description: string
+  instructions: string
+  guidance_prompt: string
+  category: string
+  tags: string[]
   source_agent_type: string
   target_agent_types: string[]
-  guidance_prompt: string
   tools_required: string[]
+  tools_optional: string[]
+  inputs: SkillInputDef[]
+  triggers: string[]
+  examples: SkillExample[]
+  safety_class: SkillSafety
+  version: string
+  changelog: string
+  status: SkillStatus
   is_active: boolean
+  scope: SkillScope
+  visibility_roles: string[]
+  forked_from_id?: string | null
+  forked_from_version?: string | null
+  usage_count: number
+  helpful_count: number
+  unhelpful_count: number
+  last_used_at?: string | null
   created_at: string
+  updated_at?: string
+  can_edit?: boolean
+  can_publish?: boolean
+  import_warnings?: string[]
+}
+
+export interface SkillWriteInput {
+  skill_name: string
+  description: string
+  instructions: string
+  category?: string
+  tags?: string[]
+  target_agent_types?: string[]
+  tools_required?: string[]
+  tools_optional?: string[]
+  inputs?: SkillInputDef[]
+  triggers?: string[]
+  examples?: SkillExample[]
+  safety_class?: SkillSafety
+  version?: string
+  changelog?: string
+  visibility_roles?: string[]
+  scope?: SkillScope
+  status?: "draft" | "active"
+}
+
+export interface SkillToolInfo {
+  name: string
+  description?: string
+  mutates: boolean
+  requires_approval: boolean
+  soft?: boolean
+}
+
+export interface SkillsMeta {
+  tools: SkillToolInfo[]
+  tools_source?: "registry" | "snapshot"
+  agent_types: string[]
+  categories: string[]
+  safety_classes: SkillSafety[]
+  scopes: SkillScope[]
+  statuses: SkillStatus[]
+  caller: { admin: boolean; author: boolean }
+}
+
+export interface SkillImportPreview {
+  ok: boolean
+  skill: Partial<SkillWriteInput> | null
+  errors: string[]
+  warnings: string[]
+}
+
+export interface SkillVersionRow {
+  id: string
+  version: string
+  status: SkillStatus
+  changelog: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillListParams {
+  scope?: SkillScope
+  status?: SkillStatus | "all"
+  agent_type?: string
+  category?: string
+  safety_class?: SkillSafety
+  q?: string
+  mine?: boolean
 }
 
 export interface HousekeepingReport {
@@ -828,6 +942,60 @@ export const listOKFSkills = (agentType?: string) => {
   const p = agentType ? `?agent_type=${encodeURIComponent(agentType)}` : ""
   return getJson<{ items: OKFSkill[] }>(`/memory/skills${p}`).then((r) => r.items ?? [])
 }
+
+/** Skills v2 list: platform library + organisation + team + my private skills, with filters (docs/skills.md). */
+export const listSkills = (params: SkillListParams = {}) => {
+  const qs = new URLSearchParams()
+  if (params.scope) qs.set("scope", params.scope)
+  qs.set("status", params.status ?? "all")
+  if (params.agent_type) qs.set("agent_type", params.agent_type)
+  if (params.category) qs.set("category", params.category)
+  if (params.safety_class) qs.set("safety_class", params.safety_class)
+  if (params.q) qs.set("q", params.q)
+  if (params.mine) qs.set("mine", "true")
+  return getJson<{ items: OKFSkill[] }>(`/memory/skills?${qs.toString()}`).then((r) => r.items ?? [])
+}
+
+export const getSkillsMeta = () => getJson<SkillsMeta>("/memory/skills/meta")
+
+export const getSkillVersions = (skillId: string) =>
+  getJson<{ items: SkillVersionRow[] }>(`/memory/skills/${skillId}/versions`).then((r) => r.items ?? [])
+
+export const createSkill = (skill: SkillWriteInput) =>
+  getJson<OKFSkill>("/memory/skills", {
+    method: "POST",
+    body: JSON.stringify({ ...skill, name: skill.skill_name, description: skill.description }),
+  })
+
+export const updateSkill = (skillId: string, skill: Partial<SkillWriteInput>) =>
+  getJson<OKFSkill>(`/memory/skills/${skillId}`, { method: "PUT", body: JSON.stringify(skill) })
+
+export const activateSkill = (skillId: string) =>
+  getJson<OKFSkill>(`/memory/skills/${skillId}/activate`, { method: "POST" })
+
+export const deprecateSkill = (skillId: string) =>
+  getJson<OKFSkill>(`/memory/skills/${skillId}/deprecate`, { method: "POST" })
+
+export const forkSkill = (skillId: string, scope: "user" | "tenant" = "user", skillName?: string) =>
+  getJson<OKFSkill>(`/memory/skills/${skillId}/fork`, {
+    method: "POST",
+    body: JSON.stringify({ scope, skill_name: skillName || undefined }),
+  })
+
+export const shareSkill = (skillId: string) =>
+  getJson<OKFSkill>(`/memory/skills/${skillId}/share`, { method: "POST" })
+
+export const exportSkill = (skillId: string) =>
+  getJson<{ filename: string; markdown: string }>(`/memory/skills/${skillId}/export`)
+
+export const previewSkillImport = (markdown: string) =>
+  getJson<SkillImportPreview>("/memory/skills/import/preview", { method: "POST", body: JSON.stringify({ markdown }) })
+
+export const importSkill = (markdown: string, scope: "user" | "tenant" = "user") =>
+  getJson<OKFSkill>("/memory/skills/import", { method: "POST", body: JSON.stringify({ markdown, scope }) })
+
+export const sendSkillFeedback = (skillId: string, helpful: boolean) =>
+  getJson<{ ok: boolean }>(`/memory/skills/${skillId}/feedback`, { method: "POST", body: JSON.stringify({ helpful }) })
 
 export const createOKFSkill = (skill: { name: string; description: string; source_agent_type: string; target_agent_types: string[]; guidance_prompt: string; tools_required: string[] }) =>
   getJson<OKFSkill>("/memory/skills", { method: "POST", body: JSON.stringify(skill) })

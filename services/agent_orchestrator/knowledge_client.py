@@ -121,7 +121,8 @@ def _citations(pack_cits: List[dict]) -> List[dict]:
 
 async def fetch_context(tenant_id: str, agent_type: str, query: str, *, user_id: Optional[str] = None,
                         roles: Optional[List[str]] = None, budget_tokens: int = GROUNDING_BUDGET_TOKENS,
-                        modules: Optional[List[str]] = None, timeout: float = GROUNDING_TIMEOUT_S) -> Dict[str, Any]:
+                        modules: Optional[List[str]] = None, timeout: float = GROUNDING_TIMEOUT_S,
+                        graph: bool = False, k: int = 10) -> Dict[str, Any]:
     """POST /knowledge/context. Returns {status, context, citations, used_tokens, degraded, truncated}.
     status: ready | no_matches | disabled | off | unavailable. Never raises."""
     query = " ".join(str(query or "").split())[:1000]
@@ -135,7 +136,9 @@ async def fetch_context(tenant_id: str, agent_type: str, query: str, *, user_id:
     mods = allowed_modules(agent_type, modules)
     if mods is not None and not mods:
         return out
-    body: Dict[str, Any] = {"query": query, "budget_tokens": max(200, min(int(budget_tokens), 12000)), "k": 10}
+    body: Dict[str, Any] = {"query": query, "budget_tokens": max(200, min(int(budget_tokens), 12000)), "k": k}
+    if graph:                                   # JEV augmentation: widen via graph neighbours (jev_retrieval.refine_pack)
+        body["graph"], body["graph_depth"] = True, 1
     if mods:
         body["modules"] = mods
     try:
@@ -176,9 +179,26 @@ async def grounding_block(tenant_id: Optional[str], agent_type: str, query: str,
     if not GROUNDING_ENABLED or not tenant_id:
         return "", {"status": "disabled", "cards": [], "used_tokens": 0, "degraded": None}
     pack = await fetch_context(str(tenant_id), agent_type, query, user_id=user_id, roles=roles)
+    jev_info, jev_note = None, ""
+    if agent_type != "customer_facing":         # customer-facing turns never send card text to an external judge
+        try:
+            from services.agent_orchestrator import jev_retrieval
+
+            async def _widen():
+                return await fetch_context(str(tenant_id), agent_type, query, user_id=user_id, roles=roles,
+                                           budget_tokens=int(GROUNDING_BUDGET_TOKENS * 1.5), graph=True, k=14)
+            pack, jev_info, jev_note = await jev_retrieval.refine_pack(
+                pack, query, tenant_id=str(tenant_id), roles=roles, widen=_widen)
+        except Exception as exc:  # noqa: BLE001 - JEV must never block a turn
+            logger.warning("JEV retrieval refinement skipped: %s", type(exc).__name__)
     info = {"status": pack["status"], "cards": pack["citations"], "used_tokens": pack["used_tokens"],
             "degraded": pack["degraded"], "truncated": pack["truncated"], "budget_tokens": GROUNDING_BUDGET_TOKENS}
-    return format_grounding(pack), info
+    if jev_info is not None:
+        info["jev"] = jev_info
+    block = format_grounding(pack)
+    if jev_note:                                # trusted guidance, outside the untrusted wrapper
+        block = f"{block}\n\nRetrieval note: {jev_note}" if block else f"Retrieval note: {jev_note}"
+    return block, info
 
 
 # ── working memory ──────────────────────────────────────────────────────────

@@ -44,6 +44,9 @@ async def process_job(indexer: Indexer, store: KnowledgeStore, job: dict) -> dic
     if job["kind"] == "consolidate":
         async with session_scope() as s:
             return await consolidation.consolidate_tenant(s, store, tenant, dry_run=bool(params.get("dry_run", True)))
+    if job["kind"] == "dream":
+        from services.tenant_memory.knowledge.dream import runner as dream_runner
+        return await dream_runner.run_dream_job(store, indexer.embedder, job)
     raise ValueError(f"unknown job kind {job['kind']}")
 
 
@@ -77,6 +80,12 @@ async def main() -> None:
     store = PgVectorStore()
     await run_with_db_retry(store.ensure_schema, logger=logger)
     embedder = OllamaEmbedder()
+    from services.tenant_memory.knowledge.dream import runner as dream_runner
+    try:
+        await dream_runner.ensure_schema(store, embedder)
+    except Exception:  # noqa: BLE001 - the dream tables are optional: never keep the indexer from starting
+        logger.exception("dream schema setup failed; the nightly dream state stays idle until it succeeds")
+    last_dream = None
     indexer = Indexer(store, embedder)
     logger.info("knowledge worker up: model=%s dim=%s batch=%s sleep=%ss", s.embedding_model, s.embedding_dim, s.index_batch_size, s.index_sleep_s)
     last_sweep = datetime.min.replace(tzinfo=timezone.utc)
@@ -95,6 +104,7 @@ async def main() -> None:
                     logger.exception("job %s failed", job["id"])
                     await store.finish_job(job["id"], "failed", {"error": str(exc)[:300]})
                 continue
+            last_dream = await dream_runner.tick(store, embedder, active_tenants, last_dream)
             if datetime.now(timezone.utc) - last_sweep >= timedelta(seconds=s.poll_seconds * 4) and await store.try_lock("knowledge:sweep"):
                 try:
                     await sweep(indexer, store, await active_tenants())

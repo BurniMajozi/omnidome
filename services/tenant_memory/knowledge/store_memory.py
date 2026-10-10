@@ -78,6 +78,14 @@ class MemoryStore(KnowledgeStore):
                 n += 1
         return n
 
+    async def refresh_valid_to(self, tenant, source_type, source_id, valid_to):
+        n = 0
+        for c in self._live(tenant):
+            if c.source_type == source_type and c.source_id == source_id:
+                c.valid_to = valid_to
+                n += 1
+        return n
+
     async def tombstone_source(self, tenant, source_type, source_id):
         return await self.retire_chunks(tenant, source_type, source_id, [])
 

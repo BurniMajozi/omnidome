@@ -409,15 +409,20 @@ async def ids_memory_summaries(session, tenant: str) -> dict:
     return {"memory_summary": {r["id"] for r in rows}}
 
 
+_SKILL_SHARED = ("platform", "tenant", "team")   # user-private skills are never embedded
+
+
 async def fetch_skills(session, tenant: str, wm: Optional[dict], limit: int) -> Page:
     ks, kp = _keyset("updated_at", "id::text", wm)
-    rows = await _rows(session, f"""SELECT id::text AS id, skill_name, description, category, source_agent_type, target_agent_types,
-        tools_required, version, is_active, updated_at, updated_at AS ts FROM tenant_agent_skills
-        WHERE tenant_id = CAST(:tenant_id AS uuid){ks} ORDER BY updated_at, id::text LIMIT :limit""", {"tenant_id": tenant, "limit": limit, **kp})
+    rows = await _rows(session, f"""SELECT id::text AS id, skill_name, slug, description, category, source_agent_type, target_agent_types,
+        tools_required, triggers, tags, safety_class, visibility_roles, version, is_active,
+        COALESCE(status, CASE WHEN is_active THEN 'active' ELSE 'deprecated' END) AS status, COALESCE(scope, 'tenant') AS scope,
+        updated_at, updated_at AS ts FROM tenant_agent_skills
+        WHERE (tenant_id = CAST(:tenant_id AS uuid) OR tenant_id IS NULL){ks} ORDER BY updated_at, id::text LIMIT :limit""", {"tenant_id": tenant, **kp, "limit": limit})
     page = Page()
     _track(page, rows)
     for r in rows:
-        if r["is_active"]:
+        if r["is_active"] and r["status"] == "active" and r["scope"] in _SKILL_SHARED:
             page.cards.append(B.skill_card(r, _utc(r["ts"])))
         else:
             page.tombstones.append(("skill", r["id"]))
@@ -425,7 +430,8 @@ async def fetch_skills(session, tenant: str, wm: Optional[dict], limit: int) -> 
 
 
 async def ids_skills(session, tenant: str) -> dict:
-    rows = await _rows(session, "SELECT id::text AS id FROM tenant_agent_skills WHERE tenant_id = CAST(:t AS uuid) AND is_active = true", {"t": tenant})
+    rows = await _rows(session, """SELECT id::text AS id FROM tenant_agent_skills WHERE (tenant_id = CAST(:t AS uuid) OR tenant_id IS NULL)
+        AND is_active = true AND COALESCE(status, 'active') = 'active' AND COALESCE(scope, 'tenant') IN ('platform', 'tenant', 'team')""", {"t": tenant})
     return {"skill": {r["id"] for r in rows}}
 
 

@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_current_tenant_id
 from services.fno_intelligence import analytics_common as ac
+from services.fno_intelligence import bi_artifact_events as artifact_events
 from services.fno_intelligence import bi_brand, database
 from services.fno_intelligence import bi_deck_model as dm
 from services.fno_intelligence.bi_models import BiBrandKit, BiDeck, BiDeckRun, BiDeckVersion
@@ -192,6 +193,7 @@ async def create_deck(body: DeckCreate, auth: AuthContext = Depends(ac.require_a
                          note="Created", created_by=auth.user_id, created_at=ac.now()))
     await db.flush()
     await db.refresh(deck)
+    artifact_events.notify(auth, "bi_deck", deck.id)
     return {**deck_public(deck), "warnings": {"ungrounded_numbers": warnings}}
 
 
@@ -220,6 +222,7 @@ async def update_deck(deck_id: uuid.UUID, body: DeckUpdate, request: Request, au
     raw = {**raw, "title": title}
     doc, warnings = await _validate_doc(raw, kit_id)
     deck = await _cas_save(db, deck, expected, title=title, doc=doc, kit_id=kit_id, auth=auth, note=body.note)
+    artifact_events.notify(auth, "bi_deck", deck.id)
     return {**deck_public(deck), "warnings": {"ungrounded_numbers": warnings}}
 
 
@@ -230,6 +233,7 @@ async def delete_deck(deck_id: uuid.UUID, auth: AuthContext = Depends(ac.require
     for model in (BiDeckRun, BiDeckVersion):
         await db.execute(delete(model).where(model.deck_id == deck.id, model.tenant_id == auth.tenant_id))
     await db.delete(deck)
+    artifact_events.notify(auth, "bi_deck", deck_id, deleted=True)
 
 
 @router.post("/{deck_id}/duplicate", status_code=201)
@@ -249,6 +253,7 @@ async def duplicate_deck(deck_id: uuid.UUID, auth: AuthContext = Depends(ac.requ
                          note=f"Duplicated from {src.id} v{src.version}", created_by=auth.user_id, created_at=ac.now()))
     await db.flush()
     await db.refresh(deck)
+    artifact_events.notify(auth, "bi_deck", deck.id)
     return deck_public(deck)
 
 
@@ -261,6 +266,7 @@ async def publish_deck(deck_id: uuid.UUID, body: PublishBody, auth: AuthContext 
     deck.published_at = ac.now() if body.published else None
     await db.flush()
     await db.refresh(deck)
+    artifact_events.notify(auth, "bi_deck", deck.id)
     return deck_public(deck, with_doc=False)
 
 
@@ -302,6 +308,7 @@ async def restore_version(deck_id: uuid.UUID, version: int, request: Request, bo
     doc, _ = await _validate_doc(old.doc, deck.brand_kit_id)
     deck = await _cas_save(db, deck, expected, title=old.title, doc=doc, kit_id=deck.brand_kit_id, auth=auth,
                            note=f"Restored from v{version}")
+    artifact_events.notify(auth, "bi_deck", deck.id)
     return deck_public(deck)
 
 

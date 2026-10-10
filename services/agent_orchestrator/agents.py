@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from services.agent_orchestrator import compaction, tool_call_log, memory_capture, memory_context, skills_runtime, usage
 from services.agent_orchestrator.llm import llm_client
-from services.agent_orchestrator import knowledge_client
-from services.agent_orchestrator.tools import KNOWLEDGE_TOOL_NAMES, SQL_TOOL_NAMES, tool_registry
+from services.agent_orchestrator import artifacts, knowledge_client
+from services.agent_orchestrator.tools import ARTIFACT_TOOL_NAMES, KNOWLEDGE_TOOL_NAMES, SQL_TOOL_NAMES, tool_registry
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
 from services.agent_orchestrator.config import settings
@@ -103,6 +103,8 @@ class Agent:
         self.skill_names: List[str] = []
         self.skills_prompt = ""
         self._skills_loaded = False
+        self.skills_skipped: List[Dict[str, str]] = []
+        self._skill_tasks: set = set()
         # Conversation compaction (spec M4): set by prepare_turn; callers that
         # own a conversation store compaction_update on it.
         self.compacted = False
@@ -162,6 +164,12 @@ class Agent:
                 str(self.tenant_id), self.agent_type, user_message,
                 user_id=self.context.get("user_id"), roles=self.context.get("roles"))
             self.context["_knowledge_info"] = info
+            # Lookup-style questions ("do we have the X deck?") put existing work product first so it is linked, not regenerated.
+            existing = await artifacts.lookup_block(
+                str(self.tenant_id), self.agent_type, user_message, user_id=self.context.get("user_id"),
+                roles=self.context.get("roles"), modules=self.context.get("modules") or None)
+            if existing:
+                block = "\n\n".join(x for x in (existing, block) if x)
             if info.get("cards"):
                 logger.info("Knowledge grounding for %s: %d cards, %s tokens", self.agent_type,
                             len(info["cards"]), info.get("used_tokens"))
@@ -171,27 +179,33 @@ class Agent:
             self.context["_knowledge_info"] = {**info, "status": "unavailable", "degraded": "grounding error"}
             return ""
 
-    async def load_skills(self) -> None:
-        """Apply guidance only when all of a skill's required tools are assigned.
+    async def load_skills(self, query: str = "") -> None:
+        """Pick the skills relevant to this message and add their guidance (docs/skills.md).
 
-        Skills are tenant-authored instructions, never a way to grant tools.
+        Only skills whose required tools the agent really has are used; skills are tenant/platform-authored
+        instructions, never a way to grant tools. Selection fails open (no skills, the agent still answers).
         """
         if self._skills_loaded or not self.tenant_id:
             return
         self._skills_loaded = True
+        allowed = {tool.name for tool in self.tools
+                   if not (self.context.get("draft_only") and tool.mutates)}
+        agent_type = self.context.get("skill_agent_type", self.agent_type)
         try:
-            skills = await skills_runtime.skills_for(str(self.tenant_id),
-                                                     self.context.get("skill_agent_type", self.agent_type),
-                                                     actor_id=self.context.get("user_id"))
+            sel = await skills_runtime.select_for_turn(
+                str(self.tenant_id), agent_type, query, actor_id=self.context.get("user_id"),
+                roles=self.context.get("roles"), allowed_tools=allowed)
         except Exception as exc:
             logger.warning("OKF skills failed for %s: %s", self.agent_type, exc)
             return
-        allowed = {tool.name for tool in self.tools
-                   if not (self.context.get("draft_only") and tool.mutates)}
-        usable = [skill for skill in skills
-                  if all(name in allowed for name in (skill.get("tools_required") or []))]
-        self.skill_names = [skill.get("skill_name", "") for skill in usable]
-        self.skills_prompt = skills_runtime.skills_prompt(usable)
+        self.skill_names = [skill.get("skill_name", "") for skill in sel.selected]
+        self.skills_skipped = list(sel.skipped)
+        self.skills_prompt = sel.block
+        if sel.selected:
+            task = asyncio.create_task(skills_runtime.record_use(
+                str(self.tenant_id), self.context.get("user_id"), self.context.get("roles"), agent_type, sel.selected))
+            self._skill_tasks.add(task)
+            task.add_done_callback(self._skill_tasks.discard)
 
     async def prepare_turn(
         self,
@@ -202,7 +216,7 @@ class Agent:
         """Messages for this turn: skills applied (M2), long history compacted
         (M4, compaction_state = what the conversation stored last time), tenant
         memory recalled (M1). Used by Agent.run and every chat path."""
-        await self.load_skills()
+        await self.load_skills(user_message)
         if history:
             tenant = str(self.tenant_id) if self.tenant_id else None
             history, self.compaction_update, self.compacted = await compaction.compact(
@@ -218,9 +232,17 @@ class Agent:
             elif DELEGATION_SYSTEM_PROMPT not in self.skills_prompt:
                 self.skills_prompt = f"{self.skills_prompt}\n\n{DELEGATION_SYSTEM_PROMPT}"
 
+        if "artifacts.find" in self.available_tool_names and artifacts.ARTIFACT_POLICY not in self.skills_prompt:
+            self.skills_prompt = "\n\n".join(x for x in (self.skills_prompt, artifacts.ARTIFACT_POLICY) if x)
+
         memory_block = await self.recall_memory(user_message)
         self.context["_memory_recalled"] = bool(memory_block)
         knowledge_block = await self.ground_knowledge(user_message)
+        try:    # the injected knowledge + memory is evidence for the answer verifier, not only tool outputs
+            from services.agent_orchestrator import jev_retrieval
+            self.context["_grounding_evidence"] = jev_retrieval.evidence_from_text(knowledge_block, memory_block)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("grounding evidence not built: %s", exc)
         return self._build_messages(user_message, history, memory_block, knowledge_block)
 
     async def run(
@@ -302,7 +324,7 @@ class Agent:
                 "context_used": {"memory_recalled": bool(self.context.get("_memory_recalled")),
                                  "memory_status": self.context.get("_memory_diagnostics", {}).get("status", "unknown"),
                                  "knowledge": self.context.get("_knowledge_info") or {"status": "disabled", "cards": []},
-                                 "skills": list(self.skill_names), "tools_available": list(self.available_tool_names),
+                                 "skills": list(self.skill_names), "skills_skipped": list(self.skills_skipped), "tools_available": list(self.available_tool_names),
                                  "architecture_hints": list(self.context.get("architecture_hints") or []),
                                  "requested_model": self.context.get("requested_model"),
                                  "kpi_status": self.context.get("kpi_status", "not_linked")},
@@ -328,8 +350,18 @@ class Agent:
                     draft_response=content_str,
                     tool_records=tool_call_log,
                     agent_type=self.agent_type,
+                    evidence=self.context.get("_grounding_evidence"),
                 )
                 verif_data = v.to_dict()
+            if not is_mock_llm and not unavailable and content_str.strip():
+                try:    # retrieval telemetry for the nightly relevance learner (jev_retrieval.retrieval_log)
+                    from services.agent_orchestrator import jev_retrieval
+                    jev_retrieval.log_turn_background(
+                        tenant_id=tenant, user_id=self.context.get("user_id"), agent_type=self.agent_type,
+                        conversation_key=str(conversation_id) if conversation_id else None, query=user_message,
+                        info=self.context.get("_knowledge_info") or {}, answer=content_str, verification=verif_data)
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("retrieval telemetry skipped: %s", exc)
             if content_str.strip() and not unavailable:
                 await self._record_working_turn(user_message, content_str, tool_call_log)
             return done(content_str, stopped_by=stopped_by, unavailable=unavailable, verification=verif_data)
@@ -515,6 +547,10 @@ class Agent:
             key = knowledge_client.session_key(self.context, self.agent_type, self.external_id)
             if key:
                 enriched_args["_session_key"] = key
+        if tool_name in ARTIFACT_TOOL_NAMES:
+            enriched_args.pop("_modules", None)         # never from the model
+            if self.context.get("modules"):
+                enriched_args["_modules"] = list(self.context["modules"])
         if "customer_id" in self.context and "customer_id" not in enriched_args:
             enriched_args["customer_id"] = self.context["customer_id"]
 
@@ -608,7 +644,8 @@ class Agent:
                              user_id=str(self.context.get("user_id", "")),
                              **({"roles": self.context["roles"]} if self.context.get("roles") else {}),
                              **({"agent_type": self.agent_type} if (tool_name in SQL_TOOL_NAMES
-                                                                     or tool_name in KNOWLEDGE_TOOL_NAMES) else {})),
+                                                                     or tool_name in KNOWLEDGE_TOOL_NAMES
+                                                                     or tool_name in ARTIFACT_TOOL_NAMES) else {})),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:

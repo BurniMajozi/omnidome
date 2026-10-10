@@ -243,6 +243,9 @@ async def execute_research(tenant_id: uuid.UUID, run_id: uuid.UUID) -> None:
             run.status, run.error = "failed", error
         run.finished_at = ac.now()
         await db.commit()
+        if run.status == "done":
+            from services.fno_intelligence import bi_artifact_events
+            bi_artifact_events.notify_system(tenant_id, getattr(run, "created_by", None), "research", run_id)
 
 
 async def sweep_stuck(db: AsyncSession, older_than_minutes: int = 30) -> int:

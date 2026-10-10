@@ -49,24 +49,24 @@ def service_routes(service_dir: Path) -> set:
                     if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
                             and d.func.attr in METHODS and isinstance(d.func.value, ast.Name)
                             and d.args and _str(d.args[0]) is not None):
-                        decorated.append((f.stem, d.func.value.id, d.func.attr.upper(), _str(d.args[0])))
+                        decorated.append((f.stem, d.func.value.id, d.func.attr.upper(), _str(d.args[0]), str(f)))
             elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
                 fn = node.value.func
                 if getattr(fn, "id", None) == "APIRouter" or getattr(fn, "attr", None) == "APIRouter":
                     for target in node.targets:
                         if isinstance(target, ast.Name):
-                            router_prefix[(f.stem, target.id)] = _prefix(node.value)
+                            router_prefix[(str(f), target.id)] = _prefix(node.value)
             elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                   and node.func.attr == "include_router" and node.args):
                 include_prefix.setdefault(ast.unparse(node.args[0]), set()).add(_prefix(node))
     routes = set()
-    for module, var, method, path in decorated:
+    for module, var, method, path, fpath in decorated:
         if var == "app":
             routes.add((method, path))
             continue
         prefixes = {p for expr, ps in include_prefix.items() if module in expr or expr == var for p in ps} or {""}
         for p in prefixes:
-            routes.add((method, p + router_prefix.get((module, var), "") + path))
+            routes.add((method, p + router_prefix.get((fpath, var), "") + path))
     return routes
 
 

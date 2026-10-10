@@ -91,7 +91,7 @@ def citation(h: Hit, now: datetime) -> dict:
     return {
         "source_type": c.source_type, "source_id": c.source_id, "chunk_no": c.chunk_no, "title": c.title,
         "module": c.module, "as_of": c.as_of.isoformat() if c.as_of else None, "age_days": age,
-        "stale": age is None or age > limit, "score": round(h.score, 6), "via": h.via,
+        "stale": age is None or age > limit or "dream:stale" in (c.tags or []), "score": round(h.score, 6), "via": h.via,
         "deep_link": (c.source_ref or {}).get("deep_link"), "tags": c.tags,
     }
 

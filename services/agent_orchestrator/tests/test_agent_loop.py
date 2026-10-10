@@ -315,12 +315,12 @@ def test_okf_guidance_uses_assigned_tools_and_cannot_grant_new_tools(harness, mo
     async def recall(*_a, **_k):
         return ""
 
-    async def skills(tenant_id, agent_type, actor_id=None):
+    async def skills(tenant_id, agent_type, actor_id=None, **_kw):
         return [
-            {"skill_name": "Case review", "guidance_prompt": "Review the case first.",
+            {"id": "s1", "skill_name": "Case review", "guidance_prompt": "Review the case first.", "triggers": ["wants to leave"],
              "tools_required": ["retention_get_cases"], "target_agent_types": ["retention"]},
-            {"skill_name": "Win-back offer", "guidance_prompt": "Always check the balance before offering 15%.",
-             "tools_required": ["billing_get_balance"], "target_agent_types": ["retention"]},
+            {"id": "s2", "skill_name": "Win-back offer", "guidance_prompt": "Always check the balance before offering 15%.",
+             "triggers": ["wants to leave"], "tools_required": ["billing_get_balance"], "target_agent_types": ["retention"]},
         ]
     monkeypatch.setattr(agents.memory_context, "recall_block", recall)
     monkeypatch.setattr(agents.skills_runtime, "skills_for", skills)

@@ -45,7 +45,7 @@ def card_to_chunks(tenant: str, card: Card, model: str, max_chars: int, overlap:
         out.append(Chunk(
             tenant_id=tenant, source_type=card.source_type, source_id=card.source_id, chunk_no=i, module=card.module,
             title=title, markdown=md, content_hash=content_hash(stable_text(md), model), source_ref=card.source_ref,
-            visibility=visibility, required_roles=list(roles), owner_id=card.owner_id, as_of=card.as_of,
+            visibility=visibility, required_roles=list(roles), required_permission=card.required_permission, owner_id=card.owner_id, as_of=card.as_of,
             valid_to=card.valid_to, importance=card.importance, tags=list(card.tags), embedding_model=model,
         ))
     return out
@@ -98,6 +98,8 @@ class Indexer:
         state = await self.store.source_state(tenant, card.source_type, card.source_id)
         todo = [c for c in chunks if force or state.get(c.chunk_no) != (c.content_hash, model)]
         stats["chunks_unchanged"] += len(chunks) - len(todo)
+        if not todo and card.valid_to is not None:        # unchanged but short-lived (personal cards): keep it alive
+            await self.store.refresh_valid_to(tenant, card.source_type, card.source_id, card.valid_to)
         if todo:
             hashes = sorted({c.content_hash for c in todo})
             known = await self.store.cached_embeddings(tenant, hashes, model)

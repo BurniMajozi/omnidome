@@ -17,6 +17,7 @@ import {
 } from "recharts"
 import { Wifi, Activity, AlertTriangle, Zap, RefreshCw } from "lucide-react"
 import { PageHeader } from "@/components/ui/page-header"
+import { InsightsCard } from "@/components/dashboard/insights-card"
 import { Button } from "@/components/ui/button"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import { tileLabel, type Loadable } from "@/lib/service-state"
@@ -91,6 +92,8 @@ export function NetworkModule() {
       {!loading && devices.value.state !== "ready" && (
         <NotConnected loadable={devices.value} service="Network" onRetry={reloadAll} />
       )}
+
+      <InsightsCard module="network" title="Network briefing" />
 
       {/* KPI Cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

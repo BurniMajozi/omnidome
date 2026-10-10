@@ -6,6 +6,7 @@ import { ActivityFeed } from "@/components/dashboard/activity-feed"
 import { QuickStats } from "@/components/dashboard/quick-stats"
 import { TicketsTable } from "@/components/dashboard/tickets-table"
 import { ExecutiveApprovalQueue } from "@/components/dashboard/executive-approval-queue"
+import { InsightsCard } from "@/components/dashboard/insights-card"
 import {
   DollarSign,
   Users,
@@ -293,30 +294,9 @@ export function DashboardOverview() {
     },
   ]
 
-  return (
-    <div className="space-y-6">
-      {/* ── 1. Top KPI Command Strip ─────────────────────────────────── */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {kpis.map((k) => {
-          const st = k.loadable.state
-          return (
-            <StatCard
-              key={k.id}
-              title={k.title}
-              value={st === "ready" ? k.value : (tileLabel(k.loadable) ?? "")}
-              change=""
-              changeType="neutral"
-              icon={k.icon}
-              description={st === "ready" ? k.description : undefined}
-              note={st === "ready" ? (k.note ?? undefined) : undefined}
-              loading={st === "loading"}
-              muted={st !== "ready"}
-            />
-          )
-        })}
-      </div>
-
-      {/* ── 2. Executive briefing + suggested actions (real data only) ── */}
+  // Rules-based briefing built from live deals/CRM rows: shown only if the insights engine is unreachable.
+  const legacyBriefing = (
+    <>
       <div className="rounded-xl border border-primary/30 bg-gradient-to-r from-primary/10 via-background to-secondary/30 p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-3xl space-y-1.5">
@@ -413,6 +393,34 @@ export function DashboardOverview() {
           </div>
         )}
       </div>
+    </>
+  )
+
+  return (
+    <div className="space-y-6">
+      {/* ── 1. Top KPI Command Strip ─────────────────────────────────── */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {kpis.map((k) => {
+          const st = k.loadable.state
+          return (
+            <StatCard
+              key={k.id}
+              title={k.title}
+              value={st === "ready" ? k.value : (tileLabel(k.loadable) ?? "")}
+              change=""
+              changeType="neutral"
+              icon={k.icon}
+              description={st === "ready" ? k.description : undefined}
+              note={st === "ready" ? (k.note ?? undefined) : undefined}
+              loading={st === "loading"}
+              muted={st !== "ready"}
+            />
+          )
+        })}
+      </div>
+
+      {/* ── 2. Executive overview (insights engine; the rules-based briefing is its fallback) ── */}
+      <InsightsCard module="overview" title="Executive overview" fallback={legacyBriefing} />
 
       {/* ── 3. Executive Approval Queue ('Needs You' Review Inbox) ──── */}
       <ExecutiveApprovalQueue />

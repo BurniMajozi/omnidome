@@ -54,10 +54,10 @@ def test_only_known_missing_tools_are_added():
                                known=["billing_get_balance", "crm_get_customer"]) == ["billing_get_balance"]
 
 
-def test_skills_are_cached_per_tenant(monkeypatch):
+def test_skills_are_cached_per_tenant_and_user(monkeypatch):
     calls = []
 
-    async def fake(tenant_id, actor_id):
+    async def fake(tenant_id, actor_id, roles):
         calls.append(tenant_id)
         return [skill("a", targets=["retention"])]
     monkeypatch.setattr(sr, "_fetch", fake)
@@ -68,7 +68,7 @@ def test_skills_are_cached_per_tenant(monkeypatch):
 
 
 def test_skills_fail_open_and_keep_the_last_good_list(monkeypatch):
-    async def ok(*_):
+    async def ok(*_):  # (tenant, actor, roles)
         return [skill("a")]
 
     async def down(*_):
@@ -78,6 +78,7 @@ def test_skills_fail_open_and_keep_the_last_good_list(monkeypatch):
     sr.clear_cache()
     monkeypatch.setattr(sr, "_fetch", ok)
     asyncio.run(sr.skills_for(T, "retention"))
-    sr._cache[T] = (0, sr._cache[T][1])          # expire
+    key = (T, "")
+    sr._cache[key] = (0, sr._cache[key][1])          # expire
     monkeypatch.setattr(sr, "_fetch", down)
     assert [s["skill_name"] for s in asyncio.run(sr.skills_for(T, "retention"))] == ["a"]

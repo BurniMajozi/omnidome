@@ -39,7 +39,7 @@ def client():
 
 
 def h(tenant, roles="", user=None):
-    return {"X-Tenant-Id": tenant, "X-User-Id": user or str(uuid.uuid4()), "X-Roles": roles}
+    return {"X-Tenant-Id": tenant, "X-User-Id": user or str(uuid.uuid4()), "X-Roles": roles, "X-Modules": "support,crm"}
 
 
 def test_search_and_context_are_tenant_scoped(client):

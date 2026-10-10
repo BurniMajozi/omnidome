@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from services.common.auth import AuthContext, get_current_tenant_id
 from services.fno_intelligence import analytics_common as ac
+from services.fno_intelligence import bi_artifact_events as artifact_events
 from services.fno_intelligence import database
 from services.fno_intelligence.bi_models import BiBrandKit
 
@@ -375,6 +376,7 @@ async def create_kit(body: BrandKitIn, auth: AuthContext = Depends(ac.require_ad
     if body.make_default or count == 0:
         await _make_default(db, tenant_id, kit.id)
         await db.refresh(kit)
+    artifact_events.notify(auth, "bi_brand_kit", kit.id)
     return kit_public(kit)
 
 
@@ -402,6 +404,7 @@ async def update_kit(kit_id: uuid.UUID, body: BrandKitPatch, auth: AuthContext =
     if body.make_default:
         await _make_default(db, auth.tenant_id, kit.id)
     await db.refresh(kit)
+    artifact_events.notify(auth, "bi_brand_kit", kit.id)
     return kit_public(kit)
 
 
@@ -413,6 +416,7 @@ async def set_default(kit_id: uuid.UUID, auth: AuthContext = Depends(ac.require_
         raise HTTPException(404, "Brand kit not found")
     await _make_default(db, auth.tenant_id, kit.id)
     await db.refresh(kit)
+    artifact_events.notify(auth, "bi_brand_kit", kit.id)
     return kit_public(kit, include_logo=False)
 
 
@@ -423,6 +427,7 @@ async def delete_kit(kit_id: uuid.UUID, auth: AuthContext = Depends(ac.require_a
     if kit is None:
         raise HTTPException(404, "Brand kit not found")
     await db.delete(kit)
+    artifact_events.notify(auth, "bi_brand_kit", kit_id, deleted=True)
 
 
 # ── suggest from website (Firecrawl, credit-ledger accounted) ─────────────

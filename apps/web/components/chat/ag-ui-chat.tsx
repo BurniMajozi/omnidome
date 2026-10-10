@@ -46,6 +46,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
+import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
+import { artifactItemsFromToolCalls, openAppPath, safeAppPath, safeExternalUrl } from "@/lib/artifact-links"
 import {
   invokeAgentAGUI,
   listAgents,
@@ -236,11 +238,34 @@ function renderInlineMarkdown(text: string): React.ReactNode[] {
     } else if (token.startsWith("[")) {
       const linkMatch = token.match(/\[([^\]]+)\]\(([^)]+)\)/)
       if (linkMatch) {
-        tokens.push(
-          <a key={match.index} href={linkMatch[2]} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">
-            {linkMatch[1]}
-          </a>
-        )
+        // Model text is untrusted: same-origin /dashboard paths open in the app (same tab); other links must be
+        // http(s); anything else (javascript:, data:, protocol-relative...) is shown as plain text.
+        const appPath = safeAppPath(linkMatch[2])
+        const external = appPath ? null : safeExternalUrl(linkMatch[2])
+        if (appPath) {
+          tokens.push(
+            <a
+              key={match.index}
+              href={appPath}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return
+                e.preventDefault()
+                openAppPath(appPath)
+              }}
+              className="text-cyan-400 hover:underline"
+            >
+              {linkMatch[1]}
+            </a>
+          )
+        } else if (external) {
+          tokens.push(
+            <a key={match.index} href={external} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">
+              {linkMatch[1]}
+            </a>
+          )
+        } else {
+          tokens.push(linkMatch[1])
+        }
       } else {
         tokens.push(token)
       }
@@ -1429,6 +1454,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
                             </button>
                           )
                         })}
+                        <ArtifactLinkCards items={artifactItemsFromToolCalls(message.toolCalls)} />
                       </div>
                     ) : (
                       <p className="whitespace-pre-wrap">{message.content}</p>

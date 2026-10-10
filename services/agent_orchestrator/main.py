@@ -222,9 +222,14 @@ app.include_router(usage_router, prefix="/api/usage")
 
 from services.agent_orchestrator.routes.memory import router as memory_router
 app.include_router(memory_router, prefix="/api/memory")
+from services.agent_orchestrator.routes.skills import router as skills_router
+app.include_router(skills_router, prefix="/api/memory")
 
 from services.agent_orchestrator.routes.approvals import router as approvals_router
 app.include_router(approvals_router, prefix="/api/approvals")
+
+from services.agent_orchestrator.insights.routes import router as insights_router
+app.include_router(insights_router, prefix="/api/insights")
 
 app.include_router(bus_events_router, prefix="/api/events")
 app.mount("/mcp/messages", mcp_sse_transport.handle_post_message)

@@ -123,6 +123,11 @@ class KnowledgeStore(ABC):
     @abstractmethod
     async def purge_tombstones(self, tenant: str, older_than: datetime) -> int: ...
 
+    async def refresh_valid_to(self, tenant: str, source_type: str, source_id: str, valid_to: Optional[datetime]) -> int:
+        """Extend/shorten the expiry of an UNCHANGED card (short-lived personal cards are kept alive by the sweep).
+        Default: nothing to do (stores that cannot, or do not need to, refresh)."""
+        return 0
+
     @abstractmethod
     async def set_importance(self, tenant: str, source_type: str, source_id: str, importance: float) -> int: ...
 

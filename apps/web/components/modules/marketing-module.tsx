@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { PageHeader } from "@/components/ui/page-header"
+import { InsightsCard } from "@/components/dashboard/insights-card"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -326,6 +327,7 @@ export function MarketingModule() {
         {/* Content */}
         <div className="min-w-0 flex-1">
           {activeTab === "connections" && <ConnectionsPanel banner={returnParams.banner} />}
+          {activeTab === "campaigns" && <InsightsCard module="marketing" title="Marketing briefing" className="mb-4" />}
           {activeTab === "campaigns" && <CampaignsTab onOpenAudiences={() => { setAdsSubTab("audiences"); setActiveTab("ads") }} />}
           {activeTab === "social-overview" && <PostsOverviewTab onOpenComposer={() => setActiveTab("social-composer")} />}
           {activeTab === "social-composer" && <SocialComposer onBackToOverview={() => setActiveTab("social-overview")} />}

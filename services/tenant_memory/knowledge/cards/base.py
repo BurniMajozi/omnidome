@@ -144,6 +144,7 @@ class Card:
     visibility: Optional[str] = None            # None -> module default
     required_roles: Optional[list[str]] = None
     access_key: Optional[str] = None            # finer access table key than the module (e.g. "inventory.procurement")
+    required_permission: Optional[str] = None   # single permission key the caller must hold (e.g. "support.read")
 
     def access(self) -> tuple[str, list[str]]:
         vis, roles = module_access(self.access_key or self.module)

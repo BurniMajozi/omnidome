@@ -312,6 +312,7 @@ export function SalesModule() {
   return (
     <ModuleLayout
       title="Sales & Lead Management"
+      insightsModule="sales"
       icon={<Target className="h-5 w-5 text-blue-400" />}
       subtitle="Omnichannel sales capture (Walk-in, Website Portal, Inbound Email, Call Center, Field Sales), pipeline stages, and deal velocity"
       flashcardKPIs={flashcardKPIsWithIcons}

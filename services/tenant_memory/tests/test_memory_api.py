@@ -157,7 +157,7 @@ def skill_admin_headers(tenant):
 
 
 def skill(client, tenant, **fields):
-    body = {"skill_name": "Win-back", "description": "d", "source_agent_type": "support",
+    body = {"skill_name": "Win-back", "description": "Use when a customer is about to leave.", "source_agent_type": "support",
             "target_agent_types": ["support"], "tools_required": ["billing_get_balance"],
             "guidance_prompt": "Check the balance first.", **fields}
     r = client.post("/api/v1/skills", json=body, headers=skill_admin_headers(tenant))
@@ -170,7 +170,7 @@ def test_skills_list_by_target_and_untargeted_skills_apply_to_everyone(client, t
     skill(client, tenant, skill_name="For support")
     skill(client, tenant, skill_name="For everyone", target_agent_types=[])
     names = lambda agent: sorted(s["skill_name"] for s in client.get(  # noqa: E731
-        "/api/v1/skills", params={"target_agent_type": agent}, headers=h).json()["items"])
+        "/api/v1/skills", params={"target_agent_type": agent, "scope": "tenant"}, headers=h).json()["items"])
     assert names("support") == ["For everyone", "For support"]
     assert names("retention") == ["For everyone"]
 
@@ -190,7 +190,7 @@ def test_deactivated_skills_stop_applying_and_reregistering_revives_them(client,
     h = skill_admin_headers(tenant)
     s = skill(client, tenant)
     assert client.post(f"/api/v1/skills/{s['id']}/deactivate", headers=h).json()["is_active"] is False
-    assert client.get("/api/v1/skills", headers=h).json()["items"] == []
+    assert client.get("/api/v1/skills", params={"scope": "tenant"}, headers=h).json()["items"] == []
     assert client.post(f"/api/v1/skills/{s['id']}/transfer", json={"target_agent_type": "x"},
                        headers=h).status_code == 404
     revived = skill(client, tenant)
@@ -200,7 +200,7 @@ def test_deactivated_skills_stop_applying_and_reregistering_revives_them(client,
 def test_skills_are_invisible_to_other_tenants(client, tenant):
     s = skill(client, tenant)
     h = skill_admin_headers(testdb.new_tenant("other"))
-    assert client.get("/api/v1/skills", headers=h).json()["items"] == []
+    assert client.get("/api/v1/skills", params={"scope": "tenant"}, headers=h).json()["items"] == []
     assert client.post(f"/api/v1/skills/{s['id']}/deactivate", headers=h).status_code == 404
     assert client.post(f"/api/v1/skills/{s['id']}/transfer", json={"target_agent_type": "x"},
                        headers=h).status_code == 404
