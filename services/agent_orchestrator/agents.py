@@ -15,6 +15,7 @@ from services.agent_orchestrator.tools import ARTIFACT_TOOL_NAMES, KNOWLEDGE_TOO
 from services.agent_orchestrator.json_repair import parse_tool_arguments
 from services.agent_orchestrator.tool_budget import DEFAULT_MAX_OUTPUT_CHARS, budget_tool_result
 from services.agent_orchestrator.config import settings
+from services.agent_orchestrator.commercial_usage import metered_turn, record_tool_cost
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,7 @@ class Agent:
             logger.debug("grounding evidence not built: %s", exc)
         return self._build_messages(user_message, history, memory_block, knowledge_block)
 
+    @metered_turn
     async def run(
         self,
         user_message: str,
@@ -507,7 +509,11 @@ class Agent:
             tc = {**tc, "name": registered.name}
         name = tc.get("name", "")
         title = {"data.datasets": "Listing available datasets", "data.query": "Querying governed data", "ask_user": "Waiting for your answer", "knowledge.search": "Searching company knowledge"}.get(name, "Running an approved tool")
-        result = await steps.track("approval" if name == "ask_user" else "data" if name.startswith("data.") else "tool", title, self._execute_call_impl(tc, call_counts, tenant, conversation_id))
+        commercial_started = time.perf_counter()
+        try:
+            result = await steps.track("approval" if name == "ask_user" else "data" if name.startswith("data.") else "tool", title, self._execute_call_impl(tc, call_counts, tenant, conversation_id))
+        finally:
+            await record_tool_cost(name, time.perf_counter()-commercial_started)
         progress = steps.current.get()
         outcome = result[2]
         if progress and isinstance(outcome, dict) and outcome.get("requires_approval"):

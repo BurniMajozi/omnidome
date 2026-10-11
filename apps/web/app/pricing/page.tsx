@@ -256,7 +256,7 @@ const usageMatrix: UsageCategory[] = [
         rows: [
             { feature: "Automation runs / month", tooltip: "Workflow triggers across all modules", free: 100, starter: "1,000", professional: "50,000", enterprise: "Unlimited" },
             { feature: "Active automations", free: 5, starter: 25, professional: 250, enterprise: "Unlimited" },
-            { feature: "AI credits / month", tooltip: "Used for churn prediction, smart suggestions, AI chat", free: 50, starter: 500, professional: "5,000", enterprise: "10,000" },
+            { feature: "AI credits / month", tooltip: "Shared tenant allowance. Usage is currently measured in shadow mode while the rate card is validated.", free: catalog.usage_policy.allowances.free, starter: catalog.usage_policy.allowances.starter, professional: catalog.usage_policy.allowances.professional.toLocaleString(), enterprise: catalog.usage_policy.allowances.enterprise.toLocaleString() },
             { feature: "Churn prediction (Retention)", free: false, starter: false, professional: true, enterprise: true },
             { feature: "AI deal scoring (Sales)", free: false, starter: true, professional: true, enterprise: true },
             { feature: "Sentiment analysis (Service)", free: false, starter: false, professional: true, enterprise: true },

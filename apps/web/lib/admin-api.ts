@@ -325,6 +325,9 @@ export function grantableRoles(actorRoles: string[]): string[] {
 // API methods
 
 export const adminApi = {
+  getTenantUsage: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantUsage>(`/tenants/${tenant}/usage`),
+  getTenantCosts: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantCosts>(`/tenants/${tenant}/usage/costs`),
+  setTenantUsagePolicy: (tenant:string,monthly_credits:number,reason:string,expires_at:string) => fetchAdmin(`/tenants/${tenant}/usage/policy`,{method:"PUT",body:JSON.stringify({monthly_credits,reason,expires_at})}),
   getPricing: (tenant: string) => fetchAdmin<PlatformPricingState>(`/tenants/${tenant}/pricing`),
   setPricing: (tenant: string, selection: PricingSelection, key: string) => fetchAdmin<{ quote: PlatformQuote; order: PlatformOrder }>(`/tenants/${tenant}/pricing`, { method: "PUT", body: JSON.stringify({ selection, intent: "invoice", idempotency_key: key }) }),
   createPlatformOrder: (tenant: string, selection: PricingSelection, intent: "invoice" | "subscription", key: string) => fetchAdmin<PlatformOrder>(`/tenants/${tenant}/pricing/orders`, { method: "POST", body: JSON.stringify({ selection, intent, idempotency_key: key }) }),

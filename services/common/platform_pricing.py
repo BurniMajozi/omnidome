@@ -60,7 +60,8 @@ def quote(selection: Selection):
     if not 0 <= vat_rate <= 1: raise ValueError("Invalid platform VAT rate")
     vat = (net * vat_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     total = net + vat
-    return {"catalog_version": data["version"], "selection": {**selection.model_dump(), "modules": chosen, "seats": seats},
+    usage_policy = {**data["usage_policy"], "monthly_credits": bundle["credits"] if bundle else data["usage_policy"]["allowances"][max(chosen.values(), key=lambda x: ["starter", "professional", "enterprise"].index(x))]}
+    return {"catalog_version": data["version"], "usage_policy": usage_policy, "selection": {**selection.model_dump(), "modules": chosen, "seats": seats},
             "name": bundle["name"] if bundle else "Custom modules", "tier": "FREE" if selection.bundle == "starter" and net == 0 else (bundle["tier"] if bundle else max(chosen.values(), key=lambda x: ["starter", "professional", "enterprise"].index(x))).upper(),
             "period": selection.period, "currency": data["currency"], "lines": lines,
             "seats": seats, "seat_price": extra_seat_price, "entitlements": sorted(chosen),

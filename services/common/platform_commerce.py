@@ -24,6 +24,8 @@ DDL = [
 
 async def ensure_schema(conn):
     for statement in DDL: await conn.execute(text(statement))
+    from services.common import platform_usage
+    await platform_usage.ensure_schema(conn)
     for module in catalog()["modules"]:
         await conn.execute(text("INSERT INTO modules(id,key,name,is_core) VALUES(:id,:key,:name,false) ON CONFLICT(key) DO NOTHING"),
                            {"id": str(uuid.uuid4()), "key": module["id"], "name": module["name"]})
@@ -56,7 +58,10 @@ async def save_choice(db, tenant, selection, actor, *, enable=False):
         "source": "platform_owner" if enable else "checkout", "provisioned": enable,
     }}
     await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb),updated_at=now() WHERE id=:t"), {"s": json.dumps(settings), "t": str(tenant)})
-    if enable: await provision(db, tenant, priced, actor)
+    if enable:
+        await provision(db, tenant, priced, actor)
+        from services.common.platform_usage import activate
+        await activate(db, tenant, priced, f"override:{revision}", revision, source="platform_owner", actor=actor, reason="Panel and plan provisioning")
     return priced, revision
 
 
@@ -136,6 +141,8 @@ async def capture_module_edits(db, tenant, actor):
     await db.execute(text("UPDATE tenants SET tier=:tier,seat_limit=:seats,seat_price=:price WHERE id=:t"),
                      {"tier": priced["tier"], "seats": priced["seats"], "price": priced["seat_price"], "t": str(tenant)})
     await create_order(db, tenant, actor, selection, "invoice", uuid.uuid4())
+    from services.common.platform_usage import activate
+    await activate(db, tenant, priced, f"override:{revision}", revision, source="platform_owner", actor=actor, reason="Panel checkbox edit")
 
 
 async def paid(db, order, payment, *, force_review=False):
@@ -158,6 +165,8 @@ async def paid(db, order, payment, *, force_review=False):
                      {"status": status, "pid": str(payment.get("id") or order["reference"]), "id": str(order["id"])})
     if matching:
         await provision(db, order["tenant_id"], order["quote"], order["actor_id"])
+        from services.common.platform_usage import activate
+        await activate(db, order["tenant_id"], order["quote"], "order:" + str(order["id"]), order["revision"], source="payment", actor=order["actor_id"])
         settings = {**(tenant["settings"] or {}), "platform_pricing": {**current, "provisioned": True, "paid_order_id": str(order["id"])}}
         await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb),billing_status='active' WHERE id=:t"), {"s": json.dumps(settings), "t": str(order["tenant_id"])})
         if order["intent"] == "subscription" and order["quote"]["amount_cents"] > 0:

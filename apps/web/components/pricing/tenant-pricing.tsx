@@ -1,6 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
+import { TenantUsageCard } from "@/components/pricing/tenant-usage"
 import { adminApi, adminErrorMessage } from "@/lib/admin-api"
 import { catalog, defaultSelection, selectedPanels, bundleSelection, type PricingTier, type PricingSelection, type PlatformQuote, type PlatformPricingState } from "@/lib/platform-pricing"
 
@@ -63,6 +64,7 @@ export function TenantPricingCard({ tenant, editable, onChanged }: { tenant: str
   return <div className="space-y-3 border-t pt-3">
     <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>{open ? "Close pricing" : "Plan, panels & invoices"}</Button>
     {open && <>
+      <TenantUsageCard tenant={tenant} platformOwner={editable}/>
       {!state ? <p className="text-sm">Loading tenant pricing…</p> : <>
         {editable ? <><PricingSelector value={selection} onChange={setSelection} disabled={busy} /><Button disabled={busy} onClick={() => run(async () => { await adminApi.setPricing(tenant, selection, crypto.randomUUID()); await load(); onChanged?.(); setNotice("Panel access saved. A platform invoice is ready for payment.") })}>Save panel access & create invoice</Button><p className="text-xs text-muted-foreground">Platform Owner changes take effect immediately. Saving creates an invoice; payment is a separate action.</p></> : <p className="text-sm">{state.pricing.quote?.name || "Negotiated plan"} · {state.pricing.quote?.seats || "—"} seats. Contact the Platform Owner to change panel access.</p>}
         {state.subscription && <div className="flex flex-wrap gap-2 items-center text-sm"><span>Subscription: {state.subscription.status}</span>{state.subscription.status !== "cancelled" && <Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { await adminApi.cancelPlatformSubscription(tenant, state.subscription!.order_id); await load(); setNotice("Recurring subscription cancelled; current panel access is retained.") })}>Cancel recurring billing</Button>}</div>}

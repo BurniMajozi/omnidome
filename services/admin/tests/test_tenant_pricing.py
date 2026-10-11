@@ -108,6 +108,11 @@ def test_verified_payment_enables_only_selected_modules(client,gateway,monkeypat
     res=gateway.post("/platform-checkout/verify",json={"order_id":order["id"]},headers=as_user(t,user))
     assert res.status_code==200,res.text
     assert res.json()["status"]=="paid"
+    assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t AND action='reconcile'",t=t)[0][0]==1
+    assert q("SELECT policy FROM platform_usage_entitlements WHERE tenant_id=:t",t=t)[0][0]["monthly_credits"]==5000
+    duplicate=gateway.post("/platform-checkout/verify",json={"order_id":order["id"]},headers=as_user(t,user))
+    assert duplicate.json()["duplicate"] is True
+    assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t AND action='reconcile'",t=t)[0][0]==1
     rows=client.get(f"/tenants/{t}/modules",headers=as_user(t,user)).json()
     enabled={r["module_name"] for r in rows if r["enabled"]}
     assert "crm" in enabled and "portal" in enabled and "billing" not in enabled

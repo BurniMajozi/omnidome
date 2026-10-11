@@ -1,0 +1,4 @@
+services:
+  agent-orchestrator:
+    environment:
+      PLATFORM_USAGE_ENABLED: 'true'

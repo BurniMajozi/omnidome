@@ -95,8 +95,13 @@ def _ident_headers(method: str, path: str, tenant_id: str, user_id: Optional[str
 async def _request(method: str, path: str, tenant_id: str, user_id: Optional[str], roles: Optional[List[str]],
                    *, timeout: float, json_body: Optional[dict] = None, params: Optional[dict] = None):
     headers = _ident_headers(method, path, tenant_id, user_id, roles)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        return await client.request(method, f"{MEMORY_URL}{path}", json=json_body, params=params, headers=headers)
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            return await client.request(method, f"{MEMORY_URL}{path}", json=json_body, params=params, headers=headers)
+    finally:
+        from services.agent_orchestrator.commercial_usage import record_tool_cost
+        await record_tool_cost("knowledge_layer", time.perf_counter()-started, category="retrieval")
 
 
 def _note_off(resp_status: int) -> None:

@@ -1,0 +1,35 @@
+"use client"
+import {useEffect,useState} from "react"
+import {Button} from "@/components/ui/button"
+import {adminApi,adminErrorMessage} from "@/lib/admin-api"
+import type {TenantUsage,TenantCosts} from "@/lib/platform-pricing"
+
+export function TenantUsageCard({tenant,platformOwner}:{tenant:string;platformOwner:boolean}) {
+  const [usage,setUsage]=useState<TenantUsage|null>(null)
+  const [costs,setCosts]=useState<TenantCosts|null>(null)
+  const [error,setError]=useState("")
+  const [busy,setBusy]=useState(false)
+  const [credits,setCredits]=useState(0)
+  const [reason,setReason]=useState("")
+  const [expiry,setExpiry]=useState("")
+  const load=async()=>{const u=await adminApi.getTenantUsage(tenant);setUsage(u);setCredits(u.policy.monthly_credits);if(platformOwner)setCosts(await adminApi.getTenantCosts(tenant))}
+  useEffect(()=>{setUsage(null);setCosts(null);setError("");load().catch(e=>setError(adminErrorMessage(e)))},[tenant,platformOwner]) // eslint-disable-line react-hooks/exhaustive-deps
+  const save=async()=>{setBusy(true);setError("");try{await adminApi.setTenantUsagePolicy(tenant,credits,reason,new Date(expiry).toISOString());await load();setReason("")}catch(e){setError(adminErrorMessage(e))}finally{setBusy(false)}}
+  return <section className="space-y-4 rounded-xl border p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">AI usage & capacity</h3><Button variant="outline" size="sm" onClick={()=>load().catch(e=>setError(adminErrorMessage(e)))}>Refresh usage</Button></div>
+    {error&&<p role="alert" className="text-sm text-destructive">{error}</p>}
+    {!usage?<p className="text-sm text-muted-foreground">Loading usage…</p>:<>
+      <p className="text-sm text-amber-500">Shadow metering · Draft rates · No credit deductions or overage charges</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">{[["Monthly allowance",usage.policy.monthly_credits],["Measured credits",usage.used],["Illustrated remaining",usage.remaining],["Running operations",usage.running]].map(([label,value])=><div key={label} className="rounded bg-secondary p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="text-xl font-semibold">{Number(value).toLocaleString()}</p></div>)}</div>
+      <progress className="h-2 w-full" max={Math.max(1,usage.policy.monthly_credits)} value={Math.min(usage.used,usage.policy.monthly_credits)} aria-label="Measured credit usage"/>
+      <p className="text-xs text-muted-foreground">Period: {new Date(usage.period_start).toLocaleDateString()} – {new Date(usage.period_end).toLocaleDateString()}. The shared pool does not stack across panels. Unused included credits do not roll over.</p>
+      {usage.policy.legacy&&<p className="text-sm">This organisation has a negotiated or older plan. No new allowance was assigned automatically.</p>}
+      <details><summary className="cursor-pointer text-sm font-medium">What uses credits?</summary><div className="mt-2 grid gap-2 sm:grid-cols-2">{Object.entries(usage.policy.rates).map(([kind,rate])=><p key={kind} className="text-sm">{kind.replaceAll("_"," ")}: {rate} minimum</p>)}</div><p className="mt-2 text-xs text-muted-foreground">Draft calculation: the higher of the action minimum and one credit per {usage.policy.token_block.toLocaleString()} recorded model tokens. Failed, cancelled and approval-waiting work receives no measured charge. Hosting capacities are awaiting measurement; communications are separate provider usage.</p></details>
+      <p className="text-xs text-muted-foreground">Allowance sync: {usage.sync?.status||"Not queued"}{usage.sync?.error_code?` · ${usage.sync.error_code}`:""}</p>
+      <div className="space-y-2"><h4 className="text-sm font-medium">Recent measured work</h4>{usage.recent.length===0?<p className="text-sm text-muted-foreground">No measured operations yet.</p>:usage.recent.map(row=><div key={row.id} className="flex flex-wrap justify-between gap-2 border-t pt-2 text-sm"><span>{row.kind.replaceAll("_"," ")} · {row.status}</span><span>{row.credits.toLocaleString()} credits · {new Date(row.started_at).toLocaleString()}</span></div>)}</div>
+      {platformOwner&&<details><summary className="cursor-pointer text-sm font-medium">Platform Owner · allowance override</summary><div className="mt-3 space-y-3"><label className="block text-sm">Monthly credits<input type="number" min={0} max={100000000} value={credits} onChange={e=>setCredits(Number(e.target.value))} className="mt-1 block w-full rounded border bg-background p-2"/></label><label className="block text-sm">Reason<input value={reason} onChange={e=>setReason(e.target.value)} minLength={5} maxLength={500} className="mt-1 block w-full rounded border bg-background p-2"/></label><label className="block text-sm">Expires at<input type="datetime-local" value={expiry} onChange={e=>setExpiry(e.target.value)} className="mt-1 block w-full rounded border bg-background p-2"/></label><Button disabled={busy||reason.trim().length<5||!expiry} onClick={save}>Save audited shadow allowance</Button></div></details>}
+    </>}
+    {platformOwner&&costs&&<details><summary className="cursor-pointer text-sm font-medium">Platform delivery costs · last {costs.window_days} days</summary><p className="my-2 text-xs text-muted-foreground">{costs.margin_reason} Currencies are shown separately; unknown cost is not zero.</p><div className="space-y-2">{costs.costs.length===0?<p className="text-sm">No delivery cost events yet.</p>:costs.costs.map((row,i)=><div key={i} className="rounded bg-secondary p-2 text-sm"><p className="break-all">{row.category} · {row.provider} · {row.source}</p><p>{row.events} events · {row.quantity} {row.unit} · {row.amount===null?"Cost unknown":`${row.currency} ${row.amount}`}</p></div>)}</div></details>}
+    {platformOwner&&costs?.draft_rate_card&&<details><summary className="cursor-pointer text-sm font-medium">Provider pricing · profit review · draft</summary><p className="my-2 text-xs text-muted-foreground">Scenario: R{costs.draft_rate_card.assumptions.usd_zar}/USD, {costs.draft_rate_card.assumptions.fx_buffer*100}% currency buffer, {costs.draft_rate_card.assumptions.target_margin*100}% target contribution margin. Prices exclude customer VAT. Payment fees and conservative fee VAT are included in the floor. These prices are not active customer charges.</p><div className="grid gap-3 md:grid-cols-2">{costs.draft_rate_card.rates.map(rate=><article key={rate.id} className="rounded border p-3 text-sm"><p className="font-medium">{rate.name}</p><p className="mt-1">R{rate.price_zar.toFixed(2)} / {rate.unit}</p><p className={rate.meets_target?"text-emerald-600":"text-destructive"}>Floor R{rate.minimum_net_zar} · Scenario margin {rate.scenario_margin_percent}%</p><p className="mt-2 text-xs text-muted-foreground">{rate.note}</p><a href={rate.source} target="_blank" rel="noreferrer" className="mt-2 inline-block underline">{rate.provider} source · reviewed {costs.draft_rate_card?.reviewed_at}</a></article>)}</div><p className="mt-3 text-xs text-muted-foreground">{costs.draft_rate_card.limitation}</p></details>}
+  </section>
+}

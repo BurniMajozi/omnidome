@@ -1,7 +1,34 @@
 {
-  "version": 1,
+  "version": 2,
   "currency": "ZAR",
   "annual_discount_percent": 20,
+  "usage_policy": {
+    "version": 1,
+    "mode": "shadow",
+    "status": "draft",
+    "feature_id": "omnidome_ai_credits",
+    "allowances": {"free":50,"starter":500,"professional":5000,"enterprise":10000},
+    "rates": {"assisted_action":1,"content_generation":10,"research":50,"bulk_record":1},
+    "token_block": 1000,
+    "rollover": false,
+    "overage": "stop",
+    "hosting": {"storage_gb":null,"bandwidth_gb":null,"published_pages":null},
+    "communications": "separate_provider_usage"
+  },
+  "provider_rate_card": {
+    "version": 1,
+    "status": "draft",
+    "reviewed_at": "2026-10-11",
+    "assumptions": {"usd_zar":20,"fx_buffer":0.15,"target_margin":0.65,"customer_vat":0.15,"gateway_rate":0.029,"gateway_fixed_zar":1,"gateway_vat":0.15},
+    "rates": [
+      {"id":"deepgram_transcription","name":"Speech transcription","provider":"Deepgram","unit":"audio minute","price_zar":0.59,"cost_usd":0.0058,"allocation_zar":0.02,"invoice_units":1000,"source":"https://deepgram.com/pricing","note":"Conservative Nova-3 multilingual streaming baseline. Prerecorded is lower. Channels, diarization, TTS, LLM and telephone charges need separate costing; this is not a full AI call price."},
+      {"id":"firecrawl_credits","name":"Web research capacity","provider":"Firecrawl","unit":"provider credit","price_zar":0.49,"cost_usd":0.005,"allocation_zar":0.02,"invoice_units":1000,"source":"https://www.firecrawl.dev/pricing","note":"Hobby replacement top-up cost. Basic scrape uses one credit per page; search, extraction and browser work consume different quantities. LLM analysis is separate."},
+      {"id":"zernio_account","name":"Managed social connection","provider":"Zernio","unit":"connected account / month","price_zar":499,"cost_usd":6,"allocation_zar":10,"invoice_units":1,"source":"https://docs.zernio.com/pricing","note":"Conservative first paid band. Shared free accounts and volume discounts are not tenant entitlements. X calls, messaging, numbers, calls, SMS, WhatsApp and ad spend are separate."},
+      {"id":"agentmail_inbox","name":"Managed email inbox","provider":"AgentMail","unit":"inbox / month","price_zar":179,"cost_usd":2,"allocation_zar":5,"invoice_units":1,"source":"https://www.agentmail.to/pricing","note":"Marginal paid capacity. The shared base subscription, storage and support still require allocation and reconciliation."},
+      {"id":"agentmail_domain","name":"Managed email domain","provider":"AgentMail","unit":"domain / month","price_zar":179,"cost_usd":2,"allocation_zar":5,"invoice_units":1,"source":"https://www.agentmail.to/pricing","note":"Provider capacity only; domain registration and DNS service are separate."},
+      {"id":"agentmail_emails","name":"Managed email capacity","provider":"AgentMail","unit":"1,000 emails / month","price_zar":179,"cost_usd":2,"allocation_zar":5,"invoice_units":1,"source":"https://www.agentmail.to/pricing","note":"Monthly purchased capacity, not an invented per-delivered-message provider charge. Track outbound recipients and all provider-counted email separately; daily limits still apply."}
+    ]
+  },
   "modules": [
     {"id":"communication","page_id":"communication","name":"Communication Hub","prices":{"starter":199,"professional":499,"enterprise":1499}},
     {"id":"sales","page_id":"sales","name":"Sales Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
@@ -21,7 +48,7 @@
   "bundles": {
     "professional":{"name":"Professional","monthly_price":3500,"seats":6,"extra_seat_price":45,"credits":5000,"tier":"professional","modules":["marketing","sales","support","crm","billing","portal"]},
     "enterprise":{"name":"Enterprise","monthly_price":9500,"seats":8,"extra_seat_price":75,"credits":10000,"tier":"enterprise","modules":["marketing","sales","support","crm","billing","portal","retention","network","compliance"]},
-    "starter":{"name":"Starter","monthly_price":0,"seats":1,"extra_seat_price":45,"credits":0,"tier":"starter","modules":["crm"]},
-    "growth":{"name":"Growth","monthly_price":999,"seats":3,"extra_seat_price":45,"credits":0,"tier":"starter","modules":["crm","sales"]}
+    "starter":{"name":"Starter","monthly_price":0,"seats":1,"extra_seat_price":45,"credits":50,"tier":"starter","modules":["crm"]},
+    "growth":{"name":"Growth","monthly_price":999,"seats":3,"extra_seat_price":45,"credits":500,"tier":"starter","modules":["crm","sales"]}
   }
 }

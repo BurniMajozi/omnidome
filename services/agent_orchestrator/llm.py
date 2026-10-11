@@ -277,6 +277,8 @@ class LLMClient:
         # Usage tracing (spec A7): one row per call, written off the request path.
         usage.record_llm_call(tenant_id=tenant_id, agent_type=agent_type, channel=channel, result=result,
                               latency_ms=int((time.perf_counter() - started) * 1000), purpose=purpose)
+        from services.agent_orchestrator.commercial_usage import record_model_cost
+        await record_model_cost(result, tenant_id, int((time.perf_counter() - started) * 1000), purpose)
         return result
 
     async def _chat(self, agent_type, messages, tools, tool_choice, primary_model, fallback_model,
@@ -351,6 +353,7 @@ class LLMClient:
                     "content": msg.get("content", ""),
                     "tool_calls": [],
                     "model": data.get("model") or model,
+                    "provider": "ollama",
                     "provider": "Ollama (local)",
                     "usage": {"prompt_tokens": data.get("prompt_eval_count", 0),
                               "completion_tokens": data.get("eval_count", 0),
@@ -433,6 +436,7 @@ class LLMClient:
                 "finish_reason": choice.get("finish_reason"),
                 "usage": data.get("usage") or {},
                 "model": data.get("model") or model_used,
+                "provider": "openrouter",
                 "provider": "OpenRouter",
             }
 
