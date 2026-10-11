@@ -838,3 +838,95 @@ def test_link_user_one_login_one_employee(make):
     assert r.status_code == 200 and target.user_id == uid
     clash = FakeDB().when(employee_by_id, [target]).when(lambda s: "SELECT employees.id" in str(s) and "employees.user_id" in str(s), [(uuid.uuid4(),)])
     assert make(clash, ctx(HR_ADMIN)).put(f"/employees/{target.id}/link-user", json={"user_id": str(uuid.uuid4())}).status_code == 409
+
+
+@pytest.fixture(autouse=True)
+def _direct_payout_mode(monkeypatch):
+    """These scripted-session tests exercise the legacy per-payslip transfer path; funded-mode tests opt in below
+    (the funded path calls billing over HTTP, which is faked there)."""
+    monkeypatch.setenv("PAYROLL_PAYOUT_MODE", "direct")
+    yield
+
+
+# ═════════════════ funded payroll (pays from the tenant's payout wallet via billing) ═════════════════
+
+def _funded_run(make, monkeypatch, batch_response=None, raises=None):
+    monkeypatch.setenv("PAYROLL_PAYOUT_MODE", "funded")
+    e1, e2 = employee(), employee()
+    run = PayrollRun(id=uuid.uuid4(), tenant_id=TENANT, period="2026-08", status="DRAFT", currency="ZAR", employee_count=2,
+                     total_gross=0, total_deductions=0, total_net=0, created_at=datetime(2026, 8, 1))
+    s1, s2 = payslip_row(e1, run.id), payslip_row(e2, run.id)
+    s1.paystack_recipient_code, s2.paystack_recipient_code = "RCP_1", "RCP_2"
+    sent = {}
+
+    async def fake_batch(tenant_id, user_id, source_id, items, kind="payroll"):
+        sent.update(tenant=tenant_id, source=source_id, items=items, kind=kind)
+        if raises:
+            raise raises
+        return batch_response(items) if batch_response else {"items": [
+            {"item_ref": i["item_ref"], "reference": i["reference"], "status": "success", "transfer_code": "TRF_" + i["item_ref"][:4],
+             "message": None} for i in items]}
+
+    async def no_direct(*a, **k):
+        raise AssertionError("funded mode must not send per-payslip transfers")
+    monkeypatch.setattr(hr.ps, "funded_batch", fake_batch)
+    monkeypatch.setattr(hr.ps, "initiate_transfer", no_direct)
+    db = FakeDB().when(lambda s: "FROM payroll_runs" in str(s), [run]).when(lambda s: "FROM payslips" in str(s), [s1, s2])
+    return run, s1, s2, sent, db
+
+
+def test_funded_pay_sends_one_batch_with_payslip_references(make, monkeypatch):
+    run, s1, s2, sent, db = _funded_run(make, monkeypatch)
+    r = make(db, ctx(HR_ADMIN)).post(f"/payroll/runs/{run.id}/pay")
+    assert r.status_code == 200
+    assert sent["kind"] == "payroll" and sent["source"] == str(run.id)
+    assert [i["reference"] for i in sent["items"]] == [f"pay-{s1.id}", f"pay-{s2.id}"] and [i["item_ref"] for i in sent["items"]] == [str(s1.id), str(s2.id)]
+    assert run.status == "PAID" and s1.payout_status == "PAID" and s2.payout_status == "PAID"
+
+
+def test_funded_pay_short_wallet_is_402_and_pays_nobody(make, monkeypatch):
+    run, s1, s2, sent, db = _funded_run(make, monkeypatch, raises=hr.ps.InsufficientFunding(
+        {"required_zar": 9000.0, "balance_zar": 100.0, "shortfall_zar": 8900.0, "fee_zar": 540.0}))
+    r = make(db, ctx(HR_ADMIN)).post(f"/payroll/runs/{run.id}/pay")
+    assert r.status_code == 402
+    d = r.json()["detail"]
+    assert d["shortfall_zar"] == 8900.0 and "short by R8900.0" in d["message"]
+    assert s1.payout_status != "PAID" and run.status == "DRAFT"
+
+
+def test_funded_pay_marks_in_flight_and_failed_items_individually(make, monkeypatch):
+    def response(items):
+        return {"items": [{"item_ref": items[0]["item_ref"], "reference": items[0]["reference"], "status": "processing", "transfer_code": "TRF_a"},
+                          {"item_ref": items[1]["item_ref"], "reference": items[1]["reference"], "status": "failed", "message": "Account closed 62001234567"}]}
+    run, s1, s2, sent, db = _funded_run(make, monkeypatch, batch_response=response)
+    r = make(db, ctx(HR_ADMIN)).post(f"/payroll/runs/{run.id}/pay")
+    assert r.status_code == 200 and run.status == "PARTIALLY_PAID"
+    assert s1.payout_status == "PROCESSING" and s2.payout_status == "FAILED" and "62001234567" not in s2.payout_message
+
+
+def test_funded_pay_skips_payslips_without_a_recipient_and_billing_errors_are_502(make, monkeypatch):
+    run, s1, s2, sent, db = _funded_run(make, monkeypatch, raises=hr.ps.PaystackError("billing payouts returned HTTP 500"))
+    s2.paystack_recipient_code = None
+    r = make(db, ctx(HR_ADMIN)).post(f"/payroll/runs/{run.id}/pay")
+    assert r.status_code == 502 and [i["item_ref"] for i in sent["items"]] == [str(s1.id)]
+
+
+def test_sync_payouts_refreshes_payslips_from_billing(make, monkeypatch):
+    run, s1, s2, sent, db = _funded_run(make, monkeypatch)
+    s1.payout_status = s2.payout_status = "PROCESSING"
+    run.status = "PAID"
+
+    async def status(tenant_id, source_id, kind="payroll", reconcile=True):
+        return {"batches": [{"items": [
+            {"item_ref": str(s1.id), "reference": "r1", "status": "success", "transfer_code": "TRF_1"},
+            {"item_ref": str(s2.id), "reference": "r2", "status": "failed", "message": "Transfer reversed"}]}]}
+    monkeypatch.setattr(hr.ps, "funded_status", status)
+    r = make(db, ctx(HR_ADMIN)).post(f"/payroll/runs/{run.id}/sync-payouts")
+    assert r.status_code == 200 and s1.payout_status == "PAID" and s2.payout_status == "FAILED" and run.status == "PARTIALLY_PAID"
+
+
+def test_payout_mode_defaults_to_funded(monkeypatch):
+    monkeypatch.delenv("PAYROLL_PAYOUT_MODE", raising=False)
+    assert hr.ps.payout_mode() == "funded"
+    monkeypatch.setenv("PAYROLL_PAYOUT_MODE", "direct")
+    assert hr.ps.payout_mode() == "direct"

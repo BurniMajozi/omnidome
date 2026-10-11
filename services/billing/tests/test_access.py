@@ -197,6 +197,7 @@ def test_every_post_is_gated_or_deliberately_public():
     # endpoint checks organisation-admin RBAC and tenant membership itself.
     from services.billing.routes.platform_checkout import PUBLIC_PATHS
     public |= PUBLIC_PATHS
+    public |= {"/payouts/internal/batches", "/payouts/internal/quote", "/payouts/internal/recipients"}   # internal service key, checked in the handler
     seats = "/billing/seats"          # seats.py keeps its own operator / billing-reader checks
     ungated = []
     for route in all_routes(app):

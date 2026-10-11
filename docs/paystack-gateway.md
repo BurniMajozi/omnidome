@@ -22,11 +22,36 @@ Only *succeeded* charges count toward the month's volume. The commission is kept
 | Refund | From an open customer credit (credit note on a paid invoice, overpayment, unallocated payment). Paystack `POST /refund` against the original charge, or a manual (EFT) record. `refund.*` webhooks finish it; posts `billing.refund` (Dr 1100 / Cr 1010). |
 | Dispute | `charge.dispute.*` recorded, matched to tenant + invoice, ops alerted, dunning + autopay frozen. Evidence pack assembled from our records; accept / decline from the Disputes tab. Lost -> `billing.chargeback` (Dr 6960 / Cr 1010) + liability. |
 
+## Funded payouts (payroll and supplier payments)
+
+Paystack transfers are paid from OmniDome's own balance, so a tenant can only pay out money it has already given us.
+`services/billing/routes/payouts.py` owns a per-tenant **payout wallet** (`billing_payout_wallets`, append-only entries):
+
+- **Funding**: a card checkout (`POST /payouts/funding/initialize`, no subaccount, credited by the `charge.success` webhook for
+  exactly the initialised amount) or an EFT recorded by a platform admin (`POST /payouts/funding/manual`, idempotent per bank
+  reference). Card funding costs OmniDome about 3% in processing, so large payrolls should be funded by EFT.
+- **Fee**: the same marginal tiers as card collections, on the tenant's month-to-date volume (card charges + payouts).
+- **Pay**: HR (`POST /payroll/runs/{id}/pay`) and inventory (`POST /purchase-orders/{id}/payments`) call billing's internal
+  endpoints with the service key. Billing reserves amount + fee from the wallet (402 with the shortfall if it cannot) and sends
+  Paystack `POST /transfer/bulk` (100 per request). An item that fails, or a transfer that is reversed, credits its amount and fee
+  back exactly once. An outcome that cannot be known (gateway error) stays *pending* and is resolved by reconcile
+  (`GET /transfer/verify/{reference}`); a transfer Paystack never created is failed and returned to the wallet.
+- **Safety**: an item already paid or in flight is never sent again; a failed one can be retried as a new attempt
+  (`...-r2` reference); billing refuses when OmniDome's own Paystack balance is below the batch; open refund/chargeback
+  liabilities are netted against the wallet as money arrives.
+- **Supplier payments**: a purchase order must be approved, the supplier needs bank details (the account number goes to Paystack
+  once; only the recipient code and last 4 digits are kept; changing details is blocked while a payment is in flight), and the
+  total paid across non-failed payments cannot exceed the order total. Manager access only.
+- **Payroll mode**: `PAYROLL_PAYOUT_MODE=funded` (default) pays from the wallet; `direct` keeps the legacy per-payslip transfer from
+  the platform balance (development only, no funding check, no fee).
+- Transfer OTP must be disabled for API transfers in the Paystack dashboard, otherwise transfers stall in `otp` status.
+- HR and inventory need `INTERNAL_SERVICE_KEY` and `BILLING_SERVICE_URL` in their environment.
+
 ## Tenant liability
 
 Refunds and lost disputes are paid from OmniDome's Paystack balance for money the tenant was already settled.
-They are recorded in `billing_gateway_liabilities` (open until recovered). Recovery by netting against future
-pre-funding / top-ups is built with the payroll + top-up work, not yet automatic.
+They are recorded in `billing_gateway_liabilities` (open until recovered). They are netted against the payout wallet
+automatically as funding arrives (oldest first, whole liabilities only).
 
 ## Safety controls
 
@@ -49,5 +74,6 @@ pre-funding / top-ups is built with the payroll + top-up work, not yet automatic
 
 ## Not built yet
 
-Settlement reconciliation + balance ledger, dispute evidence file upload, VAT on the gateway fee, automatic
-liability recovery, payroll / supplier pre-funding with bulk transfers, prepaid credits + top-ups (Autumn).
+Settlement reconciliation + balance ledger, dispute evidence file upload, VAT on the gateway fee, a Paystack
+dedicated virtual account for EFT funding (today an admin records the EFT), tenant-books posting of payout fees, and the
+platform prepaid credits + top-ups (Codex, platform side).

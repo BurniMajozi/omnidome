@@ -3245,6 +3245,15 @@ async def pay_payroll_run(
     logger.info("AUDIT hr.payroll_run.pay tenant=%s user=%s run=%s payslips=%d idempotency_key=%s",
                 tenant_id, admin.user_id, run_id, len(slips), (idempotency_key or "")[:64] or "-")
 
+    if ps.payout_mode() == "funded":
+        paid, failed = await _pay_from_wallet(db, run, slips, tenant_id, admin)
+    else:
+        paid, failed = await _pay_direct(db, run, slips, tenant_id)
+    return await _finish_payment(db, run, run_id, tenant_id, paid, failed)
+
+
+async def _pay_direct(db, run, slips, tenant_id):
+    """Legacy: one transfer per payslip from the platform balance. Development only (PAYROLL_PAYOUT_MODE=direct)."""
     paid = failed = 0
     for slip in slips:
         recipient = slip.paystack_recipient_code
@@ -3284,7 +3293,64 @@ async def pay_payroll_run(
         else:
             slip.payout_status = "FAILED"
             failed += 1
+    return paid, failed
 
+
+_PAYOUT_STATUS = {"success": "PAID", "processing": "PROCESSING", "pending": "PROCESSING", "failed": "FAILED"}
+
+
+async def _recipient_for(db, slip, tenant_id):
+    if slip.paystack_recipient_code:
+        return slip.paystack_recipient_code
+    prof = (await db.execute(
+        select(PayrollProfile).where(PayrollProfile.employee_id == slip.employee_id, PayrollProfile.tenant_id == tenant_id)
+    )).scalars().first()
+    return prof.paystack_recipient_code if prof else None
+
+
+async def _pay_from_wallet(db, run, slips, tenant_id, admin):
+    """Pay the run out of the tenant's pre-funded payout wallet through billing (one bulk transfer, fee applied).
+    A wallet that cannot cover the run plus the fee refuses with 402 before anything is reserved or sent."""
+    items, by_ref, failed = [], {}, 0
+    for slip in slips:
+        recipient = await _recipient_for(db, slip, tenant_id)
+        if not recipient:
+            slip.payout_status = "FAILED"
+            slip.payout_message = "no Paystack recipient (set bank details on payroll profile)"
+            failed += 1
+            continue
+        slip.paystack_recipient_code = recipient
+        by_ref[str(slip.id)] = slip
+        items.append({"item_ref": str(slip.id), "recipient_code": recipient, "amount_zar": f"{float(slip.net):.2f}",
+                      "reason": f"Payroll {run.period}", "reference": _transfer_reference(slip.id)})
+    if not items:
+        return 0, failed
+    try:
+        out = await ps.funded_batch(tenant_id, admin.user_id, str(run.id), items)
+    except ps.InsufficientFunding as exc:
+        d = exc.detail if isinstance(exc.detail, dict) else {}
+        raise HTTPException(status_code=402, detail={
+            "message": f"The payroll wallet is short by R{d.get('shortfall_zar', '?')}. Fund it in Billing, then pay again.", **d})
+    except ps.PaystackError as exc:
+        raise HTTPException(status_code=502, detail=scrub_text(str(exc)))
+    paid = 0
+    for it in out.get("items", []):
+        slip = by_ref.get(it["item_ref"])
+        if slip is None:
+            continue
+        status = _PAYOUT_STATUS.get(it["status"], "PROCESSING")
+        slip.payout_status = status
+        slip.paystack_transfer_code = it.get("transfer_code")
+        slip.paystack_reference = it.get("reference")
+        slip.payout_message = scrub_text(it.get("message"))
+        if status == "FAILED":
+            failed += 1
+        else:
+            paid += 1
+    return paid, failed
+
+
+async def _finish_payment(db, run, run_id, tenant_id, paid, failed):
     if failed == 0:
         run.status = "PAID"
     elif paid == 0:
@@ -3297,6 +3363,43 @@ async def pay_payroll_run(
         select(Payslip).where(Payslip.run_id == run_id, Payslip.tenant_id == tenant_id).order_by(Payslip.created_at)
     )).scalars().all()
     return {"initiated": paid, "failed": failed, **_run_to_dict(run, slips_all)}
+
+
+@app.post("/payroll/runs/{run_id}/sync-payouts")
+async def sync_payroll_payouts(
+    run_id: uuid.UUID,
+    tenant_id: uuid.UUID = Depends(get_current_tenant_id),
+    admin: AuthContext = Depends(require_hr_admin),
+    db=Depends(get_session),
+):
+    """Refresh payslip payout statuses from billing (asks Paystack about transfers still in flight). HR admin only."""
+    run = (await db.execute(
+        select(PayrollRun).where(PayrollRun.id == run_id, PayrollRun.tenant_id == tenant_id).with_for_update()
+    )).scalars().first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Payroll run not found")
+    try:
+        status_doc = await ps.funded_status(tenant_id, str(run_id))
+    except ps.PaystackError as exc:
+        raise HTTPException(status_code=502, detail=scrub_text(str(exc)))
+    slips = {str(s.id): s for s in (await db.execute(
+        select(Payslip).where(Payslip.run_id == run_id, Payslip.tenant_id == tenant_id).with_for_update())).scalars().all()}
+    for batch in status_doc.get("batches", []):                    # oldest attempt first: the latest attempt wins
+        for it in batch.get("items", []):
+            slip = slips.get(it["item_ref"])
+            if slip is None:
+                continue
+            slip.payout_status = _PAYOUT_STATUS.get(it["status"], "PROCESSING")
+            slip.paystack_transfer_code = it.get("transfer_code") or slip.paystack_transfer_code
+            slip.paystack_reference = it.get("reference") or slip.paystack_reference
+            if it.get("message"):
+                slip.payout_message = scrub_text(it["message"])
+    states = [s.payout_status for s in slips.values()]
+    if states:
+        run.status = ("PAID" if all(x == "PAID" for x in states) else "FAILED" if all(x == "FAILED" for x in states)
+                      else "PARTIALLY_PAID" if any(x in ("PAID", "PROCESSING") for x in states) else run.status)
+    await db.flush()
+    return _run_to_dict(run, list(slips.values()))
 
 
 def _transfer_reference(payslip_id: uuid.UUID) -> str:

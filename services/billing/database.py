@@ -14,6 +14,7 @@ from services.billing.models import Base, InvoiceSequence
 from services.billing import models_fees  # noqa: F401  (registers fee_policies & co. so create_all builds them)
 from services.billing import models_invoicing  # noqa: F401  (registers quotes, templates, share links, delivery events)
 from services.billing import models_gateway  # noqa: F401  (registers gateway settings + commission ledger)
+from services.billing import models_payouts  # noqa: F401  (registers payout wallet, batches, fundings)
 
 
 logger = logging.getLogger("billing.database")

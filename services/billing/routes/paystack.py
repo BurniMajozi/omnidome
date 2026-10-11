@@ -280,7 +280,9 @@ async def paystack_webhook(
     elif event in ("transfer.success", "transfer.failed", "transfer.reversed"):
         # Payroll payouts (services/hr) initiate transfers on this same Paystack
         # account; record the terminal state here for visibility.
-        logger.info("Transfer %s: %s", event.split(".")[1], data.get("reference"))
+        from services.billing.routes import payouts
+        outcome = await payouts.handle_transfer_event(event, data)
+        logger.info("Transfer %s: %s (%s)", event.split(".")[1], data.get("reference"), outcome)
 
     return {"status": outcome}
 
@@ -335,6 +337,10 @@ async def _handle_charge_success(data: dict, key: str) -> str:
     metadata = data.get("metadata") or {}
     if not isinstance(metadata, dict):
         metadata = {}
+
+    if metadata.get("kind") == "payout_funding":        # a tenant topping up its payout wallet, not an invoice payment
+        from services.billing.routes import payouts
+        return await payouts.handle_funding_success(data, key)
 
     entries: list = []
     reinstate = None

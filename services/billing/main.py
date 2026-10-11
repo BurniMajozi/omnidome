@@ -20,6 +20,7 @@ from services.billing.routes.gateway import router as gateway_router
 from services.billing.routes.payment_methods import router as payment_methods_router
 from services.billing.routes.disputes import router as disputes_router
 from services.billing.routes.refunds import router as refunds_router
+from services.billing.routes.payouts import router as payouts_router
 from services.billing.routes.collections import router as collections_router
 from services.billing.routes.reports import router as reports_router
 from services.billing.routes.subscriptions import router as subscriptions_router
@@ -56,7 +57,9 @@ app = FastAPI(
 guard = EntitlementGuard(
     module_id="billing",
     public_paths={"/payments/paystack/webhook"} | OUTBOX_PUBLIC_PATHS | DELIVERY_PUBLIC_PATHS | PLATFORM_CHECKOUT_PATHS,
-    public_prefixes=("/public/",),  # share-token routes: per-IP rate limited, generic 404, sanitised (routes/public_invoices.py)
+    # /public/: share-token routes, per-IP rate limited, generic 404, sanitised (routes/public_invoices.py)
+    # /payouts/internal/: HR / purchasing service calls; each handler checks the internal service key (routes/payouts.py)
+    public_prefixes=("/public/", "/payouts/internal/"),
 )
 
 configure_production(app)
@@ -109,6 +112,7 @@ app.include_router(gateway_router)
 app.include_router(payment_methods_router)
 app.include_router(disputes_router)
 app.include_router(refunds_router)
+app.include_router(payouts_router)
 app.include_router(collections_router)
 app.include_router(reports_router)
 app.include_router(subscriptions_router)

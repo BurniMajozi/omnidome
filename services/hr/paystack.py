@@ -146,3 +146,67 @@ async def initiate_transfer(
         "reference": reference,
         "message": body.get("message", f"paystack error ({resp.status_code})"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Funded payouts through billing (the default). Paystack transfers are paid out of OmniDome's own balance, so
+# payroll only goes out of the tenant's pre-funded payout wallet (services/billing/routes/payouts.py), which also
+# applies OmniDome's fee and sends one bulk transfer instead of one request per employee.
+# ---------------------------------------------------------------------------
+
+def payout_mode() -> str:
+    """'funded' (default: pay from the tenant's payout wallet via billing) or 'direct' (legacy: one transfer per
+    payslip straight from the platform balance, no funding check and no fee: development only)."""
+    return "direct" if os.getenv("PAYROLL_PAYOUT_MODE", "funded").strip().lower() == "direct" else "funded"
+
+
+class InsufficientFunding(Exception):
+    """The tenant's payout wallet cannot cover the run plus the fee. `detail` carries required / balance / shortfall."""
+
+    def __init__(self, detail):
+        super().__init__("payout wallet is short")
+        self.detail = detail
+
+
+def _billing_headers() -> dict:
+    key = os.getenv("INTERNAL_SERVICE_KEY", "")
+    if not key:
+        raise PaystackError("INTERNAL_SERVICE_KEY is not configured: cannot reach billing payouts")
+    return {"x-internal-key": key, "Content-Type": "application/json"}
+
+
+def _billing_url() -> str:
+    return os.getenv("BILLING_SERVICE_URL", "http://billing:8003").rstrip("/")
+
+
+async def funded_batch(tenant_id, user_id, source_id: str, items: list, kind: str = "payroll") -> dict:
+    """Create + execute a payout batch in billing. items: [{item_ref, recipient_code, amount_zar(str), reason, reference}]."""
+    body = {"tenant_id": str(tenant_id), "kind": kind, "source_id": source_id,
+            "requested_by": str(user_id) if user_id else None, "items": items}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(f"{_billing_url()}/payouts/internal/batches", json=body, headers=_billing_headers())
+    except httpx.HTTPError as exc:
+        raise PaystackError(f"payout request failed: {exc}") from exc
+    data = resp.json() if resp.content else {}
+    if resp.status_code == 402:
+        raise InsufficientFunding(data.get("detail"))
+    if resp.status_code in (409, 422, 503):
+        detail = data.get("detail")
+        raise PaystackError(str(detail.get("message") if isinstance(detail, dict) else detail))
+    if resp.status_code != 200:
+        raise PaystackError(f"billing payouts returned HTTP {resp.status_code}")
+    return data
+
+
+async def funded_status(tenant_id, source_id: str, kind: str = "payroll", reconcile: bool = True) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.get(f"{_billing_url()}/payouts/internal/by-source", headers=_billing_headers(),
+                                    params={"tenant_id": str(tenant_id), "kind": kind, "source_id": source_id,
+                                            "reconcile": str(reconcile).lower()})
+    except httpx.HTTPError as exc:
+        raise PaystackError(f"payout status request failed: {exc}") from exc
+    if resp.status_code != 200:
+        raise PaystackError(f"billing payouts returned HTTP {resp.status_code}")
+    return resp.json()

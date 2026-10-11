@@ -1010,6 +1010,42 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+
+class SupplierBank(Base):
+    """Where a supplier is paid. The full account number goes to Paystack once (as a transfer recipient) and is never
+    stored: only the recipient code and the last four digits are kept."""
+    __tablename__ = "inventory_supplier_bank"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, unique=True)
+    bank_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    account_last4: Mapped[str] = mapped_column(String(4), nullable=False)
+    recipient_code: Mapped[str] = mapped_column(String(60), nullable=False)
+    updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SupplierPayment(Base):
+    """One payment to a supplier against a purchase order, paid from the tenant's funded payout wallet via billing."""
+    __tablename__ = "inventory_supplier_payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    po_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False, index=True)
+    supplier_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    amount_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|processing|paid|failed
+    supplier_invoice_ref: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    fee_zar: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=Decimal("0.00"))
+    transfer_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 async def init_tables():
     """Create missing tables and bring pre-existing (legacy-shaped) ones to the ORM shape.
 
