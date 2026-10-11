@@ -5,7 +5,7 @@ import { Pencil, Plus, RefreshCcw, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
-import { useBillingTier } from "@/lib/billing-api"
+import { useBillingTier, useTaxProfile } from "@/lib/billing-api"
 import { fmtMoney } from "@/lib/money"
 import {
   asList,
@@ -46,6 +46,7 @@ interface ItemForm {
 const blankItem: ItemForm = { name: "", description: "", unit_price_zar: "", tax_rate: "", category: "", active: true }
 
 function ItemsSection() {
+  const { charges, includesVat } = useTaxProfile()
   const { tier } = useBillingTier()
   const canWrite = tierAtLeast(tier, "clerk")
   const isAdmin = tier === "admin"
@@ -180,11 +181,11 @@ function ItemsSection() {
               <textarea className={textareaClass} value={edit.form.description} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, description: e.target.value } })} />
             </Field>
             <div className="grid grid-cols-3 gap-3">
-              <Field label="Unit price (R)">
+              <Field label={includesVat ? "Unit price (R, incl. VAT)" : "Unit price (R)"}>
                 <input className={inputClass} inputMode="decimal" value={edit.form.unit_price_zar} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, unit_price_zar: e.target.value } })} />
               </Field>
               <Field label="VAT %" hint="Empty = default">
-                <input className={inputClass} inputMode="decimal" value={edit.form.tax_rate} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, tax_rate: e.target.value } })} />
+                <input className={inputClass} inputMode="decimal" value={charges === false ? "0" : edit.form.tax_rate} readOnly={charges === false} title={charges === false ? "You are not registered for VAT" : undefined} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, tax_rate: e.target.value } })} />
               </Field>
               <Field label="Category">
                 <input className={inputClass} value={edit.form.category} onChange={(e) => setEdit({ ...edit, form: { ...edit.form, category: e.target.value } })} />

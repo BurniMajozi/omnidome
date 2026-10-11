@@ -38,7 +38,7 @@ import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet, StatValue } from "@/components/ui/not-connected"
 
-import { useBillingPages, fetchCustomerNames, getReconOverview, runAutopayNow, useBillingTier, type AutopayResult, type CollectionsReportRow } from "@/lib/billing-api"
+import { useBillingPages, fetchCustomerNames, getReconOverview, getTaxProfile, runAutopayNow, useBillingTier, type AutopayResult, type CollectionsReportRow } from "@/lib/billing-api"
 import { mapAgingBuckets, collectionRateText, customerLabel, invoiceStatusView, paymentMix, showingLabel, billingCsv, isBillingAdmin } from "@/lib/billing-derive"
 import { fmtMoney, sumCents } from "@/lib/money"
 import { downloadCsv } from "@/lib/export-csv"
@@ -49,6 +49,7 @@ import { MovementsTab } from "@/components/modules/billing/invoicing/movements-t
 import { ItemsTemplatesTab } from "@/components/modules/billing/invoicing/items-templates-tab"
 import { FeePoliciesTab } from "@/components/modules/billing/invoicing/fee-policies-tab"
 import { GatewayTab } from "@/components/modules/billing/gateway-tab"
+import { TaxTab } from "@/components/modules/billing/tax-tab"
 import { StatementTab } from "@/components/modules/billing/statement-tab"
 import { ReconciliationTab } from "@/components/modules/billing/reconciliation-tab"
 import { PayoutWalletTab } from "@/components/modules/billing/payout-wallet-tab"
@@ -191,6 +192,12 @@ export function BillingModule() {
   const isClient = useIsClient()
   // The reconciliation overview answers 403 for everyone but platform admins; that decides whether the tab shows.
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false)
+  const [vatUnconfirmed, setVatUnconfirmed] = useState(false)
+  useEffect(() => {
+    let off = false
+    getTaxProfile().then((l) => !off && setVatUnconfirmed(l.state === "ready" && !l.data.configured))
+    return () => { off = true }
+  }, [])
   useEffect(() => {
     let off = false
     getReconOverview().then((l) => !off && setIsPlatformAdmin(l.state === "ready"))
@@ -201,7 +208,7 @@ export function BillingModule() {
     const h = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (typeof t === "string") setActiveTab(t) }
     // Deep link from other screens, e.g. /dashboard?section=billing&sub=payout-wallet.
     const sub = new URLSearchParams(window.location.search).get("sub")
-    if (sub === "payout-wallet" || sub === "refunds") setActiveTab(sub)
+    if (sub === "payout-wallet" || sub === "refunds" || sub === "tax") setActiveTab(sub)
     window.addEventListener("billing:open-tab", h)
     return () => window.removeEventListener("billing:open-tab", h)
   }, [])
@@ -389,12 +396,19 @@ export function BillingModule() {
           <TabsTrigger value="gateway">Payments gateway</TabsTrigger>
           <TabsTrigger value="payout-wallet">Payout wallet</TabsTrigger>
           <TabsTrigger value="statement">Statement</TabsTrigger>
+          <TabsTrigger value="tax">VAT &amp; tax</TabsTrigger>
           {isPlatformAdmin && <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>}
           <TabsTrigger value="disputes">Disputes</TabsTrigger>
           <TabsTrigger value="aging">Aging Report</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="mt-4 space-y-4">
+          {vatUnconfirmed && (
+            <div role="status" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+              <span>Confirm your VAT status. Until you do, invoices add 15% VAT on top of your prices.</span>
+              <Button size="sm" variant="outline" onClick={() => setActiveTab("tax")}>Open VAT &amp; tax</Button>
+            </div>
+          )}
           <InsightsCard module="billing" title="Billing & Collection briefing" />
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Revenue Chart */}
@@ -515,6 +529,10 @@ export function BillingModule() {
 
         <TabsContent value="statement" className="mt-4">
           <StatementTab />
+        </TabsContent>
+
+        <TabsContent value="tax" className="mt-4">
+          <TaxTab />
         </TabsContent>
 
         {isPlatformAdmin && (

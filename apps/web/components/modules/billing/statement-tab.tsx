@@ -54,12 +54,14 @@ export function StatementTab() {
   )
 }
 
+const vatHint = (vat?: number) => (vat === undefined || vat === null ? undefined : `includes VAT ${fmtMoney(vat)}`)
+
 function Body({ s }: { s: GatewayStatement }) {
   return (
     <div className="space-y-4 text-sm">
       <section className="space-y-1">
         <Line k="Collected from your customers" v={fmtMoney(s.collections.collected_zar)} hint={`${s.collections.charges} card payment${s.collections.charges === 1 ? "" : "s"}`} />
-        <Line k="OmniDome gateway fee" v={`-${fmtMoney(s.collections.commission_zar)}`} />
+        <Line k="OmniDome gateway fee" v={`-${fmtMoney(s.collections.commission_zar)}`} hint={vatHint(s.collections.commission_vat_zar)} />
         <Line k="Paid to your bank (you receive)" v={fmtMoney(s.collections.you_receive_zar)} bold />
         <p className="text-xs text-muted-foreground">
           {s.settlement_checks.verified} of {s.settlement_checks.total} payments verified against Paystack.
@@ -71,12 +73,13 @@ function Body({ s }: { s: GatewayStatement }) {
       </section>
       <section className="space-y-1 border-t border-border pt-3">
         <Line k="Payouts" v={fmtMoney(s.payouts.total_zar)} hint={`${s.payouts.count} payment${s.payouts.count === 1 ? "" : "s"}`} />
-        <Line k="Payout fees" v={fmtMoney(s.payouts.fees_zar)} />
+        <Line k="Payout fees" v={fmtMoney(s.payouts.fees_zar)} hint={vatHint(s.payouts.fees_vat_zar)} />
       </section>
       <section className="space-y-1 border-t border-border pt-3">
         <Line k="Payout wallet balance" v={fmtMoney(s.payout_wallet_zar)} bold />
         <Line k="Refunds and chargebacks owed to OmniDome" v={fmtMoney(s.open_liabilities_zar)} />
       </section>
+      {s.fees_include_vat && <p className="text-xs text-muted-foreground">OmniDome&apos;s fees include VAT.</p>}
     </div>
   )
 }

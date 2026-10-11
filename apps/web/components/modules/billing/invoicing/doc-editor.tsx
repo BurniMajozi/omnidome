@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown, ArrowUp, Plus, RefreshCcw, Search, Trash2, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { fmtCents } from "@/lib/money"
+import { useTaxProfile } from "@/lib/billing-api"
 import { loadCustomers, type CustomerListItem } from "@/lib/crm-api"
 import {
   asList,
@@ -85,6 +86,20 @@ export function LinesGrid({
 }) {
   const [pick, setPick] = useState("")
   const totals = useMemo(() => calcTotals(lines), [lines])
+  const { charges, ratePercent, includesVat } = useTaxProfile()
+  const rateText = String(ratePercent)
+  // Match the tenant's VAT status: no VAT means every line is 0%; otherwise blank lines start at the profile rate (once).
+  const filled = useRef(false)
+  useEffect(() => {
+    if (charges === null || disabled) return
+    if (!charges) {
+      if (lines.some((l) => l.tax_rate !== "0")) onChange(lines.map((l) => ({ ...l, tax_rate: "0" })))
+    } else if (!filled.current) {
+      filled.current = true
+      if (lines.some((l) => l.tax_rate.trim() === "")) onChange(lines.map((l) => (l.tax_rate.trim() === "" ? { ...l, tax_rate: rateText } : l)))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [charges, lines.length])
 
   const patch = (key: string, p: Partial<EditableLine>) => onChange(lines.map((l) => (l.key === key ? { ...l, ...p } : l)))
   const move = (i: number, d: -1 | 1) => {
@@ -106,7 +121,7 @@ export function LinesGrid({
         unit_price: String(it.unit_price_zar ?? ""),
         discount: "",
         discount_type: "amount",
-        tax_rate: it.tax_rate === null || it.tax_rate === undefined ? "" : String(it.tax_rate),
+        tax_rate: charges === false ? "0" : it.tax_rate === null || it.tax_rate === undefined ? (charges ? rateText : "") : String(it.tax_rate),
         catalog_item_id: it.id,
       },
     ])
@@ -116,7 +131,7 @@ export function LinesGrid({
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => onChange([...lines, blankLine()])}>
+        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => onChange([...lines, { ...blankLine(), tax_rate: charges === null ? "" : rateText }])}>
           <Plus className="h-3.5 w-3.5" />
           Free-form line
         </Button>
@@ -150,7 +165,7 @@ export function LinesGrid({
             <tr>
               <th className="px-2 py-2">Description</th>
               <th className="w-20 px-2 py-2">Qty</th>
-              <th className="w-28 px-2 py-2">Unit price</th>
+              <th className="w-28 px-2 py-2">{includesVat ? "Unit price (incl. VAT)" : "Unit price"}</th>
               <th className="w-36 px-2 py-2">Discount</th>
               <th className="w-20 px-2 py-2">VAT %</th>
               <th className="w-28 px-2 py-2 text-right">Line total*</th>
@@ -184,7 +199,7 @@ export function LinesGrid({
                     <input aria-label="Quantity" className={inputClass} inputMode="decimal" value={l.quantity} disabled={disabled} onChange={(e) => patch(l.key, { quantity: e.target.value })} />
                   </td>
                   <td data-label="Unit price" className="px-2 py-1.5">
-                    <input aria-label="Unit price" className={inputClass} inputMode="decimal" value={l.unit_price} disabled={disabled} onChange={(e) => patch(l.key, { unit_price: e.target.value })} />
+                    <input aria-label={includesVat ? "Unit price (incl. VAT)" : "Unit price"} className={inputClass} inputMode="decimal" value={l.unit_price} disabled={disabled} onChange={(e) => patch(l.key, { unit_price: e.target.value })} />
                   </td>
                   <td data-label="Discount" className="px-2 py-1.5">
                     <div className="flex gap-1">
@@ -196,7 +211,7 @@ export function LinesGrid({
                     </div>
                   </td>
                   <td data-label="VAT %" className="px-2 py-1.5">
-                    <input aria-label="VAT rate" className={inputClass} inputMode="decimal" placeholder="default" value={l.tax_rate} disabled={disabled} onChange={(e) => patch(l.key, { tax_rate: e.target.value })} />
+                    <input aria-label="VAT rate" className={inputClass} inputMode="decimal" placeholder="default" value={charges === false ? "0" : l.tax_rate} disabled={disabled} readOnly={charges === false} title={charges === false ? "You are not registered for VAT" : undefined} onChange={(e) => patch(l.key, { tax_rate: e.target.value })} />
                   </td>
                   <td data-label="Line total" className="px-2 py-2 tabular-nums text-foreground md:text-right">{fmtCents(c.total)}</td>
                   <td data-label="Line actions" className="px-1 py-1.5">

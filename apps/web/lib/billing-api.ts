@@ -454,10 +454,11 @@ export const recordManualFunding = (input: { tenant_id: string; amount_zar: numb
 
 export interface GatewayStatement {
   period: string
-  collections: { charges: number; collected_zar: number; commission_zar: number; you_receive_zar: number }
+  collections: { charges: number; collected_zar: number; commission_zar: number; commission_vat_zar?: number; you_receive_zar: number }
   refunds: { count: number; total_zar: number }
   chargebacks: { count: number; total_zar: number }
-  payouts: { count: number; total_zar: number; fees_zar: number }
+  payouts: { count: number; total_zar: number; fees_zar: number; fees_vat_zar?: number }
+  fees_include_vat?: boolean
   payout_wallet_zar: number
   open_liabilities_zar: number
   settlement_checks: { verified: number; total: number }
@@ -531,3 +532,73 @@ export const getReconLedger = (category = "", limit = 100) =>
   get<ReconLedger>(`/recon/ledger?${category ? `category=${encodeURIComponent(category)}&` : ""}limit=${limit}`)
 export const listReconSettlements = () => get<{ settlements: ReconSettlement[] }>("/recon/settlements")
 export const listReconSnapshots = (limit = 48) => get<{ snapshots: ReconSnapshot[] }>(`/recon/snapshots?limit=${limit}`)
+
+// ---------------------------------------------------------------- VAT & tax profile
+
+export interface TaxProfile {
+  configured: boolean
+  country: string | null
+  vat_registered: boolean
+  vat_number: string | null
+  rate_percent: number | null
+  prices_include_vat: boolean
+  legal_name: string | null
+  address: string | null
+  registered_since: string | null
+}
+export interface TaxProfileInput {
+  country: string
+  vat_registered: boolean
+  vat_number: string | null
+  rate_percent?: number
+  prices_include_vat: boolean
+  legal_name: string | null
+  address: string | null
+  registered_since: string | null
+}
+export interface TaxCountry {
+  code: string
+  name: string
+  default_rate_percent: number
+  authority: string | null
+  thresholds: unknown
+}
+export type TaxStatusKind = "registered" | "must_register" | "will_exceed" | "approaching" | "may_register" | "below_threshold" | "not_applicable"
+export interface TaxStatus {
+  applicable: boolean
+  status: TaxStatusKind
+  message: string
+  turnover_12m_zar: number
+  run_rate_12m_zar: number
+  compulsory_threshold_zar: number
+  voluntary_threshold_zar: number
+  register_within_business_days: number
+  source: string | null
+  full_tax_invoice_above_zar: number
+}
+export const getTaxProfile = () => get<TaxProfile>("/tax/profile")
+/** Admin. A 422 `detail` is a plain-English reason and is returned as `message`. */
+export const saveTaxProfile = (input: TaxProfileInput) => put<TaxProfile>("/tax/profile", input)
+export const getTaxCountries = () => get<{ countries: TaxCountry[] }>("/tax/countries")
+export const getTaxStatus = () => get<TaxStatus>("/tax/status")
+
+let taxProfileCache: Promise<Loadable<TaxProfile>> | null = null
+/** Shared across screens; call after saving to refresh. */
+export const invalidateTaxProfile = () => {
+  taxProfileCache = null
+}
+export const loadTaxProfile = () => (taxProfileCache ??= getTaxProfile().then((l) => (l.state === "ready" ? l : ((taxProfileCache = null), l))))
+
+/** The tenant's VAT settings for forms. `charges` is null until known (forms then behave as before). */
+export function useTaxProfile(): { profile: TaxProfile | null; charges: boolean | null; ratePercent: number; includesVat: boolean } {
+  const [profile, setProfile] = useState<TaxProfile | null>(null)
+  useEffect(() => {
+    let off = false
+    loadTaxProfile().then((l) => !off && l.state === "ready" && setProfile(l.data))
+    return () => {
+      off = true
+    }
+  }, [])
+  const charges = profile ? (profile.configured ? profile.vat_registered : true) : null
+  return { profile, charges, ratePercent: charges ? (profile?.rate_percent ?? 15) : 0, includesVat: !!profile?.prices_include_vat }
+}
