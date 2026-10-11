@@ -55,4 +55,6 @@ Browser visual testing remains uncompleted because of the existing browser proto
 5. Verify tenant journeys and permissions in a browser, including phone width.
 6. Approve a versioned rate card and explicitly migrate existing contracts before enabling charges.
 
-Changes are local and unpushed; prior commits are retained. Separate website-builder, inventory, mail-event and cancellation backlogs remain outside this rollout.
+Implementation commit: `2d3f6c88`. Changes are local and unpushed; prior commits are retained. The working tree is clean apart from untracked `.codex/`. Separate website-builder, inventory, mail-event and cancellation backlogs remain outside this rollout.
+
+After the final recovery, admin, billing, agent, tenant memory and gateway reported healthy. Other services were still warming up; `knowledge_indexer` reported unhealthy and needs a separate ingestion-health check. This is not a claim that every service passed health verification. Autumn containers are stopped and core/Ollama containers restored; no bridge process was activated.
