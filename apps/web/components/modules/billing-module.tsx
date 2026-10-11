@@ -38,7 +38,7 @@ import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet, StatValue } from "@/components/ui/not-connected"
 
-import { useBillingPages, fetchCustomerNames, runAutopayNow, useBillingTier, type AutopayResult, type CollectionsReportRow } from "@/lib/billing-api"
+import { useBillingPages, fetchCustomerNames, getReconOverview, runAutopayNow, useBillingTier, type AutopayResult, type CollectionsReportRow } from "@/lib/billing-api"
 import { mapAgingBuckets, collectionRateText, customerLabel, invoiceStatusView, paymentMix, showingLabel, billingCsv, isBillingAdmin } from "@/lib/billing-derive"
 import { fmtMoney, sumCents } from "@/lib/money"
 import { downloadCsv } from "@/lib/export-csv"
@@ -49,6 +49,8 @@ import { MovementsTab } from "@/components/modules/billing/invoicing/movements-t
 import { ItemsTemplatesTab } from "@/components/modules/billing/invoicing/items-templates-tab"
 import { FeePoliciesTab } from "@/components/modules/billing/invoicing/fee-policies-tab"
 import { GatewayTab } from "@/components/modules/billing/gateway-tab"
+import { StatementTab } from "@/components/modules/billing/statement-tab"
+import { ReconciliationTab } from "@/components/modules/billing/reconciliation-tab"
 import { PayoutWalletTab } from "@/components/modules/billing/payout-wallet-tab"
 import { RefundsTab } from "@/components/modules/billing/refunds-tab"
 import { DisputesTab } from "@/components/modules/billing/disputes-tab"
@@ -187,6 +189,13 @@ export function BillingModule() {
   const showInvoice = useCallback((id: string) => { setOpenInvoiceId(id); setActiveTab("invoices") }, [])
   const showQuote = useCallback((id: string) => { setFocusQuoteId(id); setActiveTab("quotes") }, [])
   const isClient = useIsClient()
+  // The reconciliation overview answers 403 for everyone but platform admins; that decides whether the tab shows.
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false)
+  useEffect(() => {
+    let off = false
+    getReconOverview().then((l) => !off && setIsPlatformAdmin(l.state === "ready"))
+    return () => { off = true }
+  }, [])
   // Lets nested drawers (e.g. the invoice drawer) ask for a tab without threading callbacks through every host.
   useEffect(() => {
     const h = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (typeof t === "string") setActiveTab(t) }
@@ -379,6 +388,8 @@ export function BillingModule() {
           <TabsTrigger value="collections">Collections</TabsTrigger>
           <TabsTrigger value="gateway">Payments gateway</TabsTrigger>
           <TabsTrigger value="payout-wallet">Payout wallet</TabsTrigger>
+          <TabsTrigger value="statement">Statement</TabsTrigger>
+          {isPlatformAdmin && <TabsTrigger value="reconciliation">Reconciliation</TabsTrigger>}
           <TabsTrigger value="disputes">Disputes</TabsTrigger>
           <TabsTrigger value="aging">Aging Report</TabsTrigger>
         </TabsList>
@@ -501,6 +512,16 @@ export function BillingModule() {
         <TabsContent value="payout-wallet" className="mt-4">
           <PayoutWalletTab />
         </TabsContent>
+
+        <TabsContent value="statement" className="mt-4">
+          <StatementTab />
+        </TabsContent>
+
+        {isPlatformAdmin && (
+          <TabsContent value="reconciliation" className="mt-4">
+            <ReconciliationTab />
+          </TabsContent>
+        )}
 
         <TabsContent value="disputes" className="mt-4">
           <DisputesTab />

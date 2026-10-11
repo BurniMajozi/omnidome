@@ -449,3 +449,85 @@ export const reconcilePayoutBatch = (id: string) => post<PayoutBatch>(`/payouts/
 /** Platform admin only: record an EFT received for a tenant. credited=false means the reference was already recorded. */
 export const recordManualFunding = (input: { tenant_id: string; amount_zar: number; bank_reference: string }) =>
   post<{ credited: boolean }>("/payouts/funding/manual", input)
+
+// ---------------------------------------------------------------- Statement + reconciliation
+
+export interface GatewayStatement {
+  period: string
+  collections: { charges: number; collected_zar: number; commission_zar: number; you_receive_zar: number }
+  refunds: { count: number; total_zar: number }
+  chargebacks: { count: number; total_zar: number }
+  payouts: { count: number; total_zar: number; fees_zar: number }
+  payout_wallet_zar: number
+  open_liabilities_zar: number
+  settlement_checks: { verified: number; total: number }
+}
+/** A 400 (state "error", status 400) means the period is not a valid YYYY-MM. */
+export const getGatewayStatement = (period: string) => get<GatewayStatement>(`/gateway/statement?period=${encodeURIComponent(period)}`)
+
+export interface ReconSnapshot {
+  balance_zar: number
+  wallets_zar: number
+  liabilities_open_zar: number
+  headroom_zar: number
+  status: "ok" | "short"
+  taken_at: string
+}
+export interface ReconOverview {
+  snapshot: ReconSnapshot | null
+  wallets_now_zar: number
+  liabilities_open_zar: number
+  charges_last_30d: { ok: number; mismatch: number; no_split_data: number; unverified: number }
+  open_mismatches: number
+  payouts_in_flight: number
+  ledger_breaks: number
+  last_run: { at: string; finished: boolean; error: string | null; summary: unknown } | null
+}
+export interface ReconMismatch {
+  tenant_id: string
+  reference: string
+  gross_zar: number
+  commission_zar: number
+  note: string | null
+  actual_tenant_zar: number | null
+  checked_at: string
+}
+export interface ReconLedgerEntry {
+  paystack_id: string | number
+  reason: string | null
+  category: string
+  difference_zar: number
+  balance_zar: number
+  occurred_at: string
+}
+export interface ReconLedger {
+  entries: ReconLedgerEntry[]
+  totals_by_category: Array<{ category: string; net_zar: number; entries: number }>
+  breaks: Array<{ after_paystack_id: string | number; paystack_id: string | number; expected_balance_zar: number; actual_balance_zar: number; reason: string | null }>
+}
+export interface ReconSettlement {
+  paystack_id: string | number
+  status: string
+  total_zar: number
+  fees_zar: number
+  paid_zar: number
+  settled_on: string | null
+}
+export interface ReconRunResult {
+  skipped?: string
+  snapshot?: unknown
+  ledger?: unknown
+  charges?: unknown
+  payouts?: unknown
+  settlements?: unknown
+  ledger_breaks?: unknown
+}
+
+/** Platform admins only: 403 (state "denied") means the caller is not one. */
+export const getReconOverview = () => get<ReconOverview>("/recon/overview")
+export const runRecon = () => post<ReconRunResult>("/recon/run")
+export const listReconMismatches = () => get<{ mismatches: ReconMismatch[] }>("/recon/mismatches")
+export const getReconLedger = (category = "", limit = 100) =>
+  get<ReconLedger>(`/recon/ledger?${category ? `category=${encodeURIComponent(category)}&` : ""}limit=${limit}`)
+export const listReconSettlements = () => get<{ settlements: ReconSettlement[] }>("/recon/settlements")
+export const listReconSnapshots = (limit = 48) => get<{ snapshots: ReconSnapshot[] }>(`/recon/snapshots?limit=${limit}`)
