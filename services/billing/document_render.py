@@ -92,7 +92,7 @@ def normalise_lines(raw_lines: list) -> list[dict]:
             "description": ln.get("description", ""),
             "quantity": str(qty), "unit_price": str(unit),
             "discount": str(ln.get("discount_zar", "0.00")),
-            "tax_rate": ln.get("tax_rate"),
+            "tax_rate": ln.get("tax_rate"), "price_includes_vat": bool(ln.get("price_includes_vat")),
             "net": str(net), "vat": None if vat is None else str(vat),
             "total": ln.get("line_total_incl_zar") or (str(Decimal(str(net)) + Decimal(str(vat))) if vat is not None else str(net)),
         })
@@ -102,15 +102,19 @@ def normalise_lines(raw_lines: list) -> list[dict]:
 def invoice_view(inv: Any, meta: Any, template: dict, bill_to: Optional[dict] = None) -> dict:
     paid = Decimal(str(inv.amount_paid_zar or 0))
     total = Decimal(str(inv.total_zar))
+    lines = normalise_lines(inv.line_items or [])
+    # SARS: a document that charges VAT is a "Tax invoice"; one that does not (the supplier is not a vendor) is a plain "Invoice".
+    has_vat = Decimal(str(inv.vat_zar or 0)) != 0
+    title = ("Tax credit note" if has_vat else "Credit note") if inv.credit_note_of else ("Tax invoice" if has_vat else "Invoice")
     return {
         "kind": "invoice",
-        "title": "Credit note" if inv.credit_note_of else "Tax invoice",
+        "title": title, "prices_include_vat": any(l["price_includes_vat"] for l in lines),
         "number": inv.number, "status": inv.status,
         "issue_date": (meta.issue_date if meta and meta.issue_date else (inv.created_at.date() if inv.created_at else None)),
         "due_date": inv.due_date, "valid_until": None,
         "po_number": meta.po_number if meta else None,
         "bill_to": bill_to or (meta.bill_to if meta and meta.bill_to else {}) or {},
-        "lines": normalise_lines(inv.line_items or []),
+        "lines": lines,
         "subtotal": str(inv.subtotal_zar), "discount_total": str(meta.discount_total_zar if meta else "0.00"),
         "vat": str(inv.vat_zar), "total": str(total), "paid": str(paid), "balance": str(total - paid),
         "notes": inv.notes, "terms": (meta.terms if meta and meta.terms else template.get("default_terms")),
@@ -178,9 +182,12 @@ def render_fragment(view: dict) -> str:
         f'<div class="muted">{esc(k)}: <strong>{esc(v.isoformat() if isinstance(v, date) else v)}</strong></div>'
         for k, v in meta_rows if v)
 
+    # No VAT anywhere on the document (a supplier that is not a VAT vendor): no VAT column and no VAT line.
+    has_vat = Decimal(str(view.get("vat") or 0)) != 0 or any(
+        Decimal(str(ln.get("tax_rate") or 0)) > 0 for ln in view.get("lines", []))
     heads = [("description", "Description", ""), ("quantity", "Qty", "num"), ("unit_price", "Unit price", "num"),
              ("discount", "Discount", "num"), ("tax", "VAT %", "num"), ("line_total", "Total", "num")]
-    shown = [(k, label, cls) for k, label, cls in heads if cols.get(k, True)]
+    shown = [(k, label, cls) for k, label, cls in heads if cols.get(k, True) and (k != "tax" or has_vat)]
     th = "".join(f'<th class="{cls}">{esc(label)}</th>' for _k, label, cls in shown)
     body_rows = []
     for ln in view.get("lines", []):
@@ -198,7 +205,8 @@ def render_fragment(view: dict) -> str:
     totals = [("Subtotal", view["subtotal"])]
     if Decimal(str(view.get("discount_total") or 0)):
         totals.append(("Discounts included", view["discount_total"]))
-    totals.append(("VAT", view["vat"]))
+    if has_vat:
+        totals.append(("VAT" + (" (included in prices)" if view.get("prices_include_vat") else ""), view["vat"]))
     tot_rows = "".join(f'<tr><td>{esc(k)}</td><td class="num">{esc(zar(v))}</td></tr>' for k, v in totals)
     tot_rows += f'<tr class="grand"><td>Total</td><td class="num">{esc(zar(view["total"]))}</td></tr>'
     if is_invoice and view.get("paid") is not None:

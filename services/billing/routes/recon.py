@@ -465,11 +465,14 @@ async def statement(period: Optional[str] = None, ctx: AuthContext = Depends(get
         verified = sum(1 for c in charges if c.recon_status == "ok")
         return {"period": period,
                 "collections": {"charges": len(charges), "collected_zar": gross / 100, "commission_zar": commission / 100,
+                                "commission_vat_zar": sum(c.commission_vat_cents for c in charges) / 100,
                                 "you_receive_zar": (gross - commission) / 100},
                 "refunds": {"count": len(refunds), "total_zar": sum(r.amount_cents for r in refunds) / 100},
                 "chargebacks": {"count": len(chargebacks), "total_zar": sum(l.amount_cents for l in chargebacks) / 100},
                 "payouts": {"count": len(items), "total_zar": sum(i.amount_cents for i in items) / 100,
-                            "fees_zar": sum(i.fee_cents for i in items) / 100},
+                            "fees_zar": sum(i.fee_cents for i in items) / 100,
+                            "fees_vat_zar": sum(i.fee_vat_cents for i in items) / 100},
+                "fees_include_vat": True,
                 "payout_wallet_zar": (wallet.balance_cents if wallet else 0) / 100,
                 "open_liabilities_zar": po.open_liabilities_cents(session, ctx.tenant_id) / 100,
                 "settlement_checks": {"verified": verified, "total": len(charges)}}

@@ -18,6 +18,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.billing import calc, delivery, doc_service as ds, document_render as render, invoicing_math as im, quotes as ql
 from services.billing.access import require, require_tier
 from services.billing.database import get_session
+from services.billing.tax_store import profile_for_tenant
 from services.billing.models_invoicing import DocumentShareLink, Quote
 from services.billing.routes.invoice_documents import (
     HTML_HEADERS, _check_catalog, _safe_filename, create_link_response, delivery_events_out, enforce_discount,
@@ -46,7 +47,7 @@ async def create_quote(body: QuoteCreate, ctx: AuthContext = Depends(get_auth_co
     e.g. a field-sales lead. ``source``: field_sales | technician | web | other."""
     if body.customer_id is None and not (body.prospect_name or "").strip():
         raise HTTPException(422, "Provide customer_id or prospect_name")
-    lines, totals = im.build_lines(body.lines)
+    lines, totals = im.build_lines(body.lines, profile_for_tenant(ctx.tenant_id))
     await enforce_discount(ctx, totals)
     snap = {}
     if body.customer_id and not (body.prospect_name and body.prospect_email):
@@ -106,7 +107,7 @@ async def update_quote(quote_id: uuid.UUID, body: QuoteUpdate, ctx: AuthContext 
     """Edit a DRAFT quote. ``lines`` replaces all lines; totals are recomputed."""
     lines = totals = None
     if body.lines is not None:
-        lines, totals = im.build_lines(body.lines)
+        lines, totals = im.build_lines(body.lines, profile_for_tenant(ctx.tenant_id))
         await enforce_discount(ctx, totals)
     with get_session() as session:
         q = ds.load_quote(session, ctx.tenant_id, quote_id, lock=True)

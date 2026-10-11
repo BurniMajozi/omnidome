@@ -21,6 +21,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.billing import calc, delivery, doc_service as ds, document_render as render, invoicing_math as im
 from services.billing.access import require, require_tier
 from services.billing.database import get_session, next_invoice_number
+from services.billing.tax_store import profile_for, profile_for_tenant
 from services.billing.models import Invoice
 from services.billing.models_invoicing import (
     DocumentDeliveryEvent, DocumentShareLink, InvoiceItem, InvoiceMeta, InvoiceTemplate,
@@ -98,7 +99,7 @@ def _apply_lines(inv: Invoice, meta: InvoiceMeta, lines: list, totals: dict) -> 
 async def create_manual_invoice(body: ManualInvoiceCreate, ctx: AuthContext = Depends(get_auth_context)):
     """Create a DRAFT invoice from free-form lines. Totals are computed here; any client totals are ignored.
     A discount above BILLING_CLERK_MAX_DISCOUNT_PERCENT (default 20%) of the gross needs a billing admin."""
-    lines, totals = im.build_lines(body.lines)
+    lines, totals = im.build_lines(body.lines, profile_for_tenant(ctx.tenant_id))
     await enforce_discount(ctx, totals)
     bill_to = body.bill_to.model_dump() if body.bill_to else await ds.customer_snapshot(ctx.tenant_id, body.customer_id)
     with get_session() as session:
@@ -131,7 +132,7 @@ async def update_draft_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, ctx: 
     """Edit a draft. Send only the fields to change; ``lines`` replaces ALL lines (totals recomputed)."""
     new_lines = totals = None
     if body.lines is not None:
-        new_lines, totals = im.build_lines(body.lines)
+        new_lines, totals = im.build_lines(body.lines, profile_for_tenant(ctx.tenant_id))
         await enforce_discount(ctx, totals)
     with get_session() as session:
         inv = ds.load_invoice(session, ctx.tenant_id, invoice_id, lock=True)
@@ -183,7 +184,7 @@ async def duplicate_invoice(invoice_id: uuid.UUID, ctx: AuthContext = Depends(ge
         raw = [r for r in raw if Decimal(str(r["quantity"])) > 0 and Decimal(str(r["unit_price"])) >= 0]
         if not raw:
             raise HTTPException(409, "Invoice has no lines that can be duplicated")
-        lines, totals = im.build_lines(raw)
+        lines, totals = im.build_lines(raw, profile_for(session, ctx.tenant_id))
         tmpl = ds.get_template(session, ctx.tenant_id, smeta.template_id if smeta else None)
         issue = calc.today_sast()
         inv = Invoice(
@@ -253,13 +254,20 @@ async def list_items(ctx: AuthContext = Depends(get_auth_context), q: Optional[s
         return [item_out(r) for r in rows]
 
 
+def _item_tax_rate(profile, requested):
+    """A catalogue item's default VAT percent: the tenant's rate, and always 0 when the tenant is not a VAT vendor."""
+    if not profile.charges_vat:
+        return 0
+    return requested if requested is not None else profile.rate_percent
+
+
 @router.post("/invoice-items", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("clerk"))])
 async def create_item(body: ItemIn, ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         item = InvoiceItem(
             tenant_id=ctx.tenant_id, name=body.name.strip(), description=body.description,
             unit_price_zar=im.money(body.unit_price_zar),
-            tax_rate=im.money(body.tax_rate if body.tax_rate is not None else im.default_vat_rate()),
+            tax_rate=im.money(_item_tax_rate(profile_for(session, ctx.tenant_id), body.tax_rate)),
             category=body.category, active=body.active)
         session.add(item)
         session.flush()

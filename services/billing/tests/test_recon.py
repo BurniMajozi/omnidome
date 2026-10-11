@@ -306,9 +306,10 @@ def test_tenant_statement_adds_up_and_is_tenant_scoped(env):
                          fee_cents=4_800, reference="p1", status="success"))
         s.query(GatewayCharge).filter(GatewayCharge.reference == "a").update({"recon_status": "ok"})
     st = asyncio.run(recon.statement("2026-03", env.ctx))
-    assert st["collections"] == {"charges": 2, "collected_zar": 3000.0, "commission_zar": 180.0, "you_receive_zar": 2820.0}
+    assert st["collections"] == {"charges": 2, "collected_zar": 3000.0, "commission_zar": 180.0, "commission_vat_zar": 0.0,
+                                 "you_receive_zar": 2820.0}
     assert st["refunds"] == {"count": 1, "total_zar": 100.0} and st["chargebacks"] == {"count": 1, "total_zar": 50.0}
-    assert st["payouts"] == {"count": 1, "total_zar": 800.0, "fees_zar": 48.0} and st["payout_wallet_zar"] == 2500.0
+    assert st["payouts"] == {"count": 1, "total_zar": 800.0, "fees_zar": 48.0, "fees_vat_zar": 0.0} and st["payout_wallet_zar"] == 2500.0
     assert st["open_liabilities_zar"] == 50.0 and st["settlement_checks"] == {"verified": 1, "total": 2}
 
 

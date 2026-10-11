@@ -8,6 +8,7 @@ import os
 import secrets
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException
@@ -15,6 +16,7 @@ from sqlalchemy import func, select
 
 from services.billing import document_render as render
 from services.billing.models import Invoice
+from services.billing.tax_store import profile_for
 from services.billing.models_invoicing import (
     DocumentDeliveryEvent, DocumentShareLink, InvoiceMeta, InvoiceTemplate, Quote, QuoteSequence,
 )
@@ -77,14 +79,40 @@ def get_meta(session, invoice_id: uuid.UUID) -> Optional[InvoiceMeta]:
     return session.get(InvoiceMeta, invoice_id)
 
 
+def apply_tax_identity(view: dict, profile) -> dict:
+    """Put the supplier's tax identity on a document the way SARS expects.
+
+    A document that charges VAT carries the supplier's registered name, address and VAT number (falling back to the tenant's tax
+    profile when the template has none). A document that charges no VAT never shows a VAT number unless the supplier is a vendor
+    (a vendor's zero-rated supply still carries its number, but not one issued before the tenant registered); a non-vendor
+    must not display one."""
+    t = dict(view.get("template") or {})
+    charges = Decimal(str(view.get("vat") or 0)) != 0
+    if charges:
+        t["vat_number"] = t.get("vat_number") or profile.vat_number
+        t["company_name"] = t.get("company_name") or profile.legal_name
+        t["company_address"] = t.get("company_address") or profile.address
+    elif profile.charges_vat:
+        # A vendor's zero-rated supply still carries its number, but a document issued before the tenant registered does not.
+        since, issued = profile.registered_since, view.get("issue_date")
+        if since is None or (issued is not None and issued >= since):
+            t["vat_number"] = t.get("vat_number") or profile.vat_number
+        else:
+            t["vat_number"] = None
+    else:
+        t["vat_number"] = None
+    view["template"] = t
+    return view
+
+
 def invoice_document(session, tenant_id: uuid.UUID, inv: Invoice) -> dict:
     meta = get_meta(session, inv.id)
     tdict = template_dict(session, tenant_id, meta.template_id if meta else None)
-    return render.invoice_view(inv, meta, tdict)
+    return apply_tax_identity(render.invoice_view(inv, meta, tdict), profile_for(session, tenant_id))
 
 
 def quote_document(session, tenant_id: uuid.UUID, q: Quote) -> dict:
-    return render.quote_view(q, template_dict(session, tenant_id, q.template_id))
+    return apply_tax_identity(render.quote_view(q, template_dict(session, tenant_id, q.template_id)), profile_for(session, tenant_id))
 
 
 # ── quotes ──────────────────────────────────────────────────────────────────

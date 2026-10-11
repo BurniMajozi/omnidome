@@ -16,6 +16,7 @@ from services.billing import models_invoicing  # noqa: F401  (registers quotes, 
 from services.billing import models_gateway  # noqa: F401  (registers gateway settings + commission ledger)
 from services.billing import models_payouts  # noqa: F401  (registers payout wallet, batches, fundings)
 from services.billing import models_recon  # noqa: F401  (registers balance snapshots, Paystack ledger copy, settlements)
+from services.billing import models_tax  # noqa: F401  (registers tenant VAT profiles)
 
 
 logger = logging.getLogger("billing.database")
@@ -82,6 +83,9 @@ _GATEWAY_COLUMNS = [
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS payment_method_id UUID",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(200)",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS commission_vat_cents INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_payout_batches ADD COLUMN IF NOT EXISTS fee_vat_cents INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_payout_items ADD COLUMN IF NOT EXISTS fee_vat_cents INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_status VARCHAR(14)",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_note VARCHAR(300)",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_at TIMESTAMPTZ",

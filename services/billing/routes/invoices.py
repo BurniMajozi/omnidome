@@ -229,7 +229,9 @@ def credit_amounts(original: Invoice, already_sub: Decimal, already_vat: Decimal
             d["total_zar"] = str((Decimal(str(l.unit_price_zar)) * l.quantity).quantize(Decimal("0.01")))
         subtotal = sum((Decimal(str(l.unit_price_zar)) * l.quantity for l in body.line_items),
                        Decimal("0")).quantize(Decimal("0.01"))
-        return subtotal, compute_vat(subtotal), li
+        # A credit note carries the same VAT treatment as the invoice it credits (including none), whatever the profile says now.
+        ratio = (original.vat_zar / original.subtotal_zar) if original.subtotal_zar else Decimal("0")
+        return subtotal, (subtotal * ratio).quantize(Decimal("0.01")), li
     return (original.subtotal_zar - already_sub, original.vat_zar - already_vat, original.line_items or [])
 
 

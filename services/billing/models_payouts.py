@@ -65,6 +65,7 @@ class PayoutBatch(Base):
     period: Mapped[str] = mapped_column(String(7), nullable=False)  # YYYY-MM (SAST), for the commission tier
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fee_vat_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # VAT contained in the (VAT-inclusive) fee
     requested_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -83,6 +84,7 @@ class PayoutItem(Base):
     recipient_code: Mapped[str] = mapped_column(String(60), nullable=False)
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fee_vat_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     reference: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|processing|success|failed

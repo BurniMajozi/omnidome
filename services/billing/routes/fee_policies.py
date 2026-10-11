@@ -105,7 +105,7 @@ async def create_policy(body: fp.PolicyIn, ctx: AuthContext = Depends(get_auth_c
 @router.post("/templates/default-24m", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_tier("admin"))])
 async def create_default_template(ctx: AuthContext = Depends(get_auth_context)):
     """Create (only when an admin calls it) a standard 24-month straight-line claw-back policy: router +
-    activation + installation recovered from the contract snapshot, 15% VAT exclusive, router return offsets the
+    activation + installation recovered from the contract snapshot, VAT per the tenant's tax profile, router return offsets the
     router component, 7-day cooling-off, provider-fault exits waived automatically, hardship waivers by approvers."""
     with get_session() as session:
         exists = session.query(FeePolicy).filter(
@@ -113,6 +113,8 @@ async def create_default_template(ctx: AuthContext = Depends(get_auth_context)):
             FeePolicy.is_active.is_(True)).first()
         if exists:
             raise HTTPException(status_code=409, detail=f"Default template already exists (policy {exists.id})")
+        from services.billing.tax_store import profile_for
+        _tax = profile_for(session, ctx.tenant_id)
         p = fp.PolicyIn(
             name="Standard 24-month claw-back",
             description="Unamortised router, activation and installation cost over a 24-month term.",
@@ -133,7 +135,8 @@ async def create_default_template(ctx: AuthContext = Depends(get_auth_context)):
             ],
             auto_approve_waiver_limit_zar=Decimal("200.00"),
             router_credit=fp.RouterCredit(enabled=True, mode="offset_router_component"),
-            vat=fp.VatRule(rate=Decimal("0.15"), treatment="exclusive"),
+            vat=fp.VatRule(rate=_tax.rate if _tax.charges_vat else Decimal("0"),
+                           treatment="inclusive" if (_tax.charges_vat and _tax.prices_include_vat) else "exclusive"),
             outstanding_balance="exclude", auto_invoice=False)
         row = _new_policy_row(p, ctx.tenant_id, ctx.user_id)
         session.add(row)
@@ -258,7 +261,7 @@ async def simulate(body: SimulateRequest, ctx: AuthContext = Depends(get_auth_co
             prow = fp.select_policy(session, ctx.tenant_id, trigger, effective, plan_keys, body.policy_id)
             if prow is None:
                 raise HTTPException(status_code=404, detail="No active fee policy applies to these inputs")
-            pol = fp.policy_to_engine(prow)
+            pol = fp.policy_to_engine(prow, session)
         inputs = {
             "trigger": trigger, "term_start": s.term_start, "term_months": s.term_months,
             "components": {c.code.strip().lower(): c.amount for c in s.components},
@@ -377,7 +380,7 @@ async def waive(calc_id: uuid.UUID, body: WaiveRequest, ctx: AuthContext = Depen
     with get_session() as session:
         calc = _get_calc(session, ctx.tenant_id, calc_id)
         prow = session.get(FeePolicy, calc.policy_id)
-        pol = fp.policy_to_engine(prow)
+        pol = fp.policy_to_engine(prow, session)
         try:
             entry = fp.waive_calculation(session, calc, pol, reason_code=body.reason_code, reason=body.reason,
                                          percent=body.percent, amount=body.amount_zar, actor_id=ctx.user_id,
@@ -404,7 +407,7 @@ async def invoice(calc_id: uuid.UUID, body: Optional[InvoiceRequest] = None, ctx
     with get_session() as session:
         calc = _get_calc(session, ctx.tenant_id, calc_id)
         prow = session.get(FeePolicy, calc.policy_id)
-        pol = fp.policy_to_engine(prow)
+        pol = fp.policy_to_engine(prow, session)
         issue = body.issue if body is not None and body.issue is not None else bool(pol.get("auto_invoice"))
         try:
             inv, created = fp.invoice_calculation(session, calc, pol, issue=issue, actor_id=ctx.user_id)

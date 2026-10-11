@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from services.billing import gateway
+from services.billing import gateway, platform_tax
 from services.billing.access import require_tier
 from services.billing.database import get_session
 from services.billing.models_gateway import GatewayChangeEvent, GatewayCharge, GatewaySettings
@@ -70,7 +70,8 @@ def split_for_charge(session, tenant_id, amount_cents: int, reference: str,
     session.add(GatewayCharge(
         tenant_id=tenant_id, reference=reference, invoice_id=invoice_id, kind=kind,
         subaccount_code=settings.subaccount_code, period=period, gross_cents=amount_cents,
-        commission_cents=calc.commission_cents, volume_before_cents=before))
+        commission_cents=calc.commission_cents, volume_before_cents=before,
+        commission_vat_cents=platform_tax.vat_inside(calc.commission_cents, session)))
     return {"subaccount": settings.subaccount_code, "transaction_charge": calc.commission_cents, "bearer": "account"}
 
 

@@ -27,7 +27,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
-from services.billing import gateway
+from services.billing import gateway, platform_tax
 from services.billing.access import internal_key_ok, require_tier
 from services.billing.database import get_session
 from services.billing.models import BillingWebhookEvent
@@ -187,20 +187,24 @@ def create_batch(session, body: BatchIn) -> tuple[PayoutBatch, list[PayoutItem]]
             "shortfall_zar": q["shortfall_zar"], "fee_zar": q["fee_zar"]})
     attempt = 1 + int(session.execute(select(func.coalesce(func.max(PayoutBatch.attempt), 0)).where(
         PayoutBatch.tenant_id == body.tenant_id, PayoutBatch.kind == body.kind, PayoutBatch.source_id == body.source_id)).scalar_one())
+    fee_vat = platform_tax.vat_inside(q["_fee_cents"], session)
     batch = PayoutBatch(tenant_id=body.tenant_id, kind=body.kind, source_id=body.source_id, attempt=attempt, period=q["period"],
-                        total_cents=total, fee_cents=q["_fee_cents"], requested_by=body.requested_by)
+                        total_cents=total, fee_cents=q["_fee_cents"], fee_vat_cents=fee_vat, requested_by=body.requested_by)
     session.add(batch)
     session.flush()
     post_entry(session, body.tenant_id, "payout", -total, str(batch.id), f"{body.kind} {body.source_id}")
     if q["_fee_cents"]:
         post_entry(session, body.tenant_id, "payout_fee", -q["_fee_cents"], str(batch.id), f"fee {body.kind} {body.source_id}")
-    items, fee_left = [], q["_fee_cents"]
+    items, fee_left, vat_left = [], q["_fee_cents"], fee_vat
     for n, i in enumerate(body.items):
         cents = _cents(i.amount_zar)
-        fee = fee_left if n == len(body.items) - 1 else (q["_fee_cents"] * cents) // total
+        last = n == len(body.items) - 1
+        fee = fee_left if last else (q["_fee_cents"] * cents) // total
+        item_vat = vat_left if last else (fee_vat * cents) // total
         fee_left -= fee
+        vat_left -= item_vat
         item = PayoutItem(batch_id=batch.id, tenant_id=body.tenant_id, kind=body.kind, item_ref=i.item_ref, recipient_code=i.recipient_code,
-                          amount_cents=cents, fee_cents=fee, reference=_reference(body.kind, i, attempt), reason=i.reason, status="pending")
+                          amount_cents=cents, fee_cents=fee, fee_vat_cents=item_vat, reference=_reference(body.kind, i, attempt), reason=i.reason, status="pending")
         session.add(item)
         items.append(item)
     session.flush()

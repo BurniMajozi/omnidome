@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from services.billing import calc, finance_posting as fp
 from services.billing.database import compute_vat, next_invoice_number
+from services.billing.tax_store import price_lines
 from services.billing.models import DunningAction, Invoice, Subscription, SubscriptionUsage
 
 logger = logging.getLogger("billing.invoicing")
@@ -118,18 +119,19 @@ def bill_period(session, sub: Subscription, billing_date: date) -> tuple[Optiona
     unbilled = session.execute(select(SubscriptionUsage).where(
         SubscriptionUsage.subscription_id == sub.id, SubscriptionUsage.billed_invoice_id.is_(None))).scalars().all()
     usage_amount = sum((u.quantity * u.unit_price_zar for u in unbilled), Decimal("0"))
-    subtotal = (recurring + usage_amount).quantize(Decimal("0.01"))
-    vat = compute_vat(subtotal)
+    usage_lines = [(u.quantity * u.unit_price_zar).quantize(Decimal("0.01")) for u in unbilled]
+    # The tenant's VAT position decides what the plan price means: added on top, already inside it, or no VAT at all.
+    priced = price_lines(session, sub.tenant_id, [recurring] + usage_lines)
+    subtotal, vat = priced["subtotal"], priced["vat"]
 
     line_items = [{
         "description": f"Subscription - {sub.plan}" + (f" ({segment})" if segment else ""),
-        "quantity": 1, "unit_price_zar": str(recurring), "total_zar": str(recurring),
+        "quantity": 1, "unit_price_zar": str(recurring), "total_zar": str(priced["nets"][0]),
     }]
-    for u in unbilled:
+    for u, net in zip(unbilled, priced["nets"][1:]):
         line_items.append({
             "description": f"Usage: {u.metric}" + (f" - {u.description}" if u.description else ""),
-            "quantity": float(u.quantity), "unit_price_zar": str(u.unit_price_zar),
-            "total_zar": str((u.quantity * u.unit_price_zar).quantize(Decimal("0.01"))),
+            "quantity": float(u.quantity), "unit_price_zar": str(u.unit_price_zar), "total_zar": str(net),
         })
 
     try:

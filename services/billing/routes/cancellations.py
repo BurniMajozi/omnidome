@@ -448,7 +448,7 @@ async def proceed_with_cancellation(
                 calc = res[0]
         if calc is not None:
             if calc.amount_due_zar > 0 or calc.invoice_id:
-                pol = fees.policy_to_engine(session.get(FeePolicy, calc.policy_id))
+                pol = fees.policy_to_engine(session.get(FeePolicy, calc.policy_id), session)
                 inv, _created = fees.invoice_calculation(
                     session, calc, pol, issue=bool(pol.get("auto_invoice")), actor_id=ctx.user_id)
                 fee_invoice = {"invoice_id": str(inv.id), "invoice_number": inv.number, "status": inv.status,
@@ -458,15 +458,17 @@ async def proceed_with_cancellation(
                 TerminationFee.cancellation_request_id == cancel_id,
             ).first()
             if tf and tf.total_etf_zar > 0:
+                from services.billing.tax_store import price_lines
+                etf = price_lines(session, ctx.tenant_id, [tf.total_etf_zar])
                 inv = Invoice(
                     tenant_id=ctx.tenant_id,
                     customer_id=cancel_req.customer_id,
                     subscription_id=cancel_req.subscription_id,
                     number=f"ETF-{str(cancel_id)[:8]}",
                     status="sent",
-                    subtotal_zar=tf.total_etf_zar,
-                    vat_zar=(tf.total_etf_zar * Decimal("0.15")).quantize(Decimal("0.01")),
-                    total_zar=(tf.total_etf_zar * Decimal("1.15")).quantize(Decimal("0.01")),
+                    subtotal_zar=etf["subtotal"],
+                    vat_zar=etf["vat"],
+                    total_zar=etf["total"],
                     due_date=date.today() + timedelta(days=14),
                 )
                 session.add(inv)

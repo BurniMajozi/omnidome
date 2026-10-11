@@ -22,6 +22,7 @@ from services.billing.routes.disputes import router as disputes_router
 from services.billing.routes.refunds import router as refunds_router
 from services.billing.routes.payouts import router as payouts_router
 from services.billing.routes.recon import router as recon_router
+from services.billing.routes.tax import router as tax_router
 from services.billing.routes.collections import router as collections_router
 from services.billing.routes.reports import router as reports_router
 from services.billing.routes.subscriptions import router as subscriptions_router
@@ -119,6 +120,7 @@ app.include_router(disputes_router)
 app.include_router(refunds_router)
 app.include_router(payouts_router)
 app.include_router(recon_router)
+app.include_router(tax_router)
 app.include_router(collections_router)
 app.include_router(reports_router)
 app.include_router(subscriptions_router)

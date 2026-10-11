@@ -17,6 +17,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.billing import calc, invoicing
 from services.billing.access import require_tier
 from services.billing.database import compute_vat, get_session, next_invoice_number
+from services.billing.tax_store import price_lines
 from services.billing.models import Invoice, Subscription, SubscriptionUsage
 from services.billing.schemas import (
     CreateSubscriptionRequest,
@@ -125,8 +126,8 @@ async def create_prorated_subscription(
         from services.billing import fee_policies as _fees  # contract fee snapshot (no-op without a policy)
         _fees.auto_snapshot_for_subscription(session, sub, ctx.user_id)
 
-        vat = compute_vat(prorated)
-        total = prorated + vat
+        priced = price_lines(session, ctx.tenant_id, [prorated])
+        prorated, vat, total = priced["subtotal"], priced["vat"], priced["total"]      # net / VAT / total per the tenant's VAT position
         number = next_invoice_number(session, ctx.tenant_id)
 
         inv = Invoice(
@@ -429,9 +430,9 @@ async def _build_invoice_preview(session, sub: Subscription) -> InvoicePreviewRe
     unbilled_usage = unbilled_result.scalars().all()
     usage_amount = sum(u.quantity * u.unit_price_zar for u in unbilled_usage)
 
-    subtotal = recurring + usage_amount
-    vat = compute_vat(subtotal)
-    total = subtotal + vat
+    usage_lines = [(u.quantity * u.unit_price_zar).quantize(Decimal("0.01")) for u in unbilled_usage]
+    priced = price_lines(session, sub.tenant_id, [recurring] + usage_lines)
+    subtotal, vat, total = priced["subtotal"], priced["vat"], priced["total"]
 
     period_start = sub.current_period_start or sub.billing_anchor
     period_end = sub.current_period_end or _add_interval(period_start, sub.billing_interval, invoicing.anchor_day(sub))
@@ -440,14 +441,14 @@ async def _build_invoice_preview(session, sub: Subscription) -> InvoicePreviewRe
         "description": f"Subscription — {sub.plan}" + (f" ({segment})" if segment else ""),
         "quantity": 1,
         "unit_price_zar": str(recurring),
-        "total_zar": str(recurring),
+        "total_zar": str(priced["nets"][0]),
     }]
-    for u in unbilled_usage:
+    for u, net in zip(unbilled_usage, priced["nets"][1:]):
         line_items.append({
             "description": f"Usage: {u.metric}" + (f" — {u.description}" if u.description else ""),
             "quantity": float(u.quantity),
             "unit_price_zar": str(u.unit_price_zar),
-            "total_zar": str((u.quantity * u.unit_price_zar).quantize(Decimal("0.01"))),
+            "total_zar": str(net),
         })
 
     return InvoicePreviewResponse(

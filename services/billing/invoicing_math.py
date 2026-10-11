@@ -36,7 +36,7 @@ def default_vat_rate() -> Decimal:
 
 def compute_line(description: str, quantity: Any, unit_price: Any, discount: Any = 0,
                  discount_type: str = "amount", tax_rate: Optional[Any] = None,
-                 catalog_item_id: Optional[Any] = None, line_id: Optional[str] = None) -> dict:
+                 catalog_item_id: Optional[Any] = None, line_id: Optional[str] = None, profile: Optional[Any] = None) -> dict:
     qty = Decimal(str(quantity))
     price = Decimal(str(unit_price))
     if qty <= 0:
@@ -44,6 +44,14 @@ def compute_line(description: str, quantity: Any, unit_price: Any, discount: Any
     if price < 0:
         raise HTTPException(422, "Line unit price cannot be negative")
     rate = Decimal(str(tax_rate)) if tax_rate is not None else default_vat_rate()
+    inclusive = False
+    if profile is not None:
+        # A tenant that is not a VAT vendor can never put VAT on a document, whatever the client sends.
+        if not profile.charges_vat:
+            rate = Decimal("0")
+        elif tax_rate is None:
+            rate = Decimal(str(profile.rate_percent))
+        inclusive = bool(profile.prices_include_vat) and profile.charges_vat
     if not (Decimal("0") <= rate <= Decimal("100")):
         raise HTTPException(422, "tax_rate must be between 0 and 100")
     gross = money(qty * price)
@@ -60,8 +68,13 @@ def compute_line(description: str, quantity: Any, unit_price: Any, discount: Any
         raise HTTPException(422, "discount_type must be 'amount' or 'percent'")
     if disc > gross:
         raise HTTPException(422, "Line discount cannot exceed the line amount")
-    net = money(gross - disc)
-    vat = money(net * rate / Decimal("100"))
+    base = money(gross - disc)
+    if inclusive and rate > 0:
+        net = money(base / (Decimal("1") + rate / Decimal("100")))     # the entered price already contains the VAT
+        vat = base - net
+    else:
+        net = base
+        vat = money(net * rate / Decimal("100"))
     return {
         "line_id": line_id or str(uuid.uuid4()),
         "description": (description or "").strip()[:500],
@@ -73,6 +86,7 @@ def compute_line(description: str, quantity: Any, unit_price: Any, discount: Any
         "total_zar": str(net),            # line total EX VAT (matches subscription lines' convention)
         "vat_zar": str(vat),
         "line_total_incl_zar": str(net + vat),
+        "price_includes_vat": bool(inclusive and rate > 0),
         "catalog_item_id": str(catalog_item_id) if catalog_item_id else None,
     }
 
@@ -92,7 +106,7 @@ def compute_totals(lines: Iterable[dict]) -> dict:
             "total_zar": total, "gross_zar": gross}
 
 
-def build_lines(raw_lines: list) -> tuple[list[dict], dict]:
+def build_lines(raw_lines: list, profile: Optional[Any] = None) -> tuple[list[dict], dict]:
     """Validated request lines (pydantic models or dicts) -> (computed lines, totals)."""
     if not raw_lines:
         raise HTTPException(422, "At least one line is required")
@@ -103,7 +117,7 @@ def build_lines(raw_lines: list) -> tuple[list[dict], dict]:
         d = raw if isinstance(raw, dict) else raw.model_dump()
         out.append(compute_line(
             d["description"], d["quantity"], d["unit_price"], d.get("discount") or 0,
-            d.get("discount_type") or "amount", d.get("tax_rate"), d.get("catalog_item_id"), d.get("line_id")))
+            d.get("discount_type") or "amount", d.get("tax_rate"), d.get("catalog_item_id"), d.get("line_id"), profile))
     return out, compute_totals(out)
 
 

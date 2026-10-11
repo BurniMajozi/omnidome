@@ -189,12 +189,17 @@ def policy_config_from_input(p: PolicyIn) -> dict:
     return cfg
 
 
-def policy_to_engine(row: Any) -> dict:
+def policy_to_engine(row: Any, session: Any = None) -> dict:
     """Flat dict the pure engine consumes, from a FeePolicy row."""
     d = dict(row.config or {})
     d.update(id=str(row.id), policy_key=str(row.policy_key), version=row.version, name=row.name,
              term_months=row.term_months, trigger_types=list(row.trigger_types or []),
              applies_to_plans=list(row.applies_to_plans or []))
+    if session is not None:
+        # A tenant that is not a VAT vendor can never charge VAT, whatever VAT rule an older policy carries.
+        from services.billing.tax_store import profile_for
+        if not profile_for(session, row.tenant_id).charges_vat:
+            d["vat"] = {"rate": "0", "treatment": "exclusive"}
     return d
 
 
@@ -728,7 +733,7 @@ def run_calculation(session: Any, *, tenant_id: uuid.UUID, sub: Any, trigger: st
     prow = select_policy(session, tenant_id, trigger, effective_date, plan_keys, policy_id)
     if prow is None:
         raise LookupError("no_policy")
-    pol = policy_to_engine(prow)
+    pol = policy_to_engine(prow, session)
     snap = current_snapshot(session, tenant_id, sub.id)
     inputs = build_inputs(session, tenant_id, sub, snap, pol, trigger=trigger, effective_date=effective_date,
                           reason_code=reason_code, router_returned=router_returned, router_condition=router_condition)
@@ -908,7 +913,7 @@ def auto_snapshot_for_subscription(session: Any, sub: Any, actor_id: Optional[uu
             prow = select_policy(session, sub.tenant_id, "cancellation", start, plan_keys_for(sub))
             if prow is None:
                 return None
-            pol = policy_to_engine(prow)
+            pol = policy_to_engine(prow, session)
             comps = components_from_policy(pol, plan_keys_for(sub))
             if not comps:
                 return None

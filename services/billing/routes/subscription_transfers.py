@@ -20,6 +20,7 @@ from sqlalchemy import select
 from services.common.auth import AuthContext, get_auth_context
 from services.billing.access import require_tier
 from services.billing.database import compute_vat, get_session, next_invoice_number
+from services.billing.tax_store import price_lines
 from services.billing.models import (
     BillingAccount,
     Invoice,
@@ -233,7 +234,8 @@ async def approve_transfer(
 
         # 1. Final invoice for outgoing tenant
         if xfer.from_prorated_amount_zar > 0:
-            out_vat = compute_vat(xfer.from_prorated_amount_zar)
+            out_priced = price_lines(session, ctx.tenant_id, [xfer.from_prorated_amount_zar])
+            out_net, out_vat, out_total = out_priced["subtotal"], out_priced["vat"], out_priced["total"]
             out_number = next_invoice_number(session, ctx.tenant_id)
             out_inv = Invoice(
                 tenant_id=ctx.tenant_id,
@@ -243,9 +245,9 @@ async def approve_transfer(
                 subscription_id=sub.id,
                 number=out_number,
                 status="draft",
-                subtotal_zar=xfer.from_prorated_amount_zar,
+                subtotal_zar=out_net,
                 vat_zar=out_vat,
-                total_zar=xfer.from_prorated_amount_zar + out_vat,
+                total_zar=out_total,
                 due_date=date.today() + timedelta(days=DEFAULT_DUE_DAYS),
                 billing_period_start=sub.current_period_start or sub.billing_anchor,
                 billing_period_end=xfer.transfer_date,
@@ -253,7 +255,7 @@ async def approve_transfer(
                     "description": f"Final prorated charge — {sub.plan} (transfer out)",
                     "quantity": 1,
                     "unit_price_zar": str(xfer.from_prorated_amount_zar),
-                    "total_zar": str(xfer.from_prorated_amount_zar),
+                    "total_zar": str(out_net),
                 }],
                 notes=f"Transfer out to customer {xfer.to_customer_id}",
             )
@@ -263,7 +265,8 @@ async def approve_transfer(
 
         # 2. First invoice for incoming tenant
         if xfer.to_prorated_amount_zar > 0:
-            in_vat = compute_vat(xfer.to_prorated_amount_zar)
+            in_priced = price_lines(session, ctx.tenant_id, [xfer.to_prorated_amount_zar])
+            in_net, in_vat, in_total = in_priced["subtotal"], in_priced["vat"], in_priced["total"]
             in_number = next_invoice_number(session, ctx.tenant_id)
             in_inv = Invoice(
                 tenant_id=ctx.tenant_id,
@@ -273,9 +276,9 @@ async def approve_transfer(
                 subscription_id=sub.id,
                 number=in_number,
                 status="draft",
-                subtotal_zar=xfer.to_prorated_amount_zar,
+                subtotal_zar=in_net,
                 vat_zar=in_vat,
-                total_zar=xfer.to_prorated_amount_zar + in_vat,
+                total_zar=in_total,
                 due_date=date.today() + timedelta(days=DEFAULT_DUE_DAYS),
                 billing_period_start=xfer.transfer_date,
                 billing_period_end=sub.current_period_end or xfer.transfer_date,

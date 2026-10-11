@@ -17,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from services.billing import calc, doc_service as ds, invoicing_math as im
 from services.billing.database import next_invoice_number
+from services.billing.tax_store import profile_for
 from services.billing.models import Invoice
 from services.billing.models_invoicing import InvoiceMeta, Quote, QuoteLine
 
@@ -37,9 +38,9 @@ def replace_lines(q: Quote, lines: list[dict], totals: dict) -> None:
     q.discount_total_zar = totals["discount_total_zar"]
 
 
-def quote_lines_as_dicts(q: Quote) -> list[dict]:
+def quote_lines_as_dicts(q: Quote, profile=None) -> list[dict]:
     return [im.compute_line(l.description, l.quantity, l.unit_price_zar, l.discount_zar, "amount", l.tax_rate,
-                            l.catalog_item_id) for l in q.lines]
+                            l.catalog_item_id, None, profile) for l in q.lines]
 
 
 def quote_out(q: Quote) -> dict:
@@ -123,7 +124,7 @@ def convert_to_invoice(session, q: Quote, *, customer_id: Optional[uuid.UUID], d
     cust = q.customer_id or customer_id
     if cust is None:
         raise HTTPException(422, "customer_id is required to convert a prospect quote")
-    lines = quote_lines_as_dicts(q)
+    lines = quote_lines_as_dicts(q, profile_for(session, q.tenant_id))
     if not lines:
         raise HTTPException(409, "Quote has no lines")
     totals = im.compute_totals(lines)
