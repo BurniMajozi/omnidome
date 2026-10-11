@@ -223,11 +223,14 @@ async def run_workflow(
                 else:
                     step.status = "succeeded" if out.get("ok", True) else "failed"
                 if not out.get("ok", True):
-                    final_error = out.get("error")
+                    final_error = out.get("error") or f"step {current} failed"
             except Exception as exc:  # noqa: BLE001
                 logger.exception("workflow node %s failed", current)
-                step.status, step.error = "failed", str(exc)
-                final_error = str(exc)
+                # Some exceptions carry no message (httpx.ReadTimeout is ''), and an empty error used to read as "no error",
+                # so a failed step ended the run as "succeeded". Always say what failed.
+                message = str(exc) or type(exc).__name__
+                step.status, step.error = "failed", message
+                final_error = f"{current}: {message}"
             step.finished_at = datetime.now(timezone.utc)
             await session.flush()
 
