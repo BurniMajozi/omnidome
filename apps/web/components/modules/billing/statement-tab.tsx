@@ -5,10 +5,43 @@
 import { useCallback, useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { NotConnected } from "@/components/ui/not-connected"
-import { getGatewayStatement, type GatewayStatement } from "@/lib/billing-api"
+import { fetchFeeInvoiceHtml, getGatewayStatement, listFeeInvoices, type FeeInvoice, type GatewayStatement } from "@/lib/billing-api"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { NoDataYet } from "@/components/ui/not-connected"
 import { fmtMoney } from "@/lib/money"
 import type { Loadable } from "@/lib/service-state"
 import { Field, Note, inputClass } from "./shared"
+
+/** "2026-03" -> "March 2026". */
+export const periodLabel = (p: string) => {
+  const d = new Date(`${p}-01T00:00:00`)
+  return Number.isNaN(d.getTime()) ? p : d.toLocaleDateString("en-GB", { month: "long", year: "numeric" })
+}
+
+/** Opens (or saves) a fee invoice. The popup is opened first so the browser treats it as a user action. Returns an error message or null. */
+export async function showFeeInvoice(inv: Pick<FeeInvoice, "id" | "number">, mode: "view" | "download"): Promise<string | null> {
+  const win = mode === "view" ? window.open("", "_blank") : null
+  if (mode === "view" && !win) return "Allow pop-ups to view the invoice."
+  const r = await fetchFeeInvoiceHtml(inv.id)
+  if (!r.ok) {
+    win?.close()
+    return r.message
+  }
+  const url = URL.createObjectURL(new Blob([r.html], { type: "text/html" }))
+  if (win) win.location.href = url
+  else {
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${inv.number}.html`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  return null
+}
+
 
 const currentPeriod = () => new Date().toISOString().slice(0, 7)
 
@@ -50,7 +83,90 @@ export function StatementTab() {
           <Body s={data.data} />
         )}
       </CardContent>
+      <FeeInvoices />
     </Card>
+  )
+}
+
+function FeeInvoices() {
+  const [data, setData] = useState<Loadable<{ invoices: FeeInvoice[] }>>({ state: "loading" })
+  const [tick, setTick] = useState(0)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+  useEffect(() => {
+    let off = false
+    listFeeInvoices().then((l) => !off && setData(l))
+    return () => {
+      off = true
+    }
+  }, [tick])
+
+  const act = async (inv: FeeInvoice, mode: "view" | "download") => {
+    setBusy(`${mode}-${inv.id}`)
+    setErr(null)
+    setErr(await showFeeInvoice(inv, mode))
+    setBusy(null)
+  }
+
+  return (
+    <CardContent className="space-y-3 border-t border-border pt-4">
+      <h4 className="text-sm font-semibold text-foreground">Tax invoices from OmniDome</h4>
+      <p className="text-xs text-muted-foreground">Use these to claim the VAT on OmniDome&apos;s fees if you are VAT registered.</p>
+      {err && <Note tone="error">{err}</Note>}
+      {data.state !== "ready" ? (
+        <NotConnected loadable={data} service="Billing" onRetry={() => setTick((t) => t + 1)} />
+      ) : (data.data.invoices ?? []).length === 0 ? (
+        <NoDataYet message="Your first fee invoice is issued after the first full month in which OmniDome charged gateway or payout fees." />
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2">Number</th>
+                <th className="px-3 py-2">Month</th>
+                <th className="px-3 py-2">Type</th>
+                <th className="px-3 py-2 text-right">Subtotal (excl. VAT)</th>
+                <th className="px-3 py-2 text-right">VAT</th>
+                <th className="px-3 py-2 text-right">Total</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {data.data.invoices.map((i) => (
+                <tr key={i.id} className="border-t border-border align-top">
+                  <td className="px-3 py-2 font-mono text-xs">{i.number}</td>
+                  <td className="px-3 py-2">{periodLabel(i.period)}</td>
+                  <td className="px-3 py-2">
+                    {i.doc_type === "Pro forma invoice" ? <Badge className="bg-secondary text-muted-foreground">{i.doc_type}</Badge> : i.doc_type}
+                    {!i.complete && (
+                      <span className="mt-1 block text-[11px] text-amber-400">
+                        Incomplete: add your registered address in{" "}
+                        <button type="button" className="underline" onClick={() => window.dispatchEvent(new CustomEvent("billing:open-tab", { detail: "tax" }))}>
+                          VAT &amp; tax
+                        </button>
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(i.subtotal_zar)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(i.vat_zar)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(i.total_zar)}</td>
+                  <td className="px-3 py-2 text-right">
+                    <div className="flex justify-end gap-1.5">
+                      <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act(i, "view")}>
+                        View
+                      </Button>
+                      <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act(i, "download")}>
+                        Download
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </CardContent>
   )
 }
 

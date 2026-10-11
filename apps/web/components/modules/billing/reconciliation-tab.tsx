@@ -13,7 +13,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { NotConnected, NoDataYet } from "@/components/ui/not-connected"
 import {
+  generateFeeInvoices,
   getReconLedger,
+  listFeeInvoices,
+  type FeeInvoice,
   getReconOverview,
   listReconMismatches,
   listReconSettlements,
@@ -29,6 +32,7 @@ import {
 import { fmtMoney } from "@/lib/money"
 import type { Loadable } from "@/lib/service-state"
 import { ConfirmModal } from "./confirm-modal"
+import { periodLabel, showFeeInvoice } from "./statement-tab"
 import { Field, Note, fmtDateTime, humanise, inputClass, useActionState } from "./shared"
 
 const CATEGORIES = ["payout", "payout_reversal", "charge", "refund", "dispute", "settlement", "fee", "topup", "other"]
@@ -55,6 +59,7 @@ export function ReconciliationTab() {
       <LedgerCard />
       <Settlements />
       <Snapshots />
+      <FeeTaxInvoices />
     </div>
   )
 }
@@ -399,6 +404,78 @@ function Snapshots() {
           </table>
         </div>
       )}
+    </Section>
+  )
+}
+
+// ------------------------------------------------------------------ fee tax invoices
+
+function FeeTaxInvoices() {
+  const { data, reload } = useLoad<{ invoices: FeeInvoice[] }>(() => listFeeInvoices(true), [])
+  const [confirming, setConfirming] = useState(false)
+  const [issued, setIssued] = useState<FeeInvoice[] | null>(null)
+  const [viewErr, setViewErr] = useState<string | null>(null)
+  const act = useActionState()
+
+  const issue = async () => {
+    const r = await act.run("issue", () => generateFeeInvoices({}))
+    if (r) {
+      setIssued(r.issued ?? [])
+      setConfirming(false)
+      reload()
+    }
+  }
+
+  return (
+    <Section
+      title="Fee tax invoices"
+      right={
+        <Button size="sm" onClick={() => { act.clear(); setIssued(null); setConfirming(true) }}>
+          Issue last month&apos;s invoices
+        </Button>
+      }
+    >
+      {issued && (issued.length === 0 ? <Note tone="info">Nothing to issue.</Note> : <Note tone="success">Issued {issued.length} invoice{issued.length === 1 ? "" : "s"}: {issued.map((i) => i.number).join(", ")}.</Note>)}
+      {viewErr && <Note tone="error">{viewErr}</Note>}
+      {data.state !== "ready" ? (
+        <NotConnected loadable={data} service="Billing" onRetry={reload} />
+      ) : (data.data.invoices ?? []).length === 0 ? (
+        <NoDataYet message="No fee invoices have been issued yet." />
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className={TH}>Tenant</th>
+                <th className={TH}>Number</th>
+                <th className={TH}>Month</th>
+                <th className={TH}>Type</th>
+                <th className={`${TH} text-right`}>Total</th>
+                <th className={TH} />
+              </tr>
+            </thead>
+            <tbody>
+              {data.data.invoices.map((i) => (
+                <tr key={i.id} className="border-t border-border">
+                  <td className={`${TH} font-mono text-xs`}>{i.tenant_id.slice(0, 8)}</td>
+                  <td className={`${TH} font-mono text-xs`}>{i.number}</td>
+                  <td className={TH}>{periodLabel(i.period)}</td>
+                  <td className={TH}>{i.doc_type}</td>
+                  <td className={`${TH} text-right tabular-nums`}>{fmtMoney(i.total_zar)}</td>
+                  <td className={`${TH} text-right`}>
+                    <Button size="sm" variant="outline" onClick={async () => setViewErr(await showFeeInvoice(i, "view"))}>
+                      View
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <ConfirmModal open={confirming} onOpenChange={setConfirming} title="Issue fee invoices" confirmLabel="Issue invoices" busy={act.busy === "issue"} error={act.msg?.tone === "error" ? act.msg.text : null} onConfirm={issue}>
+        <p>This issues numbered, immutable tax documents to every tenant that was charged fees last month. They cannot be edited or deleted afterwards.</p>
+      </ConfirmModal>
     </Section>
   )
 }

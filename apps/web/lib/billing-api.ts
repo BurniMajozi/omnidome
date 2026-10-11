@@ -612,3 +612,33 @@ export function useTaxProfile(): { profile: TaxProfile | null; charges: boolean 
   const charges = profile ? (profile.configured ? profile.vat_registered : true) : null
   return { profile, charges, ratePercent: charges ? (profile?.rate_percent ?? 15) : 0, includesVat: !!profile?.prices_include_vat }
 }
+
+// ---------------------------------------------------------------- Fee tax invoices (OmniDome -> tenant)
+
+export interface FeeInvoice {
+  id: string
+  tenant_id: string
+  number: string
+  /** YYYY-MM */
+  period: string
+  issue_date: string
+  doc_type: "Tax invoice" | "Invoice" | "Pro forma invoice" | string
+  complete: boolean
+  subtotal_zar: number
+  vat_zar: number
+  total_zar: number
+}
+export const listFeeInvoices = (all = false) => get<{ invoices: FeeInvoice[] }>(`/fee-invoices${all ? "?all=true" : ""}`)
+/** Platform admin. Issues numbered, immutable documents for the period (default: last month). */
+export const generateFeeInvoices = (input: { period?: string; tenant_id?: string } = {}) =>
+  post<{ period: string; issued: FeeInvoice[] }>("/fee-invoices/generate", input)
+/** The HTML document needs the auth header, so it is fetched (not linked) and handled as a Blob by the caller. */
+export async function fetchFeeInvoiceHtml(id: string): Promise<{ ok: true; html: string } | { ok: false; message: string }> {
+  try {
+    const res = await fetch(`${BILLING_BASE}/fee-invoices/${encodeURIComponent(id)}?format=html`, { cache: "no-store", signal: AbortSignal.timeout(20_000) })
+    if (!res.ok) return { ok: false, message: res.status === 403 ? "Not permitted to view this invoice." : res.status === 404 ? "Invoice not found." : `Could not load the invoice (HTTP ${res.status}).` }
+    return { ok: true, html: await res.text() }
+  } catch {
+    return { ok: false, message: "Could not reach the service. Try again." }
+  }
+}
