@@ -31,9 +31,18 @@ Sources: SARS Budget 2026 FAQ, SARS "Tax Invoices", SARS "Register for VAT" page
 - **Registration monitor** (`GET /tax/status`): last 12 months of invoiced ex-VAT value (credit notes net off, drafts and voids excluded) against the thresholds, plus a forward-looking run-rate check. States: registered, must_register, will_exceed, approaching (within 20%), may_register, below_threshold, not_applicable (non-South-African tenants).
 - **Tenants that have not chosen yet** keep the legacy behaviour (15% added on top) so nothing changes under them; the Billing screens show a banner asking them to confirm their VAT status.
 
+## OmniDome's monthly tax invoice to each tenant (fees)
+
+`services/billing/fee_invoicing.py`, `routes/fee_invoices.py`. A VAT-registered tenant needs a tax invoice from OmniDome to claim the VAT on our
+gateway and payout fees as input tax, so OmniDome issues one per tenant per month:
+
+- **What it covers**: every fee not yet invoiced up to the end of the month: card-collection commission and payout fees, each already stored VAT-exclusive with the 15% VAT added on top when it was charged. A fee that arrives after its month was invoiced rolls into the next invoice. A payout that fails after its fee was invoiced gets its fee + VAT returned to the wallet, and the return is a negative adjustment line on the next invoice (a credit alone is not an invoice: it carries forward).
+- **Document**: immutable, sequentially numbered `ODF-<year>-<serial>`, with OmniDome's and the tenant's details snapshotted at issue. "Tax invoice" when OmniDome is a VAT vendor with a VAT number; a plain "Invoice" (no VAT) if OmniDome is not a vendor; "Pro forma invoice" if OmniDome's own name/address/VAT number are missing. Above R5,000 the recipient's name and address are needed: if the tenant has not entered an address the invoice is flagged incomplete and tells them where to add it (Billing -> VAT & tax). The recipient's VAT number is shown when the tenant is a vendor.
+- **Issuing**: `POST /fee-invoices/generate` (platform admin; last month by default), or the opt-in worker `FEE_INVOICE_WORKER_ENABLED=true` (from the 2nd of each month, every 6 hours, idempotent per tenant and month). Tenants see their invoices at `GET /fee-invoices` and the printable page at `GET /fee-invoices/{id}?format=html`; platform admins see all with `?all=true`.
+- Delivery by email is not built; the tenant downloads the document from Billing -> Statement.
+
 ## Not built yet
 
-- A monthly **tax invoice from OmniDome to each tenant for the gateway and payout fees** (VAT is recorded per charge and payout and shown on the statement, but no invoice document is generated). A VAT-registered tenant needs it to claim the VAT inside our fee as input tax.
 - Abridged-invoice handling for amounts up to R5,000 (all documents are full invoices, which is always valid).
 - Recipient VAT number / name / address checks on invoices above R5,000.
 - Zero-rated and exempt supply categories per line (lines can carry 0% but there is no category).

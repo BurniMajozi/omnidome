@@ -85,6 +85,8 @@ class PayoutItem(Base):
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     fee_vat_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    fee_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)         # invoice that billed the fee
+    fee_credit_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)  # invoice that credited it back
     reference: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|processing|success|failed

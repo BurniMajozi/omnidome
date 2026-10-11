@@ -70,7 +70,8 @@ class GatewayCharge(Base):
     gross_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     commission_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     volume_before_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    commission_vat_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # VAT contained in the (VAT-inclusive) commission
+    commission_vat_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # VAT added on top of the (VAT-exclusive) commission
+    fee_invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)  # the fee invoice that billed it
     paystack_fee_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     payment_method_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

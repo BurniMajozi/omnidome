@@ -229,7 +229,7 @@ def render_fragment(view: dict) -> str:
         f'<div style="text-align:right"><p class="title">{esc(view["title"])}</p>'
         f'<div class="muted">No. <strong>{esc(view["number"])}</strong></div>'
         f'<div><span class="badge">{esc(view["status"])}</span></div>{meta_html}</div></div>'
-        f'<div class="cols">{_party_block("Bill to", bt.get("name"), [bt.get("email"), bt.get("phone"), bt.get("address")])}</div>'
+        f'<div class="cols">{_party_block("Bill to", bt.get("name"), [bt.get("email"), bt.get("phone"), bt.get("address"), f"VAT no. {bt['vat_number']}" if bt.get("vat_number") else None])}</div>'
         f'<table><thead><tr>{th}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
         f'<table class="tot"><tbody>{tot_rows}</tbody></table>'
         f'{"".join(blocks)}{footer}</div>'

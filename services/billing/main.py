@@ -23,6 +23,7 @@ from services.billing.routes.refunds import router as refunds_router
 from services.billing.routes.payouts import router as payouts_router
 from services.billing.routes.recon import router as recon_router
 from services.billing.routes.tax import router as tax_router
+from services.billing.routes.fee_invoices import router as fee_invoices_router
 from services.billing.routes.collections import router as collections_router
 from services.billing.routes.reports import router as reports_router
 from services.billing.routes.subscriptions import router as subscriptions_router
@@ -86,6 +87,10 @@ async def startup() -> None:
     if _recon.worker_enabled():  # RECON_WORKER_ENABLED, default off: solvency snapshot, ledger copy, charge verification
         import asyncio
         app.state.recon_worker = asyncio.create_task(_recon.worker_loop())
+    from services.billing.routes import fee_invoices as _fee_invoices
+    if _fee_invoices.worker_enabled():  # FEE_INVOICE_WORKER_ENABLED, default off: monthly tax invoice for gateway/payout fees
+        import asyncio
+        app.state.fee_invoice_worker = asyncio.create_task(_fee_invoices.worker_loop())
     from services.billing import finance_posting
     if finance_posting.worker_enabled():  # BILLING_OUTBOX_WORKER_ENABLED, default off
         import asyncio
@@ -121,6 +126,7 @@ app.include_router(refunds_router)
 app.include_router(payouts_router)
 app.include_router(recon_router)
 app.include_router(tax_router)
+app.include_router(fee_invoices_router)
 app.include_router(collections_router)
 app.include_router(reports_router)
 app.include_router(subscriptions_router)

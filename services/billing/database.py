@@ -17,6 +17,7 @@ from services.billing import models_gateway  # noqa: F401  (registers gateway se
 from services.billing import models_payouts  # noqa: F401  (registers payout wallet, batches, fundings)
 from services.billing import models_recon  # noqa: F401  (registers balance snapshots, Paystack ledger copy, settlements)
 from services.billing import models_tax  # noqa: F401  (registers tenant VAT profiles)
+from services.billing import models_fee_invoices  # noqa: F401  (registers OmniDome's monthly fee tax invoices)
 
 
 logger = logging.getLogger("billing.database")
@@ -84,6 +85,9 @@ _GATEWAY_COLUMNS = [
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(200)",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS commission_vat_cents INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS fee_invoice_id UUID",
+    "ALTER TABLE billing_payout_items ADD COLUMN IF NOT EXISTS fee_invoice_id UUID",
+    "ALTER TABLE billing_payout_items ADD COLUMN IF NOT EXISTS fee_credit_invoice_id UUID",
     "ALTER TABLE billing_payout_batches ADD COLUMN IF NOT EXISTS fee_vat_cents INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE billing_payout_items ADD COLUMN IF NOT EXISTS fee_vat_cents INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_status VARCHAR(14)",
