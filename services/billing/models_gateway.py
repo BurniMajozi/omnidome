@@ -133,3 +133,46 @@ class GatewayDispute(Base):
     last_event: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class GatewayRefund(Base):
+    """A refund of money we hold for a customer (billing_customer_credits), paid back through Paystack
+    (POST /refund against the original transaction) or recorded as paid manually (EFT)."""
+    __tablename__ = "billing_refunds"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    credit_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    method: Mapped[str] = mapped_column(String(10), nullable=False, default="paystack")  # paystack|manual
+    transaction_reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # the charge being refunded
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="pending")  # pending|processing|processed|failed
+    paystack_refund_id: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    requested_by: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("ix_refunds_ref", "transaction_reference"),)
+
+
+class GatewayLiability(Base):
+    """Money OmniDome paid out of its own Paystack balance for a tenant's customer (refund, lost dispute,
+    dispute fee) that the tenant already received at settlement. The tenant owes it back; recovery is netted
+    against the tenant's future pre-funding / top-ups. `source_id` makes each posting idempotent."""
+    __tablename__ = "billing_gateway_liabilities"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)  # refund|chargeback
+    source_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="open")  # open|recovered|written_off
+    note: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    recovered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (UniqueConstraint("tenant_id", "kind", "source_id", name="uq_gateway_liability"),)

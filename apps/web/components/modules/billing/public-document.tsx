@@ -88,6 +88,7 @@ export function PublicDocument({ kind, token }: { kind: "invoice" | "quote"; tok
   const [msg, setMsg] = useState<{ tone: "ok" | "err"; text: string } | null>(null)
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
+  const [saveCard, setSaveCard] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -108,13 +109,14 @@ export function PublicDocument({ kind, token }: { kind: "invoice" | "quote"; tok
   const pay = async () => {
     if (!doc || busy) return
     setMsg(null)
-    const body: Record<string, string> = {}
+    const body: Record<string, string | boolean> = {}
     if (amount.trim()) {
       const n = Number(amount)
       if (!Number.isFinite(n) || n <= 0) return setMsg({ tone: "err", text: "Enter a valid amount." })
       if (doc.balance && n > Number(doc.balance)) return setMsg({ tone: "err", text: "The amount cannot be more than the balance due." })
       body.amount_zar = n.toFixed(2)
     }
+    body.save_payment_method = saveCard
     setBusy("pay")
     const r = await call(`/invoices/${encodeURIComponent(token)}/pay`, "POST", body)
     const url = (r.data as { authorization_url?: unknown } | null)?.authorization_url
@@ -300,6 +302,13 @@ export function PublicDocument({ kind, token }: { kind: "invoice" | "quote"; tok
                   Pay {doc.balance && !amount.trim() ? fmtMoney(doc.balance) : "now"}
                 </button>
               </div>
+              <label className="flex items-start gap-2 text-xs text-muted-foreground">
+                <input type="checkbox" checked={saveCard} onChange={(e) => setSaveCard(e.target.checked)} className="mt-0.5" />
+                <span>
+                  Save this card for future payments of my account (you can remove it at any time)
+                  <span className="block text-[11px]">If you tick this box, you authorise us to charge this card for future amounts due on your account. Your card details are held securely by our payment provider, not by us.</span>
+                </span>
+              </label>
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">

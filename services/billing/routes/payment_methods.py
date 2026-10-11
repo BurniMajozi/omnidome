@@ -301,3 +301,80 @@ async def run_autopay(tenant_id, user_id, *, limit: int = 100, today: Optional[d
 
 def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Scheduler (opt-in): AUTOPAY_WORKER_ENABLED=true
+# ---------------------------------------------------------------------------
+
+_AUTOPAY_LOCK_KEY = 0x0B111_5EA9
+
+
+def worker_enabled() -> bool:
+    return os.getenv("AUTOPAY_WORKER_ENABLED", "false").strip().lower() == "true"
+
+
+def _acquire_pass_lock():
+    """Hold a Postgres session advisory lock for the whole pass so two uvicorn workers / replicas never charge the
+    same invoices at once. Returns (acquired, connection_to_close). SQLite (tests) always acquires."""
+    from sqlalchemy import text
+    from services.common.db import get_engine
+    engine = get_engine()
+    if engine.dialect.name != "postgresql":
+        return True, None
+    conn = engine.connect()
+    got = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": _AUTOPAY_LOCK_KEY}).scalar())
+    if not got:
+        conn.close()
+        return False, None
+    return True, conn
+
+
+def _release_pass_lock(conn) -> None:
+    from sqlalchemy import text
+    if conn is not None:
+        try:
+            conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": _AUTOPAY_LOCK_KEY})
+        finally:
+            conn.close()
+
+
+async def run_autopay_all(*, limit_per_tenant: int = 100) -> dict:
+    """One scheduler pass over every tenant that has a gateway and at least one saved card."""
+    from services.billing import finance_posting as fp
+    acquired, conn = _acquire_pass_lock()
+    if not acquired:
+        return {"skipped": "another worker holds the lock"}
+    try:
+        with get_session() as session:
+            tenants = [t for (t,) in session.execute(
+                select(PaymentMethod.tenant_id).where(PaymentMethod.status == "active").distinct()).all()]
+        totals = {"tenants": 0, "charged": 0, "failed": 0, "pending": 0, "skipped": 0}
+        user = uuid.UUID(fp.service_user_id())
+        for tenant_id in tenants:
+            try:
+                out = await run_autopay(tenant_id, user, limit=limit_per_tenant)
+            except Exception:  # noqa: BLE001  (one tenant's failure must not stop the others)
+                logger.exception("autopay pass failed for tenant %s", tenant_id)
+                continue
+            totals["tenants"] += 1
+            for k in ("charged", "failed", "pending", "skipped"):
+                totals[k] += out[k]
+        return totals
+    finally:
+        _release_pass_lock(conn)
+
+
+async def worker_loop(interval_seconds: Optional[int] = None) -> None:
+    import asyncio
+    interval = interval_seconds or int(os.getenv("AUTOPAY_INTERVAL_SECONDS", "3600"))
+    logger.info("autopay worker started (interval %ss)", interval)
+    while True:
+        try:
+            out = await run_autopay_all()
+            logger.info("autopay pass: %s", out)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("autopay worker pass failed")
+        await asyncio.sleep(interval)

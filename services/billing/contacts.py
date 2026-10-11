@@ -30,3 +30,19 @@ async def resolve_customer_email(tenant_id: uuid.UUID, customer_id: uuid.UUID,
     except Exception as exc:  # noqa: BLE001
         logger.warning("customer email lookup failed for %s: %s", customer_id, type(exc).__name__)
         return None
+
+
+async def resolve_customer_profile(tenant_id: uuid.UUID, customer_id: uuid.UUID) -> dict:
+    """Name / email / phone / address from the CRM record, for dispute evidence. Missing fields come back as None."""
+    out = {"name": None, "email": None, "phone": None, "address": None}
+    try:
+        data = await service_get("crm", f"/customers/{customer_id}", tenant_id=tenant_id,
+                                 user_id=uuid.UUID(fp.service_user_id()), timeout=5.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("customer profile lookup failed for %s: %s", customer_id, type(exc).__name__)
+        return out
+    if isinstance(data, dict):
+        name = " ".join(p for p in (data.get("first_name"), data.get("last_name")) if p) or data.get("name")
+        out.update(name=name or None, email=data.get("email"), phone=data.get("phone") or data.get("mobile"),
+                   address=data.get("address"))
+    return out

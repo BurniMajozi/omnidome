@@ -57,6 +57,8 @@ CHART_OF_ACCOUNTS = {
     "6400": "Depreciation & Amortization",
     "6500": "Bad Debt Expense",
     "6900": "General & Administrative",
+    "6950": "Payment Processing Fees",
+    "6960": "Chargebacks & Disputes",
     "7000": "Interest Income",
     "8000": "Interest Expense",
     "9000": "Income Tax Expense",

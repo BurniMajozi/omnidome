@@ -50,6 +50,19 @@ _INTERVAL_MAP = {
 }
 
 
+def native_subscriptions_enabled() -> bool:
+    """Paystack Plans/Subscriptions cannot carry a tenant subaccount or OmniDome's commission, so using them for a
+    tenant's customers would pay OmniDome everything and settle nothing to the tenant. Recurring billing charges the
+    saved card instead (routes/payment_methods.py). The creating endpoints are therefore off unless explicitly enabled."""
+    return os.getenv("PAYSTACK_NATIVE_SUBSCRIPTIONS_ENABLED", "false").strip().lower() == "true"
+
+
+def _require_native_subscriptions() -> None:
+    if not native_subscriptions_enabled():
+        raise HTTPException(status_code=410, detail="Paystack-managed subscriptions are retired: recurring billing charges the "
+                                                    "customer's saved card so the tenant is settled and the gateway fee applies")
+
+
 def _secret() -> str:
     return os.getenv("PAYSTACK_SECRET_KEY", "")
 
@@ -97,6 +110,7 @@ async def sync_plan_to_paystack(
     body: PaystackPlanSync,
     ctx: AuthContext = Depends(get_auth_context),
 ):
+    _require_native_subscriptions()
     with get_session() as session:
         plan = session.execute(
             select(BillingPlan).where(BillingPlan.id == plan_id, BillingPlan.tenant_id == ctx.tenant_id)
@@ -145,6 +159,7 @@ async def create_subscription(
     body: PaystackSubscribeRequest,
     ctx: AuthContext = Depends(get_auth_context),
 ):
+    _require_native_subscriptions()
     payload = {"customer": body.customer_code, "plan": body.plan_code}
     if body.authorization_code:
         payload["authorization"] = body.authorization_code

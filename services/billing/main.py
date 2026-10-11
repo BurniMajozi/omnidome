@@ -19,6 +19,7 @@ from services.billing.routes.paystack_recurring import router as paystack_recurr
 from services.billing.routes.gateway import router as gateway_router
 from services.billing.routes.payment_methods import router as payment_methods_router
 from services.billing.routes.disputes import router as disputes_router
+from services.billing.routes.refunds import router as refunds_router
 from services.billing.routes.collections import router as collections_router
 from services.billing.routes.reports import router as reports_router
 from services.billing.routes.subscriptions import router as subscriptions_router
@@ -72,6 +73,10 @@ async def startup() -> None:
     if seat_runs.worker_enabled():
         import asyncio
         app.state.seat_worker = asyncio.create_task(seat_runs.worker_loop())
+    from services.billing.routes import payment_methods as _payment_methods
+    if _payment_methods.worker_enabled():  # AUTOPAY_WORKER_ENABLED, default off: charges saved cards for due invoices
+        import asyncio
+        app.state.autopay_worker = asyncio.create_task(_payment_methods.worker_loop())
     from services.billing import finance_posting
     if finance_posting.worker_enabled():  # BILLING_OUTBOX_WORKER_ENABLED, default off
         import asyncio
@@ -103,6 +108,7 @@ app.include_router(paystack_recurring_router)
 app.include_router(gateway_router)
 app.include_router(payment_methods_router)
 app.include_router(disputes_router)
+app.include_router(refunds_router)
 app.include_router(collections_router)
 app.include_router(reports_router)
 app.include_router(subscriptions_router)

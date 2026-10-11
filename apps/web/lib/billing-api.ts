@@ -206,3 +206,189 @@ export function useBillingTier(): { tier: BillingTier; loading: boolean; canWrit
   const tier = billingTier(roles)
   return { tier, loading: roles === undefined, canWrite: tier === "clerk" || tier === "admin", isAdmin: tier === "admin" }
 }
+
+// ---------------------------------------------------------------- Payments gateway
+
+const get = <T>(path: string) => fetchLoadable<T>(`${BILLING_BASE}${path}`)
+const put = <T>(path: string, body: unknown) => sendJson<T>(`${BILLING_BASE}${path}`, "PUT", body, { adminLabel: ADMIN_LABEL })
+const del = <T>(path: string) => sendJson<T>(`${BILLING_BASE}${path}`, "DELETE", undefined, { adminLabel: ADMIN_LABEL })
+
+export interface GatewayBank {
+  code: string
+  name: string
+}
+export interface GatewaySettings {
+  configured: boolean
+  business_name?: string | null
+  bank?: string | null
+  settlement_bank_code?: string | null
+  account_last4?: string | null
+  status?: string | null
+  /** Set when a change to the settlement account awaits platform approval. */
+  pending_change?: { bank: string; last4: string; requested_at: string } | null
+}
+export interface GatewayTier {
+  from_zar: number
+  to_zar: number | null
+  rate_percent: number
+}
+export interface GatewaySummary {
+  period: string
+  volume_zar: number
+  charges: number
+  commission_zar: number
+  current_rate_percent: number
+  next_threshold_zar: number | null
+  remaining_in_band_zar: number | null
+  tiers: GatewayTier[]
+}
+export interface CommissionPreview {
+  commission_zar: number
+  tenant_receives_zar: number
+  effective_rate_percent: number
+}
+export interface PendingGatewayChange {
+  tenant_id: string
+  business_name: string
+  current: { bank: string; last4: string }
+  requested: { bank: string; last4: string; business_name: string }
+  requested_by: string
+  requested_at: string
+}
+
+export const getGatewaySettings = () => get<GatewaySettings>("/gateway/settings")
+export const listGatewayBanks = () => get<{ banks: GatewayBank[] }>("/gateway/banks")
+/** Admin. The account number is sent once here; the API only ever returns the last 4 digits. */
+export const saveGatewaySettings = (input: { business_name: string; settlement_bank_code: string; account_number: string }) =>
+  put<GatewaySettings>("/gateway/settings", input)
+export const getGatewaySummary = () => get<GatewaySummary>("/gateway/summary")
+export const previewCommission = (amountZar: number) => get<CommissionPreview>(`/gateway/commission/preview?amount_zar=${encodeURIComponent(String(amountZar))}`)
+/** Platform admin only: a 403 (state "denied") means the caller is not one. */
+export const listPendingGatewayChanges = () => get<{ changes: PendingGatewayChange[] }>("/gateway/changes/pending")
+export const approveGatewayChange = (tenantId: string) => post<unknown>(`/gateway/changes/${encodeURIComponent(tenantId)}/approve`)
+export const rejectGatewayChange = (tenantId: string) => post<unknown>(`/gateway/changes/${encodeURIComponent(tenantId)}/reject`)
+
+// ---------------------------------------------------------------- Disputes
+
+export interface DisputeRow {
+  id: string
+  dispute_id: string
+  reference: string | null
+  invoice_id: string | null
+  amount_zar: number
+  status: string
+  category: string | null
+  resolution: string | null
+  due_at: string | null
+  open: boolean
+  outcome?: "lost" | "won" | null
+  updated_at: string | null
+}
+export interface DisputeList {
+  disputes: DisputeRow[]
+  open: number
+  next_due_at: string | null
+}
+export interface EvidencePack {
+  customer_name?: string | null
+  customer_email?: string | null
+  customer_phone?: string | null
+  service_details?: string | null
+  delivery_address?: string | null
+  delivery_date?: string | null
+  invoice_numbers?: string[]
+  payments?: Array<{ reference: string; amount_zar: number; paid_at: string }>
+  activity?: Array<{ at: string; text: string }>
+}
+export interface DisputeDetail extends DisputeRow {
+  evidence_pack?: EvidencePack | null
+}
+export interface EvidenceInput {
+  customer_email: string
+  customer_name: string
+  customer_phone: string
+  service_details: string
+  delivery_address: string
+  delivery_date: string | null
+}
+
+export const listDisputes = () => get<DisputeList>("/disputes")
+export const getDispute = (id: string) => get<DisputeDetail>(`/disputes/${encodeURIComponent(id)}`)
+export const submitDisputeEvidence = (id: string, input: EvidenceInput) => post<unknown>(`/disputes/${encodeURIComponent(id)}/evidence`, input)
+export const resolveDispute = (id: string, input: { resolution: "merchant-accepted" | "declined"; message: string; refund_amount_zar?: number }) =>
+  post<unknown>(`/disputes/${encodeURIComponent(id)}/resolve`, input)
+
+// ---------------------------------------------------------------- Cards on file
+
+export interface PaymentMethod {
+  id: string
+  customer_id: string
+  brand: string | null
+  card_type: string | null
+  bank: string | null
+  last4: string
+  exp_month: number | string | null
+  exp_year: number | string | null
+  is_default: boolean
+  /** "active" | "expired" | ... */
+  status: string
+}
+export const listPaymentMethods = (customerId: string) =>
+  get<{ methods: PaymentMethod[] }>(`/payment-methods?customer_id=${encodeURIComponent(customerId)}`)
+export const makePaymentMethodDefault = (id: string) => post<unknown>(`/payment-methods/${encodeURIComponent(id)}/default`)
+export const removePaymentMethod = (id: string) => del<unknown>(`/payment-methods/${encodeURIComponent(id)}`)
+export const chargeSavedCard = (input: { invoice_id: string; payment_method_id?: string; amount_zar?: number }) =>
+  post<{ status: "succeeded" | "failed" | "pending"; reason?: string | null }>("/payments/charge-saved", input)
+
+export interface AutopayResult {
+  charged: number
+  failed: number
+  pending: number
+  skipped: number
+  details: Array<{ invoice_id: string; status: string; attempt?: number | null; reason?: string | null; error?: string | null }>
+}
+/** Admin: charge every due invoice that has a saved card. */
+export const runAutopayNow = () => post<AutopayResult>("/payments/autopay/run")
+
+// ---------------------------------------------------------------- Refunds + amounts owed to the platform
+
+export type RefundCreditKind = "refund_required" | "overpayment" | "unallocated_payment"
+export interface RefundCredit {
+  id: string
+  customer_id: string
+  invoice_id: string | null
+  kind: RefundCreditKind
+  reason: string | null
+  amount_zar: number
+  remaining_zar: number
+  /** How much of the credit can still go back to the customer's card; 0 when the original payment was not by card. */
+  paystack_refundable_zar: number
+  created_at: string
+}
+export interface RefundRow {
+  id: string
+  credit_id: string
+  invoice_id: string | null
+  method: "paystack" | "manual"
+  amount_zar: number
+  status: string
+  reason: string | null
+  failure_reason: string | null
+  created_at: string
+  updated_at: string | null
+}
+export const listRefundCredits = () => get<{ credits: RefundCredit[] }>("/refunds/credits")
+export const listRefunds = () => get<{ refunds: RefundRow[] }>("/refunds")
+/** Admin. Money movement: callers confirm first. 400/422/502 bodies carry a useful `detail`. */
+export const createRefund = (input: { credit_id: string; amount_zar: number; reason: string; method: "paystack" | "manual"; manual_reference?: string }) =>
+  post<RefundRow>("/refunds", input)
+
+export interface GatewayLiability {
+  id: string
+  kind: "refund" | "chargeback"
+  amount_zar: number
+  status: "open" | "recovered" | "written_off"
+  note: string | null
+  created_at: string
+}
+export const getGatewayLiabilities = () => get<{ owed_zar: number; items: GatewayLiability[] }>("/gateway/liabilities")

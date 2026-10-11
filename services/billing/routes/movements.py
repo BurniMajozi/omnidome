@@ -52,7 +52,7 @@ def _act(id_: str, label: str, endpoint: Optional[str], payload: Optional[dict] 
 def suggest_actions(inv: Invoice, *, today: date, has_active_arrangement: bool, open_refund_credit: bool,
                     already_emailed: bool) -> list[dict]:
     """Next actions for one invoice. Endpoints are only given where billing really has one; call-centre
-    queueing, the mailer builder, upgrade/downgrade review and refund payout are 'integration pending'."""
+    queueing, the mailer builder and upgrade/downgrade review are 'integration pending'."""
     iid = str(inv.id)
     out: list[dict] = []
     if inv.credit_note_of is not None:
@@ -96,9 +96,8 @@ def suggest_actions(inv: Invoice, *, today: date, has_active_arrangement: bool, 
         if not Decimal(inv.amount_paid_zar or 0) > 0:
             out.append(_act("void_invoice", "Void the invoice", f"POST /invoices/{iid}/void", None, tier="admin"))
     if open_refund_credit:
-        out.append(_act("issue_refund", "Refund the customer", None,
-                        reason="integration pending: refund payout has no billing endpoint; the amount is held "
-                               "as a refund_required row in billing_customer_credits"))
+        out.append(_act("issue_refund", "Refund the customer", "GET /refunds/credits", None, tier="admin",
+                        reason="opens the Refunds tab: refund to the customer's card (Paystack) or record an EFT payout"))
     return out
 
 

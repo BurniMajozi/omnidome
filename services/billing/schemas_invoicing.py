@@ -259,3 +259,4 @@ class ReconcileRequest(BaseModel):
 
 class PublicPayRequest(BaseModel):
     amount_zar: Optional[Decimal] = Field(None, gt=0, max_digits=12, decimal_places=2)
+    save_payment_method: bool = False   # the customer ticked "save this card for future payments"

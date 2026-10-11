@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { PageHeader } from "@/components/ui/page-header"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { InsightsCard } from "@/components/dashboard/insights-card"
 import { TableShell } from "@/components/ui/table-shell"
 import {
@@ -37,7 +38,7 @@ import { useLoadable } from "@/lib/service-fetch"
 import { type Loadable } from "@/lib/service-state"
 import { NotConnected, NoDataYet, StatValue } from "@/components/ui/not-connected"
 
-import { useBillingPages, fetchCustomerNames, type CollectionsReportRow } from "@/lib/billing-api"
+import { useBillingPages, fetchCustomerNames, runAutopayNow, useBillingTier, type AutopayResult, type CollectionsReportRow } from "@/lib/billing-api"
 import { mapAgingBuckets, collectionRateText, customerLabel, invoiceStatusView, paymentMix, showingLabel, billingCsv, isBillingAdmin } from "@/lib/billing-derive"
 import { fmtMoney, sumCents } from "@/lib/money"
 import { downloadCsv } from "@/lib/export-csv"
@@ -47,6 +48,9 @@ import { QuotesTab } from "@/components/modules/billing/invoicing/quotes-tab"
 import { MovementsTab } from "@/components/modules/billing/invoicing/movements-tab"
 import { ItemsTemplatesTab } from "@/components/modules/billing/invoicing/items-templates-tab"
 import { FeePoliciesTab } from "@/components/modules/billing/invoicing/fee-policies-tab"
+import { GatewayTab } from "@/components/modules/billing/gateway-tab"
+import { RefundsTab } from "@/components/modules/billing/refunds-tab"
+import { DisputesTab } from "@/components/modules/billing/disputes-tab"
 
 // All figures come from the billing service (/svc/billing/...). Nothing is
 // hard-coded: when the service is down or returns no rows the UI says so.
@@ -95,6 +99,66 @@ function mapLoadable<T, U>(l: Loadable<T>, fn: (d: T) => U): Loadable<U> {
   return l.state === "ready" ? { state: "ready", data: fn(l.data) } : (l as Loadable<U>)
 }
 
+/** Admin: charge every due invoice that has a saved card, then summarise the run. */
+function AutopayButton({ onDone }: { onDone: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [result, setResult] = useState<AutopayResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const run = async () => {
+    setBusy(true)
+    setError(null)
+    const r = await runAutopayNow()
+    setBusy(false)
+    if (r.ok && r.data) {
+      setResult(r.data)
+      onDone()
+    } else setError(r.message ?? "Autopay could not be run.")
+    setOpen(true)
+  }
+  const failed = (result?.details ?? []).filter((d) => d.status === "failed")
+  return (
+    <>
+      <Button variant="outline" size="sm" disabled={busy} onClick={run}>
+        <CreditCard className="h-3.5 w-3.5" />
+        {busy ? "Running autopay…" : "Run autopay now"}
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Autopay run</DialogTitle>
+            <DialogDescription>Due invoices were charged to the customers' saved cards.</DialogDescription>
+          </DialogHeader>
+          {error ? (
+            <p role="alert" className="text-sm text-red-400">{error}</p>
+          ) : result ? (
+            <div className="space-y-3 text-sm">
+              <div className="grid grid-cols-4 gap-2 text-center">
+                {([["Charged", result.charged], ["Failed", result.failed], ["Pending", result.pending], ["Skipped", result.skipped]] as const).map(([k, v]) => (
+                  <div key={k} className="rounded-md border border-border bg-secondary/20 p-2">
+                    <p className="text-[11px] text-muted-foreground">{k}</p>
+                    <p className="text-lg font-semibold text-foreground">{v}</p>
+                  </div>
+                ))}
+              </div>
+              {failed.length > 0 && (
+                <ul className="divide-y divide-border rounded-md border border-border text-xs">
+                  {failed.map((d, i) => (
+                    <li key={`${d.invoice_id}-${i}`} className="px-3 py-1.5">
+                      <span className="font-medium text-foreground">Invoice {String(d.invoice_id).slice(0, 8)}</span>
+                      <span className="text-muted-foreground">: {d.reason || d.error || "Failed"}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+}
+
 export function BillingModule() {
   const revenue = useLoadable<RevenueRow[]>(`${BASE}/reports/revenue?months=6`)
   const aging = useLoadable<AgingRow[]>(`${BASE}/reports/aging`)
@@ -104,6 +168,7 @@ export function BillingModule() {
 
   const collections = useLoadable<CollectionsReportRow[]>(`${BASE}/reports/collections?months=6`)
   const { roles } = useRoles()
+  const { isAdmin } = useBillingTier()
   const [names, setNames] = useState<Record<string, string>>({})
   const [namesPartial, setNamesPartial] = useState(true)
   useEffect(() => {
@@ -121,6 +186,12 @@ export function BillingModule() {
   const showInvoice = useCallback((id: string) => { setOpenInvoiceId(id); setActiveTab("invoices") }, [])
   const showQuote = useCallback((id: string) => { setFocusQuoteId(id); setActiveTab("quotes") }, [])
   const isClient = useIsClient()
+  // Lets nested drawers (e.g. the invoice drawer) ask for a tab without threading callbacks through every host.
+  useEffect(() => {
+    const h = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (typeof t === "string") setActiveTab(t) }
+    window.addEventListener("billing:open-tab", h)
+    return () => window.removeEventListener("billing:open-tab", h)
+  }, [])
 
   // Oldest -> newest for the trend chart.
   const revenueSeries = mapLoadable(revenue.value, (rows) =>
@@ -299,8 +370,11 @@ export function BillingModule() {
           <TabsTrigger value="quotes">Quotes</TabsTrigger>
           <TabsTrigger value="catalogue">Items &amp; Templates</TabsTrigger>
           <TabsTrigger value="movements">Movements</TabsTrigger>
+          <TabsTrigger value="refunds">Refunds</TabsTrigger>
           <TabsTrigger value="fees">Fee policies</TabsTrigger>
           <TabsTrigger value="collections">Collections</TabsTrigger>
+          <TabsTrigger value="gateway">Payments gateway</TabsTrigger>
+          <TabsTrigger value="disputes">Disputes</TabsTrigger>
           <TabsTrigger value="aging">Aging Report</TabsTrigger>
         </TabsList>
 
@@ -407,8 +481,20 @@ export function BillingModule() {
           <MovementsTab names={names} onOpenQuote={showQuote} />
         </TabsContent>
 
+        <TabsContent value="refunds" className="mt-4">
+          <RefundsTab />
+        </TabsContent>
+
         <TabsContent value="fees" className="mt-4">
           <FeePoliciesTab onOpenInvoice={showInvoice} />
+        </TabsContent>
+
+        <TabsContent value="gateway" className="mt-4">
+          <GatewayTab />
+        </TabsContent>
+
+        <TabsContent value="disputes" className="mt-4">
+          <DisputesTab />
         </TabsContent>
 
         <TabsContent value="collections" className="mt-4">
@@ -416,6 +502,7 @@ export function BillingModule() {
             <CardHeader>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <CardTitle className="text-base">Collections Queue</CardTitle>
+                {isAdmin && <AutopayButton onDone={queue.reload} />}
                 {queue.value.state === "ready" && (
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge className="badge-danger">{queue.value.data.filter((q) => q.days_overdue >= 30).length} Urgent (30+ days)</Badge>

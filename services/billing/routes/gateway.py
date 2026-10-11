@@ -78,15 +78,20 @@ def discard_charge(session, reference: str) -> None:
     session.query(GatewayCharge).filter(GatewayCharge.reference == reference, GatewayCharge.status == "initialized").delete()
 
 
-def mark_charge_succeeded(session, reference: str, paystack_fee_cents: Optional[int]) -> None:
-    """Webhook hook: runs inside the webhook transaction, so it commits or rolls back with the payment."""
+def mark_charge_succeeded(session, reference: str, paystack_fee_cents: Optional[int]) -> Optional[dict]:
+    """Webhook hook: runs inside the webhook transaction, so it commits or rolls back with the payment.
+    Returns the tenant-ledger entry for OmniDome's commission (Dr 6950 / Cr 1010) for the caller to enqueue."""
+    from services.billing import finance_posting as fp
     row = session.query(GatewayCharge).filter(GatewayCharge.reference == reference).with_for_update().first()
     if row is None or row.status == "succeeded":
-        return
+        return None
     row.status = "succeeded"
     row.settled_at = datetime.now(timezone.utc)
     if paystack_fee_cents is not None:
         row.paystack_fee_cents = int(paystack_fee_cents)
+    if row.commission_cents > 0:
+        return fp.gateway_fee_entry(row.id, reference, fp.sast_today(), Decimal(row.commission_cents) / 100)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -310,3 +315,17 @@ async def summary(ctx: AuthContext = Depends(get_auth_context)):
             "next_threshold_zar": None if band["next_threshold_cents"] is None else band["next_threshold_cents"] / 100,
             "remaining_in_band_zar": None if band["remaining_in_band_cents"] is None else band["remaining_in_band_cents"] / 100,
             "tiers": _tiers_public(tiers)}
+
+
+@router.get("/liabilities", dependencies=[Depends(require_tier("reader"))])
+async def liabilities(ctx: AuthContext = Depends(get_auth_context)):
+    """Refunds and lost disputes OmniDome paid out of its own balance for this tenant's customers. The tenant was
+    already settled for those charges, so the amount is owed back and is netted against future pre-funding / top-ups."""
+    from services.billing.models_gateway import GatewayLiability
+    with get_session() as session:
+        rows = session.execute(select(GatewayLiability).where(GatewayLiability.tenant_id == ctx.tenant_id)
+                               .order_by(GatewayLiability.created_at.desc()).limit(200)).scalars().all()
+        items = [{"id": str(r.id), "kind": r.kind, "amount_zar": r.amount_cents / 100, "status": r.status, "note": r.note,
+                  "created_at": r.created_at.isoformat() if r.created_at else None} for r in rows]
+    owed = sum(i["amount_zar"] for i in items if i["status"] == "open")
+    return {"owed_zar": round(owed, 2), "items": items}

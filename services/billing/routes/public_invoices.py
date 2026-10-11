@@ -155,7 +155,8 @@ async def public_invoice_pay(token: str, request: Request, body: PublicPayReques
                       auth_mode="public-link")
     try:
         result = await ps.initialize_paystack(
-            PaystackInitializeRequest(invoice_id=invoice_id, amount_zar=body.amount_zar, callback_url=callback), ctx)
+            PaystackInitializeRequest(invoice_id=invoice_id, amount_zar=body.amount_zar, callback_url=callback,
+                                      save_payment_method=body.save_payment_method), ctx)
     except HTTPException as exc:
         logger.info("public pay refused for %s: HTTP %s", invoice_id, exc.status_code)
         if exc.status_code in (502, 503):

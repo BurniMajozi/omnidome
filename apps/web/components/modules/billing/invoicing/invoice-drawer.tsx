@@ -21,6 +21,7 @@ import {
   type Loadable,
 } from "@/lib/invoicing-api"
 import { Modal, SidePanel, StatusBadge, fmtDate, fmtDateTime, humanise, tierAtLeast } from "../shared"
+import { SavedCards } from "../saved-cards"
 import { DocumentActions } from "./document-actions"
 import { InvoiceBuilder } from "./invoice-builder"
 import { SuggestedActions } from "./suggested-actions"
@@ -167,6 +168,8 @@ export function InvoiceDrawer({
               )}
             </section>
 
+            {detail.data.customer_id && <SavedCards customerId={detail.data.customer_id} invoiceId={Number(detail.data.balance_zar) > 0 ? detail.data.id : undefined} balance={detail.data.balance_zar} onCharged={changed} />}
+
             <section className="space-y-2">
               <h4 className="text-sm font-semibold text-foreground">Suggested actions</h4>
               {timeline.state !== "ready" ? (
@@ -178,6 +181,10 @@ export function InvoiceDrawer({
                   balance={String(detail.data.balance_zar)}
                   onDone={changed}
                   onEdit={() => setEditing(true)}
+                  onOpenRefunds={() => {
+                    onClose()
+                    window.dispatchEvent(new CustomEvent("billing:open-tab", { detail: "refunds" }))
+                  }}
                   onOpenDelivery={() => {
                     setDeliveryOpen(true)
                     setTimeout(() => deliveryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50)

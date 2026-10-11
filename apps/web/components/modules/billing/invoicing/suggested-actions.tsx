@@ -25,6 +25,7 @@ export function SuggestedActions({
   onDone,
   onEdit,
   onOpenDelivery,
+  onOpenRefunds,
 }: {
   actions: SuggestedAction[]
   tier: BillingTier
@@ -33,6 +34,8 @@ export function SuggestedActions({
   onDone: () => void
   onEdit: () => void
   onOpenDelivery: () => void
+  /** Switch the billing module to its Refunds tab. */
+  onOpenRefunds: () => void
 }) {
   const act = useActionState()
   const [confirm, setConfirm] = useState<string | null>(null)
@@ -58,6 +61,7 @@ export function SuggestedActions({
 
   const click = (a: SuggestedAction) => {
     if (a.id === "edit_draft") return onEdit()
+    if (a.id === "issue_refund") return onOpenRefunds()
     if (LOCAL_SECTION.has(a.id)) return onOpenDelivery()
     if (a.id === "record_payment") {
       payKey.current = newIdempotencyKey()

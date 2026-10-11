@@ -337,8 +337,9 @@ def test_overdue_invoice_suggestions_are_accurate_about_what_exists(client):
     assert acts["offer_arrangement"]["endpoint"] == f"POST /collections/{CUSTOMER}/arrange"
     assert acts["suspend_service"]["endpoint"] == f"POST /collections/{CUSTOMER}/suspend"
     assert acts["issue_credit"]["endpoint"] == f"POST /invoices/{inv.id}/credit-note"
-    for pending in ("queue_call", "mailer_builder", "review_upgrade_request", "issue_refund"):
+    for pending in ("queue_call", "mailer_builder", "review_upgrade_request"):
         assert acts[pending]["endpoint"] is None and "integration pending" in acts[pending]["reason"]
+    assert acts["issue_refund"]["endpoint"] == "GET /refunds/credits" and acts["issue_refund"]["tier"] == "admin"
     arranged = {a["id"] for a in suggest_actions(inv, today=date(2026, 2, 1), has_active_arrangement=True,
                                                 open_refund_credit=False, already_emailed=True)}
     assert "offer_arrangement" not in arranged and "issue_refund" not in arranged and "send_invoice_email" not in arranged

@@ -259,6 +259,9 @@ async def paystack_webhook(
     if platform_outcome is not None:
         return {"status": platform_outcome}
 
+    if event.startswith("refund."):
+        from services.billing.routes import refunds
+        return {"status": await refunds.handle_event(event, data)}
     if event.startswith("charge.dispute."):
         from services.billing.routes import disputes
         return {"status": await disputes.handle_event(event, data)}
@@ -401,7 +404,9 @@ async def _handle_charge_success(data: dict, key: str) -> str:
         if init is not None:
             init.status = "completed"
         if action != "reject_currency":
-            gateway_routes.mark_charge_succeeded(session, reference, data.get("fees"))
+            fee_entry = gateway_routes.mark_charge_succeeded(session, reference, data.get("fees"))
+            if fee_entry is not None and fp.enqueue(session, tenant_id, fee_entry) is not None:
+                entries.append(fee_entry)
             if action == "apply":
                 payment_methods.capture_authorization(session, tenant_id, inv.customer_id, data)
     # Everything below runs after the commit.

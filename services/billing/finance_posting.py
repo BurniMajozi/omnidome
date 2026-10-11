@@ -32,7 +32,9 @@ from services.billing.models import BillingFinanceOutbox
 logger = logging.getLogger("billing.finance_posting")
 
 AR, BANK, PAYSTACK_CLEARING, VAT_OUTPUT, REVENUE = "1100", "1000", "1010", "2200", "4000"
-SOURCES = ("billing.invoice", "billing.payment", "billing.credit_note", "billing.void", "billing.seat_invoice")
+SOURCES = ("billing.invoice", "billing.payment", "billing.credit_note", "billing.void", "billing.seat_invoice",
+           "billing.gateway_fee", "billing.refund", "billing.chargeback")
+FEES, CHARGEBACKS = "6950", "6960"
 MAX_ERROR = 500
 _CENT = Decimal("0.01")
 
@@ -98,6 +100,34 @@ def void_entry(invoice_id, number: str, on: date, total, subtotal, vat) -> dict:
     total, revenue, vat = _split(total, subtotal, vat)
     return _entry("billing.void", invoice_id, on, f"Void invoice {number}",
                   [_line(REVENUE, debit=revenue), _line(VAT_OUTPUT, debit=vat), _line(AR, credit=total)])
+
+
+def gateway_fee_entry(charge_id, reference: str, on: date, amount) -> dict:
+    """OmniDome's gateway commission on a card charge, taken from the Paystack clearing balance the payment
+    entry debited: Dr 6950 Payment Processing Fees / Cr 1010 Paystack Clearing."""
+    amount = money(amount)
+    if amount <= 0:
+        raise ValueError("fee must be positive")
+    return _entry("billing.gateway_fee", charge_id, on, f"Gateway fee {reference}",
+                  [_line(FEES, debit=amount), _line(PAYSTACK_CLEARING, credit=amount)])
+
+
+def refund_entry(refund_id, reference: str, on: date, amount) -> dict:
+    """Money returned to the customer from the held credit: Dr 1100 AR (clears the credit balance) / Cr 1010 Paystack Clearing."""
+    amount = money(amount)
+    if amount <= 0:
+        raise ValueError("refund must be positive")
+    return _entry("billing.refund", refund_id, on, f"Refund {reference}",
+                  [_line(AR, debit=amount), _line(PAYSTACK_CLEARING, credit=amount)])
+
+
+def chargeback_entry(dispute_id, reference: str, on: date, amount) -> dict:
+    """A lost dispute: Dr 6960 Chargebacks & Disputes / Cr 1010 Paystack Clearing."""
+    amount = money(amount)
+    if amount <= 0:
+        raise ValueError("chargeback must be positive")
+    return _entry("billing.chargeback", dispute_id, on, f"Chargeback {reference}",
+                  [_line(CHARGEBACKS, debit=amount), _line(PAYSTACK_CLEARING, credit=amount)])
 
 
 def sast_today() -> date:
