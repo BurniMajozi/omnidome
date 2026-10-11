@@ -31,6 +31,7 @@ from services.common.http_client import service_post
 from services.billing import finance_posting as fp, invoicing
 from services.billing.access import require_tier
 from services.billing.contacts import resolve_customer_email
+from services.billing.routes import gateway as gateway_routes
 from services.billing.database import get_session
 from services.billing.models import (
     BillingWebhookEvent, CustomerCredit, Invoice, PaystackInitialization, Subscription,
@@ -144,6 +145,10 @@ async def initialize_paystack(
         payload["callback_url"] = body.callback_url
 
     with get_session() as session:
+        # Tenant subaccount + OmniDome commission (None when the tenant has no gateway set up).
+        split = gateway_routes.split_for_charge(session, ctx.tenant_id, amount_cents, reference, invoice_id=invoice_id)
+        if split:
+            payload.update(split)
         session.add(PaystackInitialization(
             tenant_id=ctx.tenant_id, invoice_id=invoice_id, customer_id=customer_id,
             reference=reference, amount_cents=amount_cents, currency="ZAR", status="pending"))
@@ -154,6 +159,7 @@ async def initialize_paystack(
         logger.error("Paystack init failed: HTTP %s", resp.status_code)
         with get_session() as session:
             session.query(PaystackInitialization).filter(PaystackInitialization.reference == reference).delete()
+            gateway_routes.discard_charge(session, reference)
         raise HTTPException(status_code=502, detail="Payment gateway error")
 
     data = resp.json().get("data", {})
@@ -389,6 +395,8 @@ async def _handle_charge_success(data: dict, key: str) -> str:
                 entries.append(ce)
         if init is not None:
             init.status = "completed"
+        if action != "reject_currency":
+            gateway_routes.mark_charge_succeeded(session, reference, data.get("fees"))
     # Everything below runs after the commit.
     if tenant_for_delivery is not None:
         await fp.deliver_after_commit(tenant_for_delivery, entries)

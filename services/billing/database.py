@@ -13,6 +13,7 @@ from services.common.db import get_engine
 from services.billing.models import Base, InvoiceSequence
 from services.billing import models_fees  # noqa: F401  (registers fee_policies & co. so create_all builds them)
 from services.billing import models_invoicing  # noqa: F401  (registers quotes, templates, share links, delivery events)
+from services.billing import models_gateway  # noqa: F401  (registers gateway settings + commission ledger)
 
 
 logger = logging.getLogger("billing.database")

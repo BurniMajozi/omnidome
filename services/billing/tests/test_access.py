@@ -164,6 +164,8 @@ EXPECTED = {
     ("POST", "/subscriptions/{subscription_id}/generate-invoice"): "admin",
     ("GET", "/reports/revenue"): "reader", ("GET", "/reports/aging"): "reader", ("GET", "/reports/collections"): "reader",
     ("POST", "/dunning/process-tenant"): "admin", ("GET", "/billing/finance-outbox"): "admin",
+    ("PUT", "/gateway/settings"): "admin", ("GET", "/gateway/banks"): "admin", ("GET", "/gateway/settings"): "reader",
+    ("GET", "/gateway/summary"): "reader", ("GET", "/gateway/commission/preview"): "reader",
 }
 
 
