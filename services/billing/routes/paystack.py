@@ -31,7 +31,7 @@ from services.common.http_client import service_post
 from services.billing import finance_posting as fp, invoicing
 from services.billing.access import require_tier
 from services.billing.contacts import resolve_customer_email
-from services.billing.routes import gateway as gateway_routes
+from services.billing.routes import gateway as gateway_routes, payment_methods
 from services.billing.database import get_session
 from services.billing.models import (
     BillingWebhookEvent, CustomerCredit, Invoice, PaystackInitialization, Subscription,
@@ -139,6 +139,7 @@ async def initialize_paystack(
             "invoice_id": str(invoice_id),
             "tenant_id": str(ctx.tenant_id),
             "customer_id": str(customer_id),
+            "save_payment_method": bool(body.save_payment_method),
         },
     }
     if body.callback_url:
@@ -257,6 +258,10 @@ async def paystack_webhook(
     platform_outcome = await handle_event(event, data)
     if platform_outcome is not None:
         return {"status": platform_outcome}
+
+    if event.startswith("charge.dispute."):
+        from services.billing.routes import disputes
+        return {"status": await disputes.handle_event(event, data)}
 
     logger.info("Paystack webhook: event=%s ref=%s", event, data.get("reference"))
     outcome = "accepted"
@@ -397,6 +402,8 @@ async def _handle_charge_success(data: dict, key: str) -> str:
             init.status = "completed"
         if action != "reject_currency":
             gateway_routes.mark_charge_succeeded(session, reference, data.get("fees"))
+            if action == "apply":
+                payment_methods.capture_authorization(session, tenant_id, inv.customer_id, data)
     # Everything below runs after the commit.
     if tenant_for_delivery is not None:
         await fp.deliver_after_commit(tenant_for_delivery, entries)

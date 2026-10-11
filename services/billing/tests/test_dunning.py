@@ -179,3 +179,14 @@ def test_process_can_be_limited_to_one_tenant():
     assert out["processed"] == 4
     with db() as s:
         assert s.query(DunningAction).filter(DunningAction.executed_at.is_(None)).count() == 4   # the other tenant's
+
+
+def test_open_dispute_defers_every_dunning_action():
+    spy = Spy()
+    d = spy.deps()
+    d.is_disputed = lambda: True
+    for kind in ("email_warning", "auto_suspend", "send_to_collections"):
+        a = action(kind)
+        asyncio.run(dunning.run_action(a, invoice(), d))
+        assert a.result == "deferred_dispute" and a.executed_at is None and a.next_attempt_at == NOW + timedelta(days=1)
+    assert spy.sent == [] and spy.suspended == 0

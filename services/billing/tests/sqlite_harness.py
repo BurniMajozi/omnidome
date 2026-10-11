@@ -58,7 +58,8 @@ def patch_sessions(monkeypatch, get_session):
                  "services.billing.routes.paystack", "services.billing.routes.subscriptions",
                  "services.billing.routes.collections", "services.billing.routes.reports",
                  "services.billing.routes.finance_outbox", "services.billing.seat_runs",
-                 "services.billing.routes.gateway"):
+                 "services.billing.routes.gateway", "services.billing.routes.payment_methods",
+                 "services.billing.routes.disputes"):
         mod = importlib.import_module(name)
         if hasattr(mod, "get_session"):
             monkeypatch.setattr(mod, "get_session", get_session)

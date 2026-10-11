@@ -117,6 +117,7 @@ class PaystackInitializeRequest(BaseModel):
     amount_zar: Optional[Decimal] = Field(None, gt=0, max_digits=12, decimal_places=2,
                                           description="Defaults to outstanding balance; may not exceed it")
     callback_url: Optional[str] = None
+    save_payment_method: bool = Field(False, description="The customer agreed to keep this card for future charges (card on file)")
 
 
 class PaystackInitializeResponse(BaseModel):

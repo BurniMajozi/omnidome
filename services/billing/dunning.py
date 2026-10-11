@@ -7,6 +7,7 @@ Every action ends in a result that says what REALLY happened:
     suspended | flagged_for_collections
     skipped_<invoice status> (paid/voided/draft...) | skipped_not_overdue
     deferred_arrangement (an active payment arrangement stops dunning; the action waits)
+    deferred_dispute (an open Paystack dispute on the invoice stops dunning; the action waits)
     failed (provider/network error: kept pending with backoff, finalised after MAX_ATTEMPTS)
 
 ``run_action`` works on plain objects through an injected ``Deps`` so it is unit-testable without
@@ -44,6 +45,7 @@ class Deps:
     send_email: Callable[[str, str, str], Awaitable[None]]      # (to, subject, html); raises on failure
     email_configured: Callable[[], bool]
     suspend: Callable[[], Awaitable[bool]]                       # True only when the network call succeeded
+    is_disputed: Callable[[], bool] = lambda: False              # open Paystack dispute on the invoice: do not chase
 
 
 def _final(action, result: str, now: datetime) -> None:
@@ -71,6 +73,10 @@ async def run_action(action, inv, deps: Deps) -> None:
         return _final(action, f"skipped_{inv.status}", now)
     if deps.has_arrangement():
         action.result = "deferred_arrangement"
+        action.next_attempt_at = now + timedelta(days=1)
+        return
+    if deps.is_disputed():
+        action.result = "deferred_dispute"
         action.next_attempt_at = now + timedelta(days=1)
         return
 
@@ -121,6 +127,11 @@ async def _suspend_call(tenant_id, customer_id) -> bool:
     return await suspend_customer(tenant_id, customer_id)
 
 
+def _disputed(session, tenant_id, invoice_id) -> bool:
+    from services.billing.routes.payment_methods import invoice_is_disputed
+    return invoice_is_disputed(session, tenant_id, invoice_id)
+
+
 def _real_deps(session, action, inv) -> Deps:
     from services.billing.contacts import resolve_customer_email
     from services.common import agentmail
@@ -151,6 +162,7 @@ def _real_deps(session, action, inv) -> Deps:
         get_email=get_email, is_suppressed=is_suppressed, send_email=send_email,
         email_configured=agentmail.is_configured,
         suspend=lambda: _suspend_call(action.tenant_id, action.customer_id),
+        is_disputed=lambda: inv is not None and _disputed(session, action.tenant_id, inv.id),
     )
 
 

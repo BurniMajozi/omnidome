@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Index, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -71,10 +71,65 @@ class GatewayCharge(Base):
     commission_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     volume_before_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     paystack_fee_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    status: Mapped[str] = mapped_column(String(12), nullable=False, default="initialized")  # initialized|succeeded
+    payment_method_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="initialized")  # initialized|succeeded|failed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (
         Index("ix_gateway_charges_tenant_period", "tenant_id", "period", "status"),
     )
+
+
+class PaymentMethod(Base):
+    """A card the customer agreed to save (consent is recorded) so we can charge it with
+    POST /transaction/charge_authorization. Only Paystack's reusable authorization token and display data are
+    kept: never a card number. The token is a bearer credential for charging this card on our merchant
+    account, so it is never returned by an API and never logged."""
+    __tablename__ = "billing_payment_methods"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    paystack_customer_code: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    authorization_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    signature: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)  # same card -> same signature
+    brand: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    card_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    bank: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    last4: Mapped[Optional[str]] = mapped_column(String(4), nullable=True)
+    exp_month: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    exp_year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reusable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="active")  # active|removed
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "customer_id", "signature", name="uq_payment_method_card"),
+        Index("ix_payment_methods_customer", "tenant_id", "customer_id", "status"),
+    )
+
+
+class GatewayDispute(Base):
+    """A Paystack chargeback/dispute (charge.dispute.* webhooks). Open disputes freeze dunning for the invoice."""
+    __tablename__ = "billing_disputes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)  # null = unmatched
+    paystack_dispute_id: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    reference: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # the disputed transaction
+    invoice_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    customer_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(40), nullable=False, default="unknown")
+    category: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resolution: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    due_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_event: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
