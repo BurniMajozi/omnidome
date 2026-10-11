@@ -1,5 +1,7 @@
 # Isolated Autumn runtime
 
+Update 11 October: Autumn is optional and stopped. Postgres is authoritative and Paystack handles payments; Stripe is not required. `AUTUMN_SYNC_ENABLED` defaults to false. Native provisioning, allowances and costs do not depend on this stack. The steps below are retained for a future opt-in evaluation, not normal application startup. See [pricing/runtime review](../../docs/pricing-review-and-next-work-2026-10-11.md).
+
 The runtime image and isolated PostgreSQL schema were prepared locally. Live Stripe-free entitlement validation remains required before bridge activation. Paystack remains the payment processor; the adapter allowlists entitlement operations and rejects paid attach calls.
 
 Pinned upstream source: `https://github.com/useautumn/autumn.git`, commit `89b5b6dc2653a19b758815d09b109061c70ecc40`.

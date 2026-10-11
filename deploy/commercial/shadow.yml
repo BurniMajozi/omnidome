@@ -1,4 +1,14 @@
 services:
+  admin:
+    environment:
+      AUTUMN_SYNC_ENABLED: 'false'
+  billing:
+    environment:
+      AUTUMN_SYNC_ENABLED: 'false'
+      # Billing startup reflects tables while other connections are held.
+      DB_POOL_SIZE: '2'
+      DB_MAX_OVERFLOW: '1'
   agent-orchestrator:
     environment:
       PLATFORM_USAGE_ENABLED: 'true'
+      AUTUMN_SYNC_ENABLED: 'false'

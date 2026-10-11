@@ -25,13 +25,17 @@ async def transaction(fn):
     finally: await engine.dispose()
 
 
-def test_member_scope_owner_only_costs_and_frozen_policy(client):
+def test_member_scope_owner_only_costs_and_frozen_policy(client,monkeypatch):
+    monkeypatch.delenv("AUTUMN_SYNC_ENABLED",raising=False)
     tenant=make_tenant(client);member,_=add_user(tenant,["org_user"])
     assert save(client,tenant,choice()).status_code==200
     response=client.get(f"/tenants/{tenant}/usage",headers=as_user(tenant,member))
     assert response.status_code==200,response.text
     assert response.json()["policy"]["monthly_credits"]==5000
     assert response.json()["charges_enabled"] is False
+    assert response.json()["entitlement_authority"]=="postgres"
+    assert response.json()["autumn_sync_enabled"] is False
+    assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t",t=tenant)[0][0]==0
     assert client.get(f"/tenants/{make_tenant(client)}/usage",headers=as_user(tenant,member)).status_code==403
     assert client.get(f"/tenants/{tenant}/usage/costs",headers=as_user(tenant,member)).status_code==403
     override={"monthly_credits":1000,"reason":"Controlled pilot allowance","expires_at":(datetime.now(timezone.utc)+timedelta(days=5)).isoformat()}
@@ -42,6 +46,7 @@ def test_member_scope_owner_only_costs_and_frozen_policy(client):
         q("UPDATE platform_usage_policy_versions SET reason='changed' WHERE id=:id",id=changed.json()["version"])
     assert q("SELECT quote FROM platform_orders WHERE tenant_id=:t",t=tenant)[0][0]["usage_policy"]["monthly_credits"]==5000
     assert client.get(f"/tenants/{tenant}/usage",headers=platform(tenant)).json()["policy"]["monthly_credits"]==1000
+    assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t",t=tenant)[0][0]==0
 
 
 def test_cost_events_immutable_unknown_not_zero_and_completion_dedup(client):
@@ -88,7 +93,8 @@ def test_grant_retry_and_duplicate_do_not_repeat_remote_success(client):
     assert any(c[0]=="balances.delete" for c in fake.calls)
 
 
-def test_override_expiry_and_payment_outbox_are_not_client_controlled(client):
+def test_override_expiry_and_payment_outbox_are_not_client_controlled(client,monkeypatch):
+    monkeypatch.setenv("AUTUMN_SYNC_ENABLED","true")
     tenant=make_tenant(client);save(client,tenant,choice())
     bad={"monthly_credits":0,"reason":"Test expired override","expires_at":"2020-01-01T00:00:00Z"}
     assert client.put(f"/tenants/{tenant}/usage/policy",json=bad,headers=platform(tenant)).status_code==422

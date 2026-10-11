@@ -327,6 +327,11 @@ export function grantableRoles(actorRoles: string[]): string[] {
 export const adminApi = {
   getTenantUsage: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantUsage>(`/tenants/${tenant}/usage`),
   getTenantCosts: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantCosts>(`/tenants/${tenant}/usage/costs`),
+  getProviderReceipts: () => fetchAdmin<import("@/components/pricing/provider-cost-evidence").ProviderReceipt[]>("/provider-costs/receipts"),
+  recordProviderReceipt: (body:Record<string,string>) => fetchAdmin<{id:string}>("/provider-costs/receipts",{method:"POST",body:JSON.stringify(body)}),
+  getProviderAllocations: (tenant:string) => fetchAdmin<import("@/components/pricing/provider-cost-evidence").ProviderAllocation[]>(`/tenants/${tenant}/usage/cost-allocations`),
+  allocateProviderCost: (tenant:string,body:Record<string,string>) => fetchAdmin(`/tenants/${tenant}/usage/cost-allocations`,{method:"POST",body:JSON.stringify(body)}),
+  voidProviderAllocation: (tenant:string,id:string,reason:string) => fetchAdmin(`/tenants/${tenant}/usage/cost-allocations/${id}/void`,{method:"POST",body:JSON.stringify({reason})}),
   setTenantUsagePolicy: (tenant:string,monthly_credits:number,reason:string,expires_at:string) => fetchAdmin(`/tenants/${tenant}/usage/policy`,{method:"PUT",body:JSON.stringify({monthly_credits,reason,expires_at})}),
   getPricing: (tenant: string) => fetchAdmin<PlatformPricingState>(`/tenants/${tenant}/pricing`),
   setPricing: (tenant: string, selection: PricingSelection, key: string) => fetchAdmin<{ quote: PlatformQuote; order: PlatformOrder }>(`/tenants/${tenant}/pricing`, { method: "PUT", body: JSON.stringify({ selection, intent: "invoice", idempotency_key: key }) }),

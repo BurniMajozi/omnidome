@@ -42,8 +42,8 @@ def quote(selection: Selection):
     if seats < included: raise ValueError(f"This selection includes {included} seats; choose at least that many")
     lines = []
     def add(label, monthly):
-        # Preserve the public page's per-month annual discount rounding.
-        monthly = (Decimal(monthly) * factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        # Match the public catalogue while retaining cents in discounted prices.
+        monthly = (Decimal(monthly) * factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         lines.append({"description": label, "monthly_net_zar": str(monthly), "quantity": months, "net_zar": str(monthly * months)})
     if bundle: add(bundle["name"] + " bundle", bundle["monthly_price"])
     for module in data["modules"]:

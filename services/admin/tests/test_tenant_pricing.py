@@ -100,6 +100,7 @@ def test_payment_mismatch_stale_selection_duplicate_and_scope(client,gateway,mon
 
 
 def test_verified_payment_enables_only_selected_modules(client,gateway,monkeypatch):
+    monkeypatch.setenv("AUTUMN_SYNC_ENABLED","true")
     t=make_tenant(client); user,_=add_user(t,["org_admin"])
     selection={"modules":{"crm":"starter","portal":"professional"},"seats":3,"period":"annually"}
     order=issue(client,t,user,selection).json()

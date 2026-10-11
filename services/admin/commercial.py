@@ -8,7 +8,7 @@ from sqlalchemy import text
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import get_async_session
 from services.common.platform_pricing import catalog
-from services.common.platform_usage import add_months
+from services.common.platform_usage import add_months, autumn_sync_enabled, queue_optional_sync
 from services.common import platform_commerce
 from services.admin import iam
 from services.common.provider_pricing import draft_rate_card
@@ -51,7 +51,8 @@ async def usage(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context),
     return {"policy": policy, "period_start": start, "period_end": end, "used": summary["used"],
             "remaining": max(0, policy["monthly_credits"]-int(summary["used"])), "running": summary["running"],
             "source": active["source"] if active else "legacy", "sync": dict(sync) if sync else None,
-            "recent": [dict(row) for row in recent], "charges_enabled": False}
+            "recent": [dict(row) for row in recent], "charges_enabled": False,
+            "entitlement_authority": "postgres", "autumn_sync_enabled": autumn_sync_enabled()}
 
 
 class PolicyOverride(BaseModel):
@@ -83,8 +84,7 @@ async def override(tenant: uuid.UUID, body: PolicyOverride, ctx: AuthContext = D
     await db.execute(text("""UPDATE platform_usage_entitlements SET policy=CAST(:p AS jsonb),generation=:g,
       source='platform_owner',actor_id=:actor,reason=:reason,expires_at=:expiry,updated_at=now() WHERE tenant_id=:t"""),
       {"p": json.dumps(policy), "g": "policy:"+str(ident), "actor": str(ctx.user_id), "reason": body.reason, "expiry": expiry, "t": str(tenant)})
-    await db.execute(text("""INSERT INTO platform_usage_outbox(id,tenant_id,generation,action,payload)
-      VALUES(:id,:t,:g,'reconcile','{}')"""), {"id": "policy:"+str(ident), "t": str(tenant), "g": "policy:"+str(ident)})
+    await queue_optional_sync(db, tenant, "policy:"+str(ident), "policy:"+str(ident))
     await iam.audit(db,ctx,"tenant.usage_policy.override","tenant",tenant,tenant,{"version":str(ident),"reason":body.reason,"monthly_credits":body.monthly_credits})
     return {"version": ident, "policy": policy, "expires_at": expiry, "charges_enabled": False}
 
@@ -96,6 +96,8 @@ async def costs(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context),
     rows = (await db.execute(text("""SELECT category,provider,currency,source,count(*) AS events,
       sum(quantity) AS quantity,unit,sum(amount) AS amount FROM platform_cost_events
       WHERE tenant_id=:t AND created_at>=now()-interval '30 days'
+      AND NOT EXISTS(SELECT 1 FROM platform_provider_cost_allocations a
+        JOIN platform_provider_allocation_voids v ON v.allocation_id=a.id WHERE a.cost_event_id=platform_cost_events.id)
       GROUP BY category,provider,currency,source,unit ORDER BY category,provider"""), {"t": str(tenant)})).mappings().all()
     return {"window_days":30,"costs":[dict(row) for row in rows],"margin_available":False,
             "margin_reason":"Provider, hosting, support and FX reconciliation must be complete before reporting margin.",

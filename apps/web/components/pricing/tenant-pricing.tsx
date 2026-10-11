@@ -46,7 +46,7 @@ export function PricingSelector({ value, onChange, disabled = false }: { value: 
       </div>)}
     </div>
     <div aria-live="polite" className="rounded bg-secondary p-3 text-sm">
-      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_net_zar).toLocaleString("en-ZA")} / month before VAT</p><p className="font-semibold mt-1">Due {value.period === "annually" ? "annually" : "monthly"}: R{Number(quote.total_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</p><p className="text-xs text-muted-foreground">Includes R{quote.vat_zar} VAT. {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
+      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_net_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month before VAT</p><p className="font-semibold mt-1">Due {value.period === "annually" ? "annually" : "monthly"}: R{Number(quote.total_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</p><p className="text-xs text-muted-foreground">Includes R{quote.vat_zar} VAT. {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
     </div>
   </fieldset>
 }

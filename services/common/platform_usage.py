@@ -52,6 +52,8 @@ DDL = [
 async def ensure_schema(conn):
     for statement in DDL:
         await conn.execute(text(statement))
+    from services.common.provider_costs import ensure_schema as ensure_provider_costs
+    await ensure_provider_costs(conn)
 
 
 def add_months(value: datetime, count: int) -> datetime:
@@ -96,6 +98,19 @@ async def append_cost(db, *, tenant, operation, category, provider, quantity, un
        "source": source, "meta": json.dumps(safe_metadata)})
 
 
+def autumn_sync_enabled():
+    """Optional mirror only; the Postgres entitlement remains authoritative."""
+    import os
+    return os.getenv("AUTUMN_SYNC_ENABLED", "false").lower() in {"true", "1", "yes"}
+
+
+async def queue_optional_sync(db, tenant, generation, ident):
+    if autumn_sync_enabled():
+        await db.execute(text("""INSERT INTO platform_usage_outbox(id,tenant_id,generation,action,payload)
+          VALUES(:id,:t,:g,'reconcile','{}') ON CONFLICT(id) DO NOTHING"""),
+          {"id": ident, "t": str(tenant), "g": generation})
+
+
 async def activate(db, tenant, priced, generation, revision, *, source, actor=None, reason=None, now=None):
     """Only authoritative provisioning calls this, in the payment/admin transaction."""
     now = now or datetime.now(timezone.utc)
@@ -110,10 +125,7 @@ async def activate(db, tenant, priced, generation, revision, *, source, actor=No
         expires_at=excluded.expires_at,actor_id=excluded.actor_id,reason=excluded.reason,updated_at=now()"""),
       {"t": str(tenant), "g": generation, "p": json.dumps(policy), "s": source, "r": revision,
        "start": now, "end": expires, "actor": str(actor) if actor else None, "reason": reason})
-    # Reconciliation is durable even while the Autumn runtime is unavailable.
-    await db.execute(text("""INSERT INTO platform_usage_outbox(id,tenant_id,generation,action,payload)
-      VALUES(:id,:t,:g,'reconcile','{}') ON CONFLICT(id) DO NOTHING"""),
-      {"id": f"activate:{tenant}:{generation}", "t": str(tenant), "g": generation})
+    await queue_optional_sync(db, tenant, generation, f"activate:{tenant}:{generation}")
 
 
 async def start_operation(db, tenant, operation, kind):

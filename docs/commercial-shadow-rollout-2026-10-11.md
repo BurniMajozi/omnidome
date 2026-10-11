@@ -2,6 +2,8 @@
 
 Reviewed 11 October 2026. Customer charging and enforcement remain disabled.
 
+Later update: [pricing/runtime review and continued supplier reconciliation](pricing-review-and-next-work-2026-10-11.md). Autumn is now optional; Postgres is authoritative. Public bundle browser validation has also been completed since this original rollout record.
+
 ## Provider commercial proposal
 
 Use HubSpot's structure: software access, explicitly selected marketing contacts, and separately purchased delivery capacity. CRM storage alone is not a marketing-contact charge. Keep tenant AI credits separate from audio, research, social accounts and email capacity.

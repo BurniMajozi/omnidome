@@ -16,10 +16,23 @@ def test_bundle_monthly_invoice(bundle,net,seats):
 
 def test_annual_invoice_is_twelve_discounted_months():
     q = quote(Selection(bundle="professional",period="annually"))
-    assert q["monthly_net_zar"] == "2800"
+    assert Decimal(q["monthly_net_zar"]) == Decimal("2800")
     assert q["net_zar"] == "33600.00"
     assert q["amount_cents"] == 3864000
     assert q["lines"][0]["quantity"] == 12
+
+
+@pytest.mark.parametrize("selection,monthly,net,total,cents", [
+    (Selection(bundle="growth", period="annually"), "799.20", "9590.40", "11028.96", 1102896),
+    (Selection(modules={"crm": "starter"}, period="annually"), "199.20", "2390.40", "2748.96", 274896),
+])
+def test_discounted_cents_match_public_price_and_gateway_amount(selection, monthly, net, total, cents):
+    q = quote(selection)
+    assert Decimal(q["monthly_net_zar"]) == Decimal(monthly)
+    assert q["net_zar"] == net
+    assert q["total_zar"] == total
+    assert q["amount_cents"] == cents
+    assert quote(Selection(**q["selection"])) == q
 
 
 def test_extra_seats_and_addons_are_in_invoice():

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timezone
 from sqlalchemy import text
 from services.common.db import session_scope
-from services.common.platform_usage import add_months
+from services.common.platform_usage import add_months, autumn_sync_enabled
 from services.common.autumn_client import AutumnClient, AutumnError
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,8 @@ async def reconcile(db, active, client, now=None):
 
 
 async def tick(client=None):
+    if not autumn_sync_enabled():
+        return
     client = client or AutumnClient()
     async with session_scope() as db:
         tenants = (await db.execute(text("SELECT tenant_id FROM platform_usage_entitlements"))).scalars().all()
@@ -102,6 +104,9 @@ async def tick(client=None):
 
 
 async def main():
+    if not autumn_sync_enabled():
+        logger.info("Optional Autumn synchronization disabled; Postgres remains authoritative")
+        return
     while True:
         try:
             await tick()

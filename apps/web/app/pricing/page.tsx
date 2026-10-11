@@ -35,6 +35,7 @@ import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { useIsClient } from "@/lib/use-is-client"
 import { catalog, canonicalModule, bundleSelection, startCheckout, type PricingSelection } from "@/lib/platform-pricing"
+import { BundlePlans } from "@/components/pricing/bundle-plans"
 
 // All 14 modules (excluding Dashboard Overview)
 const modules = [
@@ -321,7 +322,7 @@ const usageMatrix: UsageCategory[] = [
         icon: Receipt,
         rows: [
             { feature: "Invoices / month", free: 25, starter: 500, professional: "10,000", enterprise: "Unlimited" },
-            { feature: "Payment gateways", tooltip: "Paystack, Stripe, manual", free: 1, starter: 2, professional: 5, enterprise: "Unlimited" },
+            { feature: "Payment collection", tooltip: "Paystack checkout and recorded manual collection", free: "Paystack", starter: "Paystack", professional: "Paystack", enterprise: "Paystack" },
             { feature: "Recurring billing automation", free: false, starter: true, professional: true, enterprise: true },
             { feature: "Collections workflows", free: false, starter: false, professional: true, enterprise: true },
             { feature: "Revenue recognition (GAAP)", free: false, starter: false, professional: true, enterprise: true },
@@ -398,30 +399,6 @@ function calculateEmailPriceZAR(emailCount: number): number {
 // Dedicated IP add-on: $40/mo + $20 setup (one-time) → with margin & ZAR
 const DEDICATED_IP_MONTHLY_ZAR = Math.round(40 * EMAIL_MARGIN * EMAIL_USD_TO_ZAR)
 
-// Customer Platform bundles
-const customerPlatformBundles = {
-    professional: {
-        name: "Professional",
-        description: "Comprehensive ISP management software for growing businesses.",
-        basePrice: catalog.bundles.professional.monthly_price,
-        annualPrice: Math.round(catalog.bundles.professional.monthly_price * 0.8),
-        seats: catalog.bundles.professional.seats,
-        extraSeatPrice: catalog.bundles.professional.extra_seat_price,
-        credits: 5000,
-        includedModules: ["marketing", "sales", "service", "crm", "billing", "portal"]
-    },
-    enterprise: {
-        name: "Enterprise",
-        description: "Our most powerful platform with advanced features and unlimited customization.",
-        basePrice: catalog.bundles.enterprise.monthly_price,
-        annualPrice: Math.round(catalog.bundles.enterprise.monthly_price * 0.8),
-        seats: catalog.bundles.enterprise.seats,
-        extraSeatPrice: catalog.bundles.enterprise.extra_seat_price,
-        credits: 10000,
-        includedModules: ["marketing", "sales", "service", "crm", "billing", "portal", "retention", "network", "compliance"]
-    }
-}
-
 // Individual/Startup plans
 const individualPlans = {
     starter: {
@@ -443,7 +420,6 @@ const individualPlans = {
 export default function PricingPage() {
     const [selectedModules, setSelectedModules] = useState<Record<string, TierType | null>>({})
     const [billingPeriod, setBillingPeriod] = useState<"monthly" | "annually">("monthly")
-    const [customerCounts, setCustomerCounts] = useState<Record<string, number>>({})
     const [activeView, setActiveView] = useState<ViewType>("customer-platform")
     const [audienceTab, setAudienceTab] = useState<"business" | "individual">("business")
     const [emailVolume, setEmailVolume] = useState(2) // index into emailVolumeSteps (6,000 default)
@@ -473,10 +449,8 @@ export default function PricingPage() {
     }
 
     const getPrice = useCallback((module: typeof modules[0], tier: TierType) => {
-        const price = tier === "starter" ? module.starterPrice
-            : tier === "professional" ? module.professionalPrice
-                : module.enterprisePrice
-        return billingPeriod === "annually" ? Math.round(price * 0.8) : price
+        const price = catalog.modules.find(row => row.id === canonicalModule(module.id))!.prices[tier]
+        return billingPeriod === "annually" ? Number((price * (1 - catalog.annual_discount_percent / 100)).toFixed(2)) : price
     }, [billingPeriod])
 
     const selectedProducts = useMemo(() => {
@@ -489,100 +463,19 @@ export default function PricingPage() {
     }, [selectedModules])
 
     const totalMonthly = useMemo(() => {
-        return selectedProducts.reduce((acc, prod) => {
+        return Number(selectedProducts.reduce((acc, prod) => {
             return acc + getPrice(prod, prod.selectedTier)
-        }, 0)
+        }, 0).toFixed(2))
     }, [selectedProducts, getPrice])
 
     const renderMainContent = () => {
         switch (activeView) {
             case "customer-platform":
-                return (
-                    <div>
-                        <div className="text-center mb-12">
-                            <h1 className="text-4xl font-bold mb-4">Customer Platform</h1>
-                            <p className="text-muted-foreground">
-                                Everything you need to scale your ISP business, bundled together and discounted.{" "}
-                                <Link href="#" className="text-primary underline">Calculate your price</Link>
-                            </p>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-                            {Object.entries(customerPlatformBundles).map(([key, bundle]) => (
-                                <div key={key} className="border border-border rounded-2xl bg-card p-8">
-                                    <h2 className="text-2xl font-bold mb-2">{bundle.name}</h2>
-                                    <p className="text-sm text-muted-foreground mb-6">{bundle.description}</p>
-
-                                    <div className="mb-4">
-                                        <span className="text-xs text-muted-foreground">Starts at</span>
-                                        <div className="flex items-baseline gap-1">
-                                            <span className="text-3xl font-bold">R{!isClient ? "--" : (billingPeriod === "annually" ? bundle.annualPrice.toLocaleString() : bundle.basePrice.toLocaleString())}</span>
-                                            <span className="text-muted-foreground">/mo</span>
-                                        </div>
-                                        {billingPeriod === "annually" && isClient && (
-                                            <span className="text-xs text-muted-foreground line-through">R{bundle.basePrice.toLocaleString()}/mo</span>
-                                        )}
-                                    </div>
-
-                                    <p className="text-sm text-muted-foreground mb-6">
-                                        Includes {bundle.seats} Seats. Additional Core Seats start at R{bundle.extraSeatPrice}/mo
-                                    </p>
-
-                                    <div className="flex gap-2 mb-6">
-                                        <button
-                                            onClick={() => setBillingPeriod("monthly")}
-                                            className={cn(
-                                                "flex-1 py-2 text-xs font-medium rounded-lg border transition-colors",
-                                                billingPeriod === "monthly" ? "bg-secondary border-border" : "border-border hover:bg-secondary/50"
-                                            )}
-                                        >
-                                            Pay Monthly
-                                        </button>
-                                        <button
-                                            onClick={() => setBillingPeriod("annually")}
-                                            className={cn(
-                                                "flex-1 py-2 text-xs font-medium rounded-lg border transition-colors",
-                                                billingPeriod === "annually" ? "bg-secondary border-border" : "border-border hover:bg-secondary/50"
-                                            )}
-                                        >
-                                            <div>Pay Annually</div>
-                                            <div className="text-primary text-[10px] font-black uppercase tracking-wider">BEST VALUE</div>
-                                        </button>
-                                    </div>
-
-                                    <Button onClick={() => startCheckout(bundleSelection(key, billingPeriod))} className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all mb-4">
-                                        Choose {bundle.name}
-                                    </Button>
-
-                                    <p className="text-xs text-muted-foreground mb-6">{!isClient ? "--" : bundle.credits.toLocaleString()} OmniDome Credits</p>
-
-                                    <div className="text-sm text-muted-foreground mb-4">
-                                        {key === "professional" ? "Starter" : "Professional"} Customer Platform, plus:
-                                    </div>
-
-                                    <ul className="space-y-3">
-                                        {bundle.includedModules.slice(0, 6).map(modId => {
-                                            const mod = modules.find(m => m.id === modId)
-                                            if (!mod) return null
-                                            return (
-                                                <li key={modId} className="flex items-center gap-3 text-sm">
-                                                    <div className={cn("w-5 h-5 rounded flex items-center justify-center bg-gradient-to-br", mod.color)}>
-                                                        <mod.icon className="h-3 w-3 text-white" />
-                                                    </div>
-                                                    <span className="font-medium">{mod.name} {key === "professional" ? "Professional" : "Enterprise"}</span>
-                                                </li>
-                                            )
-                                        })}
-                                    </ul>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )
+                return <BundlePlans period={billingPeriod} onPeriodChange={setBillingPeriod} onCustomize={() => setActiveView("create-bundle")} />
 
             case "create-bundle":
                 return (
-                    <div className="flex gap-12">
+                    <div className="flex flex-col gap-8 xl:flex-row">
                         <div className="flex-1 space-y-6">
                             <div className="text-center mb-8">
                                 <h1 className="text-4xl font-bold mb-4">Create a Bundle</h1>
@@ -602,7 +495,7 @@ export default function PricingPage() {
                                         <h3 className="font-semibold">{mod.name}</h3>
                                     </div>
 
-                                    <div className="grid grid-cols-3 gap-4 mb-4">
+                                    <div className="grid grid-cols-1 gap-4 mb-4 sm:grid-cols-3">
                                         {(["starter", "professional", "enterprise"] as TierType[]).map(tier => {
                                             const price = getPrice(mod, tier)
                                             const isSelected = selectedModules[mod.id] === tier
@@ -634,28 +527,8 @@ export default function PricingPage() {
 
                                     {mod.customers && selectedModules[mod.id] && (
                                         <div className="border-t border-border pt-4">
-                                            <div className="flex items-center justify-between">
-                                                <div>
-                                                    <span className="text-sm">Select number of </span>
-                                                    <span className="text-sm text-primary underline cursor-pointer">customers</span>
-                                                    <span className="text-sm">:</span>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <label htmlFor={`customers-${mod.id}`} className="sr-only">Number of customers</label>
-                                                    <input
-                                                        id={`customers-${mod.id}`}
-                                                        type="number"
-                                                        value={customerCounts[mod.id] || mod.customers}
-                                                        onChange={(e) => setCustomerCounts(prev => ({ ...prev, [mod.id]: parseInt(e.target.value) || 0 }))}
-                                                        className="w-24 px-3 py-2 border border-border rounded-lg bg-background text-right"
-                                                        title="Number of customers"
-                                                        aria-label="Number of customers"
-                                                        placeholder="0"
-                                                    />
-                                                </div>
-                                            </div>
                                             <p className="text-xs text-muted-foreground mt-2">
-                                                Includes {!isClient ? "--" : mod.customers.toLocaleString()} customers. Additional customers sold in increments of 1,000 from R50/month.
+                                                Contact capacity is quoted separately and is not part of this panel's software price.
                                             </p>
                                         </div>
                                     )}
@@ -664,7 +537,7 @@ export default function PricingPage() {
                         </div>
 
                         {/* Summary Sidebar */}
-                        <div className="w-80 shrink-0">
+                        <div className="w-full shrink-0 xl:w-80">
                             <div className="sticky top-24 border border-border rounded-xl bg-card overflow-hidden">
                                 <div className="flex border-b border-border">
                                     <button
@@ -720,8 +593,9 @@ export default function PricingPage() {
                                         <div className="flex justify-between items-center mb-4">
                                             <span className="font-semibold">Estimated Total</span>
                                             <div className="text-right">
-                                                <div className="text-2xl font-bold">R{!isClient ? "0" : totalMonthly.toLocaleString()}</div>
+                                                <div className="text-2xl font-bold">R{totalMonthly.toLocaleString("en-GB",{maximumFractionDigits:2})}</div>
                                                 <div className="text-xs text-muted-foreground">/month</div>
+                                                {billingPeriod === "annually" && <p className="mt-2 text-xs text-muted-foreground">R{Number((totalMonthly*12).toFixed(2)).toLocaleString("en-GB")} paid yearly, excluding VAT</p>}
                                             </div>
                                         </div>
                                         <Button disabled={!selectedProducts.length} onClick={() => startCheckout({ modules: Object.fromEntries(selectedProducts.map(p => [canonicalModule(p.id), p.selectedTier])) as PricingSelection["modules"], period: billingPeriod, seats: 1 })} className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
@@ -743,7 +617,7 @@ export default function PricingPage() {
                         <div className="text-center mb-12">
                             <h1 className="text-4xl font-bold mb-4">Usage & Limits</h1>
                             <p className="text-muted-foreground max-w-2xl mx-auto">
-                                Compare what each tier includes across every module. Aligned with our multi-tenant entitlement system — upgrade anytime.
+                                Compare planned capabilities across modules. Purchased panel access and seats are confirmed in checkout; detailed contact and delivery capacity requires a separate quote.
                             </p>
                         </div>
 
@@ -754,8 +628,8 @@ export default function PricingPage() {
                                     <Mail className="h-5 w-5 text-white" />
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold">Email Volume Calculator</h2>
-                                    <p className="text-xs text-muted-foreground">Marketing email pricing powered by UniOne delivery infrastructure</p>
+                                    <h2 className="text-xl font-bold">Email capacity planning</h2>
+                                    <p className="text-xs text-muted-foreground">Legacy SMTP estimate only. Delivery capacity is quoted separately and is not included in software checkout.</p>
                                 </div>
                             </div>
 
@@ -783,7 +657,7 @@ export default function PricingPage() {
                                 </div>
 
                                 <div className="border border-border rounded-xl bg-background p-6">
-                                    <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Estimated cost</div>
+                                    <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Indicative estimate · not a price quote</div>
                                     <div className="flex items-baseline gap-1 mb-4">
                                         <span className="text-4xl font-bold">R{isClient ? emailPriceZAR.toLocaleString() : "--"}</span>
                                         <span className="text-muted-foreground">/month</span>
@@ -793,7 +667,7 @@ export default function PricingPage() {
                                         <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> SPF, DKIM, DMARC authentication</li>
                                         <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> Real-time webhooks & analytics</li>
                                         <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> 200+ email templates</li>
-                                        <li className="flex items-center gap-2"><Check className="h-3.5 w-3.5 text-primary" /> 99%+ deliverability</li>
+                                        <li className="flex items-center gap-2"><Info className="h-3.5 w-3.5 text-primary" /> Deliverability depends on consent, sender reputation and provider limits</li>
                                     </ul>
                                     <div className="mt-4 pt-4 border-t border-border">
                                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -917,7 +791,7 @@ export default function PricingPage() {
                                     <div className="mb-6">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-4xl font-bold">
-                                                {plan.basePrice === 0 ? "Free" : `R${!isClient ? "--" : (billingPeriod === "annually" ? Math.round(plan.basePrice * 0.8) : plan.basePrice).toLocaleString()}`}
+                                                {plan.basePrice === 0 ? "Free" : `R${(billingPeriod === "annually" ? Number((plan.basePrice * (1 - catalog.annual_discount_percent / 100)).toFixed(2)) : plan.basePrice).toLocaleString("en-GB")}`}
                                             </span>
                                             {plan.basePrice > 0 && <span className="text-muted-foreground">/mo</span>}
                                         </div>
@@ -973,8 +847,8 @@ export default function PricingPage() {
 
                         <div className="grid md:grid-cols-2 gap-8 max-w-4xl">
                             {(["professional", "enterprise"] as const).map(tier => {
-                                const price = tier === "professional" ? product.professionalPrice : product.enterprisePrice
-                                const annualPrice = Math.round(price * 0.8)
+                                const price = catalog.modules.find(row => row.id === canonicalModule(product.id))!.prices[tier]
+                                const annualPrice = Number((price * (1 - catalog.annual_discount_percent / 100)).toFixed(2))
                                 return (
                                     <div key={tier} className="border border-border rounded-2xl bg-card p-8">
                                         <h2 className="text-xl font-bold mb-2 capitalize">{product.name.replace(" Hub", "")} {tier}</h2>
@@ -1113,7 +987,7 @@ export default function PricingPage() {
                             <ThemeToggleCompact />
                             <Link href="/auth">
                                 <Button size="sm" className="bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
-                                    Start free or get a demo
+                                    <span className="hidden sm:inline">Start free or get a demo</span><span className="sm:hidden">Get started</span>
                                 </Button>
                             </Link>
                         </div>
@@ -1234,8 +1108,14 @@ export default function PricingPage() {
                 </aside>
 
                 {/* Main Content */}
-                <main className="flex-1 p-8 lg:p-12">
+                <main className="min-w-0 flex-1 p-4 sm:p-8 lg:p-12">
                     <div className="max-w-6xl mx-auto">
+                        <label className="mb-6 block text-sm lg:hidden">Explore pricing
+                            <select aria-label="Explore pricing" value={activeView} onChange={event => setActiveView(event.target.value)} className="mt-2 block w-full rounded-lg border bg-background p-3">
+                                <option value="customer-platform">Platform bundles</option><option value="create-bundle">Build a modular plan</option><option value="individual">Individual & start-up</option><option value="usage-limits">Usage & limits</option>
+                                {modules.map(module => <option key={module.id} value={module.id}>{module.name}</option>)}
+                            </select>
+                        </label>
                         {renderMainContent()}
                     </div>
                 </main>

@@ -50,6 +50,11 @@ async def main():
                 "draft_provider_rates":len(body.get("draft_rate_card",{}).get("rates",[]))}),flush=True)
             response.raise_for_status()
         url="http://tenant_memory:8025/api/v1/knowledge/context"
+        for url in ("http://admin:8013/provider-costs/receipts",base+"/usage/cost-allocations"):
+            response=await client.get(url,headers=headers("GET",url))
+            print(json.dumps({"check":"supplier evidence read","status":response.status_code,"records":len(response.json()) if response.status_code==200 else None}),flush=True)
+            response.raise_for_status()
+        url="http://tenant_memory:8025/api/v1/knowledge/context"
         response=await client.post(url,headers=headers("POST",url),json={
             "query":"Platform pricing, marketing provider costs and tenant memory","k":5,"budget_tokens":1000})
         body=response.json()

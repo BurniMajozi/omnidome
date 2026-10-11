@@ -2,6 +2,8 @@
 
 Status: draft commercial proposal and tested scenario calculator. These prices do not alter current invoices, subscriptions, or existing integrations. Reviewed 11 October 2026.
 
+Later implementation update: [supplier invoice evidence and tenant allocation workflow](pricing-review-and-next-work-2026-10-11.md) now supports manual procurement reconciliation. Automatic provider-native receipts and managed-capacity checkout remain pending; Postgres is authoritative and Autumn is optional.
+
 ## Commercial structure
 
 Keep the software subscription for panel access, seats, contacts, segmentation, campaigns and automation. Add explicit managed-provider capacity: social accounts, email inboxes and domains, email capacity, research credits and audio minutes. AI reasoning uses the separate shared tenant AI allowance. A research operation can therefore consume Firecrawl capacity and AI credits; the UI must explain both before running it. Never describe transcription as the complete cost of a telephone or AI voice call.

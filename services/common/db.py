@@ -122,12 +122,23 @@ def _async_database_url() -> str:
 
 @lru_cache
 def get_engine():
-    return create_engine(_database_url(), pool_pre_ping=True)
+    return create_engine(_database_url(), pool_pre_ping=True, **database_pool_options())
 
 
 @lru_cache
 def get_async_engine() -> AsyncEngine:
-    return create_async_engine(_async_database_url(), pool_pre_ping=True)
+    return create_async_engine(_async_database_url(), pool_pre_ping=True, **database_pool_options())
+
+
+def database_pool_options():
+    """Budget each process's sync/async pools explicitly on small deployments."""
+    if not make_url(_database_url()).drivername.startswith("postgresql"):
+        return {}
+    size = int(os.getenv("DB_POOL_SIZE", "5"))
+    overflow = int(os.getenv("DB_MAX_OVERFLOW", "10"))
+    if size < 1 or overflow < 0:
+        raise ValueError("Database pools must have positive size and nonnegative overflow")
+    return {"pool_size": size, "max_overflow": overflow}
 
 
 @lru_cache

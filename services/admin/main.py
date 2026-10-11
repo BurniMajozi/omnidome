@@ -54,6 +54,8 @@ from services.common.platform_pricing import Selection
 app.include_router(pricing_router)
 from services.admin.commercial import router as commercial_router
 app.include_router(commercial_router)
+from services.admin.provider_costs import router as provider_costs_router
+app.include_router(provider_costs_router)
 _SEAT_READ_RE = re.compile(r"^/(tenants/[0-9a-fA-F-]{36}/seats|platform/seat-usage)$")
 
 

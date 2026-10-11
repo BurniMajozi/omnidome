@@ -7,7 +7,7 @@ export COMPOSE_FILE=$base_compose
 mkdir -p /home/benedict/build_logs
 mapfile -t running < <(docker compose ps --services --status running | grep -v -E '^(db|ollama)$')
 images=(admin billing agent-orchestrator web)
-backup_tag=pre-commercial-shadow
+backup_tag=${COMMERCIAL_BACKUP_TAG:-pre-commercial-shadow}
 finished=false
 restore() {
   set +e

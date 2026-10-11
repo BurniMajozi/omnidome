@@ -44,3 +44,17 @@ async def adapter_check():
     with pytest.raises(ValueError): await client.call("billing.attach",{})
     with pytest.raises(AutumnError,match="http_500"):
         await AutumnClient("http://autumn.local","secret",httpx.MockTransport(lambda r:httpx.Response(500,text="secret token leak"))).call("check",{})
+
+
+def test_optional_worker_does_not_contact_database_or_provider(monkeypatch):
+    import asyncio
+    from services.common import autumn_worker
+    from services.common.platform_usage import autumn_sync_enabled
+    monkeypatch.delenv("AUTUMN_SYNC_ENABLED",raising=False)
+    assert autumn_sync_enabled() is False
+    def unexpected_database():
+        raise AssertionError("Disabled optional mirror must not open a database connection")
+    monkeypatch.setattr(autumn_worker,"session_scope",unexpected_database)
+    asyncio.run(autumn_worker.tick())
+    monkeypatch.setenv("AUTUMN_SYNC_ENABLED","true")
+    assert autumn_sync_enabled() is True

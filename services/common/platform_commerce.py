@@ -23,6 +23,9 @@ DDL = [
 
 
 async def ensure_schema(conn):
+    # Admin and billing can start together. Serialize shared DDL and triggers.
+    if conn.dialect.name == "postgresql":
+        await conn.execute(text("SELECT pg_advisory_xact_lock(7142001)"))
     for statement in DDL: await conn.execute(text(statement))
     from services.common import platform_usage
     await platform_usage.ensure_schema(conn)
