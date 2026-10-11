@@ -8,13 +8,18 @@ finance posting (hold / chargeback expense / receivable from the tenant) come wi
 Commission on a charge that is later lost is NOT refunded to the tenant (the processing happened).
 """
 
+import asyncio
 import logging
+import os
+import re
 import uuid
+from urllib.parse import quote
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -27,6 +32,7 @@ from services.billing.models import BillingWebhookEvent, Invoice, PaystackInitia
 from services.billing.models_gateway import GatewayCharge, GatewayDispute, GatewayLiability
 from services.billing.routes import gateway as gw
 from services.billing.routes.paystack_recurring import _paystack, _secret
+from services.common import url_safety
 from services.common.auth import AuthContext, get_auth_context
 
 logger = logging.getLogger("billing.disputes")
@@ -259,3 +265,62 @@ async def resolve_dispute(dispute_id: uuid.UUID, body: ResolveRequest, ctx: Auth
         raise HTTPException(status_code=502, detail=res.get("message", "Paystack rejected the resolution"))
     logger.info("dispute %s %s tenant=%s by=%s", pid, body.resolution, ctx.tenant_id, ctx.user_id)
     return {"resolution": body.resolution, "dispute_id": pid, "note": "Final status arrives from Paystack"}
+
+
+# ---------------------------------------------------------------------------
+# Evidence attachments (Paystack signed-URL upload)
+# ---------------------------------------------------------------------------
+
+ATTACHMENT_TYPES = {".pdf": (b"%PDF",), ".png": (b"\x89PNG",), ".jpg": (b"\xff\xd8\xff",), ".jpeg": (b"\xff\xd8\xff",)}
+CONTENT_TYPES = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def max_attachment_bytes() -> int:
+    return int(float(os.getenv("DISPUTE_ATTACHMENT_MAX_MB", "5")) * 1024 * 1024)
+
+
+def _safe_name(name: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(name or "evidence"))[:80].strip("._") or "evidence"
+    return base
+
+
+@router.post("/{dispute_id}/attachments", dependencies=[Depends(require_tier("admin"))])
+async def upload_attachment(dispute_id: uuid.UUID, file: UploadFile = File(...), ctx: AuthContext = Depends(get_auth_context)):
+    """Upload one evidence file (PDF/PNG/JPG, size-capped, content checked) to the signed URL Paystack issues, and return the
+    `uploaded_filename` to pass to POST /disputes/{id}/resolve. The file is held in memory only; nothing is stored here."""
+    with get_session() as session:
+        d = _own(session, ctx.tenant_id, dispute_id)
+        if d.status in CLOSED:
+            raise HTTPException(status_code=409, detail="This dispute is already closed")
+        pid = d.paystack_dispute_id
+    if not _secret():
+        raise HTTPException(status_code=503, detail="Paystack not configured")
+    name = _safe_name(file.filename or "")
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in ATTACHMENT_TYPES:
+        raise HTTPException(status_code=415, detail="Only PDF, PNG or JPG files can be uploaded")
+    limit = max_attachment_bytes()
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"File is larger than {limit // (1024 * 1024)} MB")
+    if not data or not any(data.startswith(magic) for magic in ATTACHMENT_TYPES[ext]):
+        raise HTTPException(status_code=415, detail="The file content does not match its type")
+    res = await _paystack("GET", f"/dispute/{pid}/upload_url?upload_filename={quote(name)}")
+    info = res.get("data") or {}
+    signed, stored = info.get("signedUrl"), info.get("fileName")
+    if not res.get("status") or not signed or not stored:
+        raise HTTPException(status_code=502, detail=res.get("message") or "Paystack did not return an upload URL")
+    try:
+        await asyncio.to_thread(url_safety.validate_public_url, signed)       # never PUT to a non-public address
+    except url_safety.UnsafeUrl:
+        logger.error("dispute upload URL for %s rejected by url_safety", pid)
+        raise HTTPException(status_code=502, detail="Paystack returned an unusable upload URL")
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            put = await client.put(signed, content=data, headers={"Content-Type": CONTENT_TYPES[ext]})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Upload to the payment provider failed") from exc
+    if put.status_code >= 300:
+        raise HTTPException(status_code=502, detail=f"The payment provider rejected the upload (HTTP {put.status_code})")
+    logger.info("dispute evidence uploaded dispute=%s tenant=%s by=%s bytes=%d", pid, ctx.tenant_id, ctx.user_id, len(data))
+    return {"uploaded_filename": stored, "size_bytes": len(data)}

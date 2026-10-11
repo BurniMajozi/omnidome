@@ -327,3 +327,88 @@ def test_autopay_worker_is_off_by_default_and_pass_visits_tenants_with_cards(env
     assert seen == [env.tenant] and out["tenants"] == 1 and out["charged"] == 1 and out["skipped"] == 2
     monkeypatch.setattr(pm, "_acquire_pass_lock", lambda: (False, None))      # another replica holds the lock
     assert "skipped" in asyncio.run(pm.run_autopay_all()) and seen == [env.tenant]
+
+
+# ---- evidence attachments ------------------------------------------------------------------
+
+def _upload(env, monkeypatch, data, filename="proof.pdf", *, put_status=200, upload_info=None, signed="https://s3.example.com/up?sig=1"):
+    import io
+    from fastapi import UploadFile
+    from services.common import url_safety
+    monkeypatch.setattr(url_safety, "_default_resolver", lambda host, port: ["93.184.216.34"])
+    puts = []
+
+    async def paystack(method, path, body=None):
+        puts.append((method, path))
+        return {"status": True, "_http_status": 200, "data": upload_info if upload_info is not None else {"signedUrl": signed, "fileName": "stored-proof.pdf"}}
+
+    class Resp:
+        status_code = put_status
+
+    class Client:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def put(self, url, content=None, headers=None):
+            puts.append(("PUT", url, len(content), headers["Content-Type"]))
+            return Resp()
+    monkeypatch.setattr(disputes, "_paystack", paystack)
+    monkeypatch.setattr(disputes.httpx, "AsyncClient", Client)
+    did = getattr(env, "_did", None)
+    if did is None:
+        did, _ = make_dispute(env)
+        env._did = did
+    up = UploadFile(file=io.BytesIO(data), filename=filename)
+    return asyncio.run(disputes.upload_attachment(did, up, env.ctx)), puts
+
+
+def test_attachment_is_sent_to_the_signed_url_and_returns_the_stored_filename(env, monkeypatch):
+    out, calls = _upload(env, monkeypatch, b"%PDF-1.4 evidence", "My proof (1).pdf")
+    assert out == {"uploaded_filename": "stored-proof.pdf", "size_bytes": 17}
+    assert calls[0] == ("GET", "/dispute/777/upload_url?upload_filename=My_proof__1_.pdf")
+    assert calls[1] == ("PUT", "https://s3.example.com/up?sig=1", 17, "application/pdf")
+
+
+@pytest.mark.parametrize("data,name,code", [
+    (b"MZ not a pdf", "proof.pdf", 415),            # content does not match the type
+    (b"%PDF-1.4", "proof.exe", 415),                # type not allowed
+    (b"", "proof.pdf", 415),
+])
+def test_attachment_rejects_bad_files_before_calling_paystack(env, monkeypatch, data, name, code):
+    with pytest.raises(HTTPException) as e:
+        _upload(env, monkeypatch, data, name)
+    assert e.value.status_code == code
+
+
+def test_attachment_over_the_size_cap_is_refused(env, monkeypatch):
+    monkeypatch.setenv("DISPUTE_ATTACHMENT_MAX_MB", "0.0001")          # about 100 bytes
+    with pytest.raises(HTTPException) as e:
+        _upload(env, monkeypatch, b"%PDF" + b"x" * 500, "big.pdf")
+    assert e.value.status_code == 413
+
+
+def test_attachment_refuses_a_non_public_upload_url_and_provider_errors(env, monkeypatch):
+    with pytest.raises(HTTPException) as e:
+        _upload(env, monkeypatch, b"%PDF-1.4", signed="http://169.254.169.254/latest")
+    assert e.value.status_code == 502 and "unusable" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        _upload(env, monkeypatch, b"%PDF-1.4", put_status=403)
+    assert e.value.status_code == 502 and "HTTP 403" in e.value.detail
+    with pytest.raises(HTTPException) as e:
+        _upload(env, monkeypatch, b"%PDF-1.4", upload_info={})
+    assert e.value.status_code == 502
+
+
+def test_attachment_needs_an_open_dispute_of_the_callers_tenant(env, monkeypatch):
+    import io
+    from fastapi import UploadFile
+    did, _ = make_dispute(env)
+    with env.db() as s:
+        s.query(GatewayDispute).update({"status": "resolved"})
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(disputes.upload_attachment(did, UploadFile(file=io.BytesIO(b"%PDF"), filename="a.pdf"), env.ctx))
+    assert e.value.status_code == 409
+    other = AuthContext(user_id=uuid.uuid4(), tenant_id=uuid.uuid4())
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(disputes.upload_attachment(did, UploadFile(file=io.BytesIO(b"%PDF"), filename="a.pdf"), other))
+    assert e.value.status_code == 404
