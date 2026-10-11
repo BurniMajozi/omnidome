@@ -47,6 +47,29 @@ Paystack transfers are paid from OmniDome's own balance, so a tenant can only pa
 - Transfer OTP must be disabled for API transfers in the Paystack dashboard, otherwise transfers stall in `otp` status.
 - HR and inventory need `INTERNAL_SERVICE_KEY` and `BILLING_SERVICE_URL` in their environment.
 
+## Reconciliation (platform admin) and the tenant statement
+
+`routes/recon.py`, run on demand (`POST /recon/run`) or by an opt-in worker (`RECON_WORKER_ENABLED=true`, hourly,
+`RECON_INTERVAL_SECONDS`), under a Postgres advisory lock. Read-only against Paystack; nothing here moves money.
+
+1. **Solvency snapshot**: OmniDome's Paystack ZAR balance (`GET /balance`) vs the sum of the tenants' payout wallets.
+   EFT-funded wallet credits never touch Paystack, so someone must top the Paystack balance up; negative headroom means
+   OmniDome could not pay every wallet out today. Ops is emailed (`GATEWAY_ALERT_EMAIL`) when the state flips to `short`.
+2. **Ledger copy**: Paystack's `GET /balance/ledger` is stored (idempotent on its id), categorised (payout, payout_reversal,
+   charge, refund, dispute, settlement, fee, topup, other) and checked for continuity (`balance == previous + difference`);
+   a missing or altered row shows as a gap. Categories are inferred from Paystack's free-text `reason`; unknown ones are `other`.
+3. **Charge integrity**: every succeeded subaccount charge is verified (`GET /transaction/verify`) and the split Paystack
+   applied is compared with what we asked for: the tenant must have received gross - commission on the right subaccount,
+   and OmniDome's share must be about commission - Paystack fee (2 cent tolerance). A charge Paystack cannot find, or a short-changed
+   tenant, is a *mismatch* and alerts ops. If Paystack does not return `fees_split` the charge is `no_split_data`
+   (not called ok). **Verify this against one real test-mode charge: the `fees_split` field name comes from Paystack's API
+   behaviour, not its OpenAPI file.**
+4. **In-flight payouts and settlements**: payout items still processing after `RECON_PAYOUT_STALE_MINUTES` (120) are reconciled
+   against Paystack; settlements paid to OmniDome's own bank account (`GET /settlement`) are copied for the audit trail.
+
+Tenant view: `GET /gateway/statement?period=YYYY-MM` (collected, gateway fee, what the tenant receives, refunds, chargebacks,
+payouts and fees, wallet balance, open liabilities, and how many charges were verified).
+
 ## Tenant liability
 
 Refunds and lost disputes are paid from OmniDome's Paystack balance for money the tenant was already settled.
@@ -70,10 +93,14 @@ automatically as funding arrives (oldest first, whole liabilities only).
 | `AUTOPAY_INTERVAL_SECONDS` | 3600 | Scheduler pass interval |
 | `AUTOPAY_MAX_ATTEMPTS` | 3 | Failed attempts per invoice before dunning takes over |
 | `AUTOPAY_RETRY_HOURS` | 48 | Gap between retries |
+| `RECON_WORKER_ENABLED` | false | Run the reconciliation worker in the billing service |
+| `RECON_INTERVAL_SECONDS` | 3600 | Worker interval |
+| `RECON_LEDGER_PAGES` | 10 | Pages of Paystack's balance ledger copied per run |
+| `RECON_PAYOUT_STALE_MINUTES` | 120 | A payout still processing after this long is reconciled |
 | `PAYSTACK_NATIVE_SUBSCRIPTIONS_ENABLED` | false | Re-enable the retired `/payments/paystack/plans/.../sync` and `/subscriptions` creators |
 
 ## Not built yet
 
-Settlement reconciliation + balance ledger, dispute evidence file upload, VAT on the gateway fee, a Paystack
+Dispute evidence file upload, VAT on the gateway fee, a Paystack
 dedicated virtual account for EFT funding (today an admin records the EFT), tenant-books posting of payout fees, and the
 platform prepaid credits + top-ups (Codex, platform side).

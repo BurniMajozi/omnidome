@@ -77,6 +77,12 @@ class GatewayCharge(Base):
     status: Mapped[str] = mapped_column(String(12), nullable=False, default="initialized")  # initialized|succeeded|failed
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     settled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Reconciliation against what Paystack actually did (GET /transaction/verify): did the tenant get gross - commission?
+    recon_status: Mapped[Optional[str]] = mapped_column(String(14), nullable=True)  # ok | mismatch | no_split_data
+    recon_note: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    recon_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_tenant_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    actual_integration_cents: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
     __table_args__ = (
         Index("ix_gateway_charges_tenant_period", "tenant_id", "period", "status"),

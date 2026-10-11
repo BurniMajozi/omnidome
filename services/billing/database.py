@@ -15,6 +15,7 @@ from services.billing import models_fees  # noqa: F401  (registers fee_policies 
 from services.billing import models_invoicing  # noqa: F401  (registers quotes, templates, share links, delivery events)
 from services.billing import models_gateway  # noqa: F401  (registers gateway settings + commission ledger)
 from services.billing import models_payouts  # noqa: F401  (registers payout wallet, batches, fundings)
+from services.billing import models_recon  # noqa: F401  (registers balance snapshots, Paystack ledger copy, settlements)
 
 
 logger = logging.getLogger("billing.database")
@@ -64,7 +65,7 @@ def init_tables() -> None:
         reconcile_legacy_tables(engine)
         Base.metadata.create_all(bind=engine)
         with engine.begin() as conn:
-            for statement in _RESTORED_COLUMNS + _SEAT_BILLING_COLUMNS + _HARDENING_COLUMNS:
+            for statement in _RESTORED_COLUMNS + _SEAT_BILLING_COLUMNS + _HARDENING_COLUMNS + _GATEWAY_COLUMNS:
                 conn.execute(text(statement))
         apply_hardening(engine)
     finally:
@@ -74,6 +75,25 @@ def init_tables() -> None:
                 lock_conn.commit()
             finally:
                 lock_conn.close()
+
+
+# Gateway columns added after the tables first shipped (create_all never ALTERs); safe no-ops on a fresh database.
+_GATEWAY_COLUMNS = [
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS payment_method_id UUID",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS attempt INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(200)",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_status VARCHAR(14)",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_note VARCHAR(300)",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS recon_at TIMESTAMPTZ",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS actual_tenant_cents INTEGER",
+    "ALTER TABLE billing_gateway_charges ADD COLUMN IF NOT EXISTS actual_integration_cents INTEGER",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_subaccount_code VARCHAR(60)",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_business_name VARCHAR(200)",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_bank_code VARCHAR(20)",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_account_last4 VARCHAR(4)",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_requested_by UUID",
+    "ALTER TABLE billing_gateway_settings ADD COLUMN IF NOT EXISTS pending_requested_at TIMESTAMPTZ",
+]
 
 
 # Per-seat billing columns on tables that may predate them (create_all never
