@@ -128,11 +128,13 @@ def quote(session, tenant_id, total_cents: int) -> dict:
     calc = gateway.calculate(total_cents, month_volume_cents(session, tenant_id, period), gw._tiers_for(settings))
     w = session.execute(select(PayoutWallet).where(PayoutWallet.tenant_id == tenant_id)).scalar_one_or_none()
     balance = w.balance_cents if w else 0
-    required = total_cents + calc.commission_cents
-    return {"amount_zar": total_cents / 100, "fee_zar": calc.commission_cents / 100, "required_zar": required / 100,
+    vat = platform_tax.vat_on(calc.commission_cents, session)         # the fee is VAT-exclusive: VAT is added on top
+    required = total_cents + calc.commission_cents + vat
+    return {"amount_zar": total_cents / 100, "fee_zar": calc.commission_cents / 100, "vat_zar": vat / 100,
+            "fee_total_zar": (calc.commission_cents + vat) / 100, "required_zar": required / 100,
             "effective_rate_percent": float(calc.effective_bps) / 100, "balance_zar": balance / 100,
-            "shortfall_zar": max(0, required - balance) / 100, "period": period,
-            "_fee_cents": calc.commission_cents, "_required_cents": required, "_balance_cents": balance}
+            "shortfall_zar": max(0, required - balance) / 100, "period": period, "fees_exclude_vat": True,
+            "_fee_cents": calc.commission_cents, "_vat_cents": vat, "_required_cents": required, "_balance_cents": balance}
 
 
 def public_quote(q: dict) -> dict:
@@ -184,17 +186,18 @@ def create_batch(session, body: BatchIn) -> tuple[PayoutBatch, list[PayoutItem]]
     if q["_balance_cents"] < q["_required_cents"]:
         raise HTTPException(status_code=402, detail={
             "message": "Payout wallet is short", "required_zar": q["required_zar"], "balance_zar": q["balance_zar"],
-            "shortfall_zar": q["shortfall_zar"], "fee_zar": q["fee_zar"]})
+            "shortfall_zar": q["shortfall_zar"], "fee_zar": q["fee_zar"], "vat_zar": q["vat_zar"]})
     attempt = 1 + int(session.execute(select(func.coalesce(func.max(PayoutBatch.attempt), 0)).where(
         PayoutBatch.tenant_id == body.tenant_id, PayoutBatch.kind == body.kind, PayoutBatch.source_id == body.source_id)).scalar_one())
-    fee_vat = platform_tax.vat_inside(q["_fee_cents"], session)
+    fee_vat = q["_vat_cents"]
     batch = PayoutBatch(tenant_id=body.tenant_id, kind=body.kind, source_id=body.source_id, attempt=attempt, period=q["period"],
                         total_cents=total, fee_cents=q["_fee_cents"], fee_vat_cents=fee_vat, requested_by=body.requested_by)
     session.add(batch)
     session.flush()
     post_entry(session, body.tenant_id, "payout", -total, str(batch.id), f"{body.kind} {body.source_id}")
     if q["_fee_cents"]:
-        post_entry(session, body.tenant_id, "payout_fee", -q["_fee_cents"], str(batch.id), f"fee {body.kind} {body.source_id}")
+        post_entry(session, body.tenant_id, "payout_fee", -(q["_fee_cents"] + fee_vat), str(batch.id),
+                   f"fee {q['_fee_cents'] / 100:.2f} + VAT {fee_vat / 100:.2f} {body.kind} {body.source_id}")
     items, fee_left, vat_left = [], q["_fee_cents"], fee_vat
     for n, i in enumerate(body.items):
         cents = _cents(i.amount_zar)
@@ -227,8 +230,9 @@ def settle_item(session, item: PayoutItem, status: str, message: Optional[str] =
     item.status = status
     if status == "failed":
         post_entry(session, item.tenant_id, "reversal", item.amount_cents, str(item.id), f"returned {item.item_ref}")
-        if item.fee_cents:
-            post_entry(session, item.tenant_id, "fee_reversal", item.fee_cents, str(item.id), f"fee returned {item.item_ref}")
+        if item.fee_cents or item.fee_vat_cents:
+            post_entry(session, item.tenant_id, "fee_reversal", item.fee_cents + item.fee_vat_cents, str(item.id),
+                       f"fee + VAT returned {item.item_ref}")
     return previous != status
 
 
@@ -316,10 +320,11 @@ def batch_summary(batch_id: uuid.UUID) -> dict:
         status = ("failed" if counts["failed"] == len(items) else "completed" if counts["success"] == len(items)
                   else "partial" if counts["failed"] else "processing")
         return {"id": str(b.id), "kind": b.kind, "source_id": b.source_id, "attempt": b.attempt, "status": status,
-                "total_zar": b.total_cents / 100, "fee_zar": b.fee_cents / 100, "counts": counts,
+                "total_zar": b.total_cents / 100, "fee_zar": b.fee_cents / 100, "fee_vat_zar": b.fee_vat_cents / 100, "counts": counts,
                 "created_at": b.created_at.isoformat() if b.created_at else None,
                 "items": [{"item_ref": i.item_ref, "reference": i.reference, "status": i.status, "amount_zar": i.amount_cents / 100,
-                           "fee_zar": i.fee_cents / 100, "transfer_code": i.transfer_code, "message": i.message} for i in items]}
+                           "fee_zar": i.fee_cents / 100, "fee_vat_zar": i.fee_vat_cents / 100, "transfer_code": i.transfer_code,
+                           "message": i.message} for i in items]}
 
 
 # ---------------------------------------------------------------------------

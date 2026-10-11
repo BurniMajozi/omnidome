@@ -29,6 +29,7 @@ CHART_OF_ACCOUNTS = {
     "1000": "Bank",
     "1010": "Paystack Clearing",
     "1100": "Accounts Receivable",
+    "1210": "VAT Input",
     "1200": "Inventory",
     "1500": "PP&E - Network Infrastructure",
     "1510": "PP&E - Equipment",

@@ -24,8 +24,7 @@ admins at `GET /disputes/platform`; it is never shown in a tenant's Disputes tab
 ## Commission
 
 Marginal bands on the tenant's processed volume in the calendar month (SAST): 6.0% on the first R250,000,
-5.5% on the next R750,000 (to R1,000,000), 5.0% above. All-in: Paystack's fee is paid out of the commission
-(`bearer: "account"`). Sent per charge as `transaction_charge` (cents that stay with OmniDome) with `subaccount`.
+5.5% on the next R750,000 (to R1,000,000), 5.0% above. The commission is quoted **exclusive of VAT**: 15% VAT is added on top when OmniDome is a VAT vendor (the default), so the all-in cost is 6.9% / 6.325% / 5.75%. Paystack's own fee is paid out of what OmniDome keeps (`bearer: "account"`). Sent per charge as `transaction_charge` = fee + VAT (cents that stay with OmniDome) with `subaccount`; the tenant receives gross - fee - VAT.
 A per-tenant negotiated tier override can be stored in `billing_gateway_settings.commission_tiers`.
 Only *succeeded* charges count toward the month's volume. The commission is kept on refunds and on lost disputes.
 
@@ -47,7 +46,7 @@ Paystack transfers are paid from OmniDome's own balance, so a tenant can only pa
 - **Funding**: a card checkout (`POST /payouts/funding/initialize`, no subaccount, credited by the `charge.success` webhook for
   exactly the initialised amount) or an EFT recorded by a platform admin (`POST /payouts/funding/manual`, idempotent per bank
   reference). Card funding costs OmniDome about 3% in processing, so large payrolls should be funded by EFT.
-- **Fee**: the same marginal tiers as card collections, on the tenant's month-to-date volume (card charges + payouts).
+- **Fee**: the same marginal tiers as card collections (VAT-exclusive, VAT added on top), on the tenant's month-to-date volume (card charges + payouts). The wallet is debited amount + fee + VAT.
 - **Pay**: HR (`POST /payroll/runs/{id}/pay`) and inventory (`POST /purchase-orders/{id}/payments`) call billing's internal
   endpoints with the service key. Billing reserves amount + fee from the wallet (402 with the shortfall if it cannot) and sends
   Paystack `POST /transfer/bulk` (100 per request). An item that fails, or a transfer that is reversed, credits its amount and fee

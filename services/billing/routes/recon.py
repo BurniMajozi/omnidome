@@ -176,15 +176,17 @@ def evaluate_charge(charge: GatewayCharge, data: dict) -> tuple[str, str, Option
     if not isinstance(split, dict) or split.get("subaccount") is None:
         return "no_split_data", "Paystack did not return the split for this charge", None, None
     tenant, integration = _int(split.get("subaccount")), _int(split.get("integration"))
-    expected_tenant = charge.gross_cents - charge.commission_cents
+    kept = charge.commission_cents + (charge.commission_vat_cents or 0)        # fee + the VAT added on top
+    expected_tenant = charge.gross_cents - kept
     if tenant != expected_tenant:
         return ("mismatch", f"Tenant received {tenant} but should have received {expected_tenant} "
-                            f"(gross {charge.gross_cents} - commission {charge.commission_cents})", tenant, integration)
+                            f"(gross {charge.gross_cents} - fee {charge.commission_cents} - VAT {charge.commission_vat_cents or 0})",
+                tenant, integration)
     fee = _int(data.get("fees")) if data.get("fees") is not None else (charge.paystack_fee_cents or 0)
-    expected_ours = charge.commission_cents - fee
+    expected_ours = kept - fee
     if abs(integration - expected_ours) > TOLERANCE_CENTS:
         return ("mismatch", f"OmniDome's share is {integration}, expected about {expected_ours} "
-                            f"(commission {charge.commission_cents} - Paystack fee {fee})", tenant, integration)
+                            f"(fee + VAT {kept} - Paystack fee {fee})", tenant, integration)
     return "ok", "", tenant, integration
 
 
@@ -466,13 +468,13 @@ async def statement(period: Optional[str] = None, ctx: AuthContext = Depends(get
         return {"period": period,
                 "collections": {"charges": len(charges), "collected_zar": gross / 100, "commission_zar": commission / 100,
                                 "commission_vat_zar": sum(c.commission_vat_cents for c in charges) / 100,
-                                "you_receive_zar": (gross - commission) / 100},
+                                "you_receive_zar": (gross - commission - sum(c.commission_vat_cents for c in charges)) / 100},
                 "refunds": {"count": len(refunds), "total_zar": sum(r.amount_cents for r in refunds) / 100},
                 "chargebacks": {"count": len(chargebacks), "total_zar": sum(l.amount_cents for l in chargebacks) / 100},
                 "payouts": {"count": len(items), "total_zar": sum(i.amount_cents for i in items) / 100,
                             "fees_zar": sum(i.fee_cents for i in items) / 100,
                             "fees_vat_zar": sum(i.fee_vat_cents for i in items) / 100},
-                "fees_include_vat": True,
+                "fees_exclude_vat": True,
                 "payout_wallet_zar": (wallet.balance_cents if wallet else 0) / 100,
                 "open_liabilities_zar": po.open_liabilities_cents(session, ctx.tenant_id) / 100,
                 "settlement_checks": {"verified": verified, "total": len(charges)}}

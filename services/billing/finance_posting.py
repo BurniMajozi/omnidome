@@ -34,7 +34,7 @@ logger = logging.getLogger("billing.finance_posting")
 AR, BANK, PAYSTACK_CLEARING, VAT_OUTPUT, REVENUE = "1100", "1000", "1010", "2200", "4000"
 SOURCES = ("billing.invoice", "billing.payment", "billing.credit_note", "billing.void", "billing.seat_invoice",
            "billing.gateway_fee", "billing.refund", "billing.chargeback")
-FEES, CHARGEBACKS = "6950", "6960"
+FEES, CHARGEBACKS, VAT_INPUT = "6950", "6960", "1210"
 MAX_ERROR = 500
 _CENT = Decimal("0.01")
 
@@ -102,14 +102,20 @@ def void_entry(invoice_id, number: str, on: date, total, subtotal, vat) -> dict:
                   [_line(REVENUE, debit=revenue), _line(VAT_OUTPUT, debit=vat), _line(AR, credit=total)])
 
 
-def gateway_fee_entry(charge_id, reference: str, on: date, amount) -> dict:
-    """OmniDome's gateway commission on a card charge, taken from the Paystack clearing balance the payment
-    entry debited: Dr 6950 Payment Processing Fees / Cr 1010 Paystack Clearing."""
-    amount = money(amount)
+def gateway_fee_entry(charge_id, reference: str, on: date, amount, vat=0, claim_input_vat: bool = False) -> dict:
+    """OmniDome's gateway commission on a card charge (VAT-exclusive `amount`, plus the VAT OmniDome added on top), taken from the
+    Paystack clearing balance the payment entry debited. Dr 6950 Payment Processing Fees (fee) [+ Dr 1210 VAT Input (VAT) when the
+    tenant is a VAT vendor and claims it; otherwise the VAT is part of the expense] / Cr 1010 Paystack Clearing (fee + VAT)."""
+    amount, vat = money(amount), money(vat)
     if amount <= 0:
         raise ValueError("fee must be positive")
-    return _entry("billing.gateway_fee", charge_id, on, f"Gateway fee {reference}",
-                  [_line(FEES, debit=amount), _line(PAYSTACK_CLEARING, credit=amount)])
+    if vat < 0:
+        raise ValueError("VAT cannot be negative")
+    lines = [_line(FEES, debit=amount if claim_input_vat else amount + vat)]
+    if claim_input_vat and vat > 0:
+        lines.append(_line(VAT_INPUT, debit=vat))
+    lines.append(_line(PAYSTACK_CLEARING, credit=amount + vat))
+    return _entry("billing.gateway_fee", charge_id, on, f"Gateway fee {reference}", lines)
 
 
 def refund_entry(refund_id, reference: str, on: date, amount) -> dict:

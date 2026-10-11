@@ -67,12 +67,14 @@ def split_for_charge(session, tenant_id, amount_cents: int, reference: str,
     period = gateway.period_key()
     before = month_volume_cents(session, tenant_id, period)
     calc = gateway.calculate(amount_cents, before, _tiers_for(settings))
+    # The commission is quoted EXCLUSIVE of VAT; OmniDome's VAT is added on top, and everything OmniDome keeps (fee + VAT) is what
+    # stays in its account: the tenant receives gross - fee - VAT.
+    vat = platform_tax.vat_on(calc.commission_cents, session)
     session.add(GatewayCharge(
         tenant_id=tenant_id, reference=reference, invoice_id=invoice_id, kind=kind,
         subaccount_code=settings.subaccount_code, period=period, gross_cents=amount_cents,
-        commission_cents=calc.commission_cents, volume_before_cents=before,
-        commission_vat_cents=platform_tax.vat_inside(calc.commission_cents, session)))
-    return {"subaccount": settings.subaccount_code, "transaction_charge": calc.commission_cents, "bearer": "account"}
+        commission_cents=calc.commission_cents, volume_before_cents=before, commission_vat_cents=vat))
+    return {"subaccount": settings.subaccount_code, "transaction_charge": calc.commission_cents + vat, "bearer": "account"}
 
 
 def discard_charge(session, reference: str) -> None:
@@ -91,7 +93,10 @@ def mark_charge_succeeded(session, reference: str, paystack_fee_cents: Optional[
     if paystack_fee_cents is not None:
         row.paystack_fee_cents = int(paystack_fee_cents)
     if row.commission_cents > 0:
-        return fp.gateway_fee_entry(row.id, reference, fp.sast_today(), Decimal(row.commission_cents) / 100)
+        from services.billing.tax_store import profile_for
+        claims_vat = profile_for(session, row.tenant_id).charges_vat          # a VAT vendor claims the VAT on our fee as input tax
+        return fp.gateway_fee_entry(row.id, reference, fp.sast_today(), Decimal(row.commission_cents) / 100,
+                                    Decimal(row.commission_vat_cents) / 100, claims_vat)
     return None
 
 
@@ -293,9 +298,11 @@ async def preview(amount_zar: Decimal, ctx: AuthContext = Depends(get_auth_conte
         settings = session.execute(select(GatewaySettings).where(GatewaySettings.tenant_id == ctx.tenant_id)).scalar_one_or_none()
         before = month_volume_cents(session, ctx.tenant_id, gateway.period_key())
         calc = gateway.calculate(int((amount_zar * 100).to_integral_value()), before, _tiers_for(settings))
-    return {"amount_zar": float(amount_zar), "commission_zar": calc.commission_cents / 100,
-            "tenant_receives_zar": calc.tenant_net_cents / 100, "effective_rate_percent": float(calc.effective_bps) / 100,
-            "month_volume_zar": before / 100}
+        vat = platform_tax.vat_on(calc.commission_cents, session)
+    return {"amount_zar": float(amount_zar), "commission_zar": calc.commission_cents / 100, "commission_vat_zar": vat / 100,
+            "commission_total_zar": (calc.commission_cents + vat) / 100,
+            "tenant_receives_zar": (calc.tenant_net_cents - vat) / 100, "effective_rate_percent": float(calc.effective_bps) / 100,
+            "fees_exclude_vat": True, "month_volume_zar": before / 100}
 
 
 @router.get("/summary", dependencies=[Depends(require_tier("reader"))])
@@ -305,13 +312,14 @@ async def summary(ctx: AuthContext = Depends(get_auth_context)):
     with get_session() as session:
         settings = session.execute(select(GatewaySettings).where(GatewaySettings.tenant_id == ctx.tenant_id)).scalar_one_or_none()
         tiers = _tiers_for(settings)
-        volume, commission, count = session.execute(
+        volume, commission, commission_vat, count = session.execute(
             select(func.coalesce(func.sum(GatewayCharge.gross_cents), 0), func.coalesce(func.sum(GatewayCharge.commission_cents), 0),
-                   func.count()).where(
+                   func.coalesce(func.sum(GatewayCharge.commission_vat_cents), 0), func.count()).where(
                 GatewayCharge.tenant_id == ctx.tenant_id, GatewayCharge.period == period,
                 GatewayCharge.status == "succeeded")).one()
     band = gateway.band_for_volume(int(volume), tiers)
     return {"period": period, "volume_zar": int(volume) / 100, "charges": int(count), "commission_zar": int(commission) / 100,
+            "commission_vat_zar": int(commission_vat) / 100, "fees_exclude_vat": True,
             "current_rate_percent": band["rate_bps"] / 100,
             "next_threshold_zar": None if band["next_threshold_cents"] is None else band["next_threshold_cents"] / 100,
             "remaining_in_band_zar": None if band["remaining_in_band_cents"] is None else band["remaining_in_band_cents"] / 100,

@@ -7,11 +7,11 @@ General guidance, not tax advice. SARS figures verified against sars.gov.za on 2
 | | OmniDome (charging tenants) | A tenant (charging its own customers) |
 |---|---|---|
 | VAT | **Charged**: OmniDome is treated as a VAT vendor by default (15%) | **The tenant's choice**: it says whether it is a VAT vendor |
-| Prices | **VAT-inclusive**: the advertised price is what the tenant pays; the VAT is shown inside it | The tenant chooses: prices include VAT (default) or VAT is added on top |
-| OmniDome fees (6% / 5.5% / 5% gateway commission, payout fees) | VAT-inclusive; the VAT inside each fee is recorded on the charge/payout | Shown on the tenant's statement as "includes VAT" |
+| Prices | **VAT-exclusive**: the advertised price is before VAT; the invoice summation shows the 15% VAT added and the total | The tenant chooses: prices include VAT (default) or VAT is added on top |
+| OmniDome fees (6% / 5.5% / 5% gateway commission, payout fees) | **VAT-exclusive**: 15% VAT is added on top (6.9% / 6.325% / 5.75% all-in); the VAT is recorded on each charge/payout | Shown on the tenant's statement as fee, VAT and total; a VAT-vendor tenant books the VAT as input tax (account 1210) |
 | Config | Admin -> Platform Billing -> invoice settings (supplier name, address, **VAT number**) and `apps/web/lib/platform-pricing.json` (`tax_policy`, `supplier`) | Billing -> **VAT & tax** (`billing_tax_profiles`) |
 
-**OmniDome still has to enter its VAT registration number** in the platform invoice settings. Until it does, Codex's platform invoicing marks documents "Pro forma invoice" rather than "Tax invoice" (a valid tax invoice needs the supplier's VAT number).
+**OmniDome's VAT number is a PLACEHOLDER (`4000000000`)** in `apps/web/lib/platform-pricing.json` (`supplier.vat_number`) until the real registration number is entered under Admin -> Platform Billing -> invoice settings. **Replace it before issuing real tax invoices**: a tax invoice with a wrong supplier VAT number is not a valid tax invoice and the tenant could lose its input claim.
 
 ## What SARS says (South Africa)
 
@@ -19,7 +19,7 @@ General guidance, not tax advice. SARS figures verified against sars.gov.za on 2
 - **Deadline**: apply within **21 business days** of exceeding the threshold.
 - **Rate**: standard rate 15% (`ZA_VAT_RATE_PERCENT`).
 - **Tax invoice** (section 20): the words "Tax Invoice", "VAT Invoice" or "Invoice"; supplier name, address and VAT number; recipient name and address and, if the recipient is a vendor, their VAT number; serial number and date; description; quantity; value, VAT and total. A full invoice is required above **R5,000**; an abridged one is allowed at R5,000 or less; none is required at R50 or less. Issue within 21 days of the supply.
-- **Prices** (sections 64-65): a vendor's prices are deemed VAT-inclusive, so VAT-inclusive pricing is the safe default.
+- **Prices** (sections 64-65): a vendor's quoted prices are deemed VAT-inclusive unless the quote shows VAT separately, so every OmniDome price shown VAT-exclusive must say "excl. VAT" and the summation must show the VAT and the total.
 - A business that is **not** registered does not charge VAT and issues a plain "Invoice".
 
 Sources: SARS Budget 2026 FAQ, SARS "Tax Invoices", SARS "Register for VAT" pages.

@@ -1,9 +1,9 @@
 """OmniDome's own VAT position, for the fees OmniDome charges tenants (gateway commission, payout fees).
 
-Everything OmniDome charges is VAT-inclusive: the advertised 6% / 5.5% / 5% is the total the tenant pays, and when OmniDome is
-a VAT vendor the VAT it must account for is carved out of that fee (fee x rate / (1 + rate)). The supplier profile is the one
-Codex's platform invoicing already keeps (`platform_invoice_supplier`, edited under Admin -> Platform Billing), falling back to the
-shipped catalogue default (VAT-registered, 15%).
+OmniDome's fees are quoted EXCLUSIVE of VAT: the 6% / 5.5% / 5% commission is the fee before VAT, and when OmniDome is a VAT
+vendor the VAT (15%) is added on top, so the tenant pays fee + VAT (6.9% / 6.325% / 5.75% all-in). The supplier profile is the one
+Codex's platform invoicing keeps (`platform_invoice_supplier`, edited under Admin -> Platform Billing), falling back to the shipped
+catalogue default (VAT-registered, 15%). Unregistered means no VAT is added.
 """
 
 from decimal import ROUND_HALF_UP, Decimal
@@ -27,10 +27,9 @@ def position(session) -> dict:
     return {"registered": bool(profile.get("vat_registered", False)), "rate": rate}
 
 
-def vat_inside(amount_cents: int, session) -> int:
-    """VAT contained in a VAT-inclusive fee of `amount_cents`: 0 unless OmniDome is a VAT vendor."""
+def vat_on(fee_cents: int, session) -> int:
+    """VAT added on top of a VAT-exclusive fee of `fee_cents` (rounded half up); 0 unless OmniDome is a VAT vendor."""
     pos = position(session)
-    if not pos["registered"] or amount_cents <= 0:
+    if not pos["registered"] or fee_cents <= 0:
         return 0
-    net = (Decimal(amount_cents) / (Decimal(1) + pos["rate"])).quantize(Decimal(1), rounding=ROUND_HALF_UP)
-    return int(amount_cents - net)
+    return int((Decimal(fee_cents) * pos["rate"]).quantize(Decimal(1), rounding=ROUND_HALF_UP))

@@ -265,11 +265,3 @@ def test_status_endpoint_uses_the_last_twelve_months_of_invoiced_ex_vat(env):
     out = asyncio.run(tax_routes.registration_status(env.ctx))
     assert out["turnover_12m_zar"] == 2_400_000.0 and out["status"] == "must_register"       # drafts excluded, credit note netted off
     assert out["profile"]["configured"] is False
-
-
-def test_omnidome_fees_are_vat_inclusive_and_carve_out_the_vat(env):
-    # no platform tables in this database: falls back to the shipped catalogue (VAT-registered, 15%)
-    with env.db() as s:
-        assert platform_tax.position(s) == {"registered": True, "rate": D("0.15")}
-        assert platform_tax.vat_inside(6900, s) == 900                      # R69.00 incl VAT = R60.00 + R9.00
-        assert platform_tax.vat_inside(0, s) == 0

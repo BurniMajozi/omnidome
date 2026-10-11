@@ -9,7 +9,11 @@ import pytest
 def _billing_test_defaults(monkeypatch):
     monkeypatch.setenv("BILLING_ENFORCE_ROLES", "false")
     monkeypatch.setenv("GATEWAY_REQUIRE_SUBACCOUNT", "false")
-    from services.billing import finance_posting
+    # The shipped default is VAT-registered (15% added on top of OmniDome fees). The money tests state exact fee amounts, so they run
+    # with OmniDome unregistered; tests/test_fee_vat.py turns VAT on explicitly.
+    from decimal import Decimal
+    from services.billing import finance_posting, platform_tax
+    monkeypatch.setattr(platform_tax, "position", lambda session: {"registered": False, "rate": Decimal("0.15")})
 
     async def no_post(*_a, **_k):
         return None
