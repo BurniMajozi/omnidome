@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import {
-  getRoster, importSpreadsheet, deleteEmployee, setPayroll, createRun, payRun,
+  getRoster, importSpreadsheet, deleteEmployee, setPayroll, createRun, payRun, syncPayouts, walletShortfallFrom, payrollErrorText, type WalletShortfall,
   type RosterRow, type ImportResult, type PayRun,
 } from "@/lib/payroll-api"
 
@@ -42,6 +42,8 @@ export default function PayrollPage() {
   const [running, setRunning] = useState(false)
   const [run, setRun] = useState<PayRun | null>(null)
   const [paying, setPaying] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [shortfall, setShortfall] = useState<WalletShortfall | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -136,13 +138,30 @@ export default function PayrollPage() {
     if (!run) return
     if (!confirm("Initiate Paystack transfers for this run? This is the only action that moves money.")) return
     setPaying(true)
+    setShortfall(null)
+    setError(null)
     try {
       const r = await payRun(run.id)
       setRun(r)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const short = walletShortfallFrom(e)
+      if (short) setShortfall(short)
+      else setError(payrollErrorText(e))
     } finally {
       setPaying(false)
+    }
+  }
+
+  const onSyncPayouts = async () => {
+    if (!run) return
+    setSyncing(true)
+    setError(null)
+    try {
+      setRun(await syncPayouts(run.id))
+    } catch (e) {
+      setError(payrollErrorText(e))
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -295,7 +314,27 @@ export default function PayrollPage() {
                 {paying ? "Paying…" : "Pay via Paystack"}
               </Button>
             )}
+            {run && (run.payslips ?? []).some((p) => p.payout_status === "PROCESSING") && (
+              <Button variant="outline" onClick={onSyncPayouts} disabled={syncing}>
+                {syncing ? "Refreshing…" : "Refresh payout status"}
+              </Button>
+            )}
           </div>
+
+          {shortfall && (
+            <div role="alert" className="mt-4 space-y-2 rounded-lg border border-red-500/40 bg-red-500/10 p-4 text-sm">
+              <p className="font-medium text-red-300">{shortfall.message}</p>
+              <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                <span>Needed incl. fee <b className="text-foreground">{ZAR(shortfall.required_zar)}</b></span>
+                <span>In wallet <b className="text-foreground">{ZAR(shortfall.balance_zar)}</b></span>
+                <span>Short by <b className="text-foreground">{ZAR(shortfall.shortfall_zar)}</b></span>
+                <span>Fee <b className="text-foreground">{ZAR(shortfall.fee_zar)}</b></span>
+              </div>
+              <Button asChild size="sm">
+                <Link href="/dashboard?section=billing&sub=payout-wallet">Fund payroll wallet</Link>
+              </Button>
+            </div>
+          )}
 
           {run && (
             <div className="mt-4">

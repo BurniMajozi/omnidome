@@ -1,6 +1,9 @@
 "use client"
 
 import { getSessionSafe } from "@/lib/supabase/client"
+import { sendJson, type ActionResult } from "@/lib/api-result"
+import { fetchLoadable } from "@/lib/service-fetch"
+import type { Loadable } from "@/lib/service-state"
 
 /**
  * Inventory API client — suppliers, purchase orders, goods receipts.
@@ -186,3 +189,96 @@ export async function createGoodsReceipt(
     body: JSON.stringify(input),
   })
 }
+
+// ── Supplier bank details + purchase order payments ────────────────────
+// Status-preserving (unlike fetchInventory) so the UI can show 402/409/422/502 messages from `detail`.
+
+export interface SupplierBankDetails {
+  configured: boolean
+  bank_code?: string
+  account_name?: string
+  account_last4?: string
+}
+export interface PoPayment {
+  id: string
+  po_id: string
+  amount_zar: number
+  fee_zar: number
+  status: "pending" | "processing" | "paid" | "failed"
+  supplier_invoice_ref: string | null
+  message: string | null
+  created_at: string
+}
+export interface PoPayments {
+  po_total_zar: number
+  paid_zar: number
+  outstanding_zar: number
+  payments: PoPayment[]
+}
+/** Body of the 402 returned when the payout wallet cannot cover a supplier payment. */
+export interface PoWalletShortfall {
+  message: string
+  required_zar: number
+  balance_zar: number
+  shortfall_zar: number
+  fee_zar: number
+}
+
+export const getSupplierBankDetails = (supplierId: string): Promise<Loadable<SupplierBankDetails>> =>
+  fetchLoadable<SupplierBankDetails>(`${API_BASE}/suppliers/${encodeURIComponent(supplierId)}/bank-details`)
+/** The account number is sent once; only the last 4 digits ever come back. */
+export const saveSupplierBankDetails = (supplierId: string, input: { bank_code: string; account_name: string; account_number: string }) =>
+  sendJson<SupplierBankDetails>(`${API_BASE}/suppliers/${encodeURIComponent(supplierId)}/bank-details`, "PUT", input)
+export const getPoPayments = (poId: string): Promise<Loadable<PoPayments>> => fetchLoadable<PoPayments>(`${API_BASE}/purchase-orders/${encodeURIComponent(poId)}/payments`)
+export interface PayPoResult {
+  ok: boolean
+  status: number
+  payment: PoPayment | null
+  /** The server's `detail` string (409/400/502...) or a generic message. */
+  message: string | null
+  /** Set on HTTP 402. */
+  shortfall: PoWalletShortfall | null
+}
+/** Hand-rolled (not sendJson) because a 402 carries an object `detail` that callers need in full. */
+export async function payPurchaseOrder(poId: string, input: { amount_zar?: number; supplier_invoice_ref?: string }): Promise<PayPoResult> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}/purchase-orders/${encodeURIComponent(poId)}/payments`, {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+      signal: AbortSignal.timeout(30_000),
+    })
+  } catch {
+    return { ok: false, status: 0, payment: null, message: "Could not confirm the result. Use Refresh status before paying again.", shortfall: null }
+  }
+  let body: unknown = null
+  try {
+    body = await res.json()
+  } catch {
+    body = null
+  }
+  if (res.ok) return { ok: true, status: res.status, payment: body as PoPayment, message: null, shortfall: null }
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (res.status === 402 && detail && typeof detail === "object") {
+    const d = detail as Partial<PoWalletShortfall>
+    return {
+      ok: false,
+      status: 402,
+      payment: null,
+      message: null,
+      shortfall: {
+        message: typeof d.message === "string" ? d.message : "The payout wallet does not have enough funds for this payment.",
+        required_zar: Number(d.required_zar) || 0,
+        balance_zar: Number(d.balance_zar) || 0,
+        shortfall_zar: Number(d.shortfall_zar) || 0,
+        fee_zar: Number(d.fee_zar) || 0,
+      },
+    }
+  }
+  const fallback = res.status === 403 ? "Not permitted: a purchasing manager is required." : `Payment request failed (HTTP ${res.status})`
+  return { ok: false, status: res.status, payment: null, message: typeof detail === "string" && detail ? detail : fallback, shortfall: null }
+}
+export const syncPoPayments = (poId: string): Promise<ActionResult<{ paid_zar: number; payments: PoPayment[] }>> =>
+  sendJson(`${API_BASE}/purchase-orders/${encodeURIComponent(poId)}/payments/sync`, "POST", {})

@@ -124,3 +124,48 @@ export const createRun = (period: string) =>
 
 export const payRun = (id: string) =>
   hr<PayRun & { initiated: number; failed: number }>(`/payroll/runs/${id}/pay`, { method: "POST" })
+
+/** Body of the HTTP 402 returned when the payout wallet cannot cover a run. */
+export interface WalletShortfall {
+  message: string
+  required_zar: number
+  balance_zar: number
+  shortfall_zar: number
+  fee_zar: number
+}
+
+/** Pulls the wallet-shortfall detail out of an error thrown by `payRun` (message looks like `402: {json}`), or null. */
+export function walletShortfallFrom(err: unknown): WalletShortfall | null {
+  const m = err instanceof Error ? /^402:\s*([\s\S]*)$/.exec(err.message) : null
+  if (!m) return null
+  try {
+    const d = (JSON.parse(m[1]) as { detail?: unknown }).detail as Partial<WalletShortfall> | undefined
+    if (!d || typeof d !== "object") return null
+    return {
+      message: typeof d.message === "string" ? d.message : "The payout wallet does not have enough funds for this payroll run.",
+      required_zar: Number(d.required_zar) || 0,
+      balance_zar: Number(d.balance_zar) || 0,
+      shortfall_zar: Number(d.shortfall_zar) || 0,
+      fee_zar: Number(d.fee_zar) || 0,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Readable message for a failed payroll call: uses the server's `detail` string (e.g. a 502 from the gateway) when present. */
+export function payrollErrorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err)
+  const m = /^(\d{3}):\s*([\s\S]*)$/.exec(raw)
+  if (!m) return raw
+  try {
+    const d = (JSON.parse(m[2]) as { detail?: unknown }).detail
+    if (typeof d === "string" && d) return d
+  } catch {
+    /* not JSON */
+  }
+  return raw
+}
+
+/** Re-check payouts that are still PROCESSING; returns the run with its payslips. */
+export const syncPayouts = (id: string) => hr<PayRun>(`/payroll/runs/${id}/sync-payouts`, { method: "POST" })

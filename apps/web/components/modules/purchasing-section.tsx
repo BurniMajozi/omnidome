@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select"
 import { DataTable, type DataColumn } from "@/components/ui/data-table"
 import { PurchasingSignature } from "./purchasing-signature"
+import { PoPaymentsDialog, SupplierBankDialog } from "./purchasing-payments"
 import {
   type PurchaseOrder as BasePurchaseOrder,
   type Supplier,
@@ -86,6 +87,9 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
   const [receiveTarget, setReceiveTarget] = useState<PurchaseOrder | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState("")
+  const [paymentsTarget, setPaymentsTarget] = useState<PurchaseOrder | null>(null)
+  const [bankOpen, setBankOpen] = useState(false)
+  const [bankSupplierId, setBankSupplierId] = useState("")
   const [decisionTarget, setDecisionTarget] = useState<PurchaseOrder | null>(null)
   const [signature, setSignature] = useState("")
   const [signerName, setSignerName] = useState("")
@@ -245,6 +249,7 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
               <PackageCheck className="h-3.5 w-3.5 mr-1" /> Receive
             </Button>
           )}
+          <Button size="sm" variant="outline" onClick={() => setPaymentsTarget(row)}>Payments</Button>
           {["draft", "submitted", "pending_approval", "approved", "rejected", "sent"].includes(row.status) && (
             <Button size="sm" variant="ghost" disabled={busyId === row.id} onClick={() => handleCancel(row)}>Cancel</Button>
           )}
@@ -271,6 +276,7 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
           </p>
         </div>
         {!approvalOnly && <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={() => setBankOpen(true)}>Supplier bank details</Button>
           <Button size="sm" variant="outline" onClick={() => setNewSupplierOpen(true)}>
             <Plus className="h-3.5 w-3.5 mr-1" /> Supplier
           </Button>
@@ -287,6 +293,24 @@ export function PurchasingSection({approvalOnly = false}: {approvalOnly?: boolea
         emptyTitle={error ? "Purchase orders unavailable" : approvalOnly ? "No pending approvals" : "No purchase orders yet"}
         emptyDescription={error || (approvalOnly ? "Submitted orders will appear here for signed review." : "Create one to start the procure-to-receive flow.")}
       />
+
+      <PoPaymentsDialog po={paymentsTarget} supplierName={paymentsTarget ? supplierName(paymentsTarget.supplier_id) : ""} open={!!paymentsTarget} onClose={() => setPaymentsTarget(null)} />
+
+      {/* Supplier bank details (pick a supplier first) */}
+      <Dialog open={bankOpen && !bankSupplierId} onOpenChange={(o) => !o && setBankOpen(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Supplier bank details</DialogTitle></DialogHeader>
+          {suppliers.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No suppliers yet. Add a supplier first.</p>
+          ) : (
+            <Select value={bankSupplierId} onValueChange={setBankSupplierId}>
+              <SelectTrigger><SelectValue placeholder="Select supplier" /></SelectTrigger>
+              <SelectContent>{suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+            </Select>
+          )}
+        </DialogContent>
+      </Dialog>
+      <SupplierBankDialog supplierId={bankSupplierId || null} supplierName={bankSupplierId ? supplierName(bankSupplierId) : ""} open={bankOpen && !!bankSupplierId} onClose={() => { setBankOpen(false); setBankSupplierId("") }} />
 
       {/* Create PO */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>

@@ -392,3 +392,60 @@ export interface GatewayLiability {
   created_at: string
 }
 export const getGatewayLiabilities = () => get<{ owed_zar: number; items: GatewayLiability[] }>("/gateway/liabilities")
+
+// ---------------------------------------------------------------- Payout wallet
+
+export type WalletEntryKind = "funding" | "manual_funding" | "payout" | "payout_fee" | "reversal" | "fee_reversal" | "liability_recovery"
+export interface WalletEntry {
+  kind: WalletEntryKind | string
+  amount_zar: number
+  note: string | null
+  created_at: string
+}
+export interface PayoutWallet {
+  balance_zar: number
+  open_liabilities_zar: number
+  entries: WalletEntry[]
+}
+export interface PayoutQuote {
+  amount_zar: number
+  fee_zar: number
+  required_zar: number
+  effective_rate_percent: number
+  balance_zar: number
+  shortfall_zar: number
+  period?: string
+}
+export interface PayoutBatchItem {
+  item_ref: string
+  reference: string | null
+  status: string
+  amount_zar: number
+  fee_zar: number
+  transfer_code: string | null
+  message: string | null
+}
+export interface PayoutBatch {
+  id: string
+  kind: string
+  source_id: string | null
+  attempt: number
+  status: string
+  total_zar: number
+  fee_zar: number
+  counts: { pending: number; processing: number; success: number; failed: number }
+  created_at: string
+  items: PayoutBatchItem[]
+}
+
+export const getPayoutWallet = () => get<PayoutWallet>("/payouts/wallet")
+export const listPayoutBatches = () => get<{ batches: PayoutBatch[] }>("/payouts/batches")
+/** Admin: Paystack checkout to top up the wallet. */
+export const initializeWalletFunding = (input: { amount_zar: number; email: string }) =>
+  post<{ authorization_url: string; reference: string }>("/payouts/funding/initialize", input)
+export const quotePayout = (amountZar: number) => post<PayoutQuote>("/payouts/quote", { amount_zar: amountZar })
+/** Admin: re-check a batch that has not finished; returns the updated batch. */
+export const reconcilePayoutBatch = (id: string) => post<PayoutBatch>(`/payouts/batches/${encodeURIComponent(id)}/reconcile`)
+/** Platform admin only: record an EFT received for a tenant. credited=false means the reference was already recorded. */
+export const recordManualFunding = (input: { tenant_id: string; amount_zar: number; bank_reference: string }) =>
+  post<{ credited: boolean }>("/payouts/funding/manual", input)

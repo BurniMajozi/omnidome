@@ -49,6 +49,7 @@ import { MovementsTab } from "@/components/modules/billing/invoicing/movements-t
 import { ItemsTemplatesTab } from "@/components/modules/billing/invoicing/items-templates-tab"
 import { FeePoliciesTab } from "@/components/modules/billing/invoicing/fee-policies-tab"
 import { GatewayTab } from "@/components/modules/billing/gateway-tab"
+import { PayoutWalletTab } from "@/components/modules/billing/payout-wallet-tab"
 import { RefundsTab } from "@/components/modules/billing/refunds-tab"
 import { DisputesTab } from "@/components/modules/billing/disputes-tab"
 
@@ -189,6 +190,9 @@ export function BillingModule() {
   // Lets nested drawers (e.g. the invoice drawer) ask for a tab without threading callbacks through every host.
   useEffect(() => {
     const h = (e: Event) => { const t = (e as CustomEvent<string>).detail; if (typeof t === "string") setActiveTab(t) }
+    // Deep link from other screens, e.g. /dashboard?section=billing&sub=payout-wallet.
+    const sub = new URLSearchParams(window.location.search).get("sub")
+    if (sub === "payout-wallet" || sub === "refunds") setActiveTab(sub)
     window.addEventListener("billing:open-tab", h)
     return () => window.removeEventListener("billing:open-tab", h)
   }, [])
@@ -374,6 +378,7 @@ export function BillingModule() {
           <TabsTrigger value="fees">Fee policies</TabsTrigger>
           <TabsTrigger value="collections">Collections</TabsTrigger>
           <TabsTrigger value="gateway">Payments gateway</TabsTrigger>
+          <TabsTrigger value="payout-wallet">Payout wallet</TabsTrigger>
           <TabsTrigger value="disputes">Disputes</TabsTrigger>
           <TabsTrigger value="aging">Aging Report</TabsTrigger>
         </TabsList>
@@ -491,6 +496,10 @@ export function BillingModule() {
 
         <TabsContent value="gateway" className="mt-4">
           <GatewayTab />
+        </TabsContent>
+
+        <TabsContent value="payout-wallet" className="mt-4">
+          <PayoutWalletTab />
         </TabsContent>
 
         <TabsContent value="disputes" className="mt-4">
