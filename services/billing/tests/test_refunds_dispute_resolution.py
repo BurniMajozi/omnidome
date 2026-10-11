@@ -412,3 +412,37 @@ def test_attachment_needs_an_open_dispute_of_the_callers_tenant(env, monkeypatch
     with pytest.raises(HTTPException) as e:
         asyncio.run(disputes.upload_attachment(did, UploadFile(file=io.BytesIO(b"%PDF"), filename="a.pdf"), other))
     assert e.value.status_code == 404
+
+
+# ---- disputes on OmniDome's own platform invoices -------------------------------------------
+
+def test_dispute_on_a_platform_invoice_goes_to_platform_ops_not_to_a_tenant(env, monkeypatch):
+    from sqlalchemy import text
+    alerts = []
+
+    async def alert(subject, html):
+        alerts.append(subject)
+    monkeypatch.setattr(gw, "_alert_ops", alert)
+    tenant = uuid.uuid4()
+    with env.db() as s:
+        s.execute(text("CREATE TABLE platform_orders (id TEXT, tenant_id TEXT, reference TEXT)"))
+        s.execute(text("CREATE TABLE platform_checkout_attempts (reference TEXT, order_id TEXT)"))
+        s.execute(text("INSERT INTO platform_orders VALUES ('o1', :t, 'ODP-2026-000012')"), {"t": str(tenant)})
+        s.execute(text("INSERT INTO platform_checkout_attempts VALUES ('ODP-2026-000012-retry', 'o1')"))
+    for ref in ("ODP-2026-000012", "ODP-2026-000012-retry"):
+        asyncio.run(disputes.handle_event("charge.dispute.create", {"id": ref[-5:], "status": "awaiting-merchant-feedback",
+                                                                   "transaction": {"reference": ref, "amount": 50_000}}))
+    asyncio.run(disputes.handle_event("charge.dispute.create", {"id": "zzz", "status": "pending", "transaction": {"reference": "mystery", "amount": 1}}))
+    with env.db() as s:
+        rows = {d.paystack_dispute_id: d for d in s.query(GatewayDispute)}
+        assert all(d.tenant_id is None for d in rows.values())                     # never visible to a tenant
+        assert str(tenant) in rows["00012"].reason and str(tenant) in rows["-retry"[-5:]].reason
+        assert rows["zzz"].reason is None
+    assert len(alerts) == 3
+    assert asyncio.run(disputes.list_disputes(env.ctx))["disputes"] == []
+    admin = AuthContext(user_id=uuid.uuid4(), tenant_id=uuid.uuid4(), roles=["platform_admin"])
+    out = asyncio.run(disputes.platform_disputes(admin))
+    assert out["open"] == 3 and {d["note"] is not None for d in out["disputes"]} == {True, False}
+    with pytest.raises(HTTPException) as e:
+        asyncio.run(disputes.platform_disputes(env.ctx))
+    assert e.value.status_code == 403

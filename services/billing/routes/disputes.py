@@ -21,7 +21,7 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from services.billing import finance_posting as fp
@@ -112,7 +112,14 @@ async def handle_event(event: str, data: dict) -> str:
         if outcome(row) == "lost" and row.tenant_id is not None and row.amount_cents > 0:
             lost_entry = post_lost(session, row)
         if row.tenant_id is None:
-            logger.error("ALERT: Paystack dispute %s on %s matches no charge of ours", dispute_id, reference)
+            platform_tenant = _platform_order_tenant(session, reference)
+            if platform_tenant is not None:
+                # A dispute on OmniDome's OWN invoice to a tenant (plan, top-up, renewal): OmniDome is the merchant, so it is
+                # answered by platform ops, never shown in a tenant's Disputes tab (tenant_id stays null).
+                row.reason = f"Platform invoice {reference} (tenant {platform_tenant})"
+                logger.error("ALERT: Paystack dispute %s is on platform invoice %s of tenant %s", dispute_id, reference, platform_tenant)
+            else:
+                logger.error("ALERT: Paystack dispute %s on %s matches no charge of ours", dispute_id, reference)
         if event.endswith(".create") or (event.endswith(".remind") and row.status not in CLOSED) or event.endswith(".resolve"):
             alert = (event, dispute_id, reference, row.amount_cents, row.status, row.due_at, row.tenant_id)
         session.flush()
@@ -126,6 +133,20 @@ async def handle_event(event: str, data: dict) -> str:
             f"<p>Dispute <b>{did}</b> on transaction {ref or '(unknown)'} for R{cents / 100:.2f}, status <b>{status}</b>"
             f"{', respond by ' + due.strftime('%Y-%m-%d %H:%M UTC') if due else ''}. Tenant: {tenant or 'unmatched'}.</p>")
     return "accepted"
+
+
+def _platform_order_tenant(session, reference: Optional[str]):
+    """Tenant of an OmniDome platform invoice (services/billing/routes/platform_checkout.py) for this Paystack reference,
+    or None. The platform tables may not exist in every environment, so a failed lookup is simply 'not a platform order'."""
+    if not reference or not reference.upper().startswith("ODP-"):
+        return None
+    try:
+        with session.begin_nested():
+            return session.execute(text(
+                "SELECT tenant_id FROM platform_orders WHERE reference = :r OR id IN "
+                "(SELECT order_id FROM platform_checkout_attempts WHERE reference = :r) LIMIT 1"), {"r": reference}).scalar()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def post_lost(session, d: GatewayDispute) -> Optional[dict]:
@@ -147,6 +168,19 @@ def public(d: GatewayDispute) -> dict:
             "status": d.status, "category": d.category, "resolution": d.resolution,
             "due_at": d.due_at.isoformat() if d.due_at else None, "open": d.status not in CLOSED, "outcome": outcome(d),
             "updated_at": d.updated_at.isoformat() if d.updated_at else None}
+
+
+@router.get("/platform", dependencies=[Depends(require_tier("admin"))])
+async def platform_disputes(ctx: AuthContext = Depends(get_auth_context)):
+    """Disputes that belong to no tenant: OmniDome's own platform invoices and charges we could not match. Platform admins only."""
+    if not gw._is_platform_admin(ctx):
+        raise HTTPException(status_code=403, detail="Platform admin only")
+    with get_session() as session:
+        rows = session.execute(select(GatewayDispute).where(GatewayDispute.tenant_id.is_(None))
+                               .order_by(GatewayDispute.created_at.desc()).limit(200)).scalars().all()
+        items = [{**public(d), "note": d.reason} for d in rows]
+    due = sorted(i["due_at"] for i in items if i["open"] and i["due_at"])
+    return {"disputes": items, "open": sum(1 for i in items if i["open"]), "next_due_at": due[0] if due else None}
 
 
 @router.get("", dependencies=[Depends(require_tier("reader"))])

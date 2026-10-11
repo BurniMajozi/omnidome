@@ -4,6 +4,23 @@ Tenants collect from their own customers through Paystack **subaccounts** under 
 keeps a commission, and the rest settles straight to the tenant's bank. Code: `services/billing/gateway.py`
 (tier maths), `routes/gateway.py`, `routes/payment_methods.py`, `routes/refunds.py`, `routes/disputes.py`.
 
+## Two billing systems, one Paystack account
+
+| | Platform billing (OmniDome charges the tenant) | Gateway (the tenant charges its own customers) |
+|---|---|---|
+| Code | `services/billing/routes/platform_checkout.py`, `services/common/platform_*.py`, Admin -> Platform Billing & Usage | `services/billing/routes/{gateway,payment_methods,refunds,disputes,payouts,recon}.py`, ISP Billing panel |
+| Who is paid | OmniDome (merchant), straight into the Paystack balance | The tenant (subaccount); OmniDome keeps the commission |
+| References | `ODP-<year>-<n>` | `OD-<uuid>` (invoices), `fund-<uuid>` (payout funding), `payroll-` / `supplier-` (transfers) |
+| Recurring | Paystack Plans/Subscriptions (the platform owns the charge, no split needed) | Our own invoices charged against the saved card (a plan cannot carry a subaccount or commission) |
+| Credits | Prepaid AI usage credits (`platform_credit_entries`), bought by top-up | Payout wallet: money the tenant gives OmniDome so it can pay salaries and suppliers. **Not** AI credits. |
+| Commission / `GATEWAY_REQUIRE_SUBACCOUNT` | Never applies | Applies |
+
+The Paystack webhook is shared. `paystack_webhook` verifies the signature once, offers every event to the platform handler first
+(it only claims `ODP-` references and platform plan/subscription codes), and everything else falls through to the gateway handlers
+(`refund.*`, `charge.dispute.*`, `transfer.*`, funding checkouts, invoice charges). `tests/test_webhook_dispatch.py` pins that order.
+A dispute on a platform invoice (`ODP-` reference) is kept with `tenant_id` empty, annotated with the tenant, and listed for platform
+admins at `GET /disputes/platform`; it is never shown in a tenant's Disputes tab.
+
 ## Commission
 
 Marginal bands on the tenant's processed volume in the calendar month (SAST): 6.0% on the first R250,000,
