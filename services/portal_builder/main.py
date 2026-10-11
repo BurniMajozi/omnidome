@@ -53,7 +53,7 @@ app = FastAPI(
 )
 
 guard = EntitlementGuard(
-    module_id="portal-builder",
+    module_id="portal",
     public_paths={"/health", "/docs", "/openapi.json", "/api/v1/portal/public", "/api/v1/portal/submissions"},
     public_prefixes=("/api/v1/portal/public", "/api/v1/portal/shared"),
 )

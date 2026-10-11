@@ -2,10 +2,11 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { TenantUsageCard } from "@/components/pricing/tenant-usage"
+import { PlatformInvoiceSettings } from "@/components/pricing/platform-invoice-settings"
 import { adminApi, adminErrorMessage } from "@/lib/admin-api"
 import { catalog, defaultSelection, selectedPanels, bundleSelection, type PricingTier, type PricingSelection, type PlatformQuote, type PlatformPricingState } from "@/lib/platform-pricing"
 
-export function PricingSelector({ value, onChange, disabled = false }: { value: PricingSelection; onChange: (v: PricingSelection) => void; disabled?: boolean }) {
+export function PricingSelector({ value, onChange, disabled = false, tenant }: { value: PricingSelection; onChange: (v: PricingSelection) => void; disabled?: boolean; tenant?: string | null }) {
   const [quote, setQuote] = useState<PlatformQuote | null>(null)
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
@@ -15,19 +16,26 @@ export function PricingSelector({ value, onChange, disabled = false }: { value: 
     setLoading(true); setQuote(null); setError("")
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch("/api/pricing/quote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value), signal: controller.signal })
-        const data = await res.json()
-        if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Choose at least one panel and a valid seat count")
+        let data: PlatformQuote
+        if (tenant) data = await adminApi.previewPlatformPricing(tenant,value,controller.signal)
+        else {
+          const res = await fetch("/api/pricing/quote", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value), signal: controller.signal })
+          const result = await res.json()
+          if (!res.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Choose at least one panel and a valid seat count")
+          data = result
+        }
         setQuote(data)
       } catch (e) { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : "Unable to calculate pricing") }
       finally { if (!controller.signal.aborted) setLoading(false) }
     }, 250)
     return () => { clearTimeout(timer); controller.abort() }
-  }, [value])
+  }, [value, tenant])
   const changePanel = (id: string, tier?: PricingTier) => {
     const modules = { ...panels }
     if (tier) modules[id] = tier; else delete modules[id]
-    onChange({ ...value, bundle: null, modules })
+    const bundle = catalog.bundles[value.bundle as keyof typeof catalog.bundles]
+    const keepBundle = bundle && bundle.modules.every(key => modules[key] === bundle.tier)
+    onChange({ ...value, bundle: keepBundle ? value.bundle : null, modules })
   }
   return <fieldset disabled={disabled} className="space-y-4 min-w-0">
     <legend className="font-medium mb-2">Plan and panel access</legend>
@@ -36,17 +44,18 @@ export function PricingSelector({ value, onChange, disabled = false }: { value: 
         {Object.entries(catalog.bundles).map(([id, b]) => <option key={id} value={id}>{b.name} bundle</option>)}<option value="modular">Choose individual modules</option>
       </select></label>
       <label className="text-sm space-y-1">Billing period<select className="block w-full rounded border bg-background p-2" value={value.period} onChange={e => onChange({ ...value, period: e.target.value as PricingSelection["period"] })}><option value="monthly">Monthly</option><option value="annually">Annually · 20% discount</option></select></label>
-      <label className="text-sm space-y-1">User seats<input type="number" min={1} max={100000} required className="block w-full rounded border bg-background p-2" value={value.seats ?? 1} onChange={e => onChange({ ...value, seats: Number(e.target.value) })} /></label>
+      <label className="text-sm space-y-1">User seats<input type="number" min={1} max={catalog.online_seat_cap} required className="block w-full rounded border bg-background p-2" value={value.seats ?? 1} onChange={e => onChange({ ...value, seats: Number(e.target.value) })} /></label>
     </div>
-    <p className="text-xs text-muted-foreground">Every member inherits the organisation’s selected panels. Organisation Admin can manage all enabled panels. Changing a bundled panel switches to modular pricing.</p>
+    <p className="text-xs text-muted-foreground">Overview and Admin are always free. Members inherit the selected panels. Add-ons retain the bundle; removing or changing an included panel switches to modular pricing. Above {catalog.online_seat_cap} seats, request a reviewed contract.</p>
     <div className="grid gap-2 sm:grid-cols-2">
       {catalog.modules.map(m => <div key={m.id} className="flex items-center justify-between gap-2 rounded border p-2">
         <label className="flex items-center gap-2 text-sm min-w-0"><input type="checkbox" checked={!!panels[m.id]} onChange={e => changePanel(m.id, e.target.checked ? "starter" : undefined)} />{m.name}</label>
         {panels[m.id] && <select aria-label={`${m.name} tier`} className="max-w-[130px] rounded border bg-background p-1 text-xs" value={panels[m.id]} onChange={e => changePanel(m.id, e.target.value as PricingTier)}>{["starter", "professional", "enterprise"].map(t => <option key={t}>{t}</option>)}</select>}
       </div>)}
     </div>
+    {quote?.proration && <div className="rounded border p-3 text-sm"><p>Unused prepaid time credit: R{quote.proration.unused_net_credit} before VAT.</p><p>Credit applied: R{quote.proration.credit_applied}. Remaining account credit: R{quote.proration.credit_remaining}.</p><p>The new cycle begins when settled. Quotes expire in 15 minutes. Credits stay on the account; no automatic refund is issued.</p></div>}
     <div aria-live="polite" className="rounded bg-secondary p-3 text-sm">
-      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_net_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month before VAT</p><p className="font-semibold mt-1">Due {value.period === "annually" ? "annually" : "monthly"}: R{Number(quote.total_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</p><p className="text-xs text-muted-foreground">Includes R{quote.vat_zar} VAT. {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
+      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_display_zar || quote.monthly_net_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month{quote.vat_registered ? quote.prices_include_vat ? " including VAT" : " excluding VAT" : " · no VAT charged"}</p><p className="font-semibold mt-1">{quote.proration ? "Due for this plan change" : value.period === "annually" ? "Due annually" : "Due monthly"}: R{Number(quote.total_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</p><p className="text-xs text-muted-foreground">{quote.vat_registered ? `VAT: R${quote.vat_zar}.` : "Supplier is not VAT registered."} {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
     </div>
   </fieldset>
 }
@@ -65,6 +74,7 @@ export function TenantPricingCard({ tenant, editable, onChanged }: { tenant: str
     <Button variant="outline" size="sm" onClick={() => setOpen(!open)}>{open ? "Close pricing" : "Plan, panels & invoices"}</Button>
     {open && <>
       <TenantUsageCard tenant={tenant} platformOwner={editable}/>
+      <PlatformInvoiceSettings tenant={tenant} platformOwner={editable}/>
       {!state ? <p className="text-sm">Loading tenant pricing…</p> : <>
         {editable ? <><PricingSelector value={selection} onChange={setSelection} disabled={busy} /><Button disabled={busy} onClick={() => run(async () => { await adminApi.setPricing(tenant, selection, crypto.randomUUID()); await load(); onChanged?.(); setNotice("Panel access saved. A platform invoice is ready for payment.") })}>Save panel access & create invoice</Button><p className="text-xs text-muted-foreground">Platform Owner changes take effect immediately. Saving creates an invoice; payment is a separate action.</p></> : <p className="text-sm">{state.pricing.quote?.name || "Negotiated plan"} · {state.pricing.quote?.seats || "—"} seats. Contact the Platform Owner to change panel access.</p>}
         {state.subscription && <div className="flex flex-wrap gap-2 items-center text-sm"><span>Subscription: {state.subscription.status}</span>{state.subscription.status !== "cancelled" && <Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { await adminApi.cancelPlatformSubscription(tenant, state.subscription!.order_id); await load(); setNotice("Recurring subscription cancelled; current panel access is retained.") })}>Cancel recurring billing</Button>}</div>}

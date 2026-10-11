@@ -1,7 +1,8 @@
 "use client"
 
 import { Button } from "@/components/ui/button"
-import { catalog, bundleSelection, startCheckout } from "@/lib/platform-pricing"
+import { catalog, bundleSelection, startCheckout, discountedPrice } from "@/lib/platform-pricing"
+import { useEffect, useState } from "react"
 
 const descriptions = {
   starter: "Start with CRM for one person.",
@@ -17,7 +18,9 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
   onCustomize: () => void
 }) {
   const annual = period === "annually"
-  const periodicPrice = (monthly: number) => Number((monthly * (annual ? 1 - catalog.annual_discount_percent / 100 : 1)).toFixed(2))
+  const periodicPrice = (monthly: number) => discountedPrice(monthly,annual)
+  const [tax,setTax] = useState(catalog.tax_policy)
+  useEffect(()=>{const controller=new AbortController();fetch("/api/pricing/catalog",{signal:controller.signal,cache:"no-store"}).then(r=>r.ok ? r.json() : null).then(data=>{if(data?.tax_policy)setTax(data.tax_policy)}).catch(()=>{});return ()=>controller.abort()},[])
   return <section className="space-y-8">
     <div className="space-y-4 text-center">
       <h1 className="text-3xl font-bold sm:text-4xl">Choose your platform bundle</h1>
@@ -26,7 +29,7 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
         <Button variant={annual ? "ghost" : "secondary"} aria-pressed={!annual} onClick={() => onPeriodChange("monthly")}>Pay monthly</Button>
         <Button variant={annual ? "secondary" : "ghost"} aria-pressed={annual} onClick={() => onPeriodChange("annually")}>Pay annually · save {catalog.annual_discount_percent}%</Button>
       </div>
-      <p className="text-sm text-muted-foreground">Prices exclude VAT. Annual plans are paid upfront; the monthly equivalent is shown below.</p>
+        <p className="text-sm text-muted-foreground">{tax.vat_registered ? tax.prices_include_vat ? "Catalogue prices include VAT." : "Catalogue prices exclude VAT; it is added at checkout." : "The platform is not VAT registered and charges no VAT."} Annual plans are paid upfront.</p>
     </div>
     <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
       {(["starter", "growth", "professional", "enterprise"] as const).map(id => {
@@ -36,7 +39,7 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
           <h2 className="text-2xl font-semibold">{bundle.name}</h2>
           <p className="mt-2 min-h-12 text-sm text-muted-foreground">{descriptions[id]}</p>
           <p className="mt-5 text-3xl font-bold">{price === 0 ? "Free" : money(price)}{price > 0 && <span className="text-sm font-normal text-muted-foreground"> / month</span>}</p>
-          <p className="mt-2 text-sm text-muted-foreground">{price === 0 ? "No software fee for the included seat" : annual ? `${money(Number((price * 12).toFixed(2)))} paid yearly, excluding VAT` : "Billed monthly, excluding VAT"}</p>
+          <p className="mt-2 text-sm text-muted-foreground">{price === 0 ? "No software fee for the included seat" : annual ? `${money(Number((price * 12).toFixed(2)))} paid yearly` : "Billed monthly"}</p>
           <p className="mt-4 text-sm">{bundle.seats} included {bundle.seats === 1 ? "seat" : "seats"} · {bundle.credits.toLocaleString("en-GB")} AI credits / month</p>
           <p className="mt-1 text-xs text-muted-foreground">Additional seats {money(periodicPrice(bundle.extra_seat_price))} / seat / month</p>
           <Button className="my-5 w-full" onClick={() => startCheckout(bundleSelection(id, period))}>Choose {bundle.name}</Button>

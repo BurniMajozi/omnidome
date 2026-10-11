@@ -54,6 +54,9 @@ async def ensure_schema(conn):
         await conn.execute(text(statement))
     from services.common.provider_costs import ensure_schema as ensure_provider_costs
     await ensure_provider_costs(conn)
+    from services.common.platform_credits import DDL as CREDIT_DDL
+    for statement in CREDIT_DDL:
+        await conn.execute(text(statement))
 
 
 def add_months(value: datetime, count: int) -> datetime:
@@ -128,22 +131,31 @@ async def activate(db, tenant, priced, generation, revision, *, source, actor=No
     await queue_optional_sync(db, tenant, generation, f"activate:{tenant}:{generation}")
 
 
-async def start_operation(db, tenant, operation, kind):
+async def start_operation(db, tenant, operation, kind, panel="unattributed"):
+    from services.common.platform_credits import reserve
+    reserved = await reserve(db,tenant,credit_charge(catalog()["usage_policy"],kind))
     active = (await db.execute(text("SELECT policy,expires_at FROM platform_usage_entitlements WHERE tenant_id=:t"), {"t": str(tenant)})).mappings().first()
     policy = dict(active["policy"]) if active else {**catalog()["usage_policy"], "monthly_credits": 0, "legacy": True}
     if active and active["expires_at"] <= datetime.now(timezone.utc):
         policy["monthly_credits"] = 0
-    await db.execute(text("""INSERT INTO platform_usage_operations(id,tenant_id,kind,policy,status)
-      VALUES(:id,:t,:kind,CAST(:p AS jsonb),'running')"""),
-      {"id": str(operation), "t": str(tenant), "kind": kind, "p": json.dumps(policy)})
+    policy = {**policy,"reserved_credits":reserved}
+    await db.execute(text("""INSERT INTO platform_usage_operations(id,tenant_id,kind,policy,status,panel,reserved_credits)
+      VALUES(:id,:t,:kind,CAST(:p AS jsonb),'running',:panel,:reserved)"""),
+      {"id": str(operation), "t": str(tenant), "kind": kind, "p": json.dumps(policy),"panel":panel,"reserved":reserved})
     return policy
 
 
 async def finish_operation(db, tenant, operation, policy, kind, *, tokens, eligible, status):
     credits = credit_charge(policy, kind, tokens, eligible)
-    result = await db.execute(text("""UPDATE platform_usage_operations SET credits=:c,kind=:kind,status=:s,completed_at=now()
-      WHERE id=:id AND tenant_id=:t AND status='running' RETURNING id"""),
-      {"c": credits, "kind": kind, "s": status, "id": str(operation), "t": str(tenant)})
-    if not result.first():
+    from services.common import platform_commerce
+    await platform_commerce.tenant_lock(db,tenant)
+    charge = min(credits,policy["reserved_credits"]) if policy.get("reserved_credits") else credits
+    result = await db.execute(text("""UPDATE platform_usage_operations SET credits=:c,measured_credits=:m,kind=:kind,status=:s,completed_at=now()
+      WHERE id=:id AND tenant_id=:t AND status='running' RETURNING started_at"""),
+      {"c": charge,"m":credits, "kind": kind, "s": status, "id": str(operation), "t": str(tenant)})
+    row = result.first()
+    if not row:
         return
-    # Shadow usage stays local. It never debits real credits or charges Paystack.
+    if policy.get("reserved_credits"):
+        from services.common.platform_credits import debit
+        await debit(db,tenant,operation,charge,row[0])

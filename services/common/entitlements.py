@@ -1,6 +1,7 @@
 import logging
 import os
 from dataclasses import dataclass
+from dataclasses import field
 from typing import Iterable, Optional
 
 from fastapi import HTTPException, status
@@ -27,6 +28,7 @@ def _bool_env(key: str, default: bool = False) -> bool:
 class EntitlementState:
     enabled: bool
     reason: Optional[str] = None
+    config: dict = field(default_factory=dict)
 
 
 class EntitlementGuard:
@@ -37,7 +39,9 @@ class EntitlementGuard:
         module_id: Optional[str] = None,
         public_prefixes: Optional[Iterable[str]] = None,
     ):
-        self.module_name = module_name or module_id or os.getenv("MODULE_ID", "")
+        from services.common.platform_access import ALIASES
+        raw_module = module_name or module_id or os.getenv("MODULE_ID", "")
+        self.module_name = ALIASES.get(raw_module, raw_module)
         self.public_paths = {"/health", "/docs", "/openapi.json"}
         if public_paths:
             self.public_paths.update(public_paths)
@@ -48,9 +52,11 @@ class EntitlementGuard:
         self.license = LicenseVerifier()
 
     def ensure_startup(self) -> None:
+        if self.module_name in {"overview", "admin"}: return
         self.license.ensure_valid()
 
     async def _check_tenant_module(self, tenant_id: str) -> EntitlementState:
+        if self.module_name in {"overview", "admin"}: return EntitlementState(enabled=True)
         if not self.enforce_modules or not self.module_name:
             return EntitlementState(enabled=True)
 
@@ -63,9 +69,10 @@ class EntitlementGuard:
                 result = await session.execute(
                     text(
                         """
-                        select tm.status
+                        select tm.status, tm.config, t.settings, t.billing_status
                         from tenant_modules tm
                         join modules m on m.id = tm.module_id
+                        join tenants t on t.id=tm.tenant_id
                         where tm.tenant_id = :tenant_id
                           and m.key = :module_key
                         """
@@ -86,7 +93,10 @@ class EntitlementGuard:
                         "entitlements: tenant %s module '%s' status=%s",
                         tenant_id, self.module_name, row[0],
                     )
-                return EntitlementState(enabled=enabled)
+                from services.common.platform_access import payment_access
+                if enabled and not payment_access(row[2], row[3]):
+                    return EntitlementState(enabled=False, reason="payment_required")
+                return EntitlementState(enabled=enabled, config=row[1] or {})
         except SQLAlchemyError:
             logger.info(
                 "entitlements: join-path query failed for tenant %s module '%s'; "
@@ -128,6 +138,7 @@ class EntitlementGuard:
         return EntitlementState(enabled=False, reason="module_not_enabled")
 
     def is_licensed(self) -> bool:
+        if self.module_name in {"overview", "admin"}: return True
         return self.license.is_module_enabled(self.module_name)
 
     def dependency(self) -> None:
@@ -159,6 +170,29 @@ class EntitlementGuard:
 
         state = await self._check_tenant_module(str(ctx.tenant_id))
         if not state.enabled:
-            return Response("Module not enabled for tenant", status_code=status.HTTP_403_FORBIDDEN)
+            return Response("Payment required; open Admin to resolve billing" if state.reason == "payment_required" else "Module not enabled for tenant", status_code=402 if state.reason == "payment_required" else 403)
 
-        return await call_next(request)
+        from services.common.platform_access import blocked_feature, reserve_write, release_write
+        tier = state.config.get("pricing_tier")
+        if tier:
+            feature = blocked_feature(self.module_name, tier, path)
+            if feature:
+                return Response(f"{feature['name']} requires {feature['tier']} for this panel", status_code=403)
+        period = None
+        limit = state.config.get("writes_per_month")
+        if limit is not None and request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}:
+            async with session_scope() as session:
+                period = await reserve_write(session, ctx.tenant_id, self.module_name, limit)
+            if period is None:
+                return Response("Monthly panel write limit reached; open Admin to review your tier", status_code=429)
+        try:
+            response = await call_next(request)
+        except BaseException:
+            if period:
+                async with session_scope() as session:
+                    await release_write(session, ctx.tenant_id, self.module_name, period)
+            raise
+        if period and response.status_code >= 400:
+            async with session_scope() as session:
+                await release_write(session, ctx.tenant_id, self.module_name, period)
+        return response

@@ -1,7 +1,31 @@
 {
-  "version": 2,
+  "version": 3,
   "currency": "ZAR",
   "annual_discount_percent": 20,
+  "online_seat_cap": 100,
+  "always_on": ["overview", "admin"],
+  "payment_grace_days": 7,
+  "tax_policy": {"vat_registered":true,"prices_include_vat":false,"rate":0.15},
+  "supplier": {"name":"OmniDome","address":"9 Short Road, Zandspruit, Rooderport, 2169","vat_registered":true,"prices_include_vat":false,"vat_number":"4000000000"},
+  "tier_limits": {
+    "free": {"writes_per_month":100,"module_ai_credits":50},
+    "starter": {"writes_per_month":1000,"module_ai_credits":50},
+    "professional": {"writes_per_month":10000,"module_ai_credits":300},
+    "enterprise": {"writes_per_month":50000,"module_ai_credits":1000}
+  },
+  "feature_gates": [
+    {"module":"sales","tier":"professional","name":"Commission reports and targets","pattern":"^/(commissions|targets)(/|$)"},
+    {"module":"sales","tier":"enterprise","name":"Lead automation events","pattern":"^/automation(/|$)"},
+    {"module":"portal","tier":"professional","name":"Campaigns, SEO and analytics","pattern":"^/api/v1/portal/(campaigns|seo|seo-profiles|analytics)(/|$)"},
+    {"module":"portal","tier":"enterprise","name":"Page version history","pattern":"^/api/v1/portal/pages/[^/]+/versions(/|$)"},
+    {"module":"billing","tier":"professional","name":"Claw-back fee policies","pattern":"^/fee-policies(/|$)"},
+    {"module":"finance","tier":"professional","name":"Revenue and expense governance","pattern":"^/(revenue-contracts|expense-receipts|approval-requests|purchase-orders)(/|$)"},
+    {"module":"finance","tier":"enterprise","name":"Scenario planning","pattern":"^/scenario(/|$)"},
+    {"module":"inventory","tier":"professional","name":"Inventory reports","pattern":"^/reports(/|$)"},
+    {"module":"inventory","tier":"enterprise","name":"Inventory approval inbox","pattern":"^/approvals(/|$)"},
+    {"module":"iot","tier":"professional","name":"Device automations and scenes","pattern":"^/api/iot/(automations|scenes)(/|$)"},
+    {"module":"marketing","tier":"professional","name":"Managed social, WhatsApp and SMS tools","pattern":"^/(social|whatsapp|sms|traditional-campaigns)(/|$)"}
+  ],
   "usage_policy": {
     "version": 1,
     "mode": "shadow",
@@ -43,12 +67,16 @@
     {"id":"billing","page_id":"billing","name":"Billing Hub","prices":{"starter":249,"professional":749,"enterprise":2499}},
     {"id":"finance","page_id":"finance","name":"Finance & FP&A Hub","prices":{"starter":299,"professional":899,"enterprise":2999}},
     {"id":"products","page_id":"products","name":"Product Hub","prices":{"starter":149,"professional":449,"enterprise":1499}},
-    {"id":"portal","page_id":"portal","name":"Portal Hub","prices":{"starter":199,"professional":599,"enterprise":1999}}
+    {"id":"portal","page_id":"portal","name":"Portal Hub","prices":{"starter":199,"professional":599,"enterprise":1999}},
+    {"id":"analytics","page_id":"analytics","name":"BI Studio","prices":{"starter":299,"professional":899,"enterprise":2999}},
+    {"id":"inventory","page_id":"inventory","name":"Inventory & Stock","prices":{"starter":199,"professional":599,"enterprise":1999}},
+    {"id":"iot","page_id":"iot","name":"IoT & Devices","prices":{"starter":199,"professional":599,"enterprise":1999}},
+    {"id":"rica","page_id":"rica","name":"RICA Verification","prices":{"starter":199,"professional":599,"enterprise":1999}}
   ],
   "bundles": {
     "professional":{"name":"Professional","monthly_price":3500,"seats":6,"extra_seat_price":45,"credits":5000,"tier":"professional","modules":["marketing","sales","support","crm","billing","portal"]},
     "enterprise":{"name":"Enterprise","monthly_price":9500,"seats":8,"extra_seat_price":75,"credits":10000,"tier":"enterprise","modules":["marketing","sales","support","crm","billing","portal","retention","network","compliance"]},
     "starter":{"name":"Starter","monthly_price":0,"seats":1,"extra_seat_price":45,"credits":50,"tier":"starter","modules":["crm"]},
-    "growth":{"name":"Growth","monthly_price":999,"seats":3,"extra_seat_price":45,"credits":500,"tier":"starter","modules":["crm","sales"]}
+    "growth":{"name":"Growth","monthly_price":599,"seats":3,"extra_seat_price":45,"credits":500,"tier":"starter","modules":["crm","sales"]}
   }
 }

@@ -110,7 +110,7 @@ def test_verified_payment_enables_only_selected_modules(client,gateway,monkeypat
     assert res.status_code==200,res.text
     assert res.json()["status"]=="paid"
     assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t AND action='reconcile'",t=t)[0][0]==1
-    assert q("SELECT policy FROM platform_usage_entitlements WHERE tenant_id=:t",t=t)[0][0]["monthly_credits"]==5000
+    assert q("SELECT policy FROM platform_usage_entitlements WHERE tenant_id=:t",t=t)[0][0]["monthly_credits"]==350
     duplicate=gateway.post("/platform-checkout/verify",json={"order_id":order["id"]},headers=as_user(t,user))
     assert duplicate.json()["duplicate"] is True
     assert q("SELECT count(*) FROM platform_usage_outbox WHERE tenant_id=:t AND action='reconcile'",t=t)[0][0]==1
@@ -128,7 +128,7 @@ def test_creation_uses_pricing_and_seat_downgrade_is_blocked(client):
     res=client.post("/tenants",json={"name":"Pricing test","domain":domain,"pricing_selection":choice("growth")},headers=platform())
     assert res.status_code==201,res.text
     assert res.json()["seat_limit"]==3
-    assert res.json()["platform_order"]["quote"]["net_zar"]=="999.00"
+    assert res.json()["platform_order"]["quote"]["net_zar"]=="599.00"
     t=uuid.UUID(res.json()["id"])
     add_user(t,["owner"]); add_user(t,["org_user"])
     assert save(client,t,choice("starter")).status_code==409
@@ -161,12 +161,12 @@ def test_subscription_initialize_uses_invoice_amount_and_pending_can_be_cancelle
     assert gateway.post("/platform-checkout/initialize",json=body,headers=headers).status_code==200
     assert len(calls)==2
     second=issue(client,t,user,choice(),intent="subscription").json()
-    assert gateway.post("/platform-checkout/initialize",json={"order_id":second["id"]},headers=headers).status_code==409
+    assert gateway.post("/platform-checkout/initialize",json={"order_id":second["id"]},headers=headers).status_code==200
     assert gateway.post("/platform-checkout/cancel",json=body,headers=headers).status_code==200
     # A new subscription can now be started; the cancelled attempt is retained.
     third=issue(client,t,user,choice(),intent="subscription").json()
     assert gateway.post("/platform-checkout/initialize",json={"order_id":third["id"]},headers=headers).status_code==200
-    assert len(q("SELECT order_id FROM platform_subscriptions WHERE tenant_id=:t",t=t))==2
+    assert len(q("SELECT order_id FROM platform_subscriptions WHERE tenant_id=:t",t=t))==3
 
 
 def test_subscription_events_renewal_idempotency_and_cancel(client,gateway,monkeypatch):

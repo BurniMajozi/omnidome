@@ -14,7 +14,7 @@ def test_calendar_anchor_and_shared_allowance():
     assert priced["usage_policy"]["monthly_credits"]==5000
     assert priced["usage_policy"]["mode"]=="shadow"
     custom=quote(Selection(modules={"crm":"professional","sales":"enterprise"}))
-    assert custom["usage_policy"]["monthly_credits"]==10000
+    assert custom["usage_policy"]["monthly_credits"]==1300
     assert quote(Selection(bundle="starter"))["usage_policy"]["monthly_credits"]==50
     assert quote(Selection(bundle="growth"))["usage_policy"]["monthly_credits"]==500
 

@@ -324,8 +324,21 @@ export function grantableRoles(actorRoles: string[]): string[] {
 
 // API methods
 
+export type InvoiceProfile = {name:string;address:string;vat_registered:boolean;vat_number:string|null;prices_include_vat:boolean}
+
 export const adminApi = {
+  previewPlatformPricing: (tenant: string, selection: PricingSelection, signal: AbortSignal) => fetchAdminRaw<PlatformQuote>(`/tenants/${tenant}/pricing/quote`, {method:"POST",body:JSON.stringify(selection),signal}),
+  invoiceProfile: (tenant: string) => fetchAdmin<InvoiceProfile>(`/tenants/${tenant}/pricing/billing-profile`),
+  saveInvoiceProfile: (tenant: string, profile: InvoiceProfile) => fetchAdmin<InvoiceProfile>(`/tenants/${tenant}/pricing/billing-profile`, {method:"PUT",body:JSON.stringify(profile)}),
+  invoiceSupplier: () => fetchAdmin<InvoiceProfile>("/pricing/supplier"),
+  saveInvoiceSupplier: (profile: InvoiceProfile) => fetchAdmin<InvoiceProfile>("/pricing/supplier", {method:"PUT",body:JSON.stringify(profile)}),
   getTenantUsage: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantUsage>(`/tenants/${tenant}/usage`),
+  getUsageLogs: (tenant:string,panel:string,offset:number) => fetchAdmin<import("@/lib/platform-pricing").UsageLogs>(`/tenants/${tenant}/usage/logs?limit=25&offset=${offset}${panel?`&panel=${encodeURIComponent(panel)}`:""}`),
+  createCreditTopup: (tenant:string,amount_zar:string,key:string) => fetchAdmin<PlatformOrder>(`/tenants/${tenant}/usage/topups`,{method:"POST",body:JSON.stringify({amount_zar,idempotency_key:key})}),
+  getCreditPolicy: () => fetchAdmin<import("@/lib/platform-pricing").CreditPolicy>("/pricing/credits"),
+  saveCreditPolicy: (policy:import("@/lib/platform-pricing").CreditPolicy) => fetchAdmin<import("@/lib/platform-pricing").CreditPolicy>("/pricing/credits",{method:"PUT",body:JSON.stringify(policy)}),
+  getDeliveryControls: (tenant:string) => fetchAdmin<import("@/lib/platform-pricing").DeliveryControls>(`/tenants/${tenant}/usage/delivery-controls`),
+  saveDeliveryControls: (tenant:string,preferences:import("@/lib/platform-pricing").DeliveryControls["preferences"]) => fetchAdmin<import("@/lib/platform-pricing").DeliveryControls>(`/tenants/${tenant}/usage/delivery-controls`,{method:"PUT",body:JSON.stringify(preferences)}),
   getTenantCosts: (tenant: string) => fetchAdmin<import("@/lib/platform-pricing").TenantCosts>(`/tenants/${tenant}/usage/costs`),
   getProviderReceipts: () => fetchAdmin<import("@/components/pricing/provider-cost-evidence").ProviderReceipt[]>("/provider-costs/receipts"),
   recordProviderReceipt: (body:Record<string,string>) => fetchAdmin<{id:string}>("/provider-costs/receipts",{method:"POST",body:JSON.stringify(body)}),
@@ -334,10 +347,11 @@ export const adminApi = {
   voidProviderAllocation: (tenant:string,id:string,reason:string) => fetchAdmin(`/tenants/${tenant}/usage/cost-allocations/${id}/void`,{method:"POST",body:JSON.stringify({reason})}),
   setTenantUsagePolicy: (tenant:string,monthly_credits:number,reason:string,expires_at:string) => fetchAdmin(`/tenants/${tenant}/usage/policy`,{method:"PUT",body:JSON.stringify({monthly_credits,reason,expires_at})}),
   getPricing: (tenant: string) => fetchAdmin<PlatformPricingState>(`/tenants/${tenant}/pricing`),
+  getPlatformInvoices: (tenant:string,offset:number) => fetchAdmin<import("@/lib/platform-pricing").PlatformInvoices>(`/tenants/${tenant}/pricing/orders?limit=25&offset=${offset}`),
   setPricing: (tenant: string, selection: PricingSelection, key: string) => fetchAdmin<{ quote: PlatformQuote; order: PlatformOrder }>(`/tenants/${tenant}/pricing`, { method: "PUT", body: JSON.stringify({ selection, intent: "invoice", idempotency_key: key }) }),
   createPlatformOrder: (tenant: string, selection: PricingSelection, intent: "invoice" | "subscription", key: string) => fetchAdmin<PlatformOrder>(`/tenants/${tenant}/pricing/orders`, { method: "POST", body: JSON.stringify({ selection, intent, idempotency_key: key }) }),
   platformCheckout: (tenant: string, order: string) => fetchAdmin<{ authorization_url: string }>(`/tenants/${tenant}/pricing/checkout`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
-  platformVerify: (tenant: string, order: string) => fetchAdmin<{ status: string }>(`/tenants/${tenant}/pricing/verify`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
+  platformVerify: (tenant: string, order: string) => fetchAdmin<{ status: string;subscription_status?:string|null }>(`/tenants/${tenant}/pricing/verify`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
   cancelPlatformSubscription: (tenant: string, order: string) => fetchAdmin<{ status: string }>(`/tenants/${tenant}/pricing/cancel`, { method: "POST", body: JSON.stringify({ order_id: order }) }),
   downloadPlatformInvoice: async (tenant: string, order: PlatformOrder) => {
     const res = await fetch(`${ADMIN_API}/tenants/${tenant}/pricing/orders/${order.id}/document`, { headers: await authHeader() })

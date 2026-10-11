@@ -32,7 +32,7 @@ tar -cf - -C "$source_root" deploy/commercial/web.Dockerfile apps/web/components
   DOCKER_BUILDKIT=0 docker build --build-arg BASE_IMAGE=omnidome-review-web:backup -f deploy/commercial/web.Dockerfile -t "${image[web]}" - > /home/benedict/build_logs/review-web.log 2>&1
 echo 'Pricing web build passed.'
 for service in "${services[@]}"; do
-  tar -cf - -C "$source_root" deploy/commercial/pool.Dockerfile services/common/db.py |
+  tar -cf - -C "$source_root" deploy/commercial/pool.Dockerfile services/common apps/web/lib/platform-pricing.json |
     DOCKER_BUILDKIT=0 docker build --build-arg "BASE_IMAGE=${image[$service]}" -f deploy/commercial/pool.Dockerfile -t "${image[$service]}" - > "/home/benedict/build_logs/review-pool-$service.log" 2>&1
 done
 for service in common admin billing agent_orchestrator; do rsync -a "$source_root/services/$service/" "services/$service/"; done

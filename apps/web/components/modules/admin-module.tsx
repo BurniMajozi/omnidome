@@ -95,6 +95,7 @@ import {
 import type { Loadable } from "@/lib/service-state"
 import { CreateTenantCard, SeatsBillingTab, TeamTab, TenantSeatControls } from "@/components/modules/admin-team"
 import { TenantPricingCard } from "@/components/pricing/tenant-pricing"
+import { PlatformBilling } from "@/components/pricing/platform-billing"
 import { cn } from "@/lib/utils"
 
 const LOADING: Loadable<never> = { state: "loading" }
@@ -769,6 +770,7 @@ export function AdminModule() {
             <TabsList className="flex w-full justify-start overflow-x-auto" aria-label="Administration sections">
               {isPlatformAdmin && <TabsTrigger value="tenants">Tenants</TabsTrigger>}
               {canManageTeam && <TabsTrigger value="team">Team</TabsTrigger>}
+              {canManageTeam && <TabsTrigger value="platform-billing">Platform Billing &amp; Usage</TabsTrigger>}
               {isPlatformAdmin && <TabsTrigger value="seats">Seats &amp; Billing</TabsTrigger>}
               <TabsTrigger value="modules">Modules</TabsTrigger>
               <TabsTrigger value="users">Users</TabsTrigger>
@@ -780,6 +782,13 @@ export function AdminModule() {
             {canManageTeam && (
               <TabsContent value="team" className="space-y-4">
                 <TeamTab identity={identity} tenants={tenantList} focusTenantId={teamFocusTenant} />
+              </TabsContent>
+            )}
+
+            {canManageTeam && (
+              <TabsContent value="platform-billing" className="space-y-4">
+                {isPlatformAdmin && <label className="block text-sm">Organisation<select value={selectedTenant?.id||""} onChange={e=>setSelectedTenantId(e.target.value)} className="ml-2 rounded border bg-background p-2">{tenantList.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></label>}
+                {(isPlatformAdmin?selectedTenant?.id:identity?.tenant_id) && <PlatformBilling key={isPlatformAdmin?selectedTenant!.id:identity!.tenant_id} tenant={isPlatformAdmin?selectedTenant!.id:identity!.tenant_id} platformOwner={isPlatformAdmin}/>}
               </TabsContent>
             )}
 

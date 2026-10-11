@@ -5,6 +5,7 @@ import os
 import time
 import uuid
 from contextvars import ContextVar
+from fastapi import HTTPException
 from services.common.db import session_scope
 from services.common import platform_usage
 
@@ -25,6 +26,13 @@ def operation_kind(agent_type, result=None):
     return "assisted_action"
 
 
+def operation_panel(agent_type):
+    from services.common.platform_pricing import catalog
+    aliases = {"portal_builder":"portal","website_builder":"portal","marketing_content":"marketing","support":"support","sales":"sales","finance":"finance"}
+    name = aliases.get(agent_type,agent_type)
+    return name if name in {m["id"] for m in catalog()["modules"]} else "ai"
+
+
 def metered_turn(fn):
     @functools.wraps(fn)
     async def wrapped(self, *args, **kwargs):
@@ -35,10 +43,12 @@ def metered_turn(fn):
         kind = operation_kind(self.agent_type)
         try:
             async with session_scope() as db:
-                policy = await platform_usage.start_operation(db, tenant, operation, kind)
+                policy = await platform_usage.start_operation(db, tenant, operation, kind, panel=operation_panel(self.agent_type))
+        except HTTPException:
+            raise
         except Exception:
-            logger.error("Commercial shadow operation was not started", exc_info=False)
-            return await fn(self, *args, **kwargs)
+            logger.error("Commercial operation was not started", exc_info=False)
+            raise HTTPException(503,"Usage accounting is unavailable; retry before starting billable work")
         token = current_operation.set((tenant, operation))
         started = time.perf_counter()
         result = None

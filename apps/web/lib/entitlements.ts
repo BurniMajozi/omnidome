@@ -10,7 +10,7 @@ export type Entitlements = {
 
 export const DEFAULT_ENTITLEMENTS: Entitlements = {
   valid: false,
-  modules: ["overview"],
+  modules: ["overview", "admin"],
 }
 
 export const moduleBySection: Record<string, string> = {
@@ -32,10 +32,12 @@ export const moduleBySection: Record<string, string> = {
   analytics: "analytics",
   inventory: "inventory",
   iot: "iot",
+  rica: "rica",
   admin: "admin",
 }
 
 export function isModuleEnabled(modules: string[], moduleId: string): boolean {
+  if (moduleId === "overview" || moduleId === "admin") return true
   if (!modules || modules.length === 0) {
     return false
   }

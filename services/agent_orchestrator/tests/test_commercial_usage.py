@@ -15,7 +15,7 @@ def test_shadow_turn_finishes_once_and_records_ineligible_work(monkeypatch,resul
     records=[]
     @asynccontextmanager
     async def session(): yield object()
-    async def start(db,tenant,operation,kind): return {"test":True}
+    async def start(db,tenant,operation,kind,**kwargs): return {"test":True}
     async def cost(db,**kwargs): records.append(("cost",kwargs))
     async def finish(db,tenant,operation,policy,kind,**kwargs): records.append(("finish",kwargs))
     monkeypatch.setenv("PLATFORM_USAGE_ENABLED","true")
@@ -38,3 +38,21 @@ def test_research_and_content_receive_their_draft_work_classification():
     assert meter.operation_kind("support",{"tool_calls":[{"name":"web_search"}]})=="research"
     assert meter.operation_kind("portal_builder")=="content_generation"
     assert meter.operation_kind("support",{"tool_calls":[{"name":"knowledge.context"}]})=="assisted_action"
+
+
+@pytest.mark.parametrize("failure",[402,503])
+def test_billable_work_does_not_start_without_credit_accounting(monkeypatch,failure):
+    from fastapi import HTTPException
+    @asynccontextmanager
+    async def session(): yield object()
+    async def deny(*args,**kwargs):
+        if failure==402: raise HTTPException(402,"Insufficient credits")
+        raise RuntimeError("Database unavailable")
+    monkeypatch.setenv("PLATFORM_USAGE_ENABLED","true")
+    monkeypatch.setattr(meter,"session_scope",session)
+    monkeypatch.setattr(meter.platform_usage,"start_operation",deny)
+    @meter.metered_turn
+    async def turn(self): raise AssertionError("Billable work started")
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(turn(SimpleNamespace(tenant_id="tenant",agent_type="support")))
+    assert error.value.status_code==failure

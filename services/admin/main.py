@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import bcrypt
 import json
 import logging
@@ -116,6 +117,16 @@ async def startup() -> None:
             await platform_commerce.ensure_schema(conn)
     if os.getenv("ADMIN_SYNC_RETRY", "true").lower() == "true":
         app.state.sync_task = asyncio.create_task(supabase_sync.retry_loop())
+    from services.admin.commercial import usage_sweep_loop
+    app.state.usage_sweep_task = asyncio.create_task(usage_sweep_loop())
+
+
+@app.on_event("shutdown")
+async def stop_usage_sweep():
+    task = getattr(app.state,"usage_sweep_task",None)
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError): await task
 
 
 @app.middleware("http")

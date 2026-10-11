@@ -34,11 +34,11 @@ import { cn } from "@/lib/utils"
 import { ThemeToggleCompact } from "@/components/ui/theme-toggle"
 import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { useIsClient } from "@/lib/use-is-client"
-import { catalog, canonicalModule, bundleSelection, startCheckout, type PricingSelection } from "@/lib/platform-pricing"
+import { discountedPrice, catalog, canonicalModule, bundleSelection, startCheckout, type PricingSelection } from "@/lib/platform-pricing"
 import { BundlePlans } from "@/components/pricing/bundle-plans"
 
 // All 14 modules (excluding Dashboard Overview)
-const modules = [
+const originalModules = [
     {
         id: "communication",
         icon: MessageSquare,
@@ -213,6 +213,11 @@ const modules = [
 })
 
 type TierType = "starter" | "professional" | "enterprise"
+const modules = [...originalModules, ...catalog.modules.filter(m => !originalModules.some(old => canonicalModule(old.id) === m.id)).map(m => ({
+    id:m.page_id, icon:BarChart3, name:m.name, category:"Operations", slug:m.page_id, customers:null,
+    starterPrice:m.prices.starter, professionalPrice:m.prices.professional, enterprisePrice:m.prices.enterprise,
+    color:"from-blue-600 to-indigo-500"
+}))]
 type ViewType = "customer-platform" | "create-bundle" | "individual" | "usage-limits" | string
 
 // ───────────────────── Usage Matrix (Airtable-style feature grid) ─────────────────────
@@ -234,139 +239,21 @@ interface UsageCategory {
     rows: UsageRow[]
 }
 
+
+const comparisonBundles = [catalog.bundles.starter, catalog.bundles.growth, catalog.bundles.professional, catalog.bundles.enterprise]
+const comparisonRow = (feature: string, values: UsageRow["free"][]): UsageRow => ({feature, free: values[0], starter: values[1], professional: values[2], enterprise: values[3]})
+const tierRank: Record<string, number> = {starter: 1, professional: 2, enterprise: 3}
 const usageMatrix: UsageCategory[] = [
-    {
-        name: "Platform",
-        icon: Database,
-        rows: [
-            { feature: "Sub-tenants", tooltip: "Separate white-label environments", free: 1, starter: 1, professional: 3, enterprise: "Unlimited" },
-            { feature: "User seats", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
-            { feature: "Contacts / Customers", tooltip: "Active CRM contacts per tenant", free: 100, starter: "1,000", professional: "25,000", enterprise: "Unlimited" },
-            { feature: "Records per module", tooltip: "Rows across deals, tickets, etc.", free: "1,000", starter: "10,000", professional: "100,000", enterprise: "Unlimited" },
-            { feature: "Custom fields per module", free: 5, starter: 25, professional: 100, enterprise: "Unlimited" },
-            { feature: "File storage", free: "500 MB", starter: "5 GB", professional: "50 GB", enterprise: "500 GB" },
-            { feature: "Data retention", free: "90 days", starter: "1 year", professional: "3 years", enterprise: "7 years" },
-            { feature: "API access", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "API requests / month", free: "-", starter: "10,000", professional: "250,000", enterprise: "Unlimited" },
-            { feature: "Webhooks", free: false, starter: 5, professional: 50, enterprise: "Unlimited" },
-        ],
-    },
-    {
-        name: "Automations & AI",
-        icon: Zap,
-        rows: [
-            { feature: "Automation runs / month", tooltip: "Workflow triggers across all modules", free: 100, starter: "1,000", professional: "50,000", enterprise: "Unlimited" },
-            { feature: "Active automations", free: 5, starter: 25, professional: 250, enterprise: "Unlimited" },
-            { feature: "AI credits / month", tooltip: "Shared tenant allowance. Usage is currently measured in shadow mode while the rate card is validated.", free: catalog.usage_policy.allowances.free, starter: catalog.usage_policy.allowances.starter, professional: catalog.usage_policy.allowances.professional.toLocaleString(), enterprise: catalog.usage_policy.allowances.enterprise.toLocaleString() },
-            { feature: "Churn prediction (Retention)", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "AI deal scoring (Sales)", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Sentiment analysis (Service)", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Revenue forecasting (Finance)", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Communication & Marketing",
-        icon: Mail,
-        rows: [
-            { feature: "Email sends / month", tooltip: "Transactional + marketing via UniOne", free: "1,000", starter: "6,000", professional: "50,000", enterprise: "Custom" },
-            { feature: "Email templates", free: 5, starter: 25, professional: "200+", enterprise: "Unlimited" },
-            { feature: "Drag-and-drop email builder", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "SMS sends / month", free: 0, starter: 500, professional: "5,000", enterprise: "Custom" },
-            { feature: "Marketing campaigns", free: 2, starter: 10, professional: "Unlimited", enterprise: "Unlimited" },
-            { feature: "Lead scoring", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "A/B testing", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Custom unsubscribe management", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Dedicated IP (email)", free: false, starter: false, professional: "Add-on", enterprise: "Included" },
-            { feature: "SightLive™ post-campaign analytics", tooltip: "Proprietary OOH & radio analytics", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Sales & CRM",
-        icon: DollarSign,
-        rows: [
-            { feature: "Deal pipelines", free: 1, starter: 3, professional: 25, enterprise: "Unlimited" },
-            { feature: "Deal stages per pipeline", free: 5, starter: 10, professional: 50, enterprise: "Unlimited" },
-            { feature: "Quotes / proposals per month", free: 5, starter: 50, professional: "Unlimited", enterprise: "Unlimited" },
-            { feature: "Contact timeline & activity log", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "Customer journey mapping", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Revenue attribution", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Service & Call Center",
-        icon: Headset,
-        rows: [
-            { feature: "Support tickets / month", free: 50, starter: 500, professional: "10,000", enterprise: "Unlimited" },
-            { feature: "SLA policies", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
-            { feature: "Knowledge base articles", free: 10, starter: 50, professional: "Unlimited", enterprise: "Unlimited" },
-            { feature: "Live chat widget", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Call recording & transcription", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "IVR / auto-attendant", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Call center agent seats", free: "-", starter: 3, professional: 15, enterprise: "Unlimited" },
-        ],
-    },
-    {
-        name: "Network & IoT",
-        icon: Wifi,
-        rows: [
-            { feature: "Monitored devices", free: 10, starter: 100, professional: "5,000", enterprise: "Unlimited" },
-            { feature: "Alert rules", free: 3, starter: 25, professional: 250, enterprise: "Unlimited" },
-            { feature: "Outage notifications", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "Capacity planning", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "IoT telemetry retention", free: "7 days", starter: "30 days", professional: "1 year", enterprise: "3 years" },
-            { feature: "Remote device commands", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Billing & Finance",
-        icon: Receipt,
-        rows: [
-            { feature: "Invoices / month", free: 25, starter: 500, professional: "10,000", enterprise: "Unlimited" },
-            { feature: "Payment collection", tooltip: "Paystack checkout and recorded manual collection", free: "Paystack", starter: "Paystack", professional: "Paystack", enterprise: "Paystack" },
-            { feature: "Recurring billing automation", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Collections workflows", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Revenue recognition (GAAP)", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Expense governance", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Scenario planning", free: false, starter: false, professional: false, enterprise: true },
-        ],
-    },
-    {
-        name: "Compliance & Operations",
-        icon: ShieldCheck,
-        rows: [
-            { feature: "RICA verifications / month", free: 10, starter: 100, professional: "5,000", enterprise: "Unlimited" },
-            { feature: "POPIA consent tracking", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "Audit trail retention", free: "30 days", starter: "1 year", professional: "5 years", enterprise: "7 years" },
-            { feature: "Product catalog items", free: 10, starter: 100, professional: "1,000", enterprise: "Unlimited" },
-            { feature: "Inventory warehouses", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
-            { feature: "Staff management (HR)", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Payroll integration", tooltip: "Via Paystack", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Portal & Analytics",
-        icon: Globe,
-        rows: [
-            { feature: "Customer self-service portal", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "White-label portal", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Custom domain for portal", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Executive dashboards", free: 1, starter: 3, professional: 10, enterprise: "Unlimited" },
-            { feature: "Scheduled report exports", free: false, starter: true, professional: true, enterprise: true },
-            { feature: "Cross-module analytics", free: false, starter: false, professional: true, enterprise: true },
-        ],
-    },
-    {
-        name: "Support & Security",
-        icon: ShieldCheck,
-        rows: [
-            { feature: "Support channel", free: "Email", starter: "Email + Chat", professional: "Priority email + chat + phone", enterprise: "Dedicated account manager" },
-            { feature: "Uptime SLA", free: "-", starter: "99.5%", professional: "99.9%", enterprise: "99.99%" },
-            { feature: "SSO (SAML / OAuth)", free: false, starter: false, professional: true, enterprise: true },
-            { feature: "Two-factor authentication", free: true, starter: true, professional: true, enterprise: true },
-            { feature: "IP allowlisting", free: false, starter: false, professional: false, enterprise: true },
-            { feature: "Custom data residency", free: false, starter: false, professional: false, enterprise: true },
-        ],
-    },
+    {name: "Platform access and limits", icon: Database, rows: [
+        comparisonRow("Overview and Admin · always free", [true,true,true,true]),
+        comparisonRow("Included user seats", comparisonBundles.map(b => b.seats)),
+        comparisonRow("Purchased panels", comparisonBundles.map(b => b.modules.length)),
+        comparisonRow("Successful writes / panel / UTC month", [catalog.tier_limits.free.writes_per_month, ...comparisonBundles.slice(1).map(b => catalog.tier_limits[b.tier as TierType].writes_per_month)]),
+        comparisonRow("AI credits / month · measured, no deductions", comparisonBundles.map(b => b.credits)),
+        comparisonRow("Extra seats / month", comparisonBundles.map(b => `R${b.extra_seat_price}`)),
+    ]},
+    {name: "Features enforced by panel tier", icon: Zap, rows: catalog.feature_gates.map(rule => comparisonRow(rule.name,
+        comparisonBundles.map(b => (b.modules as string[]).includes(rule.module) && tierRank[b.tier] >= tierRank[rule.tier])))},
 ]
 
 // ───────────────────── Email Volume Pricing (UniOne-based, 60% margin) ─────────────────────
@@ -405,14 +292,14 @@ const individualPlans = {
         name: "Starter",
         description: "Essential tools for new ISPs getting started.",
         basePrice: 0,
-        features: ["Up to 100 customers", "Basic CRM", "Email support", "1 user seat"],
-        limitations: ["Limited reporting", "No API access"]
+        features: ["CRM panel", "Overview and Admin always free", "100 successful CRM writes per UTC month", "1 included seat"],
+        limitations: ["Advanced panel features require a higher tier", "Provider delivery capacity is separate"]
     },
     growth: {
         name: "Growth",
-        description: "Everything you need to scale your first 1,000 customers.",
+        description: "CRM and sales for a small team.",
         basePrice: catalog.bundles.growth.monthly_price,
-        features: ["Up to 1,000 customers", "Full CRM + Sales Hub", "Phone support", "3 user seats", "Basic reporting", "API access"],
+        features: ["CRM and Sales panels at Starter tier", "3 included seats", "1,000 successful writes per panel per UTC month", "500 measured AI credits per month"],
         limitations: []
     }
 }
@@ -450,7 +337,7 @@ export default function PricingPage() {
 
     const getPrice = useCallback((module: typeof modules[0], tier: TierType) => {
         const price = catalog.modules.find(row => row.id === canonicalModule(module.id))!.prices[tier]
-        return billingPeriod === "annually" ? Number((price * (1 - catalog.annual_discount_percent / 100)).toFixed(2)) : price
+        return billingPeriod === "annually" ? discountedPrice(price,true) : price
     }, [billingPeriod])
 
     const selectedProducts = useMemo(() => {
@@ -519,7 +406,7 @@ export default function PricingPage() {
                                                         </div>
                                                         <span className="text-sm font-medium capitalize">{tier}</span>
                                                     </div>
-                                                    <div className="text-lg font-bold">R{price}<span className="text-sm font-normal text-muted-foreground">/month</span></div>
+                                                    <div className="text-lg font-bold">R{price}<span className="text-sm font-normal text-muted-foreground">/month excl. VAT</span></div>
                                                 </button>
                                             )
                                         })}
@@ -574,7 +461,7 @@ export default function PricingPage() {
                                                         <div className="text-primary capitalize">{prod.selectedTier}</div>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <span>R{getPrice(prod, prod.selectedTier)}/mo</span>
+                                                        <span>R{getPrice(prod, prod.selectedTier)}/mo excl. VAT</span>
                                                         <button
                                                             onClick={() => removeModule(prod.id)}
                                                             className="text-muted-foreground hover:text-foreground"
@@ -594,8 +481,8 @@ export default function PricingPage() {
                                             <span className="font-semibold">Estimated Total</span>
                                             <div className="text-right">
                                                 <div className="text-2xl font-bold">R{totalMonthly.toLocaleString("en-GB",{maximumFractionDigits:2})}</div>
-                                                <div className="text-xs text-muted-foreground">/month</div>
-                                                {billingPeriod === "annually" && <p className="mt-2 text-xs text-muted-foreground">R{Number((totalMonthly*12).toFixed(2)).toLocaleString("en-GB")} paid yearly, excluding VAT</p>}
+                                                <div className="text-xs text-muted-foreground">/month excl. VAT</div>
+                                                {billingPeriod === "annually" && <p className="mt-2 text-xs text-muted-foreground">R{Number((totalMonthly*12).toFixed(2)).toLocaleString("en-GB")} paid yearly</p>}
                                             </div>
                                         </div>
                                         <Button disabled={!selectedProducts.length} onClick={() => startCheckout({ modules: Object.fromEntries(selectedProducts.map(p => [canonicalModule(p.id), p.selectedTier])) as PricingSelection["modules"], period: billingPeriod, seats: 1 })} className="w-full bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all">
@@ -617,7 +504,7 @@ export default function PricingPage() {
                         <div className="text-center mb-12">
                             <h1 className="text-4xl font-bold mb-4">Usage & Limits</h1>
                             <p className="text-muted-foreground max-w-2xl mx-auto">
-                                Compare planned capabilities across modules. Purchased panel access and seats are confirmed in checkout; detailed contact and delivery capacity requires a separate quote.
+                                Compare purchased access and enforced panel limits. Overview and Admin are always free. Provider delivery, hosting and storage capacity are quoted separately; AI credits remain measured without deductions.
                             </p>
                         </div>
 
@@ -680,12 +567,12 @@ export default function PricingPage() {
                         </div>
 
                         {/* Airtable-style Feature Comparison Grid */}
-                        <div className="border border-border rounded-2xl bg-card overflow-hidden">
+                        <div className="border border-border rounded-2xl bg-card overflow-x-auto [&>div]:min-w-[680px]">
                             {/* Table Header */}
-                            <div className="grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border bg-muted/50 sticky top-16 z-10">
+                            <div className="grid grid-cols-[minmax(240px,1fr)_100px_100px_120px_120px] gap-0 border-b border-border bg-muted/50">
                                 <div className="px-6 py-4 text-sm font-semibold">Feature</div>
-                                <div className="px-3 py-4 text-sm font-semibold text-center">Free</div>
-                                <div className="px-3 py-4 text-sm font-semibold text-center">Starter</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center">Starter · Free</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center">Growth</div>
                                 <div className="px-3 py-4 text-sm font-semibold text-center text-indigo-400">Professional</div>
                                 <div className="px-3 py-4 text-sm font-semibold text-center text-violet-400">Enterprise</div>
                             </div>
@@ -697,7 +584,7 @@ export default function PricingPage() {
                                         {/* Category Header */}
                                         <button
                                             onClick={() => toggleCategory(category.name)}
-                                            className="w-full grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
+                                            className="w-full grid grid-cols-[minmax(240px,1fr)_100px_100px_120px_120px] gap-0 border-b border-border bg-muted/30 hover:bg-muted/50 transition-colors"
                                         >
                                             <div className="px-6 py-3 flex items-center gap-3 text-left">
                                                 <category.icon className="h-4 w-4 text-primary" />
@@ -712,7 +599,7 @@ export default function PricingPage() {
                                             <div
                                                 key={row.feature}
                                                 className={cn(
-                                                    "grid grid-cols-[1fr,100px,100px,120px,120px] gap-0 border-b border-border/50 hover:bg-muted/20 transition-colors",
+                                                    "grid grid-cols-[minmax(240px,1fr)_100px_100px_120px_120px] gap-0 border-b border-border/50 hover:bg-muted/20 transition-colors",
                                                     rowIdx % 2 === 0 ? "bg-transparent" : "bg-muted/10"
                                                 )}
                                             >
@@ -791,9 +678,9 @@ export default function PricingPage() {
                                     <div className="mb-6">
                                         <div className="flex items-baseline gap-1">
                                             <span className="text-4xl font-bold">
-                                                {plan.basePrice === 0 ? "Free" : `R${(billingPeriod === "annually" ? Number((plan.basePrice * (1 - catalog.annual_discount_percent / 100)).toFixed(2)) : plan.basePrice).toLocaleString("en-GB")}`}
+                                                {plan.basePrice === 0 ? "Free" : `R${(billingPeriod === "annually" ? discountedPrice(plan.basePrice,true) : plan.basePrice).toLocaleString("en-GB")}`}
                                             </span>
-                                            {plan.basePrice > 0 && <span className="text-muted-foreground">/mo</span>}
+                                            {plan.basePrice > 0 && <span className="text-muted-foreground">/mo excl. VAT</span>}
                                         </div>
                                     </div>
 
@@ -848,7 +735,7 @@ export default function PricingPage() {
                         <div className="grid md:grid-cols-2 gap-8 max-w-4xl">
                             {(["professional", "enterprise"] as const).map(tier => {
                                 const price = catalog.modules.find(row => row.id === canonicalModule(product.id))!.prices[tier]
-                                const annualPrice = Number((price * (1 - catalog.annual_discount_percent / 100)).toFixed(2))
+                                const annualPrice = discountedPrice(price,true)
                                 return (
                                     <div key={tier} className="border border-border rounded-2xl bg-card p-8">
                                         <h2 className="text-xl font-bold mb-2 capitalize">{product.name.replace(" Hub", "")} {tier}</h2>
@@ -864,12 +751,12 @@ export default function PricingPage() {
                                                 <span className="text-3xl font-bold">
                                                     R{billingPeriod === "annually" ? annualPrice : price}
                                                 </span>
-                                                <span className="text-muted-foreground">/mo</span>
+                                                <span className="text-muted-foreground">/mo excl. VAT</span>
                                             </div>
                                         </div>
 
                                         <p className="text-sm text-muted-foreground mb-6">
-                                            Includes 1 Core Seat. Additional seats at R{tier === "professional" ? "45" : "75"}/mo
+                                            Includes 1 seat. Additional modular seats at R45/month before annual discounts
                                         </p>
 
                                         <div className="flex gap-2 mb-6">
