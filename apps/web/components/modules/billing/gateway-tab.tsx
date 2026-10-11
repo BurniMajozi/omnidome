@@ -266,7 +266,7 @@ function SummaryBody({ s }: { s: GatewaySummary }) {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Tile k={`Processed (${s.period})`} v={fmtMoney(s.volume_zar)} />
         <Tile k="Card payments" v={String(s.charges)} />
-        <Tile k="Commission this month" v={fmtMoney(s.commission_zar)} />
+        <Tile k="Commission this month (excl. VAT)" v={fmtMoney(s.commission_zar)} />
         <Tile k="Current rate" v={pct(s.current_rate_percent)} />
       </div>
       <div className="space-y-1">
@@ -279,6 +279,7 @@ function SummaryBody({ s }: { s: GatewaySummary }) {
             : "You are on the lowest rate band."}
         </p>
       </div>
+      <p className="text-xs text-muted-foreground">VAT (15%) is added to OmniDome&apos;s fees.</p>
       {tiers.length === 0 ? (
         <NoDataYet message="No commission bands are configured." />
       ) : (
@@ -287,7 +288,7 @@ function SummaryBody({ s }: { s: GatewaySummary }) {
             <thead className="bg-secondary/40 text-left text-xs text-muted-foreground">
               <tr>
                 <th className="px-3 py-2">Monthly volume</th>
-                <th className="px-3 py-2 text-right">Rate</th>
+                <th className="px-3 py-2 text-right">Rate (excl. VAT)</th>
               </tr>
             </thead>
             <tbody>
@@ -346,8 +347,10 @@ function FeeCalculator() {
       {result?.state === "loading" && <p className="text-xs text-muted-foreground">Calculating…</p>}
       {result && result.state !== "loading" && result.state !== "ready" && <NotConnected loadable={result} service="Billing" className="p-3" />}
       {result?.state === "ready" && (
-        <div className="grid grid-cols-3 gap-2">
-          <Tile k="Commission" v={fmtMoney(result.data.commission_zar)} />
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+          <Tile k="OmniDome fee (excl. VAT)" v={fmtMoney(result.data.commission_zar)} />
+          <Tile k="VAT 15%" v={fmtMoney(result.data.commission_vat_zar ?? 0)} />
+          <Tile k="Total fee" v={fmtMoney(result.data.commission_total_zar ?? result.data.commission_zar)} />
           <Tile k="You receive" v={fmtMoney(result.data.tenant_receives_zar)} />
           <Tile k="Effective rate" v={pct(result.data.effective_rate_percent)} />
         </div>

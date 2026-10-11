@@ -29,7 +29,7 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
         <Button variant={annual ? "ghost" : "secondary"} aria-pressed={!annual} onClick={() => onPeriodChange("monthly")}>Pay monthly</Button>
         <Button variant={annual ? "secondary" : "ghost"} aria-pressed={annual} onClick={() => onPeriodChange("annually")}>Pay annually · save {catalog.annual_discount_percent}%</Button>
       </div>
-        <p className="text-sm text-muted-foreground">{tax.vat_registered ? tax.prices_include_vat ? "Catalogue prices include VAT." : "Catalogue prices exclude VAT; it is added at checkout." : "The platform is not VAT registered and charges no VAT."} Annual plans are paid upfront.</p>
+        <p className="text-sm text-muted-foreground">{tax.vat_registered ? tax.prices_include_vat ? "Catalogue prices include VAT." : "Catalogue prices exclude VAT; 15% VAT is added at checkout and shown in your invoice summation." : "The platform is not VAT registered and charges no VAT."} Annual plans are paid upfront.</p>
     </div>
     <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
       {(["starter", "growth", "professional", "enterprise"] as const).map(id => {

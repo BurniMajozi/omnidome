@@ -237,13 +237,19 @@ export interface GatewaySummary {
   volume_zar: number
   charges: number
   commission_zar: number
+  commission_vat_zar?: number
+  fees_exclude_vat?: boolean
   current_rate_percent: number
   next_threshold_zar: number | null
   remaining_in_band_zar: number | null
   tiers: GatewayTier[]
 }
 export interface CommissionPreview {
+  /** Excluding VAT. */
   commission_zar: number
+  commission_vat_zar?: number
+  commission_total_zar?: number
+  fees_exclude_vat?: boolean
   tenant_receives_zar: number
   effective_rate_percent: number
 }
@@ -409,7 +415,11 @@ export interface PayoutWallet {
 }
 export interface PayoutQuote {
   amount_zar: number
+  /** Excluding VAT. */
   fee_zar: number
+  vat_zar?: number
+  fee_total_zar?: number
+  fees_exclude_vat?: boolean
   required_zar: number
   effective_rate_percent: number
   balance_zar: number
@@ -458,7 +468,7 @@ export interface GatewayStatement {
   refunds: { count: number; total_zar: number }
   chargebacks: { count: number; total_zar: number }
   payouts: { count: number; total_zar: number; fees_zar: number; fees_vat_zar?: number }
-  fees_include_vat?: boolean
+  fees_exclude_vat?: boolean
   payout_wallet_zar: number
   open_liabilities_zar: number
   settlement_checks: { verified: number; total: number }

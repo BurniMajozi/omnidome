@@ -35,9 +35,9 @@ const KIND_LABEL: Record<string, string> = {
   funding: "Card funding",
   manual_funding: "EFT received",
   payout: "Payout",
-  payout_fee: "Payout fee",
+  payout_fee: "Payout fee (incl. VAT)",
   reversal: "Returned (transfer failed)",
-  fee_reversal: "Fee returned",
+  fee_reversal: "Fee + VAT returned",
   liability_recovery: "Refund/chargeback recovery",
 }
 const CREDITS = new Set(["funding", "manual_funding", "reversal", "fee_reversal"])
@@ -228,8 +228,8 @@ function QuoteCard() {
         {quote && (
           <Note tone={quote.shortfall_zar > 0 ? "error" : "success"}>
             {quote.shortfall_zar > 0
-              ? `You need ${fmtMoney(quote.required_zar)} in the wallet (${fmtMoney(quote.fee_zar)} fee); shortfall ${fmtMoney(quote.shortfall_zar)}.`
-              : `Covered. You need ${fmtMoney(quote.required_zar)} in the wallet (${fmtMoney(quote.fee_zar)} fee) and you have ${fmtMoney(quote.balance_zar)}.`}
+              ? `Needed in the wallet: ${fmtMoney(quote.required_zar)} (fee excl. VAT ${fmtMoney(quote.fee_zar)}, VAT ${fmtMoney(quote.vat_zar ?? 0)}); shortfall ${fmtMoney(quote.shortfall_zar)}.`
+              : `Covered. Needed in the wallet: ${fmtMoney(quote.required_zar)} (fee excl. VAT ${fmtMoney(quote.fee_zar)}, VAT ${fmtMoney(quote.vat_zar ?? 0)}) and you have ${fmtMoney(quote.balance_zar)}.`}
           </Note>
         )}
       </CardContent>

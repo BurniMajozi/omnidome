@@ -1,4 +1,5 @@
 "use client"
+import { QuoteSummation } from "@/components/pricing/quote-summation"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { TenantUsageCard } from "@/components/pricing/tenant-usage"
@@ -55,7 +56,7 @@ export function PricingSelector({ value, onChange, disabled = false, tenant }: {
     </div>
     {quote?.proration && <div className="rounded border p-3 text-sm"><p>Unused prepaid time credit: R{quote.proration.unused_net_credit} before VAT.</p><p>Credit applied: R{quote.proration.credit_applied}. Remaining account credit: R{quote.proration.credit_remaining}.</p><p>The new cycle begins when settled. Quotes expire in 15 minutes. Credits stay on the account; no automatic refund is issued.</p></div>}
     <div aria-live="polite" className="rounded bg-secondary p-3 text-sm">
-      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_display_zar || quote.monthly_net_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month{quote.vat_registered ? quote.prices_include_vat ? " including VAT" : " excluding VAT" : " · no VAT charged"}</p><p className="font-semibold mt-1">{quote.proration ? "Due for this plan change" : value.period === "annually" ? "Due annually" : "Due monthly"}: R{Number(quote.total_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}</p><p className="text-xs text-muted-foreground">{quote.vat_registered ? `VAT: R${quote.vat_zar}.` : "Supplier is not VAT registered."} {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
+      {loading ? "Calculating your invoice…" : error ? <p className="text-destructive">{error}</p> : quote && <><p>{quote.name} · {quote.seats} seats · {quote.entitlements.length} panels</p><p>R{Number(quote.monthly_display_zar || quote.monthly_net_zar).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month{quote.vat_registered ? quote.prices_include_vat ? " including VAT" : " excluding VAT" : " · no VAT charged"}</p><p className="font-semibold mt-1">{quote.proration ? "Due for this plan change" : value.period === "annually" ? "Due annually" : "Due monthly"}</p><QuoteSummation quote={quote} /><p className="text-xs text-muted-foreground">{!quote.vat_registered && "Supplier is not VAT registered."} {value.period === "annually" && "The invoice covers 12 months upfront."}</p></>}
     </div>
   </fieldset>
 }
