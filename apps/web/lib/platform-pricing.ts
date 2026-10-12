@@ -5,7 +5,7 @@ export function discountedPrice(price:number,annual:boolean) {
   const cents = Number(whole)*100+Number(fraction.padEnd(2,"0").slice(0,2))
   return Math.floor((cents*(annual ? 100-catalog.annual_discount_percent : 100)+50)/100)/100
 }
-export type PricingTier = "starter" | "professional" | "enterprise"
+export type PricingTier = "free" | "starter" | "professional" | "enterprise"
 export type UsagePolicy = {version:number;mode:string;status:string;monthly_credits:number;rates:Record<string,number>;token_block:number;hosting:Record<string,number|null>;communications:string;legacy?:boolean}
 export type CreditPolicy = {enabled:boolean;price_per_credit_zar:string|null;minimum_zar?:string;operation_credit_limit:number}
 export type UsageLog = {id:string;panel:string;kind:string;credits:number;measured_credits?:number;reserved_credits?:number;status:string;started_at:string;completed_at?:string|null}
@@ -29,7 +29,7 @@ export function bundleSelection(id: string, period: "monthly" | "annually"): Pri
 }
 export function selectedPanels(selection: PricingSelection): Record<string, PricingTier> {
   const bundle = catalog.bundles[selection.bundle as keyof typeof catalog.bundles]
-  return { ...(bundle ? Object.fromEntries(bundle.modules.map(m => [m, bundle.tier as PricingTier])) : {}), ...selection.modules }
+  return { ...(bundle ? Object.fromEntries(catalog.free_modules.map(m => [m, "free" as PricingTier])) : {}), ...(bundle ? Object.fromEntries(bundle.modules.map(m => [m, bundle.tier as PricingTier])) : {}), ...selection.modules }
 }
 export function startCheckout(selection: PricingSelection) {
   localStorage.setItem("omnidome.pricing.selection", JSON.stringify(selection))

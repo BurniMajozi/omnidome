@@ -166,7 +166,8 @@ async def evaluate_tool_call(
         )
 
     provider, api_key, endpoint = _get_credentials()
-    if not settings.jev_gate_enabled or not api_key:
+    from services.common.llm_routing import free_only
+    if not settings.jev_gate_enabled or not api_key or await free_only(tenant_id):
         fallback_action = "require_approval" if static_requires_approval else "auto_approve"
         return JevGateVerdict(
             action=fallback_action,
@@ -434,7 +435,8 @@ async def triage_inbound_inquiry(
     """Unified inbound triage: combines Choice (agent routing), Score (frustration & churn risk),
     and Noul (SLA escalation & direct lookup) into a single Jev System One evaluation."""
     provider, api_key, endpoint = _get_credentials()
-    if not settings.jev_gate_enabled or not api_key:
+    from services.common.llm_routing import free_only
+    if not settings.jev_gate_enabled or not api_key or await free_only():
         from services.agent_orchestrator.routes.agents import _classify_agent
         static_choice = _classify_agent(message)
         return JevTriageDecision(
@@ -612,12 +614,18 @@ async def verify_agent_response(
     tool_records: Optional[List[Dict[str, Any]]] = None,
     agent_type: str = "assistant",
     evidence: Optional[List[Dict[str, Any]]] = None,
+    tenant_id: Optional[str] = None,
 ) -> JevVerificationVerdict:
     """Verify that an agent's drafted answer actually answers the customer, is strictly
     grounded in retrieved data (tool results AND the injected knowledge/memory `evidence`) without
     hallucination, and adheres to ISP safety policy."""
     from services.agent_orchestrator import jev_retrieval
     provider, api_key, endpoint = _get_credentials()
+    from services.common.llm_routing import free_only
+    if await free_only(tenant_id):
+        return JevVerificationVerdict(passed=False, action="flag_for_review", answers_inquiry=0.0,
+            grounded_in_facts=0.0, policy_compliant=0.0, reason="Paid verifier is excluded by this model route; human review required.",
+            critique=None, evaluated_by_jev=False)
     if not jev_retrieval.egress_allowed():
         return JevVerificationVerdict(
             passed=True, action="accept", answers_inquiry=1.0, grounded_in_facts=1.0, policy_compliant=1.0,

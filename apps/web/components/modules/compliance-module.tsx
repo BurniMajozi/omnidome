@@ -2365,7 +2365,7 @@ export default function ComplianceModule() {
                       />
                     </div>
                     <div className="space-y-1">
-                      <label className="text-xs font-medium text-foreground">Site / Hub Location</label>
+                      <label className="text-xs font-medium text-foreground">Site location</label>
                       <Input
                         placeholder="e.g. Durbanville Substation"
                         value={incidentForm.location || ""}

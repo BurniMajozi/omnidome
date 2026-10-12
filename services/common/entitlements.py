@@ -66,6 +66,8 @@ class EntitlementGuard:
         # pays for an exception + retry per request.
         try:
             async with session_scope() as session:
+                from services.common.platform_trials import expire
+                await expire(session, tenant_id)
                 result = await session.execute(
                     text(
                         """
@@ -167,6 +169,13 @@ class EntitlementGuard:
 
         if ctx.is_platform_admin:
             return await call_next(request)
+
+        if self.module_name not in {"overview", "admin"}:
+            from services.common.platform_trials import expire, seat_allowed
+            async with session_scope() as session:
+                await expire(session, ctx.tenant_id)
+                if not await seat_allowed(session, ctx.tenant_id, ctx.user_id):
+                    return Response("Your owner must select your Free seat or add paid seats in Admin", status_code=403)
 
         state = await self._check_tenant_module(str(ctx.tenant_id))
         if not state.enabled:

@@ -18,6 +18,7 @@ from services.agent_orchestrator.control_plane import (
 )
 from services.agent_orchestrator.models import AgentApproval, AgentJob, AgentTenantBudget, RegisteredAgent
 from services.agent_orchestrator import memory_capture
+from services.agent_orchestrator.job_conversations import root_job, thread_jobs, full_turn
 from services.agent_orchestrator.routes.agents import _may_manage_agents
 
 router = APIRouter(tags=["agent-work"])
@@ -48,6 +49,11 @@ class ReviseJob(BaseModel):
 class RetryJob(ReviseJob):
     max_cost_usd: float = Field(default=2, gt=0, le=100)
 
+class FollowUp(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    request_key: uuid.UUID
+    max_cost_usd: float = Field(default=2, gt=0, le=100)
+
 
 class BudgetUpdate(BaseModel):
     monthly_budget_usd: float = Field(ge=0, le=10000)
@@ -64,6 +70,7 @@ async def get_tenant_budget(ctx: AuthContext = Depends(require_operator)):
             AgentTenantBudget.tenant_id == ctx.tenant_id,
         ))).scalar_one_or_none()
         return {"monthly_budget_usd": tenant_budget_limit(row),
+                "can_edit": ctx.is_platform_admin,
                 "daily_budget_usd": float(TENANT_DAILY_BUDGET_USD),
                 "month_spend_usd": await monthly_spend(session, ctx.tenant_id),
                 "day_spend_usd": await daily_spend(session, ctx.tenant_id)}
@@ -188,11 +195,11 @@ async def list_jobs(ctx: AuthContext = Depends(require_operator)):
     async with session_scope(ctx.tenant_id) as session:
         # Summaries only: the heavy columns (checkpoint, result, history) are not even read.
         rows = (await session.execute(
-            select(AgentJob, AgentJob.checkpoint["parent_job_id"].astext)
+            select(AgentJob, AgentJob.checkpoint["parent_job_id"].astext, AgentJob.checkpoint["thread_id"].astext)
             .options(defer(AgentJob.checkpoint), defer(AgentJob.result), defer(AgentJob.iteration_history))
             .where(AgentJob.tenant_id == ctx.tenant_id)
             .order_by(AgentJob.created_at.desc(), AgentJob.id.desc()).limit(100))).all()
-        return [job_summary(row, parent) for row, parent in rows]
+        return [job_summary(row, parent, thread) for row, parent, thread in rows]
 
 
 @router.get("/jobs/{job_id}")
@@ -203,7 +210,74 @@ async def get_job(job_id: uuid.UUID, ctx: AuthContext = Depends(require_operator
         ))).scalar_one_or_none()
         if row is None:
             raise HTTPException(status_code=404, detail="Job not found")
+        return await full_turn(session, row)
+
+
+@router.get("/jobs/{job_id}/thread")
+async def get_thread(job_id: uuid.UUID, ctx: AuthContext = Depends(require_operator)):
+    async with session_scope(ctx.tenant_id) as session:
+        root = await root_job(session, job_id, ctx.tenant_id)
+        rows = await thread_jobs(session, root.id, ctx.tenant_id)
+        return {"id": str(root.id), "title": root.goal_label or root.objective[:160],
+                "turns": [await full_turn(session, row) for row in rows], "limit": 100}
+
+
+@router.post("/jobs/{job_id}/messages", status_code=201)
+async def follow_up(job_id: uuid.UUID, body: FollowUp, ctx: AuthContext = Depends(require_operator)):
+    if not body.message.strip():
+        raise HTTPException(422, "Write a follow-up message")
+    async with session_scope(ctx.tenant_id) as session:
+        root = await root_job(session, job_id, ctx.tenant_id)
+        # Lock the thread root, so concurrent follow-ups become a serial conversation.
+        await session.execute(select(AgentJob.id).where(AgentJob.id == root.id).with_for_update())
+        rows = await thread_jobs(session, root.id, ctx.tenant_id)
+        for row in rows:
+            if (row.checkpoint or {}).get("message_key") == str(body.request_key):
+                if row.objective != body.message.strip():
+                    raise HTTPException(409, "This request key belongs to a different message")
+                return job_dict(row)
+        if len(rows) >= 100:
+            raise HTTPException(409, "This conversation is full. Start a new task.")
+        reason = await tenant_cap_reason(session, ctx.tenant_id)
+        if reason: raise HTTPException(409, reason)
+        prior = rows[-1]
+        if prior.employee_id:
+            registered = (await session.execute(select(RegisteredAgent).where(
+                RegisteredAgent.tenant_id == ctx.tenant_id, RegisteredAgent.employee_id == prior.employee_id,
+                RegisteredAgent.status == "registered"))).scalar_one_or_none()
+            if not registered:
+                raise HTTPException(409, "Agent is no longer registered")
+            if await monthly_spend(session, ctx.tenant_id, prior.agent_type) >= float(registered.monthly_budget_usd):
+                raise HTTPException(409, "Monthly agent budget reached")
+        row = AgentJob(tenant_id=ctx.tenant_id, agent_type=prior.agent_type, employee_id=prior.employee_id,
+            objective=body.message.strip(), goal_label=root.goal_label,
+            max_cost_usd=Decimal(str(body.max_cost_usd)), max_iterations=min(prior.max_iterations, 3),
+            max_steps=prior.max_steps, status="queued",
+            checkpoint={"parent_job_id": str(prior.id), "thread_id": str(root.id), "follow_up": True,
+                        "message_key": str(body.request_key), "actor_id": str(ctx.user_id),
+                        "actor_roles": list(ctx.roles), "actor_permissions": list(ctx.permissions)})
+        session.add(row); await session.flush()
         return job_dict(row)
+
+
+@router.get("/budgets/credits")
+async def billing_credits(ctx: AuthContext = Depends(require_operator)):
+    # Reuse billing's authenticated aggregate view rather than invent a second balance.
+    import os
+    import httpx
+    from services.common.internal_auth import sign_headers
+    path = f"/tenants/{ctx.tenant_id}/usage"
+    identity = {"x-tenant-id": str(ctx.tenant_id), "x-user-id": str(ctx.user_id),
+                "x-roles": ",".join(ctx.roles), "x-permissions": ",".join(ctx.permissions)}
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            response = await client.get(os.getenv("ADMIN_SERVICE_URL", "http://admin:8013") + path,
+                headers={**identity, **sign_headers(identity, "GET", path)})
+        if response.status_code != 200:
+            raise HTTPException(response.status_code, "Billing credit balance unavailable for this member")
+        return response.json()
+    except httpx.HTTPError:
+        raise HTTPException(503, "Billing service is unavailable; no balance has been estimated")
 
 
 @router.post("/jobs/{job_id}/pause")

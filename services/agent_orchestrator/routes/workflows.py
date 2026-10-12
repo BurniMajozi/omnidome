@@ -17,11 +17,29 @@ from sqlalchemy import select
 from services.common.auth import AuthContext, get_auth_context
 from services.common.db import session_scope
 from services.agent_orchestrator.models import Workflow, WorkflowRun, RunStep
-from services.agent_orchestrator.workflow_engine import run_workflow
+from services.agent_orchestrator.workflow_engine import run_workflow,resume_workflow
 from services.agent_orchestrator.event_triggers import install_lead_warming, lead_warming_status
 from services.common.event_bus import normalise_event_type
+from services.agent_orchestrator.workflow_designer import DesignRequest, propose
+from services.agent_orchestrator.workflow_catalog import EVENT_LABELS, NODE_TYPES, activation_errors
 
 router = APIRouter()
+
+def validate_activation(workflow):
+    if workflow.status == "active":
+        errors = activation_errors(workflow.definition, workflow.trigger_event)
+        if errors: raise HTTPException(422, "; ".join(errors))
+
+@router.get("/capabilities")
+async def workflow_capabilities(ctx: AuthContext = Depends(get_auth_context)):
+    return {"events":[{"type":key,"label":label,"publisher":key.split('.')[0]} for key,label in EVENT_LABELS.items()],
+            "node_types":sorted(NODE_TYPES),"parallel":False,"loops":False,"timezone":"UTC"}
+
+def require_editor(ctx: AuthContext = Depends(get_auth_context)):
+    from services.agent_orchestrator.identity import is_admin
+    if not is_admin(ctx):
+        raise HTTPException(403, "Tenant admin role required to edit workflows")
+    return ctx
 
 
 class WorkflowCreate(BaseModel):
@@ -101,12 +119,13 @@ async def list_workflows(ctx: AuthContext = Depends(get_auth_context)):
 
 
 @router.post("", status_code=201)
-async def create_workflow(body: WorkflowCreate, ctx: AuthContext = Depends(get_auth_context)):
+async def create_workflow(body: WorkflowCreate, ctx: AuthContext = Depends(require_editor)):
     async with session_scope() as s:
         w = Workflow(tenant_id=ctx.tenant_id, name=body.name, description=body.description,
                      definition=body.definition or {}, status=body.status,
                      trigger_event=_trigger_event(body.trigger_event))
         _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
+        validate_activation(w)
         s.add(w)
         await s.flush()
         return _wf_json(w)
@@ -125,6 +144,44 @@ async def install_lead_warming_templates(ctx: AuthContext = Depends(get_auth_con
     return {"data": await lead_warming_status(ctx.tenant_id)}
 
 
+@router.get("/templates/billing")
+async def billing_templates(ctx: AuthContext = Depends(get_auth_context)):
+    from services.agent_orchestrator.billing_workflows import status
+    return {"data":await status(ctx.tenant_id)}
+
+
+@router.post("/templates/billing")
+async def install_billing_templates(ctx: AuthContext = Depends(get_auth_context)):
+    from services.agent_orchestrator.routes.approvals import _require_approver
+    from services.agent_orchestrator.billing_workflows import install,status
+    _require_approver(ctx)
+    await install(ctx.tenant_id)
+    return {"data":await status(ctx.tenant_id)}
+
+
+@router.post("/design")
+async def design_workflow(body: DesignRequest,
+                          ctx: AuthContext = Depends(require_editor)):
+    from services.agent_orchestrator.workflow_designer import limiter
+    limiter.check_key(f"{ctx.tenant_id}:{ctx.user_id}")
+    from services.agent_orchestrator import workflow_design_sessions as sessions
+    if body.session_id:
+        saved = await sessions.read(ctx, body.session_id)
+        body = body.model_copy(update={"history": (saved["history"] or [])[-12:]})
+    result = await propose(body, ctx)
+    return await sessions.append(ctx, body.session_id, body.prompt, result)
+
+@router.get("/design/sessions")
+async def design_sessions(ctx: AuthContext = Depends(require_editor)):
+    from services.agent_orchestrator.workflow_design_sessions import listing
+    return {"data": await listing(ctx)}
+
+@router.get("/design/sessions/{session_id}")
+async def design_session(session_id: uuid.UUID, ctx: AuthContext = Depends(require_editor)):
+    from services.agent_orchestrator.workflow_design_sessions import read
+    return await read(ctx, session_id)
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(workflow_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
     async with session_scope() as s:
@@ -136,7 +193,7 @@ async def get_workflow(workflow_id: uuid.UUID, ctx: AuthContext = Depends(get_au
 
 
 @router.put("/{workflow_id}")
-async def update_workflow(workflow_id: uuid.UUID, body: WorkflowUpdate, ctx: AuthContext = Depends(get_auth_context)):
+async def update_workflow(workflow_id: uuid.UUID, body: WorkflowUpdate, ctx: AuthContext = Depends(require_editor)):
     async with session_scope() as s:
         w = (await s.execute(select(Workflow).where(
             Workflow.id == workflow_id, Workflow.tenant_id == ctx.tenant_id))).scalar_one_or_none()
@@ -153,12 +210,13 @@ async def update_workflow(workflow_id: uuid.UUID, body: WorkflowUpdate, ctx: Aut
         if body.trigger_event is not None:
             w.trigger_event = _trigger_event(body.trigger_event)
         _apply_schedule(w, body.schedule_cron, body.schedule_enabled)
+        validate_activation(w)
         await s.flush()
         return _wf_json(w)
 
 
 @router.delete("/{workflow_id}", status_code=204)
-async def delete_workflow(workflow_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
+async def delete_workflow(workflow_id: uuid.UUID, ctx: AuthContext = Depends(require_editor)):
     async with session_scope() as s:
         w = (await s.execute(select(Workflow).where(
             Workflow.id == workflow_id, Workflow.tenant_id == ctx.tenant_id))).scalar_one_or_none()
@@ -227,3 +285,12 @@ async def get_run(run_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context
                 "output": st.output, "error": st.error,
             } for st in steps],
         }
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume(run_id: uuid.UUID,ctx: AuthContext = Depends(get_auth_context)):
+    from services.agent_orchestrator.routes.approvals import _require_approver
+    _require_approver(ctx)
+    result=await resume_workflow(run_id,str(ctx.tenant_id))
+    if result.get("error")=="run not found": raise HTTPException(404,"run not found")
+    return result

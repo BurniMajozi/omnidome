@@ -358,6 +358,7 @@ class Agent:
                     tool_records=tool_call_log,
                     agent_type=self.agent_type,
                     evidence=self.context.get("_grounding_evidence"),
+                    tenant_id=tenant,
                 ))
                 verif_data = v.to_dict()
             if not is_mock_llm and not unavailable and content_str.strip():
@@ -381,6 +382,7 @@ class Agent:
                 tenant_id=tenant,
                 channel=self.channel,
                 requested_model=self.context.get("requested_model"),
+                **({"response_format": self.context["response_format"]} if self.context.get("response_format") else {}),
                 system_extra="\n".join(filter(None, [self.skills_prompt, self.context.get("roster_mandate", ""),
                                                     self.context.get("run_guidance", ""),
                                                     self.context.get("architecture_briefing", ""),
@@ -535,6 +537,8 @@ class Agent:
             msg = ("This registered agent is limited to read-only tools."
                    if self.context.get("draft_only") else f"Tool {tool_name} is not permitted for this agent.")
             return tool_name, {}, {"success": False, "refused": True, "error": msg}
+        if tool_name=="workflows.run" and self.context.get("workflow_id"):
+            return tool_name, {}, {"success":False,"refused":True,"error":"A workflow step cannot recursively launch another workflow"}
         # Spec A1: repaired arguments only. A call whose arguments could not be
         # repaired or were cut off is refused (never run with {}); the error goes
         # back to the model so it re-issues the call.
@@ -562,11 +566,12 @@ class Agent:
             return tool_name, tool_args, await self._consult_specialist(tool_args)
 
         if tool_name == "ask_user":
-            from services.agent_orchestrator.ask_user import ask
+            from services.agent_orchestrator.ask_user import ask, validation_error
+            from pydantic import ValidationError
             try:
                 return tool_name, tool_args, await ask(tool_args)
-            except ValueError:
-                return tool_name, tool_args, {"success": False, "error": "Use 1–3 questions with 2–4 unique options each."}
+            except ValidationError as error:
+                return tool_name, tool_args, {"success": False, "error": validation_error(error)}
 
         if tool_name in ("openrouter:subagent", "openrouter_subagent"):
             return tool_name, tool_args, {"success": True, "status": "ok", "outcome": "Server-side delegation completed."}
@@ -619,17 +624,20 @@ class Agent:
             run_id = self.context.get("run_id")
             user_id = str(self.context.get("user_id", ""))
             call_id = tc.get("id", "") or f"call_{uuid.uuid4().hex[:8]}"
-            appr = await request_approval_standalone(
-                tenant_id=tenant,
-                agent_type=self.agent_type,
-                tool_name=tool_name,
-                arguments=enriched_args,
-                conversation_id=conv_id,
-                run_id=run_id,
-                requested_by=user_id or self.agent_type,
-                tool_call_id=call_id,
-                jev_gate=verdict.to_dict(),
-            )
+            try:
+                appr = await request_approval_standalone(
+                    tenant_id=tenant,
+                    agent_type=self.agent_type,
+                    tool_name=tool_name,
+                    arguments=enriched_args,
+                    conversation_id=conv_id,
+                    run_id=run_id,
+                    requested_by=user_id or self.agent_type,
+                    tool_call_id=call_id,
+                    jev_gate=verdict.to_dict(),
+                )
+            except ValueError as exc:
+                return tool_name, tool_args, {"success": False, "error": str(exc)}
             if conv_id and tenant:
                 try:
                     await mark_conversation_awaiting_hitl(conv_id, tenant)

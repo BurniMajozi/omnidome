@@ -49,9 +49,36 @@ def test_pricing_provisioning_and_member_inheritance(client):
     assert rows.status_code==200,rows.text
     enabled={r["module_name"] for r in rows.json() if r["enabled"]}
     assert {"crm","support","billing","portal"} <= enabled
-    assert "network" not in enabled and "inventory" not in enabled
+    assert "network" not in enabled and "inventory" in enabled
     assert client.get(f"/tenants/{make_tenant(client)}/modules",headers=as_user(t,user)).status_code==403
     assert client.put(f"/tenants/{t}/pricing",json={"selection":choice(),"idempotency_key":str(uuid.uuid4())},headers=as_user(t,user)).status_code==403
+
+
+def test_free_pricing_provisions_all_six_panels_at_enforced_free_limits(client):
+    t=make_tenant(client); user,_=add_user(t,["org_user"])
+    res=save(client,t,choice("starter")); assert res.status_code==200,res.text
+    expected={"crm","support","portal","retention","products","inventory"}
+    rows=client.get(f"/tenants/{t}/modules",headers=as_user(t,user))
+    assert rows.status_code==200,rows.text
+    enabled={r["module_name"] for r in rows.json() if r["enabled"]}
+    assert expected <= enabled
+    assert "billing" not in enabled and "network" not in enabled
+    stored=q("SELECT m.key,tm.config FROM tenant_modules tm JOIN modules m ON m.id=tm.module_id WHERE tm.tenant_id=:t AND m.key=ANY(CAST(:keys AS text[]))",t=t,keys=list(expected))
+    assert len(stored)==6
+    assert all(row._mapping["config"]["pricing_tier"]=="free" and row._mapping["config"]["writes_per_month"]==100 for row in stored)
+    # Removing a basic panel must not keep a bundle that silently adds it back.
+    changed=client.put(f"/tenants/{t}/modules",json={"modules":[{"module_name":"inventory","enabled":False}]},headers=platform(t))
+    assert changed.status_code==200,changed.text
+    pricing=client.get(f"/tenants/{t}/pricing",headers=platform(t)).json()["pricing"]
+    assert pricing["selection"]["bundle"] is None
+    assert "inventory" not in pricing["selection"]["modules"]
+    assert pricing["quote"]["amount_cents"]==0
+    changed=client.put(f"/tenants/{t}/modules",json={"modules":[{"module_name":"inventory","enabled":True}]},headers=platform(t))
+    assert changed.status_code==200,changed.text
+    pricing=client.get(f"/tenants/{t}/pricing",headers=platform(t)).json()["pricing"]
+    assert pricing["selection"]["modules"]["inventory"]=="free"
+    assert pricing["quote"]["amount_cents"]==0
+    assert pricing["quote"]["usage_policy"]["monthly_credits"]==50
 
 
 def test_admin_cannot_inject_commercial_settings_and_seats_stay_aligned(client):

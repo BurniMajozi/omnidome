@@ -144,6 +144,13 @@ class AgentJob(Base):
 
 # ── Native workflow / DAG runner (Phase A) ─────────────────────────────────
 
+class AgentJobActivity(Base):
+    __tablename__ = "agent_job_activity"
+    job_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_jobs.id", ondelete="CASCADE"), nullable=False, unique=True)
+    items: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    status_text: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+
+
 class Workflow(Base):
     __tablename__ = "workflows"
 
@@ -165,6 +172,24 @@ class Workflow(Base):
     __table_args__ = (Index("ix_workflows_tenant", "tenant_id", "status"),)
 
 
+class ChatWorkflowAttachment(Base):
+    __tablename__ = "chat_workflow_attachments"
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    approval_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+    __table_args__ = (UniqueConstraint("conversation_id", "workflow_id", name="uq_chat_workflow_attachment"),)
+
+
+class ChatWorkflowRequest(Base):
+    __tablename__ = "chat_workflow_requests"
+    request_key: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, unique=True)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("agent_conversations.id", ondelete="CASCADE"), nullable=False)
+    workflow_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("workflows.id", ondelete="CASCADE"), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    approval_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+
 class WorkflowRun(Base):
     __tablename__ = "workflow_runs"
 
@@ -175,11 +200,14 @@ class WorkflowRun(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     input: Mapped[dict] = mapped_column(JSONB, nullable=True)
     output: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    checkpoint: Mapped[dict] = mapped_column(JSONB, nullable=True)
+    event_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
     error: Mapped[str] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (Index("ix_wfruns_wf", "workflow_id", "started_at"),)
+    __table_args__ = (Index("ix_wfruns_wf", "workflow_id", "started_at"),
+                      Index("uq_workflow_event", "workflow_id", "event_id", unique=True))
 
 
 class RunStep(Base):

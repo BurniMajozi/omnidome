@@ -97,9 +97,14 @@ _WEB_READ = ToolPolicy(mutates=False, timeout_s=120, max_output_chars=12000)
 
 # Every registered tool has an explicit entry (enforced by tests/test_tool_policy.py).
 TOOL_POLICIES: Dict[str, ToolPolicy] = {
+    "workflows.list": _READ,
+    "workflows.run": ToolPolicy(mutates=True,requires_approval=True,timeout_s=180),
     "data.datasets": _READ,
     "data.query": ToolPolicy(mutates=False, timeout_s=30, max_output_chars=16000),
     "ask_user": ToolPolicy(mutates=False, timeout_s=1810),
+    "forecast.catalog": ToolPolicy(mutates=False),
+    "forecast.runs": ToolPolicy(mutates=False),
+    "forecast.request": ToolPolicy(mutates=True, requires_approval=True),
     # CRM
     "crm_get_customer": _READ,
     "crm_get_customer_360": _READ,
@@ -213,6 +218,9 @@ class Tool:
     ) -> Dict[str, Any]:
         """Execute the tool by calling the microservice API or internal handler.
         agent_type selects the SQL tool's table allowlist (spec A9)."""
+        if self.name in {"workflows.list","workflows.run"}:
+            from services.agent_orchestrator.workflow_tools import run_tool
+            return await run_tool(self.name,tool_input,tenant_id,user_id)
         if self.name in SQL_TOOL_NAMES:
             from services.agent_orchestrator.safe_sql import execute_safe_sql
             return await execute_safe_sql(
@@ -330,6 +338,8 @@ class ToolRegistry:
 
     def _register_default_tools(self):
         """Register all built-in OmniDome service tools."""
+        self.register(Tool(name="workflows.list",description="List active workflows in your organisation. Read-only; no editing.",service="internal",method="GET",endpoint="",parameters={"type":"object","properties":{},"additionalProperties":False}))
+        self.register(Tool(name="workflows.run",description="Request human approval to run an existing active workflow with frozen inputs. Cannot edit a workflow. Use workflows.list to find its ID.",service="internal",method="POST",endpoint="",parameters={"type":"object","required":["workflow_id"],"additionalProperties":False,"properties":{"workflow_id":{"type":"string","format":"uuid"},"input":{"type":"object","maxProperties":100}}}))
 
         self.register(Tool(name="data.datasets", description="Discover governed datasets and allowed columns for your panels. Use before data.query.", service="fno_intelligence", method="GET", endpoint="/api/fno/bi/datasets", parameters={"type": "object", "properties": {}, "additionalProperties": False}))
         self.register(Tool(name="data.query", description="Query current tenant data using an approved dataset. No SQL. Use mode=list for records, aggregate for counts and totals. Lists are capped at 200 rows.", service="fno_intelligence", method="POST", endpoint="/api/fno/bi/query", parameters={
@@ -343,7 +353,11 @@ class ToolRegistry:
                 "filters": {"type": "array", "items": {"type": "object", "required": ["field", "op"], "properties": {"field": {"type": "string"}, "op": {"type": "string", "enum": ["eq", "neq", "gt", "gte", "lt", "lte", "in", "not_in", "contains", "between", "is_null", "not_null"]}, "value": {}}, "additionalProperties": False}},
                 "order_by": {"type": "array", "items": {"type": "object", "required": ["field"], "properties": {"field": {"type": "string"}, "dir": {"type": "string", "enum": ["asc", "desc"]}}, "additionalProperties": False}}, "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             }}))
-        self.register(Tool(name="ask_user", description="Pause this live chat and ask 1–3 concrete questions with 2–4 options. Wait for the user's answer; never assume an approval.", service="internal", method="POST", endpoint="", parameters={"type": "object", "required": ["questions"], "additionalProperties": False, "properties": {"questions": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "object", "required": ["header", "question", "options"], "additionalProperties": False, "properties": {"header": {"type": "string", "maxLength": 12}, "question": {"type": "string", "maxLength": 500}, "options": {"type": "array", "minItems": 2, "maxItems": 4, "items": {"type": "object", "required": ["label", "description"], "properties": {"label": {"type": "string"}, "description": {"type": "string"}}, "additionalProperties": False}}, "multi_select": {"type": "boolean"}}}}}}))
+        from services.agent_orchestrator.ask_user import tool_schema
+        self.register(Tool(name="ask_user", description="Pause this live chat and ask 1–3 concrete questions with 2–4 unique options. Headers may have up to 24 characters. Wait for the user's answer; never assume an approval.", service="internal", method="POST", endpoint="", parameters=tool_schema()))
+        self.register(Tool(name="forecast.catalog", description="Discover supported time-series metrics, minimum history and horizons. Use before requesting a model forecast.", service="fno_intelligence", method="GET", endpoint="/api/fno/bi/metrics/catalog", parameters={"type":"object","properties":{},"additionalProperties":False}))
+        self.register(Tool(name="forecast.runs", description="Read queued and completed time-series forecast runs. Report the actual model and data limitations; weighted pipeline is not a model forecast.", service="fno_intelligence", method="GET", endpoint="/api/fno/bi/forecast/runs", parameters={"type":"object","properties":{},"additionalProperties":False}))
+        self.register(Tool(name="forecast.request", description="Queue a bounded time-series forecast for approved metric keys. Requires approval. A queued run is not a completed forecast; check forecast.runs for results.", service="fno_intelligence", method="POST", endpoint="/api/fno/bi/forecast/runs", parameters={"type":"object","properties":{"metrics":{"type":"array","minItems":1,"maxItems":40,"items":{"type":"string"}},"horizon":{"type":"integer","minimum":1,"maximum":60}},"required":["metrics","horizon"],"additionalProperties":False}))
 
         # ── CRM Tools ─────────────────────────────────────────────
         self.register(Tool(
@@ -1044,7 +1058,9 @@ class ToolRegistry:
         # agents that report on numbers.
         for _agent, _tools in AGENT_TOOL_PERMISSIONS.items():
             if _agent != "customer_facing":
+                _tools.extend(t for t in ("forecast.catalog","forecast.runs","forecast.request") if t not in _tools)
                 _tools.extend(t for t in ("data.datasets", "data.query", "ask_user") if t not in _tools)
+                _tools.extend(t for t in ("workflows.list","workflows.run") if t not in _tools)
                 _tools[:] = [t for t in _tools if t not in SQL_TOOL_NAMES]
             _tools.extend(t for t in KNOWLEDGE_TOOLS if t not in _tools)
             if _agent != "customer_facing":

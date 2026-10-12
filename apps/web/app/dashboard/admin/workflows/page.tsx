@@ -14,6 +14,7 @@ import { Play, Plus, Save, Loader2, RefreshCw, Clock, Zap, History, ArrowLeft, D
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { FlowCanvas } from "@/components/workflows/flow-canvas"
+import { WorkflowDesigner, type WorkflowProposal } from "@/components/workflows/workflow-designer"
 import { WorkflowRunHistory } from "@/components/admin/agent-insights"
 import { KNOWN_EVENT_TYPES } from "@/lib/orchestrator-api"
 
@@ -116,6 +117,8 @@ function describeCron(cron: string): string {
 }
 
 function WorkflowsView() {
+  const [eventTypes, setEventTypes] = useState(KNOWN_EVENT_TYPES)
+  useEffect(() => { fetch("/api/orchestrator/workflows/capabilities", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(data => { if (Array.isArray(data?.events)) setEventTypes(data.events) }).catch(() => {}) }, [])
   const [list, setList] = useState<WF[]>([])
   const [selected, setSelected] = useState<WF | null>(null)
   const [defText, setDefText] = useState("")
@@ -129,6 +132,19 @@ function WorkflowsView() {
   // Event trigger (SPEC-lead-automations.md): runs when this bus event arrives.
   const [triggerEvent, setTriggerEvent] = useState("")
   const [runsKey, setRunsKey] = useState(0)
+  const [graphRevision, setGraphRevision] = useState(0)
+  const [designerSession, setDesignerSession] = useState(0)
+
+  const propose = (draft: WorkflowProposal) => {
+    // AI proposals are new unsaved drafts, including when refining an active workflow.
+    setSelected({ ...draft, id: "", status: "draft", schedule_enabled: false })
+    setDefText(JSON.stringify(draft.definition, null, 2))
+    setTriggerEvent(draft.trigger_event || "")
+    setSchedCron(draft.schedule_cron || "")
+    setSchedEnabled(false)
+    setRunOut(null)
+    setGraphRevision(n => n + 1)
+  }
 
   const load = useCallback(async () => {
     setError(null)
@@ -141,10 +157,25 @@ function WorkflowsView() {
     }
   }, [])
 
+  const installBilling = async () => {
+    setBusy("billing-templates")
+    setError(null)
+    try {
+      const response = await fetch("/api/orchestrator/workflows/templates/billing", {method:"POST"})
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.detail || "Could not install billing workflows")
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally { setBusy(null) }
+  }
+
   useEffect(() => { void load() }, [load])
 
 
   const select = (w: WF) => {
+    setGraphRevision(n => n + 1)
+    setDesignerSession(n => n + 1)
     setSelected(w)
     setRunOut(null)
     setDefText(JSON.stringify(w.definition ?? { nodes: [], edges: [] }, null, 2))
@@ -216,12 +247,14 @@ function WorkflowsView() {
     setBusy("save"); setError(null)
     try {
       const definition = JSON.parse(defText)
-      const r = await fetch(`/api/orchestrator/workflows/${selected.id}`, {
-        method: "PUT", headers: { "Content-Type": "application/json" },
+      const r = await fetch(selected.id ? `/api/orchestrator/workflows/${selected.id}` : "/api/orchestrator/workflows", {
+        method: selected.id ? "PUT" : "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: selected.name,
+          description: selected.description,
+          status: selected.status,
           definition,
-          schedule_cron: schedCron.trim() || null,
+          schedule_cron: schedCron.trim(),
           schedule_enabled: schedEnabled,
           trigger_event: triggerEvent.trim(),   // "" clears it
         }),
@@ -272,13 +305,13 @@ function WorkflowsView() {
         </Button>
       </div>
 
-      <div className="flex h-full min-h-[85vh] gap-6">
+      <div className="flex flex-col lg:flex-row h-full min-h-[85vh] gap-6">
       {/* Sidebar List & Templates */}
-      <div className="w-80 flex-shrink-0 space-y-4">
+      <div className="w-full lg:w-80 flex-shrink-0 space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base font-semibold text-foreground">Workflows</h2>
-            <p className="text-xs text-muted-foreground">Automated DAG multi-agent pipelines</p>
+            <p className="text-xs text-muted-foreground">Design, review and run automations</p>
           </div>
           <div className="flex gap-1.5">
             <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => void load()} title="Refresh list">
@@ -289,6 +322,14 @@ function WorkflowsView() {
               New
             </Button>
           </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-card p-3 space-y-2">
+          <p className="text-sm font-medium">Platform billing alerts</p>
+          <p className="text-xs text-muted-foreground">Six workflows for credit limits, top-ups, subscription payments and plan activation. Owner notifications only; no card charges or customer messages.</p>
+          <Button variant="outline" size="sm" className="w-full" disabled={busy !== null} onClick={() => void installBilling()}>
+            {busy === "billing-templates" ? "Installing…" : "Install billing workflows"}
+          </Button>
         </div>
 
         {list.length === 0 && (
@@ -380,6 +421,9 @@ function WorkflowsView() {
 
       {/* Editor & Execution Pane */}
       <div className="flex-1 min-w-0">
+        <div className="mb-4">
+          <WorkflowDesigner key={designerSession} current={selected ? { ...selected, definition: (() => { try { return JSON.parse(defText) } catch { return selected.definition } })() } : null} onProposal={propose} />
+        </div>
         {!selected ? (
           <div className="flex h-full flex-col items-center justify-center rounded-2xl border border-dashed border-border p-12 text-center">
             <Clock className="h-10 w-10 text-muted-foreground/40 mb-3" />
@@ -404,6 +448,10 @@ function WorkflowsView() {
                 </p>
               </div>
               <div className="flex items-center gap-2">
+                <select aria-label="Workflow activation" value={selected.status} onChange={e => setSelected({ ...selected, status: e.target.value })}
+                  className="rounded-md border border-border bg-background px-2 py-2 text-xs">
+                  <option value="draft">Draft · triggers off</option><option value="active">Active · triggers on</option>
+                </select>
                 <Button
                   size="sm"
                   variant="outline"
@@ -420,13 +468,13 @@ function WorkflowsView() {
                   disabled={busy === "save"}
                 >
                   {busy === "save" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4 text-muted-foreground" />}
-                  Save Changes
+                  {selected.id ? "Save Changes" : "Save draft"}
                 </Button>
                 <Button
                   size="sm"
                   className="h-9 gap-1.5 bg-primary text-primary-foreground shadow-sm"
                   onClick={() => void run()}
-                  disabled={busy === "run"}
+                  disabled={busy === "run" || !selected.id || selected.status !== "active"}
                 >
                   {busy === "run" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                   Run Pipeline
@@ -450,12 +498,12 @@ function WorkflowsView() {
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <select
-                  value={KNOWN_EVENT_TYPES.some((e) => e.type === triggerEvent) || !triggerEvent ? triggerEvent : "__custom"}
+                  value={eventTypes.some((e) => e.type === triggerEvent) || !triggerEvent ? triggerEvent : "__custom"}
                   onChange={(e) => setTriggerEvent(e.target.value === "__custom" ? (triggerEvent || "custom.event.name") : e.target.value)}
                   className="h-8 rounded-md border border-border bg-background px-2 text-xs"
                 >
                   <option value="">No event trigger</option>
-                  {KNOWN_EVENT_TYPES.map((e) => (
+                  {eventTypes.map((e) => (
                     <option key={e.type} value={e.type}>{e.label}</option>
                   ))}
                   <option value="__custom">Custom event name…</option>
@@ -562,7 +610,7 @@ function WorkflowsView() {
               </div>
               <div className="p-2">
                 <FlowCanvas
-                  key={selected.id}
+                  key={`${selected.id}:${graphRevision}`}
                   definition={selected.definition ?? { nodes: [], edges: [] }}
                   onChange={(d) => setDefText(JSON.stringify(d, null, 2))}
                 />
@@ -582,6 +630,7 @@ function WorkflowsView() {
                   className="h-56 w-full rounded-lg border border-border bg-background/80 p-3 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-primary"
                   spellCheck={false}
                 />
+                <Button size="sm" variant="outline" onClick={() => { try { const next = JSON.parse(defText); if (!Array.isArray(next.nodes) || !Array.isArray(next.edges)) throw new Error(); setSelected({ ...selected, definition: next }); setGraphRevision(value => value + 1); setError(null) } catch { setError("Use a JSON graph with nodes and edges arrays. The graph is unchanged.") } }}>Apply JSON to graph</Button>
               </div>
             )}
 

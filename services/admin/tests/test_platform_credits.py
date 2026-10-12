@@ -15,11 +15,13 @@ from services.billing.routes import platform_checkout as broker
 
 @pytest.fixture
 def published(client):
-    old=client.get('/pricing/credits',headers=platform()).json()
+    # Publishing is audited against the Platform Owner's actual tenant.
+    headers=platform(make_tenant(client))
+    old=client.get('/pricing/credits',headers=headers).json()
     config={"enabled":True,"price_per_credit_zar":"0.25","operation_credit_limit":50}
-    assert client.put('/pricing/credits',json=config,headers=platform()).status_code==200
+    assert client.put('/pricing/credits',json=config,headers=headers).status_code==200
     yield config
-    assert client.put('/pricing/credits',json={k:old[k] for k in config},headers=platform()).status_code==200
+    assert client.put('/pricing/credits',json={k:old[k] for k in config},headers=headers).status_code==200
 
 
 def purchase(client,tenant,user,amount="50.00",key=None):

@@ -8,7 +8,12 @@ FROM python:3.12-slim AS builder
 ARG WITH_CHRONOS=1
 WORKDIR /build
 COPY services/forecaster/requirements.txt services/forecaster/requirements-chronos.txt ./
-RUN pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install -r requirements.txt  && if [ "$WITH_CHRONOS" = "1" ]; then       pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install         --extra-index-url https://download.pytorch.org/whl/cpu torch       && pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install         --extra-index-url https://download.pytorch.org/whl/cpu -r requirements-chronos.txt ;     fi
+RUN pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install -r requirements.txt \
+    && if [ "$WITH_CHRONOS" = "1" ]; then \
+       pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install \
+         --index-url https://download.pytorch.org/whl/cpu 'torch==2.6.0+cpu' \
+       && pip install --no-cache-dir --default-timeout=100 --retries 5 --prefix=/install \
+         -r requirements-chronos.txt; fi
 
 FROM python:3.12-slim
 WORKDIR /app

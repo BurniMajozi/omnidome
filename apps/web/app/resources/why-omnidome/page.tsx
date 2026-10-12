@@ -79,9 +79,9 @@ export default function WhyOmniDomePage() {
                         </Link>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/auth">
+                            <Link href="/trial">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
-                                    Start Free Trial
+                                    Try it For Free
                                 </Button>
                             </Link>
                         </div>
@@ -104,9 +104,9 @@ export default function WhyOmniDomePage() {
                         The complete ISP operating system, built specifically for South African service providers who demand more from their technology.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/auth">
+                        <Link href="/trial">
                             <Button size="lg" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white text-lg px-8">
-                                Get Started Free
+                                Try it For Free
                                 <ArrowRight className="ml-2 h-5 w-5" />
                             </Button>
                         </Link>
@@ -236,17 +236,17 @@ export default function WhyOmniDomePage() {
             <section className="py-24 px-4 bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                 <div className="max-w-4xl mx-auto text-center">
                     <h2 className="text-3xl sm:text-4xl font-bold mb-6">Ready to Transform Your ISP?</h2>
-                    <p className="text-xl mb-10 opacity-90">Start your 14-day free trial today. No credit card required.</p>
+                    <p className="text-xl mb-10 opacity-90">Explore OmniDome’s free features. No credit card required.</p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/auth">
+                        <Link href="/trial">
                             <Button size="lg" className="bg-white text-emerald-600 hover:bg-white/90 text-lg px-8 font-semibold">
-                                Start Free Trial
+                                Try it For Free
                                 <ArrowRight className="ml-2 h-5 w-5" />
                             </Button>
                         </Link>
-                        <Button size="lg" variant="outline" className="border-white text-white hover:bg-white/10 text-lg px-8">
+                        <Button asChild size="lg" variant="outline" className="border-white text-white hover:bg-white/10 text-lg px-8"><Link href="/demo">
                             Schedule a Demo
-                        </Button>
+                        </Link></Button>
                     </div>
                 </div>
             </section>

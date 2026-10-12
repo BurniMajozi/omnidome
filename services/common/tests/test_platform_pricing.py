@@ -90,6 +90,44 @@ def test_catalogue_has_all_priced_panels_and_no_admin_role():
     assert not {"owner", "org_admin", "platform_admin", "admin"} & ids
 
 
+def test_free_plan_gives_six_real_free_tiers_and_one_shared_allowance():
+    q = quote(Selection(bundle="starter"))
+    expected = {"crm", "support", "portal", "retention", "products", "inventory"}
+    assert set(q["entitlements"]) == expected
+    assert set(q["selection"]["modules"].values()) == {"free"}
+    assert q["tier"] == "FREE" and q["amount_cents"] == 0
+    assert q["usage_policy"]["monthly_credits"] == 50
+    assert all(limits["writes_per_month"] == 100 for limits in q["usage_policy"]["module_limits"].values())
+    from services.common.platform_access import blocked_feature
+    assert blocked_feature("inventory", "free", "/reports/valuation")
+    assert blocked_feature("portal", "free", "/api/v1/portal/campaigns")
+    assert blocked_feature("inventory", "free", "/items") is None
+
+
+def test_free_modules_can_be_selected_or_upgraded_without_hidden_charges():
+    free = {key: "free" for key in catalog()["free_modules"]}
+    q = quote(Selection(modules=free))
+    assert q["amount_cents"] == 0 and q["usage_policy"]["monthly_credits"] == 50
+    inclusive = quote(Selection(modules=free), {"vat_registered": False, "prices_include_vat": True, "rate": "0.15"})
+    assert inclusive["amount_cents"] == 0 and inclusive["total_zar"] == "0.00"
+    upgraded = quote(Selection(bundle="starter", modules={"crm": "professional"}))
+    assert upgraded["net_zar"] == "749.00"
+    assert upgraded["selection"]["modules"]["inventory"] == "free"
+    assert upgraded["tier"] == "PROFESSIONAL"
+    assert quote(Selection(**upgraded["selection"])) == upgraded
+    with pytest.raises(ValidationError): Selection(modules={"billing": "free"})
+
+
+def test_paid_bundle_keeps_basic_free_panels_without_inflating_allowance():
+    q = quote(Selection(bundle="growth"))
+    assert set(catalog()["free_modules"]) <= set(q["entitlements"])
+    assert q["selection"]["modules"]["crm"] == "starter"
+    assert q["selection"]["modules"]["inventory"] == "free"
+    assert q["usage_policy"]["module_limits"]["inventory"]["writes_per_month"] == 100
+    assert q["usage_policy"]["monthly_credits"] == 500
+
+
+
 def test_tenant_owner_rag_scope_intersects_enabled_panels():
     from types import SimpleNamespace
     from services.tenant_memory.knowledge.access import build_scope, restrict_to_tenant

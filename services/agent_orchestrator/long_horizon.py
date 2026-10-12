@@ -105,11 +105,15 @@ async def evaluate_adversarial_jev(
     objective: str,
     draft_output: str,
     iteration: int,
+    tenant_id: Optional[str] = None,
 ) -> tuple[bool, Optional[str], dict]:
     """Use Jev System One to adversarially evaluate whether a long-horizon task is complete.
     Returns (is_complete, critique_or_none, reported_usage)."""
     if not settings.jev_gate_enabled:
         return False, None, {}
+    from services.common.llm_routing import free_only
+    if await free_only(tenant_id):
+        return False, "Paid verifier is excluded by this model route; review the output.", {}
 
     from services.agent_orchestrator.jev_gate import _get_credentials, DEFAULT_TIMEOUT_S
     provider, api_key, endpoint = _get_credentials()
@@ -404,7 +408,7 @@ async def run_long_horizon_agent(
             break
 
         # 5. Adversarial Self-Review check (via Jev)
-        is_complete, critique, jev_usage = await evaluate_adversarial_jev(prompt, turn_content, i + 1)
+        is_complete, critique, jev_usage = await evaluate_adversarial_jev(prompt, turn_content, i + 1, tenant_id=str(tenant_id) if tenant_id else None)
         if jev_usage:
             review_tokens = int(jev_usage.get("total_tokens") or 0)
             jev_tokens += review_tokens

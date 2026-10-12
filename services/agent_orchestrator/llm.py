@@ -67,6 +67,8 @@ def system_prompt_for(agent_type: str, extra: str = "") -> str:
                  "Memory and vectors provide context, not exact database totals. Do not use analytics.query or generate raw SQL; "
                  "do not ask the user to run SQL or find a colleague. A denied dataset must name its missing panel. "
                  "Use ask_user for one to three concrete questions when the user's intent or required inputs are ambiguous. "
+                 "If a question fails validation, correct the named field; do not expose schema debugging or repeated speculative retries to the user. "
+                 "Weighted sales pipeline is a scenario estimate, not a time-series forecast. Label it accurately and use stored forecast facts or the forecasting service for model forecasts. "
                  "Use the original task and approved tools, never bypass approvals or invent unavailable data.")
     return f"{combined}\n\n{extra}" if extra else combined
 
@@ -263,6 +265,7 @@ class LLMClient:
         purpose: str = "round",
         system_extra: str = "",
         requested_model: Optional[str] = None,
+        response_format: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """Send a chat completion request. Returns {content, tool_calls, ...}.
         tool_choice="none" keeps the tool definitions (needed when the history
@@ -272,8 +275,14 @@ class LLMClient:
         )
 
         started = time.perf_counter()
-        result = await self._chat(agent_type, messages, tools, tool_choice, primary_model, fallback_model,
-                                  system_extra=system_extra, requested_model=requested_model)
+        from services.common.llm_routing import resolve, route_chain
+        chain = await resolve(tenant_id, requested_model)
+        token = route_chain.set(chain)
+        try:
+            result = await self._chat(agent_type, messages, tools, tool_choice, primary_model, fallback_model,
+                                      system_extra=system_extra, requested_model=requested_model, response_format=response_format)
+        finally:
+            route_chain.reset(token)
         # Usage tracing (spec A7): one row per call, written off the request path.
         usage.record_llm_call(tenant_id=tenant_id, agent_type=agent_type, channel=channel, result=result,
                               latency_ms=int((time.perf_counter() - started) * 1000), purpose=purpose)
@@ -282,8 +291,23 @@ class LLMClient:
         return result
 
     async def _chat(self, agent_type, messages, tools, tool_choice, primary_model, fallback_model,
-                    system_extra: str = "", requested_model: Optional[str] = None) -> Dict[str, Any]:
+                    system_extra: str = "", requested_model: Optional[str] = None, response_format: Optional[dict] = None) -> Dict[str, Any]:
         full_messages = [{"role": "system", "content": system_prompt_for(agent_type, system_extra)}] + messages
+
+        from services.common.llm_routing import route_chain
+        restricted = route_chain.get()
+        if restricted is not None:
+            for model in restricted:
+                if "/" in model:
+                    result = await self._openrouter_chat(model, full_messages, tools, tool_choice=tool_choice,
+                                                        agent_type=agent_type, response_format=response_format)
+                    # The common client already tries all approved cloud fallbacks once.
+                    if result: return result
+                    break
+                result = await self._ollama_chat(model, full_messages, None if tool_choice == "none" else tools,
+                                                response_format=response_format)
+                if result: return result
+            return {"content": "Your plan's AI models are unavailable. Please try again later.", "tool_calls": [], "unavailable": True}
 
         # HR's model preference is honored for hired agents. The actual model
         # and provider are recorded from the response, including any fallback.
@@ -292,26 +316,26 @@ class LLMClient:
             chosen = canonical_model.removeprefix("openrouter/")
             if "/" in chosen and OPENROUTER_API_KEY:
                 selected = await self._openrouter_chat(chosen, full_messages, tools,
-                                                        tool_choice=tool_choice, agent_type=agent_type)
+                                                        tool_choice=tool_choice, agent_type=agent_type, response_format=response_format)
                 if selected:
                     return selected
             elif "/" not in chosen:
                 selected = await self._ollama_chat(chosen, full_messages,
-                                                   None if tool_choice == "none" else tools)
+                                                   None if tool_choice == "none" else tools, response_format=response_format)
                 if selected:
                     return selected
 
         # Try Ollama first
         ollama_ok = await self._check_ollama()
         if ollama_ok:
-            result = await self._ollama_chat(primary_model, full_messages, None if tool_choice == "none" else tools)
+            result = await self._ollama_chat(primary_model, full_messages, None if tool_choice == "none" else tools, response_format=response_format)
             if result:
                 return result
 
         # Fallback to OpenRouter
         if OPENROUTER_API_KEY:
             result = await self._openrouter_chat(
-                fallback_model, full_messages, tools, tool_choice=tool_choice, agent_type=agent_type
+                fallback_model, full_messages, tools, tool_choice=tool_choice, agent_type=agent_type, response_format=response_format
             )
             if result:
                 return result
@@ -327,6 +351,7 @@ class LLMClient:
         model: str,
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]] = None,
+        response_format: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call Ollama /api/chat endpoint."""
         payload: Dict[str, Any] = {
@@ -337,6 +362,9 @@ class LLMClient:
         }
         if tools:
             payload["tools"] = self._format_ollama_tools(tools)
+        if response_format:
+            payload["format"] = "json"
+            payload["options"]["num_predict"] = 6144
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -382,6 +410,7 @@ class LLMClient:
         tools: Optional[List[Dict]] = None,
         tool_choice: Optional[str] = None,
         agent_type: Optional[str] = None,
+        response_format: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call OpenRouter /api/v1/chat/completions endpoint with prompt caching optimizations."""
         # Prompt caching: Add cache_control to system message for prefix caching
@@ -397,6 +426,9 @@ class LLMClient:
             "temperature": 0.1,
             "max_tokens": 2048,
         }
+        if response_format:
+            payload["response_format"] = response_format
+            payload["max_tokens"] = 6144
         if tools:
             # Deterministically sort tools so prefix remains stable across calls
             def _tool_key(t):
@@ -489,6 +521,13 @@ class LLMClient:
         system_extra: str = "",
     ):
         """Stream chat completion tokens from Ollama. Yields token strings."""
+        from services.common.llm_routing import resolve
+        if await resolve() is not None:
+            from services.common.db import get_tenant_context
+            result = await self.chat(agent_type, messages, tools, tenant_id=str(get_tenant_context()) if get_tenant_context() else None,
+                                     system_extra=system_extra, purpose="stream")
+            yield result.get("content", "AI service unavailable.")
+            return
         full_messages = [{"role": "system", "content": system_prompt_for(agent_type, system_extra)}] + messages
 
         model, fallback = MODEL_ROUTES.get(agent_type, ("qwen2.5:7b", OPENROUTER_MODEL))

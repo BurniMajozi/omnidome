@@ -153,7 +153,7 @@ export function AgentMailTab() {
             className="h-8 text-xs font-semibold gap-1.5"
           >
             <Inbox className="h-3.5 w-3.5" />
-            <span>AgentMail Hub</span>
+            <span>AgentMail Dome</span>
           </Button>
           <Button
             size="sm"

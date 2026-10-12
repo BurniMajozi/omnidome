@@ -113,11 +113,51 @@ def public_order(row):
 @router.get("/tenants/{tenant}/pricing")
 async def tenant_pricing(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context), db=Depends(get_async_session)):
     await check_scope(ctx, tenant, db)
+    from services.common.platform_trials import expire
+    await expire(db,tenant)
     row = (await db.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t": str(tenant)})).mappings().first()
     if not row: raise HTTPException(404, "Tenant not found")
     orders = (await db.execute(text("SELECT * FROM platform_orders WHERE tenant_id=:t ORDER BY created_at DESC LIMIT 30"), {"t": str(tenant)})).mappings().all()
     sub = (await db.execute(text("SELECT status,order_id,updated_at FROM platform_subscriptions WHERE tenant_id=:t ORDER BY updated_at DESC LIMIT 1"), {"t": str(tenant)})).mappings().first()
     return {"pricing": commerce.state(row), "orders": [public_order(x) for x in orders], "subscription": dict(sub) if sub else None}
+
+
+@router.get("/tenants/{tenant}/pricing/trial")
+async def trial_state(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context), db=Depends(get_async_session)):
+    await check_scope(ctx,tenant,db)
+    from services.common.platform_trials import expire
+    await expire(db,tenant)
+    row = await commerce.tenant_lock(db,tenant)
+    return (row["settings"] or {}).get("platform_trial")
+
+
+@router.post("/tenants/{tenant}/pricing/trial")
+async def trial_start(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context), db=Depends(get_async_session)):
+    await check_scope(ctx,tenant,db)
+    from services.common.platform_trials import start
+    return await start(db,tenant,ctx.user_id)
+
+
+class FreeSeat(BaseModel):
+    user_id: uuid.UUID
+
+
+@router.put("/tenants/{tenant}/pricing/trial/seat")
+async def trial_seat(tenant: uuid.UUID, body: FreeSeat, ctx: AuthContext = Depends(get_auth_context), db=Depends(get_async_session)):
+    await check_scope(ctx,tenant,db)
+    from services.common.platform_trials import expire
+    await expire(db,tenant)
+    row = await commerce.tenant_lock(db,tenant)
+    settings = row["settings"] or {}
+    trial = settings.get("platform_trial") or {}
+    if trial.get("status") != "expired" or commerce.state(row).get("billing_mode") != "free":
+        raise HTTPException(409,"Free seat selection applies after trial expiry")
+    if not (await db.execute(text("SELECT 1 FROM users WHERE id=:u AND tenant_id=:t AND is_active=true"), {"u":str(body.user_id),"t":str(tenant)})).first():
+        raise HTTPException(422,"Choose an active member of this organisation")
+    settings["platform_trial"] = {**trial,"free_user_id":str(body.user_id)}
+    await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb) WHERE id=:t"), {"s":json.dumps(settings),"t":str(tenant)})
+    await iam.audit(db,ctx,"trial.free_seat","tenant",tenant,tenant,{"user_id":str(body.user_id)})
+    return settings["platform_trial"]
 
 
 @router.get("/tenants/{tenant}/pricing/orders")

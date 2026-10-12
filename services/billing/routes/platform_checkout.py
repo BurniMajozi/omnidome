@@ -278,6 +278,9 @@ async def handle_event(event, data):
             active_plan = commerce.state(tenant).get("active_plan_code")
             if active_plan == sub["plan_code"]:
                 await db.execute(text("UPDATE tenants SET billing_status=:s WHERE id=:t"), {"s":"past_due" if event == "invoice.payment_failed" else "cancelled","t":str(sub["tenant_id"])})
+            if event == "invoice.payment_failed":
+                from services.common.platform_billing_events import payment_failed
+                await payment_failed(db,sub,data)
         elif event == "charge.success":
             # Renewal references are provider generated. Freeze a separate invoice
             # per charge, keeping its original commercial revision for stale checks.

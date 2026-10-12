@@ -15,7 +15,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import func, select, text, update, cast, String, or_
+from sqlalchemy.orm import aliased
 
 from services.common.db import session_scope
 from services.agent_orchestrator.models import AgentJob, AgentTenantBudget, RegisteredAgent
@@ -67,7 +68,7 @@ def job_dict(row: AgentJob) -> dict:
     }
 
 
-def job_summary(row: AgentJob, parent_job_id: str | None = None) -> dict:
+def job_summary(row: AgentJob, parent_job_id: str | None = None, thread_id: str | None = None) -> dict:
     """List view: no result, iteration history or checkpoint payloads."""
     return {
         "id": str(row.id), "agent_type": row.agent_type,
@@ -79,6 +80,7 @@ def job_summary(row: AgentJob, parent_job_id: str | None = None) -> dict:
         "actual_cost_usd": float(row.actual_cost_usd) if row.actual_cost_usd is not None else None,
         "cost_source": row.cost_source, "total_steps": row.total_steps, "total_tokens": row.total_tokens,
         "parent_job_id": parent_job_id,
+        "thread_id": thread_id,
         "error": row.error,
         "reviewed_by": str(row.reviewed_by) if row.reviewed_by else None,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -216,10 +218,27 @@ async def claim_next_job() -> uuid.UUID | None:
         # tenant. Concurrent agents could otherwise each pass the same
         # monthly budget check before either records its spend.
         await session.execute(text("SELECT pg_advisory_xact_lock(194749)"))
+        from services.agent_orchestrator.job_conversations import BLOCKING
+        preceding = aliased(AgentJob)
+        ready = select(preceding.id).where(
+            cast(preceding.id, String) == AgentJob.checkpoint["parent_job_id"].astext,
+            preceding.tenant_id == AgentJob.tenant_id,
+            preceding.status.not_in(BLOCKING),
+        ).exists()
         candidates = (await session.execute(select(AgentJob).where(
             AgentJob.status == "queued",
+            or_(AgentJob.checkpoint["follow_up"].astext.is_distinct_from("true"), ready),
         ).order_by(AgentJob.created_at, AgentJob.id).limit(25).with_for_update(skip_locked=True))).scalars().all()
         for row in candidates:
+            if (row.checkpoint or {}).get("follow_up"):
+                parent_id = uuid.UUID(row.checkpoint["parent_job_id"])
+                parent = (await session.execute(select(AgentJob).where(
+                    AgentJob.id == parent_id, AgentJob.tenant_id == row.tenant_id))).scalar_one_or_none()
+                if not parent:
+                    row.status, row.error = "failed", "Previous conversation turn is missing"
+                    continue
+                if parent.status in BLOCKING:
+                    continue
             already_running = (await session.execute(select(AgentJob.id).where(
                 AgentJob.tenant_id == row.tenant_id,
                 AgentJob.status.in_(["running", "pause_requested"]),
@@ -255,6 +274,13 @@ async def execute_job(job_id: uuid.UUID) -> None:
         job = (await session.execute(select(AgentJob).where(AgentJob.id == job_id))).scalar_one()
         tenant_id, agent_type, employee_id = job.tenant_id, job.agent_type, job.employee_id
         objective, checkpoint = job.objective, dict(job.checkpoint or {})
+        if checkpoint.get("follow_up") and not checkpoint.get("history") and not checkpoint.get("iterations_completed"):
+            from services.agent_orchestrator.job_conversations import history_from
+            prior = (await session.execute(select(AgentJob).where(
+                AgentJob.id == uuid.UUID(checkpoint["parent_job_id"]), AgentJob.tenant_id == job.tenant_id))).scalar_one()
+            checkpoint["history"] = history_from(prior)
+        checkpoint.setdefault("job_id", str(job_id))
+        checkpoint.setdefault("conversation_id", str(uuid.uuid4()))
         max_cost, max_iterations, max_steps = float(job.max_cost_usd), job.max_iterations, job.max_steps
         tenant_budget = (await session.execute(select(AgentTenantBudget).where(
             AgentTenantBudget.tenant_id == tenant_id,
@@ -361,6 +387,11 @@ async def execute_job(job_id: uuid.UUID) -> None:
                 logger.warning("lease heartbeat failed for job %s", job_id)
 
     heartbeat_task = asyncio.create_task(heartbeat())
+    from services.agent_orchestrator.job_activity import capture_activity
+    from services.agent_orchestrator import steps
+    tracker = steps.Steps(str(job_id), str(tenant_id), context.get("user_id"))
+    activity_token = steps.current.set(tracker)
+    activity_task = asyncio.create_task(capture_activity(job_id, tenant_id, tracker))
     try:
         result = await run_long_horizon_agent(
             prompt=objective, agent_type=runtime_type, tenant_id=tenant_id,
@@ -395,6 +426,10 @@ async def execute_job(job_id: uuid.UUID) -> None:
             row.lease_owner, row.lease_expires_at = None, None
     finally:
         heartbeat_task.cancel()
+        steps.current.reset(activity_token)
+        # Drain public events already emitted before closing the activity writer.
+        await tracker.queue.put(None)
+        await activity_task
 
 
 async def worker_loop() -> None:

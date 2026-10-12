@@ -48,6 +48,8 @@ async def create_event(
             if await validate_tenant_users(session, ctx.tenant_id, [body.user_id]):
                 raise HTTPException(status_code=422, detail="User does not belong to this tenant")
             owner_id = body.user_id
+        from services.common.platform_demo_access import check_calendar_write
+        await check_calendar_write(session,owner_id,body.start_time,body.end_time)
         event = ScheduleEvent(
             tenant_id=ctx.tenant_id,
             channel_id=body.channel_id,
@@ -178,6 +180,8 @@ async def update_event(
         if "channel_id" in update_data and update_data["channel_id"] != event.channel_id:
             await validate_refs(session, ctx, update_data["channel_id"])
         _validate_times(update_data.get("start_time", event.start_time), update_data.get("end_time", event.end_time))
+        from services.common.platform_demo_access import check_calendar_write
+        await check_calendar_write(session,event.user_id,update_data.get("start_time",event.start_time),update_data.get("end_time",event.end_time))
         for field, value in update_data.items():
             setattr(event, field, value)
         await session.flush()

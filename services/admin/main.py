@@ -57,6 +57,8 @@ from services.admin.commercial import router as commercial_router
 app.include_router(commercial_router)
 from services.admin.provider_costs import router as provider_costs_router
 app.include_router(provider_costs_router)
+from services.admin.platform_onboarding import router as onboarding_router
+app.include_router(onboarding_router)
 _SEAT_READ_RE = re.compile(r"^/(tenants/[0-9a-fA-F-]{36}/seats|platform/seat-usage)$")
 
 
@@ -75,7 +77,7 @@ class AdminGuard(EntitlementGuard):
         return await super().middleware(request, call_next)
 
 
-guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept", "/invites/claim", "/pricing/catalog", "/pricing/quote"})
+guard = AdminGuard(module_name="admin", public_paths={"/internal/users/by-email", "/invites/accept", "/invites/claim", "/pricing/catalog", "/pricing/quote", "/public/platform/trial-request", "/public/platform/demo", "/public/platform/demo/book", "/public/platform/demo/manage", "/public/platform/demo/request"})
 
 configure_production(app)
 
@@ -115,6 +117,8 @@ async def startup() -> None:
         async with get_async_engine().begin() as conn:
             await conn.execute(text("SELECT pg_advisory_xact_lock(70198432)"))
             await platform_commerce.ensure_schema(conn)
+            from services.admin.platform_onboarding import DDL as ONBOARDING_DDL
+            for statement in ONBOARDING_DDL: await conn.execute(text(statement))
     if os.getenv("ADMIN_SYNC_RETRY", "true").lower() == "true":
         app.state.sync_task = asyncio.create_task(supabase_sync.retry_loop())
     from services.admin.commercial import usage_sweep_loop
@@ -139,6 +143,7 @@ async def entitlement_middleware(request, call_next):
 # ---------------------------------------------------------------------------
 
 class TenantCreate(BaseModel):
+    start_platform_trial: bool = False
     pricing_selection: Optional[Selection] = None
     name: str
     domain: Optional[str] = None
@@ -332,6 +337,11 @@ async def create_tenant(
     )
 
     platform_order = None
+    if payload.start_platform_trial:
+        if payload.pricing_selection: raise HTTPException(422,"Choose trial or paid provisioning")
+        from services.common.platform_trials import start
+        await start(session,tenant_id,ctx.user_id,awaiting_owner=bool(payload.owner_email))
+        seat_limit = 3
     if payload.pricing_selection:
         priced, _ = await platform_commerce.save_choice(session, tenant_id, payload.pricing_selection, ctx.user_id, enable=True)
         seat_limit = priced["seats"]
@@ -359,6 +369,9 @@ async def create_tenant(
     response = _tenant_response(row)
     response["seat_limit"] = seat_limit
     response["seat_price"] = str(payload.seat_price) if payload.seat_price is not None else None
+    if payload.start_platform_trial:
+        response["settings"] = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t":str(tenant_id)})).scalar_one()
+        response["tier"] = "professional"
     if platform_order:
         response["platform_order"] = {"id": str(platform_order["id"]), "reference": platform_order["reference"], "quote": platform_order["quote"]}
         response["settings"] = (await session.execute(text("SELECT settings FROM tenants WHERE id=:t"), {"t": str(tenant_id)})).scalar_one()
@@ -436,6 +449,9 @@ async def update_tenant(
         if "platform_pricing" in payload.settings and payload.settings["platform_pricing"] != current_settings.get("platform_pricing"):
             raise HTTPException(403, "Use the pricing editor to change commercial settings")
         settings = dict(payload.settings)
+        if "platform_trial" in payload.settings and payload.settings["platform_trial"] != current_settings.get("platform_trial"):
+            raise HTTPException(403,"Use the trial endpoints to change trial access")
+        if "platform_trial" in current_settings: settings["platform_trial"] = current_settings["platform_trial"]
         if "platform_pricing" in current_settings: settings["platform_pricing"] = current_settings["platform_pricing"]
         updates["settings"] = json.dumps(settings)
     if payload.branding is not None:

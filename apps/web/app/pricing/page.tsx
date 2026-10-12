@@ -36,13 +36,14 @@ import { FlickeringGrid } from "@/components/ui/flickering-grid"
 import { useIsClient } from "@/lib/use-is-client"
 import { discountedPrice, catalog, canonicalModule, bundleSelection, startCheckout, type PricingSelection } from "@/lib/platform-pricing"
 import { BundlePlans } from "@/components/pricing/bundle-plans"
+import { ToolPriceComparison } from "@/components/pricing/tool-price-comparison"
 
 // All 14 modules (excluding Dashboard Overview)
 const originalModules = [
     {
         id: "communication",
         icon: MessageSquare,
-        name: "Communication Hub",
+        name: "Communication Dome",
         category: "Core",
         starterPrice: 199,
         professionalPrice: 499,
@@ -54,7 +55,7 @@ const originalModules = [
     {
         id: "sales",
         icon: DollarSign,
-        name: "Sales Hub",
+        name: "Sales Dome",
         category: "Revenue",
         starterPrice: 299,
         professionalPrice: 899,
@@ -66,7 +67,7 @@ const originalModules = [
     {
         id: "crm",
         icon: Users,
-        name: "CRM Hub",
+        name: "CRM Dome",
         category: "Customer",
         starterPrice: 249,
         professionalPrice: 749,
@@ -78,7 +79,7 @@ const originalModules = [
     {
         id: "service",
         icon: Headset,
-        name: "Service Hub",
+        name: "Service Dome",
         category: "Customer",
         starterPrice: 199,
         professionalPrice: 599,
@@ -90,7 +91,7 @@ const originalModules = [
     {
         id: "retention",
         icon: HeartHandshake,
-        name: "Retention Hub",
+        name: "Retention Dome",
         category: "Analytics",
         starterPrice: 399,
         professionalPrice: 1199,
@@ -102,7 +103,7 @@ const originalModules = [
     {
         id: "network",
         icon: Wifi,
-        name: "Network Ops Hub",
+        name: "Network Ops Dome",
         category: "Operations",
         starterPrice: 499,
         professionalPrice: 1499,
@@ -114,7 +115,7 @@ const originalModules = [
     {
         id: "call-center",
         icon: Phone,
-        name: "Call Center Hub",
+        name: "Call Center Dome",
         category: "Customer",
         starterPrice: 299,
         professionalPrice: 899,
@@ -126,7 +127,7 @@ const originalModules = [
     {
         id: "marketing",
         icon: Megaphone,
-        name: "Marketing Hub",
+        name: "Marketing Dome",
         category: "Revenue",
         starterPrice: 299,
         professionalPrice: 899,
@@ -138,7 +139,7 @@ const originalModules = [
     {
         id: "compliance",
         icon: ShieldCheck,
-        name: "Compliance Hub",
+        name: "Compliance Dome",
         category: "Operations",
         starterPrice: 199,
         professionalPrice: 599,
@@ -162,7 +163,7 @@ const originalModules = [
     {
         id: "billing",
         icon: Receipt,
-        name: "Billing Hub",
+        name: "Billing Dome",
         category: "Revenue",
         starterPrice: 249,
         professionalPrice: 749,
@@ -174,7 +175,7 @@ const originalModules = [
     {
         id: "finance",
         icon: FileText,
-        name: "Finance & FP&A Hub",
+        name: "Finance & FP&A Dome",
         category: "Revenue",
         starterPrice: 299,
         professionalPrice: 899,
@@ -186,7 +187,7 @@ const originalModules = [
     {
         id: "products",
         icon: Package,
-        name: "Product Hub",
+        name: "Product Dome",
         category: "Operations",
         starterPrice: 149,
         professionalPrice: 449,
@@ -198,7 +199,7 @@ const originalModules = [
     {
         id: "portal",
         icon: Globe,
-        name: "Portal Hub",
+        name: "Portal Dome",
         category: "Core",
         starterPrice: 199,
         professionalPrice: 599,
@@ -212,7 +213,7 @@ const originalModules = [
     return { ...mod, starterPrice: prices.starter, professionalPrice: prices.professional, enterprisePrice: prices.enterprise }
 })
 
-type TierType = "starter" | "professional" | "enterprise"
+type TierType = "free" | "starter" | "professional" | "enterprise"
 const modules = [...originalModules, ...catalog.modules.filter(m => !originalModules.some(old => canonicalModule(old.id) === m.id)).map(m => ({
     id:m.page_id, icon:BarChart3, name:m.name, category:"Operations", slug:m.page_id, customers:null,
     starterPrice:m.prices.starter, professionalPrice:m.prices.professional, enterprisePrice:m.prices.enterprise,
@@ -242,13 +243,14 @@ interface UsageCategory {
 
 const comparisonBundles = [catalog.bundles.starter, catalog.bundles.growth, catalog.bundles.professional, catalog.bundles.enterprise]
 const comparisonRow = (feature: string, values: UsageRow["free"][]): UsageRow => ({feature, free: values[0], starter: values[1], professional: values[2], enterprise: values[3]})
-const tierRank: Record<string, number> = {starter: 1, professional: 2, enterprise: 3}
+const tierRank: Record<string, number> = {free: 0, starter: 1, professional: 2, enterprise: 3}
+const includedPanels = (b: typeof comparisonBundles[number]) => Array.from(new Set([...catalog.free_modules, ...b.modules]))
 const usageMatrix: UsageCategory[] = [
     {name: "Platform access and limits", icon: Database, rows: [
         comparisonRow("Overview and Admin · always free", [true,true,true,true]),
         comparisonRow("Included user seats", comparisonBundles.map(b => b.seats)),
-        comparisonRow("Purchased panels", comparisonBundles.map(b => b.modules.length)),
-        comparisonRow("Successful writes / panel / UTC month", [catalog.tier_limits.free.writes_per_month, ...comparisonBundles.slice(1).map(b => catalog.tier_limits[b.tier as TierType].writes_per_month)]),
+        comparisonRow("Included panels", comparisonBundles.map(b => includedPanels(b).length)),
+        comparisonRow("Successful writes / panel / UTC month", [catalog.tier_limits.free.writes_per_month, ...comparisonBundles.slice(1).map(b => `${catalog.tier_limits.free.writes_per_month} Free / ${catalog.tier_limits[b.tier as TierType].writes_per_month.toLocaleString("en-GB")} paid`)]),
         comparisonRow("AI credits / month · measured, no deductions", comparisonBundles.map(b => b.credits)),
         comparisonRow("Extra seats / month", comparisonBundles.map(b => `R${b.extra_seat_price}`)),
     ]},
@@ -289,10 +291,10 @@ const DEDICATED_IP_MONTHLY_ZAR = Math.round(40 * EMAIL_MARGIN * EMAIL_USD_TO_ZAR
 // Individual/Startup plans
 const individualPlans = {
     starter: {
-        name: "Starter",
+        name: "Free",
         description: "Essential tools for new ISPs getting started.",
         basePrice: 0,
-        features: ["CRM panel", "Overview and Admin always free", "100 successful CRM writes per UTC month", "1 included seat"],
+        features: ["CRM, Services, Portal and Retention", "Product and Stock", "Overview and Admin always free", "100 successful writes per panel per UTC month", "50 shared AI credits per month", "1 included seat"],
         limitations: ["Advanced panel features require a higher tier", "Provider delivery capacity is separate"]
     },
     growth: {
@@ -336,7 +338,8 @@ export default function PricingPage() {
     }
 
     const getPrice = useCallback((module: typeof modules[0], tier: TierType) => {
-        const price = catalog.modules.find(row => row.id === canonicalModule(module.id))!.prices[tier]
+        const prices: Partial<Record<TierType, number>> = catalog.modules.find(row => row.id === canonicalModule(module.id))!.prices
+        const price = prices[tier] ?? 0
         return billingPeriod === "annually" ? discountedPrice(price,true) : price
     }, [billingPeriod])
 
@@ -358,7 +361,7 @@ export default function PricingPage() {
     const renderMainContent = () => {
         switch (activeView) {
             case "customer-platform":
-                return <BundlePlans period={billingPeriod} onPeriodChange={setBillingPeriod} onCustomize={() => setActiveView("create-bundle")} />
+                return <div className="space-y-12"><BundlePlans period={billingPeriod} onPeriodChange={setBillingPeriod} onCustomize={() => setActiveView("create-bundle")} /><ToolPriceComparison /></div>
 
             case "create-bundle":
                 return (
@@ -383,7 +386,7 @@ export default function PricingPage() {
                                     </div>
 
                                     <div className="grid grid-cols-1 gap-4 mb-4 sm:grid-cols-3">
-                                        {(["starter", "professional", "enterprise"] as TierType[]).map(tier => {
+                                        {([...(catalog.free_modules.includes(canonicalModule(mod.id)) ? ["free"] : []), "starter", "professional", "enterprise"] as TierType[]).map(tier => {
                                             const price = getPrice(mod, tier)
                                             const isSelected = selectedModules[mod.id] === tier
                                             return (
@@ -406,7 +409,7 @@ export default function PricingPage() {
                                                         </div>
                                                         <span className="text-sm font-medium capitalize">{tier}</span>
                                                     </div>
-                                                    <div className="text-lg font-bold">R{price}<span className="text-sm font-normal text-muted-foreground">/month excl. VAT</span></div>
+                                                    <div className="text-lg font-bold">{price === 0 ? "Free" : `R${price}`}<span className="text-sm font-normal text-muted-foreground"> / month · tax shown at checkout</span></div>
                                                 </button>
                                             )
                                         })}
@@ -571,7 +574,7 @@ export default function PricingPage() {
                             {/* Table Header */}
                             <div className="grid grid-cols-[minmax(240px,1fr)_100px_100px_120px_120px] gap-0 border-b border-border bg-muted/50">
                                 <div className="px-6 py-4 text-sm font-semibold">Feature</div>
-                                <div className="px-3 py-4 text-sm font-semibold text-center">Starter · Free</div>
+                                <div className="px-3 py-4 text-sm font-semibold text-center">Free</div>
                                 <div className="px-3 py-4 text-sm font-semibold text-center">Growth</div>
                                 <div className="px-3 py-4 text-sm font-semibold text-center text-indigo-400">Professional</div>
                                 <div className="px-3 py-4 text-sm font-semibold text-center text-violet-400">Enterprise</div>
@@ -690,7 +693,7 @@ export default function PricingPage() {
                                                 ? "bg-gradient-to-r from-indigo-600 to-blue-500 font-bold shadow-[0_0_20px_rgba(79,70,229,0.3)] text-white hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] transition-all"
                                                 : "bg-secondary"
                                         )}>
-                                            {plan.basePrice === 0 ? "Get started free" : "Choose Growth"}
+                                            {plan.basePrice === 0 ? "Try it For Free" : "Choose Growth"}
                                         </Button>
 
                                     <ul className="space-y-3">
@@ -738,7 +741,7 @@ export default function PricingPage() {
                                 const annualPrice = discountedPrice(price,true)
                                 return (
                                     <div key={tier} className="border border-border rounded-2xl bg-card p-8">
-                                        <h2 className="text-xl font-bold mb-2 capitalize">{product.name.replace(" Hub", "")} {tier}</h2>
+                                        <h2 className="text-xl font-bold mb-2 capitalize">{product.name} {tier}</h2>
                                         <p className="text-sm text-muted-foreground mb-6">
                                             {tier === "professional"
                                                 ? "Essential features for growing teams."
@@ -966,7 +969,7 @@ export default function PricingPage() {
                                             )}
                                         >
                                             <mod.icon className="h-4 w-4" />
-                                            {mod.name.replace(" Hub", "")}
+                                            {mod.name}
                                         </button>
                                     </li>
                                 ))}

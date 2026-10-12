@@ -13,7 +13,7 @@ export function OrbitingCirclesDemo({ className }: { className?: string }) {
       )}
     >
       <span className="pointer-events-none whitespace-pre-wrap bg-gradient-to-b from-white to-slate-400 bg-clip-text text-center text-4xl font-bold leading-none text-transparent">
-        Hub
+        Dome
       </span>
 
       {/* Inner Circles */}

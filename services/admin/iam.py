@@ -1123,6 +1123,8 @@ async def _activate_locked_invite(inv: Dict[str, Any], who: Dict[str, Any], sess
         )
     if is_owner:
         await session.execute(text("UPDATE tenants SET owner_user_id = :u WHERE id = :t AND owner_user_id IS NULL"), {"u": str(user_id), "t": str(tenant_id)})
+        from services.common.platform_trials import activate_owner
+        await activate_owner(session,tenant_id,user_id)
     await session.execute(
         text("UPDATE invites SET status = 'accepted', accepted_at = now(), accepted_user_id = :u WHERE id = :i"),
         {"u": str(user_id), "i": str(inv["id"])},

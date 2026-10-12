@@ -82,7 +82,7 @@ jobs:
         run: |
           pip install -r services/common/requirements.txt
           sed '1s/^\xEF\xBB\xBF//' services/${{ matrix.service }}/requirements.txt | grep -v '^-r' > /tmp/service-reqs.txt
-          pip install -r /tmp/service-reqs.txt pytest
+          pip install -r /tmp/service-reqs.txt pytest aiosqlite
 
       - name: Run tests
         working-directory: services/${{ matrix.service }}

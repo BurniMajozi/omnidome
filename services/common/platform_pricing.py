@@ -16,7 +16,7 @@ def catalog():
 class Selection(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bundle: str | None = None
-    modules: dict[str, Literal["starter", "professional", "enterprise"]] = Field(default_factory=dict)
+    modules: dict[str, Literal["free", "starter", "professional", "enterprise"]] = Field(default_factory=dict)
     period: Literal["monthly", "annually"] = "monthly"
     seats: int | None = Field(None, ge=1, le=100)
 
@@ -26,6 +26,8 @@ class Selection(BaseModel):
         ids = {m["id"] for m in data["modules"]}
         if self.bundle and self.bundle not in data["bundles"]: raise ValueError("Unknown bundle")
         if set(self.modules) - ids: raise ValueError("Unknown or unpriced module")
+        if any(tier == "free" and key not in data["free_modules"] for key, tier in self.modules.items()):
+            raise ValueError("Free tier is not available for this panel")
         if not self.bundle and not self.modules: raise ValueError("Choose a bundle or at least one module")
         return self
 
@@ -39,7 +41,8 @@ def quote(selection: Selection, tax_policy=None):
     months = 12 if selection.period == "annually" else 1
     factor = (Decimal(100) - Decimal(data["annual_discount_percent"])) / 100 if months == 12 else Decimal(1)
     bundle = data["bundles"].get(selection.bundle) if selection.bundle else None
-    chosen = {m: bundle["tier"] for m in bundle["modules"]} if bundle else {}
+    chosen = {m: "free" for m in data["free_modules"]} if bundle else {}
+    if bundle: chosen.update({m: bundle["tier"] for m in bundle["modules"]})
     chosen.update(selection.modules)
     included = bundle["seats"] if bundle else 1
     seats = selection.seats or included
@@ -56,8 +59,9 @@ def quote(selection: Selection, tax_policy=None):
         tier = chosen.get(module["id"])
         if not tier: continue
         if bundle and module["id"] in bundle["modules"]:
-            if tier != bundle["tier"]: raise ValueError("Change to modular pricing to use different tiers for bundled panels")
-            continue
+            if tier == bundle["tier"]: continue
+            if bundle["tier"] != "free": raise ValueError("Change to modular pricing to use different tiers for bundled panels")
+        if tier == "free": continue
         add(module["name"] + " (" + tier + ")", module["prices"][tier])
     extra_seat_price = bundle["extra_seat_price"] if bundle else 45
     if seats > included: add(f"{seats - included} extra seats", (seats - included) * extra_seat_price)
@@ -65,13 +69,14 @@ def quote(selection: Selection, tax_policy=None):
     vat = (net * vat_rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     total = net + vat
     if inclusive:
-        total = sum(Decimal(line["display_zar"]) for line in lines)
+        total = sum((Decimal(line["display_zar"]) for line in lines), Decimal(0))
         vat = total-net
-    included_modules = set(bundle["modules"]) if bundle else set()
-    credits = (bundle["credits"] if bundle else 0) + sum(data["tier_limits"][tier]["module_ai_credits"] for key, tier in chosen.items() if key not in included_modules)
-    usage_policy = {**data["usage_policy"], "monthly_credits": min(10000, credits), "allowance_basis": "bundle_plus_addons" if bundle else "sum_of_selected_modules", "module_limits": {key: data["tier_limits"]["free" if selection.bundle == "starter" and key == "crm" else tier] for key,tier in chosen.items()}}
+    included_modules = {key for key in bundle["modules"] if chosen[key] == bundle["tier"]} if bundle else set()
+    # Free panels share one allowance; selecting several does not mint extra credits.
+    credits = (bundle["credits"] if bundle else data["usage_policy"]["allowances"]["free"] if "free" in chosen.values() else 0) + sum(data["tier_limits"][tier]["module_ai_credits"] for key, tier in chosen.items() if key not in included_modules and tier != "free")
+    usage_policy = {**data["usage_policy"], "monthly_credits": min(10000, credits), "allowance_basis": "bundle_plus_addons" if bundle else "sum_of_selected_modules", "module_limits": {key: data["tier_limits"][tier] for key,tier in chosen.items()}}
     return {"catalog_version": data["version"], "usage_policy": usage_policy, "selection": {**selection.model_dump(), "modules": chosen, "seats": seats},
-            "name": bundle["name"] if bundle else "Custom modules", "tier": "FREE" if selection.bundle == "starter" and net == 0 else (bundle["tier"] if bundle else max(chosen.values(), key=lambda x: ["starter", "professional", "enterprise"].index(x))).upper(),
+            "name": bundle["name"] if bundle else "Custom modules", "tier": max(chosen.values(), key=lambda x: ["free", "starter", "professional", "enterprise"].index(x)).upper(),
             "period": selection.period, "currency": data["currency"], "lines": lines,
             "seats": seats, "seat_price": extra_seat_price, "entitlements": sorted(chosen),
             "net_zar": str(net.quantize(Decimal("0.01"))), "vat_zar": str(vat), "total_zar": str(total.quantize(Decimal("0.01"))),

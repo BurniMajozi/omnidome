@@ -1400,18 +1400,18 @@ export default function LandingPage() {
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6 mb-16">
                         <ShineBorder borderRadius={12} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={2}>
-                            <Link href="/auth">
+                            <Link href="/trial">
                                 <Button size="lg" className="h-16 px-10 text-xl font-black bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_0_40px_rgba(79,70,229,0.4)] transition-all duration-300 group overflow-hidden relative active:scale-95">
                                     <span className="relative z-10 flex items-center gap-3">
-                                        Start Your Free Trial <ArrowRight className="h-6 w-6 group-hover:translate-x-1.5 transition-transform" />
+                                        Try it For Free <ArrowRight className="h-6 w-6 group-hover:translate-x-1.5 transition-transform" />
                                     </span>
                                     <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-blue-500 opacity-0 group-hover:opacity-100 transition-opacity" />
                                 </Button>
                             </Link>
                         </ShineBorder>
                         <ShineBorder borderRadius={12} color={["#6366f1", "#8b5cf6", "#06b6d4"]} duration={3}>
-                            <Button size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-border bg-muted/50 hover:bg-muted text-foreground backdrop-blur-md transition-all active:scale-95">
-                                Schedule a Demo
+                            <Button asChild size="lg" variant="outline" className="h-16 px-10 text-xl font-bold border-border bg-muted/50 hover:bg-muted text-foreground backdrop-blur-md transition-all active:scale-95">
+                                <Link href="/demo">Schedule a Demo</Link>
                             </Button>
                         </ShineBorder>
                     </div>
@@ -1531,7 +1531,7 @@ export default function LandingPage() {
                                     <AnimatedBeamMultipleOutputDemo className="absolute inset-0 flex items-center justify-center border-none transition-all duration-300 ease-out group-hover:scale-105" />
                                 }
                                 Icon={Share2Icon}
-                                description="Connect all your modules - CRM, Billing, Network, Support - in one hub."
+                                description="Connect all your modules - CRM, Billing, Network, Support - in one Dome."
                                 href="/products/overview"
                                 cta="Learn more"
                             />
@@ -1821,14 +1821,14 @@ export default function LandingPage() {
                         Join leading South African ISPs using OmniDome to streamline operations and grow revenue.
                     </p>
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
-                        <Link href="/auth">
+                        <Link href="/trial">
                             <Button size="lg" className="bg-primary hover:bg-primary/90 text-primary-foreground text-xl font-black h-16 px-10 shadow-[0_0_30px_rgba(79,70,229,0.4)] transition-all">
-                                Start Your Free Trial
+                                Try it For Free
                                 <ArrowRight className="ml-3 h-6 w-6" />
                             </Button>
                         </Link>
-                        <Button size="lg" variant="outline" className="border-border bg-muted/50 text-foreground hover:bg-muted text-xl font-bold h-16 px-10 backdrop-blur-md">
-                            Schedule a Demo
+                        <Button asChild size="lg" variant="outline" className="border-border bg-muted/50 text-foreground hover:bg-muted text-xl font-bold h-16 px-10 backdrop-blur-md">
+                            <Link href="/demo">Schedule a Demo</Link>
                         </Button>
                     </div>
                 </div>

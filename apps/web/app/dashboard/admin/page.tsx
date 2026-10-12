@@ -3,7 +3,7 @@
 /**
  * Admin Console — /dashboard/admin
  *
- * Hub page for the Admin section. Links to Agent Manager, Workflows, and Audit.
+ * Dome page for the Admin section. Links to Agent Manager, Workflows, and Audit.
  * This page prevents the 404 when navigating to /dashboard/admin directly.
  */
 

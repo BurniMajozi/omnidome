@@ -45,6 +45,22 @@ def test_clarification_validation_never_implies_approval():
         with pytest.raises(HTTPException):
             ask_user.validate_answers(questions, [answer])
 
+@pytest.mark.parametrize("count", [2,4])
+def test_retry_workflow_question_matches_advertised_schema(count):
+    body={"questions":[{"header":"Retry Workflow","multi_select":False,"question":"Which workflow would you like to retry?",
+        "options":[{"label":f"Workflow {i}","description":"Currently active workflow"} for i in range(count)]}]}
+    assert ask_user.Questions.model_validate(body).questions[0].header=="Retry Workflow"
+    schema=ask_user.tool_schema()
+    assert schema["properties"]["questions"]["items"]["properties"]["header"]["maxLength"]==24
+    assert "$ref" not in str(schema)
+
+def test_question_validation_names_the_actual_bad_field():
+    from pydantic import ValidationError
+    body={"questions":[{**QUESTIONS["questions"][0],"header":"x"*25}]}
+    with pytest.raises(ValidationError) as error:ask_user.Questions.model_validate(body)
+    message=ask_user.validation_error(error.value)
+    assert "questions.0.header" in message and "24" in message
+
 
 def test_durable_question_owner_tenant_resume_and_cancel(tmp_path, monkeypatch):
     async def scenario():

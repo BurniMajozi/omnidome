@@ -107,6 +107,8 @@ async def ingest_event(body: EventIn, ctx: AuthContext = Depends(get_auth_contex
         event_type = normalise_event_type(body.type)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+    if event_type.startswith("platform.billing."):
+        raise HTTPException(403,"Platform billing events are emitted only by verified billing services")
     async with session_scope() as s:
         event_id = await publish(s, ctx.tenant_id, event_type, body.payload, source="api",
                                  idempotency_key=body.idempotency_key)

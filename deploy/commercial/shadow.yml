@@ -1,4 +1,12 @@
 services:
+  tenant_memory:
+    environment:
+      KNOWLEDGE_DB_URL: ${KNOWLEDGE_DB_URL:-}
+      KNOWLEDGE_DB_ADMIN_URL: ${KNOWLEDGE_DB_ADMIN_URL:-}
+      KNOWLEDGE_ENABLED: ${KNOWLEDGE_ENABLED:-true}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-nomic-embed-text}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-768}
+      OLLAMA_BASE_URL: ${KNOWLEDGE_OLLAMA_URL:-http://ollama:11434}
   admin:
     environment:
       AUTUMN_SYNC_ENABLED: 'false'

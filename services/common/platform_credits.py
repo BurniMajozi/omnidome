@@ -45,7 +45,7 @@ def window(active, now=None):
     index = max(0,(now.year-anchor.year)*12+now.month-anchor.month)
     if add_months(anchor,index)>now: index=max(0,index-1)
     start = add_months(anchor,index)
-    expiry = active["expires_at"]
+    expiry = None if active["policy"].get("permanent_free") else active["expires_at"]
     end = min(add_months(anchor,index+1),expiry) if expiry else add_months(anchor,index+1)
     allowance = int(active["policy"].get("monthly_credits",0)) if not expiry or expiry>now else 0
     return start,end,allowance
@@ -53,8 +53,12 @@ def window(active, now=None):
 async def reserve(db, tenant, minimum):
     """Serialize starts/completions with purchases to prevent wallet overdrafts."""
     config = await policy(db)
-    if not config["enabled"]: return 0
-    await commerce.tenant_lock(db,tenant)
+    from services.common.platform_trials import expire
+    await expire(db,tenant)
+    tenant_row = await commerce.tenant_lock(db,tenant)
+    if (tenant_row["settings"] or {}).get("platform_trial",{}).get("status")=="pending":
+        raise HTTPException(402,"Accept the owner invitation before using trial credits")
+    if not config["enabled"] and not (tenant_row["settings"] or {}).get("platform_trial"): return 0
     active = (await db.execute(text("SELECT * FROM platform_usage_entitlements WHERE tenant_id=:t"), {"t":str(tenant)})).mappings().first()
     start,end,allowance = window(active)
     used = int((await db.execute(text("SELECT coalesce(sum(credits),0) FROM platform_usage_operations WHERE tenant_id=:t AND started_at>=:start AND started_at<:end"), {"t":str(tenant),"start":start,"end":end})).scalar_one())
@@ -118,4 +122,8 @@ async def settle(db, order, payment):
     if fresh["status"]=="cancelled": raise HTTPException(409,"Credit invoice cancelled")
     await db.execute(text("INSERT INTO platform_credit_entries(id,tenant_id,order_id,credits) VALUES(:id,:t,:o,:c) ON CONFLICT(order_id) DO NOTHING"), {"id":str(uuid.uuid4()),"t":str(order["tenant_id"]),"o":str(order["id"]),"c":order["quote"]["credit_topup"]["credits"]})
     await db.execute(text("UPDATE platform_orders SET status='paid',paid_at=now(),payment_id=:p WHERE id=:id"), {"p":str(payment.get("id") or payment["reference"]),"id":str(order["id"])})
+    from services.common.platform_billing_events import emit
+    await emit(db,order["tenant_id"],"credits.topped_up",
+        {"order_id":str(order["id"]),"reference":order["reference"],"credits_added":order["quote"]["credit_topup"]["credits"],"total_zar":order["quote"]["total_zar"]},
+        "topup:"+str(order["id"]),("platform_order",order["id"]))
     return {"status":"paid","duplicate":False,"credits_added":order["quote"]["credit_topup"]["credits"]}

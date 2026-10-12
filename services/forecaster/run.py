@@ -164,12 +164,18 @@ def main(argv: Optional[list] = None) -> int:
     if not a.dry_run and not sink.configured():
         log.error("TENANT_MEMORY_SERVICE_URL is not set; nothing can be written (use --dry-run to test)")
         return 2
+    engine = make_engine()
+    if a.pending:
+        with engine.connect() as conn:
+            queued = conn.execute(text("SELECT 1 FROM forecast_runs WHERE status='queued' LIMIT 1")).first()
+        if queued is None:
+            log.info("No queued forecast requests; model loading skipped")
+            return 0
     foundation = chronos_adapter.load()
     if foundation:
         log.info("model path: %s %s plus statistical baselines", foundation.name, foundation.version)
     else:
         log.info("model path: statistical baselines only (%s)", chronos_adapter.status()[1])
-    engine = make_engine()
     if a.pending:
         res = process_pending(engine, sink, foundation=foundation, dry_run=a.dry_run)
         log.info("processed %d queued run(s): %s", len(res), res)

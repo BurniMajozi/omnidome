@@ -100,6 +100,10 @@ LEAD_WARMING_TEMPLATES = [
 async def handle_event(event: dict) -> None:
     """Run the tenant's active workflows for this event type (once per event)."""
     tenant_id = uuid.UUID(event["tenant_id"])
+    from services.common.platform_billing_events import PREFIX, SOURCE
+    if event["type"].startswith(PREFIX) and event.get("source") != SOURCE:
+        logger.warning("Ignoring untrusted platform billing event %s", event.get("id"))
+        return
     async with session_scope() as s:
         workflows = (await s.execute(select(Workflow).where(
             Workflow.tenant_id == tenant_id, Workflow.status == "active",

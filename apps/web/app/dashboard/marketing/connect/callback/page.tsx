@@ -3,7 +3,7 @@
 /**
  * Landing page for the in-app account connect flow. The provider redirects here with ?st=<state>
  * plus its own params. We hand every param to the marketing service, render a picker if one is
- * needed, then return to the hub with a success/failure banner. The user never lands on the
+ * needed, then return to the Dome with a success/failure banner. The user never lands on the
  * provider's own dashboard.
  */
 

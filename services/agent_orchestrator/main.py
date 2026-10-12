@@ -97,6 +97,9 @@ async def startup() -> None:
                 conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN NOT NULL DEFAULT false"))
                 conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS last_run_at TIMESTAMPTZ"))
                 conn.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ"))
+                conn.execute(text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS checkpoint JSONB"))
+                conn.execute(text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS event_id UUID"))
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_event ON workflow_runs(workflow_id,event_id)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_next_run ON workflows (next_run_at)"))
 
         await run_with_db_retry(lambda: asyncio.to_thread(_create_tables), logger=logger)
@@ -105,11 +108,11 @@ async def startup() -> None:
     if not skip_db:
         import asyncio
         from services.common.db import get_engine, run_with_db_retry
-        from services.agent_orchestrator.models import Base as MainBase, AgentJob, AgentTenantBudget, RegisteredAgent
+        from services.agent_orchestrator.models import Base as MainBase, AgentJob, AgentJobActivity, AgentTenantBudget, RegisteredAgent
 
         def _ensure_control_plane() -> None:
             from services.agent_orchestrator.ask_user import PendingQuestion
-            MainBase.metadata.create_all(bind=get_engine(), tables=[RegisteredAgent.__table__, AgentTenantBudget.__table__, AgentJob.__table__, PendingQuestion.__table__])
+            MainBase.metadata.create_all(bind=get_engine(), tables=[RegisteredAgent.__table__, AgentTenantBudget.__table__, AgentJob.__table__, AgentJobActivity.__table__, PendingQuestion.__table__])
 
         await run_with_db_retry(lambda: asyncio.to_thread(_ensure_control_plane), logger=logger)
         if os.getenv("AGENT_JOB_WORKER_ENABLED", "true").lower() == "true":
@@ -141,6 +144,12 @@ async def startup() -> None:
                 # Event-triggered workflows (SPEC-lead-automations.md); create_all never ALTERs.
                 await s.execute(text("ALTER TABLE workflows ADD COLUMN IF NOT EXISTS trigger_event VARCHAR(120)"))
                 await s.execute(text("CREATE INDEX IF NOT EXISTS ix_workflows_trigger_event ON workflows (trigger_event)"))
+                await s.execute(text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS checkpoint JSONB"))
+                await s.execute(text("ALTER TABLE workflow_runs ADD COLUMN IF NOT EXISTS event_id UUID"))
+                await s.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_workflow_event ON workflow_runs(workflow_id,event_id)"))
+                from services.agent_orchestrator.billing_workflows import NOTICE_DDL,NOTICE_FK_DDL
+                await s.execute(text(NOTICE_DDL))
+                for statement in NOTICE_FK_DDL: await s.execute(text(statement))
                 # LLM usage tracing tables (spec A7).
                 from services.agent_orchestrator.usage import ensure_schema as ensure_usage_schema
                 await ensure_usage_schema(s)
@@ -159,8 +168,20 @@ async def startup() -> None:
             # Executes approved tool calls idempotently upon approval decision (spec A8).
             from services.agent_orchestrator.approvals import consumer as approvals_consumer
             approvals_consumer.start()
+            from services.agent_orchestrator.workflow_engine import approval_recovery_loop
+            app.state.workflow_approval_recovery = asyncio.create_task(approval_recovery_loop())
 
         schedule_background(run_with_db_retry(_ensure_bus_schema, logger=logger))
+
+
+@app.on_event("shutdown")
+async def stop_workflow_recovery():
+    import asyncio
+    from contextlib import suppress
+    task=getattr(app.state,"workflow_approval_recovery",None)
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError): await task
 
 
 @app.middleware("http")
@@ -211,6 +232,8 @@ app.include_router(jobs_router, prefix="/api/agents")
 
 from services.agent_orchestrator.routes.workflows import router as workflows_router
 app.include_router(workflows_router, prefix="/api/workflows")
+from services.agent_orchestrator.routes.chat_workflows import router as chat_workflows_router
+app.include_router(chat_workflows_router, prefix="/api/chat-workflows")
 
 from services.agent_orchestrator.routes.notifications import (
     events_router as bus_events_router,
@@ -220,6 +243,8 @@ app.include_router(notifications_router, prefix="/api/notifications")
 
 from services.agent_orchestrator.routes.usage import router as usage_router
 app.include_router(usage_router, prefix="/api/usage")
+from services.agent_orchestrator.routes.llm_console import router as llm_console_router
+app.include_router(llm_console_router, prefix="/api/llm-console")
 
 from services.agent_orchestrator.routes.memory import router as memory_router
 app.include_router(memory_router, prefix="/api/memory")

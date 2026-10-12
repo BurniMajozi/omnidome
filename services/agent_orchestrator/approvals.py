@@ -169,6 +169,9 @@ async def request_approval(
     expires_at = datetime.now(timezone.utc) + timedelta(hours=DEFAULT_EXPIRATION_HOURS)
 
     # `_`-prefixed keys are reserved for the gate itself; never accept them from a caller.
+    if tool_name == "workflows.run":
+        from services.agent_orchestrator.workflow_tools import freeze_arguments
+        arguments = await freeze_arguments(session,tenant_id,arguments)
     stored_arguments = {k: v for k, v in (arguments or {}).items() if not str(k).startswith("_")}
     if tool_call_id:
         stored_arguments["_tool_call_id"] = tool_call_id
@@ -667,6 +670,12 @@ async def execute_approved(
         result["resumed_response"] = resumed_response
 
     await _record(row, result)
+    if row.run_id:
+        from services.agent_orchestrator.workflow_engine import resume_workflow_for_approval
+        try:
+            await resume_workflow_for_approval(row.tenant_id,row.id)
+        except Exception:
+            logger.exception("Approved action recorded; workflow continuation awaits recovery for %s", row.id)
     return result
 
 
@@ -676,6 +685,9 @@ async def handle_approval_decided(event: dict) -> None:
     payload = event.get("payload") or {}
     if payload.get("approval_id") and payload.get("decision") == "approved":
         await execute_approved(event["tenant_id"], payload["approval_id"])
+    if payload.get("approval_id"):
+        from services.agent_orchestrator.workflow_engine import resume_workflow_for_approval
+        await resume_workflow_for_approval(event["tenant_id"],payload["approval_id"])
 
 
 consumer = EventConsumer("approval_gate", {EVENT_APPROVAL_DECIDED: handle_approval_decided})

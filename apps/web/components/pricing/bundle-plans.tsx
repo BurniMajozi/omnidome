@@ -5,7 +5,7 @@ import { catalog, bundleSelection, startCheckout, discountedPrice } from "@/lib/
 import { useEffect, useState } from "react"
 
 const descriptions = {
-  starter: "Start with CRM for one person.",
+  starter: "CRM, service, portal, retention, products and stock for one person.",
   growth: "CRM and sales for a small team.",
   professional: "Run customer, sales and billing operations together.",
   enterprise: "Add retention, network operations and compliance.",
@@ -44,7 +44,7 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
           <p className="mt-1 text-xs text-muted-foreground">Additional seats {money(periodicPrice(bundle.extra_seat_price))} / seat / month</p>
           <Button className="my-5 w-full" onClick={() => startCheckout(bundleSelection(id, period))}>Choose {bundle.name}</Button>
           <p className="mb-3 text-sm font-medium">Included panels</p>
-          <ul className="space-y-2 text-sm text-muted-foreground">{bundle.modules.map(module => <li key={module}>{catalog.modules.find(row => row.id === module)?.name}</li>)}</ul>
+          <ul className="space-y-2 text-sm text-muted-foreground">{Array.from(new Set([...catalog.free_modules, ...bundle.modules])).map(module => <li key={module}>{catalog.modules.find(row => row.id === module)?.name}{!bundle.modules.includes(module) && " · Free tier"}</li>)}</ul>
         </article>
       })}
     </div>
@@ -52,6 +52,6 @@ export function BundlePlans({ period, onPeriodChange, onCustomize }: {
       <div><h2 className="font-semibold">Prefer individual panels?</h2><p className="text-sm text-muted-foreground">Build a modular plan and review its total before checkout.</p></div>
       <Button variant="outline" onClick={onCustomize}>Build a modular plan</Button>
     </div>
-    <p className="text-sm text-muted-foreground">AI usage is currently measured in shadow mode with no credit deductions or overage charges. Managed email, social connections, research and voice capacity are separate from software access.</p>
+    <p className="text-sm text-muted-foreground">Free panels include {catalog.tier_limits.free.writes_per_month} successful writes per panel per UTC month. Free has {catalog.bundles.starter.credits} shared AI credits per month, not per panel. Advanced features require a higher panel tier. Managed email, social connections, research and voice capacity are separate from software access.</p>
   </section>
 }

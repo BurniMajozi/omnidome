@@ -86,10 +86,10 @@ const certifications = [
         description: "Master the fundamentals of OmniDome platform."
     },
     {
-        name: "Sales Hub Specialist",
+        name: "Sales Dome Specialist",
         price: "R 3,500",
         duration: "2-day workshop",
-        description: "Deep dive into Sales Hub implementation and optimization."
+        description: "Deep dive into Sales Dome implementation and optimization."
     },
     {
         name: "Network Ops Expert",

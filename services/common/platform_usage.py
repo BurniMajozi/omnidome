@@ -50,6 +50,8 @@ DDL = [
 
 
 async def ensure_schema(conn):
+    from services.common.event_bus import ensure_schema as ensure_event_bus
+    await ensure_event_bus(conn)
     for statement in DDL:
         await conn.execute(text(statement))
     from services.common.provider_costs import ensure_schema as ensure_provider_costs
@@ -118,6 +120,8 @@ async def activate(db, tenant, priced, generation, revision, *, source, actor=No
     """Only authoritative provisioning calls this, in the payment/admin transaction."""
     now = now or datetime.now(timezone.utc)
     policy = policy_for_quote(priced)
+    if priced.get("tier")=="FREE" and priced.get("amount_cents")==0:
+        policy["permanent_free"] = True
     expires = add_months(now, 12 if priced["period"] == "annually" else 1)
     # An owner override is bounded to the invoice's service period, not perpetual.
     await db.execute(text("""INSERT INTO platform_usage_entitlements
@@ -136,7 +140,7 @@ async def start_operation(db, tenant, operation, kind, panel="unattributed"):
     reserved = await reserve(db,tenant,credit_charge(catalog()["usage_policy"],kind))
     active = (await db.execute(text("SELECT policy,expires_at FROM platform_usage_entitlements WHERE tenant_id=:t"), {"t": str(tenant)})).mappings().first()
     policy = dict(active["policy"]) if active else {**catalog()["usage_policy"], "monthly_credits": 0, "legacy": True}
-    if active and active["expires_at"] <= datetime.now(timezone.utc):
+    if active and not policy.get("permanent_free") and active["expires_at"] <= datetime.now(timezone.utc):
         policy["monthly_credits"] = 0
     policy = {**policy,"reserved_credits":reserved}
     await db.execute(text("""INSERT INTO platform_usage_operations(id,tenant_id,kind,policy,status,panel,reserved_credits)
@@ -159,3 +163,5 @@ async def finish_operation(db, tenant, operation, policy, kind, *, tokens, eligi
     if policy.get("reserved_credits"):
         from services.common.platform_credits import debit
         await debit(db,tenant,operation,charge,row[0])
+        from services.common.platform_billing_events import credits_checkpoint
+        await credits_checkpoint(db,tenant)

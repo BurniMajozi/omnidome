@@ -1,9 +1,9 @@
 "use client"
 
 /**
- * Communication Hub — /dashboard/comms
+ * Communication Dome — /dashboard/comms
  *
- * Standalone full-page route for the team communication hub.
+ * Standalone full-page route for the team communication Dome.
  * Accessible from the sidebar "Communication" and "AgentMail" nav items.
  * Supports ?tab=mail, ?tab=chat, ?tab=tasks, etc.
  */
@@ -28,7 +28,7 @@ export default function CommsPage() {
     <Suspense
       fallback={
         <div className="h-screen w-full flex items-center justify-center bg-background text-sm text-muted-foreground">
-          Loading Communication Hub...
+          Loading Communication Dome...
         </div>
       }
     >

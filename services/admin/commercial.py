@@ -26,7 +26,12 @@ async def usage_sweep_loop():
     while True:
         await asyncio.sleep(60)
         try:
-            async with session_scope() as db: await sweep_abandoned(db)
+            async with session_scope() as db:
+                await sweep_abandoned(db)
+                from services.common.platform_trials import sweep
+                await sweep(db)
+            from services.admin.platform_onboarding import deliver_notices
+            await deliver_notices()
         except Exception:
             logging.getLogger("admin").warning("Usage cleanup failed; retrying next minute")
 
@@ -44,6 +49,8 @@ async def member_scope(ctx, tenant, db):
 @router.get("/tenants/{tenant}/usage")
 async def usage(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context), db=Depends(get_async_session)):
     await member_scope(ctx, tenant, db)
+    from services.common.platform_trials import expire
+    await expire(db,tenant)
     # Recover abandoned measurement work without inventing credits or provider costs.
     await db.execute(text("UPDATE platform_usage_operations SET status='abandoned',completed_at=now() WHERE tenant_id=:t AND status='running' AND started_at<now()-interval '2 hours'"), {"t":str(tenant)})
     active = (await db.execute(text("SELECT * FROM platform_usage_entitlements WHERE tenant_id=:t"), {"t": str(tenant)})).mappings().first()
@@ -57,8 +64,8 @@ async def usage(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context),
         if add_months(anchor,index) > now:
             index = max(0,index-1)
         start = add_months(anchor,index)
-        end = min(add_months(anchor,index+1), active["expires_at"])
-        if active["expires_at"] <= now:
+        end = add_months(anchor,index+1) if policy.get("permanent_free") else min(add_months(anchor,index+1), active["expires_at"])
+        if not policy.get("permanent_free") and active["expires_at"] <= now:
             policy["monthly_credits"] = 0
     summary = (await db.execute(text("""SELECT coalesce(sum(credits),0) AS used,
       count(*) FILTER (WHERE status='running') AS running FROM platform_usage_operations
@@ -72,10 +79,11 @@ async def usage(tenant: uuid.UUID, ctx: AuthContext = Depends(get_auth_context),
       count(*) FILTER(WHERE status='running') AS running FROM platform_usage_operations
       WHERE tenant_id=:t AND started_at>=:start AND started_at<:end GROUP BY panel ORDER BY sum(credits) DESC,panel"""), {"t":str(tenant),"start":start,"end":end})).mappings().all()
     sync = (await db.execute(text("SELECT status,error_code,attempts FROM platform_usage_outbox WHERE tenant_id=:t AND action='reconcile' ORDER BY created_at DESC LIMIT 1"), {"t": str(tenant)})).mappings().first()
+    trial = (await db.execute(text("SELECT settings->'platform_trial' FROM tenants WHERE id=:t"),{"t":str(tenant)})).scalar_one_or_none()
     return {"policy": policy, "period_start": start, "period_end": end, "used": summary["used"],
             "remaining": max(0, policy["monthly_credits"]-int(summary["used"])), "running": summary["running"],
             "source": active["source"] if active else "legacy", "sync": dict(sync) if sync else None,
-            "recent": [dict(row) for row in recent], "charges_enabled": credit_policy["enabled"],
+            "recent": [dict(row) for row in recent], "charges_enabled": credit_policy["enabled"] or bool(trial),
             "credit_wallet":{"purchased_remaining":purchased,"reserved":reserved,
                 "available":max(0,max(0,policy["monthly_credits"]-int(summary["used"]))+purchased-reserved),
                 "topup_policy":credit_policy},"by_panel":[dict(row) for row in by_panel],
@@ -193,15 +201,17 @@ async def override(tenant: uuid.UUID, body: PolicyOverride, ctx: AuthContext = D
     active = (await db.execute(text("SELECT * FROM platform_usage_entitlements WHERE tenant_id=:t FOR UPDATE"), {"t": str(tenant)})).mappings().first()
     if not active:
         raise HTTPException(409, "Provision a catalogue plan first")
-    if active["expires_at"] <= now:
+    permanent_free = active["policy"].get("permanent_free",False)
+    if not permanent_free and active["expires_at"] <= now:
         raise HTTPException(409, "Renew or explicitly provision the plan before changing its allowance")
     policy = {**active["policy"], "monthly_credits": body.monthly_credits}
+    policy.pop("permanent_free",None)
     ident = uuid.uuid4()
     await db.execute(text("""INSERT INTO platform_usage_policy_versions(id,tenant_id,policy,actor_id,reason,expires_at)
       VALUES(:id,:t,CAST(:p AS jsonb),:actor,:reason,:expiry)"""),
       {"id": str(ident), "t": str(tenant), "p": json.dumps(policy), "actor": str(ctx.user_id), "reason": body.reason, "expiry": body.expires_at})
     # Override can expire earlier than paid access but cannot extend a paid grant.
-    expiry = min(body.expires_at, active["expires_at"])
+    expiry = body.expires_at if permanent_free else min(body.expires_at, active["expires_at"])
     await db.execute(text("""UPDATE platform_usage_entitlements SET policy=CAST(:p AS jsonb),generation=:g,
       source='platform_owner',actor_id=:actor,reason=:reason,expires_at=:expiry,updated_at=now() WHERE tenant_id=:t"""),
       {"p": json.dumps(policy), "g": "policy:"+str(ident), "actor": str(ctx.user_id), "reason": body.reason, "expiry": expiry, "t": str(tenant)})

@@ -34,6 +34,7 @@ import {
   Code,
   Maximize2,
   Minimize2,
+  Workflow,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -48,6 +49,7 @@ import {
 import { cn } from "@/lib/utils"
 import { ArtifactLinkCards } from "@/components/chat/artifact-link-cards"
 import { AgentActivity, activityEvent, emptyActivity, finishActivity, type Activity } from "@/components/chat/agent-activity"
+import { ChatWorkflows } from "@/components/workflows/chat-workflows"
 import { humanizeTool } from "@/lib/agent-activity"
 import { artifactItemsFromToolCalls, openAppPath, safeAppPath, safeExternalUrl } from "@/lib/artifact-links"
 import {
@@ -533,6 +535,9 @@ interface AGUIChatProps {
 }
 
 export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContext, initialDraft }: AGUIChatProps) {
+  const [modelChoices, setModelChoices] = useState<string[]>([])
+  const [requestedModel, setRequestedModel] = useState("")
+  useEffect(() => { if (isOpen) fetch("/api/orchestrator/llm-console/choices", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(d => { setModelChoices(d?.models || []); setRequestedModel("") }).catch(() => setModelChoices([])) }, [isOpen])
   const [messages, setMessages] = useState<AGUIMessage[]>([])
   const [inputValue, setInputValue] = useState(initialDraft || "")
   const [isSending, setIsSending] = useState(false)
@@ -545,6 +550,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
   const [artifactViewMode, setArtifactViewMode] = useState<"preview" | "code">("preview")
   const [artifactRevisionPrompt, setArtifactRevisionPrompt] = useState("")
   const [conversationId, setConversationId] = useState<string | null>(null)
+  const [showWorkflows, setShowWorkflows] = useState(false)
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [context] = useState<Record<string, unknown>>(initialContext || {})
   const [error, setError] = useState<string | null>(null)
@@ -962,6 +968,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           message: messageText,
           context: {
             ...context,
+            ...(requestedModel ? { requested_model: requestedModel } : {}),
             conversation_id: conversationId,
           },
           conversation_id: conversationId || undefined,
@@ -1159,7 +1166,7 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
       {/* Left Chat Column */}
       <div className={cn("flex min-w-0 flex-1 flex-col overflow-hidden", canvasOpen && "w-1/2 border-r border-border")}>
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-border bg-secondary/80 px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-secondary/80 px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="rounded-lg bg-primary/10 p-1.5 text-primary">
               <Bot className="h-5 w-5" />
@@ -1176,6 +1183,11 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
           </div>
 
           <div className="flex items-center gap-1">
+            {modelChoices.length > 0 && <select aria-label="AI model for this chat" disabled={isSending} className="h-7 max-w-40 rounded border bg-background text-xs" value={requestedModel} onChange={e => setRequestedModel(e.target.value)}><option value="">Plan default</option>{modelChoices.map(model => <option key={model} value={model}>{model}</option>)}</select>}
+            <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 px-2" title="Workflows attached to this chat"
+              onClick={() => setShowWorkflows(true)} disabled={isSending}>
+              <Workflow className="h-3.5 w-3.5" /><span className="hidden sm:inline">Workflows</span>
+            </Button>
             <Button
               variant={showHistory ? "secondary" : "ghost"}
               size="sm"
@@ -1268,6 +1280,8 @@ export function AGUIChat({ isOpen, onClose, initialAgent, context: initialContex
         )}
 
         {/* History Panel or Active Chat */}
+        {!showHistory && <ChatWorkflows key={conversationId || "new"} conversationId={conversationId} onConversation={setConversationId}
+          open={showWorkflows} onOpenChange={setShowWorkflows} chatBusy={isSending} />}
         {showHistory ? (
           <div className="flex-1 overflow-y-auto p-3 flex flex-col space-y-3 bg-card">
             <div className="flex items-center justify-between border-b border-border pb-2 px-1">

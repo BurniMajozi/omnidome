@@ -220,7 +220,7 @@ export function rememberConnectReturn(path: string) {
   try {
     sessionStorage.setItem(CONNECT_RETURN_KEY, path)
   } catch {
-    /* storage unavailable: callback falls back to the marketing hub */
+    /* storage unavailable: callback falls back to the marketing Dome */
   }
 }
 export function takeConnectReturn(): string | null {

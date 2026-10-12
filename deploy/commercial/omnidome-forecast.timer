@@ -1,0 +1,8 @@
+[Unit]
+Description=Check approved OmniDome forecast requests every five minutes
+[Timer]
+OnBootSec=120
+OnUnitActiveSec=300
+Unit=omnidome-forecast.service
+[Install]
+WantedBy=timers.target

@@ -338,6 +338,36 @@ def test_process_pending_claims_runs_once_and_records_summary(tmp_path):
 
 # ── hard rules ───────────────────────────────────────────────────────────────
 
+@pytest.mark.parametrize("name",["chronos-bolt-small","chronos-2"])
+def test_real_api_uses_inputs_argument_and_quantile_shapes(name):
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    class Tensor:
+        def __init__(self,values):self.values=values
+        def __getitem__(self,key):return Tensor(self.values[key])
+        def cpu(self):return self
+        def numpy(self):return self.values
+    class Pipeline:
+        def predict_quantiles(self,inputs,*,prediction_length,quantile_levels):
+            assert quantile_levels==[.1,.5,.9]
+            values=np.tile([1.,2.,3.],(1,prediction_length,1))
+            return ([Tensor(values)] if name=="chronos-2" else Tensor(values)),None
+    model=chronos_adapter.ChronosModel.__new__(chronos_adapter.ChronosModel)
+    model.name=name;model._pipe=Pipeline();model._torch=SimpleNamespace(tensor=lambda values:values,no_grad=nullcontext)
+    median,lower,upper=model.predict(np.arange(24.),6,.8)
+    assert median.shape==lower.shape==upper.shape==(6,)
+    assert (lower<=median).all() and (median<=upper).all()
+
+def test_empty_queue_does_not_load_foundation_model(tmp_path, monkeypatch):
+    from services.fno_intelligence.forecast_models import FORECAST_TABLES
+    from services.fno_intelligence.models import Base
+    eng=make_db(tmp_path)
+    Base.metadata.create_all(eng,tables=FORECAST_TABLES)
+    monkeypatch.setattr(run,"make_engine",lambda:eng)
+    def unexpected_load():raise AssertionError("Empty queue must not load model weights")
+    monkeypatch.setattr(chronos_adapter,"load",unexpected_load)
+    assert run.main(["--pending","--dry-run"])==0
+
 def test_no_llm_or_timesfm3_code_paths():
     banned = ("openrouter", "llm_complete", "anthropic", "openai", "ollama", "gemini", "from services.common.firecrawl")
     for p in PKG.glob("*.py"):

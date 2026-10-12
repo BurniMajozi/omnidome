@@ -35,7 +35,7 @@ export function PricingSelector({ value, onChange, disabled = false, tenant }: {
     const modules = { ...panels }
     if (tier) modules[id] = tier; else delete modules[id]
     const bundle = catalog.bundles[value.bundle as keyof typeof catalog.bundles]
-    const keepBundle = bundle && bundle.modules.every(key => modules[key] === bundle.tier)
+    const keepBundle = bundle && Object.entries(selectedPanels(bundleSelection(value.bundle!, value.period))).every(([key, tier]) => modules[key] === tier)
     onChange({ ...value, bundle: keepBundle ? value.bundle : null, modules })
   }
   return <fieldset disabled={disabled} className="space-y-4 min-w-0">
@@ -50,8 +50,8 @@ export function PricingSelector({ value, onChange, disabled = false, tenant }: {
     <p className="text-xs text-muted-foreground">Overview and Admin are always free. Members inherit the selected panels. Add-ons retain the bundle; removing or changing an included panel switches to modular pricing. Above {catalog.online_seat_cap} seats, request a reviewed contract.</p>
     <div className="grid gap-2 sm:grid-cols-2">
       {catalog.modules.map(m => <div key={m.id} className="flex items-center justify-between gap-2 rounded border p-2">
-        <label className="flex items-center gap-2 text-sm min-w-0"><input type="checkbox" checked={!!panels[m.id]} onChange={e => changePanel(m.id, e.target.checked ? "starter" : undefined)} />{m.name}</label>
-        {panels[m.id] && <select aria-label={`${m.name} tier`} className="max-w-[130px] rounded border bg-background p-1 text-xs" value={panels[m.id]} onChange={e => changePanel(m.id, e.target.value as PricingTier)}>{["starter", "professional", "enterprise"].map(t => <option key={t}>{t}</option>)}</select>}
+        <label className="flex items-center gap-2 text-sm min-w-0"><input type="checkbox" checked={!!panels[m.id]} onChange={e => changePanel(m.id, e.target.checked ? (catalog.free_modules.includes(m.id) ? "free" : "starter") : undefined)} />{m.name}</label>
+        {panels[m.id] && <select aria-label={`${m.name} tier`} className="max-w-[130px] rounded border bg-background p-1 text-xs" value={panels[m.id]} onChange={e => changePanel(m.id, e.target.value as PricingTier)}>{[...(catalog.free_modules.includes(m.id) ? ["free"] : []), "starter", "professional", "enterprise"].map(t => <option key={t}>{t}</option>)}</select>}
       </div>)}
     </div>
     {quote?.proration && <div className="rounded border p-3 text-sm"><p>Unused prepaid time credit: R{quote.proration.unused_net_credit} before VAT.</p><p>Credit applied: R{quote.proration.credit_applied}. Remaining account credit: R{quote.proration.credit_remaining}.</p><p>The new cycle begins when settled. Quotes expire in 15 minutes. Credits stay on the account; no automatic refund is issued.</p></div>}

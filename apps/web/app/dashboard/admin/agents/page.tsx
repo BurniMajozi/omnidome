@@ -19,6 +19,7 @@ import {
 } from "@/components/admin/agent-insights"
 import type { AgentInfo } from "@/lib/orchestrator-api"
 import { AgentWorkView } from "@/components/admin/agent-work-view"
+import { ModelConsole } from "@/components/admin/model-console"
 
 // ─── Display-name map ────────────────────────────────────────────────────────
 
@@ -123,6 +124,14 @@ function TabError({ message }: { message: string }) {
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
+  const [platformOwner, setPlatformOwner] = useState(false)
+  useEffect(() => { fetch("/api/orchestrator/llm-console/capabilities", { cache: "no-store" }).then(r => r.ok ? r.json() : null).then(d => setPlatformOwner(d?.platform_owner === true)).catch(() => setPlatformOwner(false)) }, [])
+  const [managerTab, setManagerTab] = useState("work")
+  useEffect(() => {
+    const readHash = () => { if (window.location.hash === "#approvals") setManagerTab("approvals") }
+    readHash(); window.addEventListener("hashchange", readHash)
+    return () => window.removeEventListener("hashchange", readHash)
+  }, [])
   const [agents, setAgents] = useState<AgentInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -206,7 +215,7 @@ export default function AgentsPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="work" className="space-y-6">
+      <Tabs value={managerTab} onValueChange={setManagerTab} className="space-y-6">
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 border-b border-border pb-3">
           <div className="min-w-0 max-w-full overflow-x-auto pb-1">
           <TabsList className="w-max justify-start bg-muted/60">
@@ -218,6 +227,7 @@ export default function AgentsPage() {
               <Bot className="h-4 w-4" />
               Agents &amp; Models
             </TabsTrigger>
+            {platformOwner && <TabsTrigger value="models" className="gap-1.5 text-xs"><Cpu className="h-4 w-4" />Models &amp; Routing</TabsTrigger>}
             <TabsTrigger value="memory" className="gap-1.5 text-xs">
               <Database className="h-4 w-4" />
               Tenant Memory
@@ -247,6 +257,7 @@ export default function AgentsPage() {
         <TabsContent value="work" className="space-y-6">
           <AgentWorkView agents={agents} />
         </TabsContent>
+        {platformOwner && <TabsContent value="models"><ModelConsole /></TabsContent>}
 
         <TabsContent value="agents" className="space-y-6">
 

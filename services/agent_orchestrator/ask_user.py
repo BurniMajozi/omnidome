@@ -22,7 +22,7 @@ class Option(BaseModel):
 
 class Question(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    header: str = Field(min_length=1, max_length=12)
+    header: str = Field(min_length=1, max_length=24)
     question: str = Field(min_length=1, max_length=500)
     options: list[Option] = Field(min_length=2, max_length=4)
     multi_select: bool = False
@@ -35,6 +35,20 @@ class Question(BaseModel):
 class Questions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     questions: list[Question] = Field(min_length=1, max_length=3)
+
+def tool_schema():
+    """Inline references for provider compatibility, from the actual validator."""
+    schema = Questions.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    def inline(value):
+        if isinstance(value, list): return [inline(item) for item in value]
+        if not isinstance(value, dict): return value
+        if "$ref" in value: return inline(definitions[value["$ref"].rsplit("/", 1)[-1]])
+        return {key: inline(item) for key,item in value.items()}
+    return inline(schema)
+
+def validation_error(error):
+    return "Invalid ask_user arguments: " + "; ".join(".".join(map(str,item["loc"])) + ": " + item["msg"] for item in error.errors(include_input=False)[:3])
 
 
 class Answer(BaseModel):

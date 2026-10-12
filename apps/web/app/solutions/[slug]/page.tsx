@@ -98,7 +98,7 @@ type CaseStudy = {
 // Comprehensive module details with correct content for each
 const moduleDetails: Record<string, ModuleDetail> = {
     "communication": {
-        name: "Communication Hub",
+        name: "Communication Dome",
         icon: MessageSquare,
         color: "from-blue-500 to-cyan-500",
         title: "Unify Your Team Communications",
@@ -107,7 +107,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         mainPoints: [
             {
                 title: "Centralize team messaging across departments.",
-                description: "No more scattered conversations across multiple tools. Communication Hub brings all your team chats, channels, and direct messages into one place.",
+                description: "No more scattered conversations across multiple tools. Communication Dome brings all your team chats, channels, and direct messages into one place.",
                 features: ["Team Channels", "Direct Messaging", "File Sharing"],
                 image: "https://images.unsplash.com/photo-1551434678-e076c223a692?q=80&w=2070&auto=format&fit=crop"
             },
@@ -120,10 +120,10 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "sales": {
-        name: "Sales Hub",
+        name: "Sales Dome",
         icon: DollarSign,
         color: "from-green-500 to-emerald-500",
-        title: "Accelerate Your Deal Flow With Sales Hub",
+        title: "Accelerate Your Deal Flow With Sales Dome",
         description: "Manage your entire pipeline from prospecting to close with automated workflows and real-time forecasting.",
         heroImage: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?q=80&w=2426&auto=format&fit=crop",
         mainPoints: [
@@ -148,7 +148,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "crm": {
-        name: "CRM Hub",
+        name: "CRM Dome",
         icon: Users,
         color: "from-violet-500 to-purple-500",
         title: "Build Lasting Customer Relationships At Scale",
@@ -170,7 +170,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "support": {
-        name: "Service Hub",
+        name: "Service Dome",
         icon: Headset,
         color: "from-orange-500 to-amber-500",
         title: "Deliver World-Class Support That Customers Love",
@@ -192,7 +192,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "retention": {
-        name: "Retention Hub",
+        name: "Retention Dome",
         icon: HeartHandshake,
         color: "from-rose-500 to-pink-500",
         title: "Stop Customer Churn Before It Happens",
@@ -220,7 +220,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "network": {
-        name: "Network Ops Hub",
+        name: "Network Ops Dome",
         icon: Wifi,
         color: "from-cyan-500 to-blue-500",
         title: "Monitor Your Infrastructure In Real-Time",
@@ -242,7 +242,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "call-center": {
-        name: "Call Center Hub",
+        name: "Call Center Dome",
         icon: Phone,
         color: "from-indigo-500 to-violet-500",
         title: "Empower Agents With Intelligent Call Management",
@@ -264,7 +264,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "marketing": {
-        name: "Marketing & Media Hub",
+        name: "Marketing & Media Dome",
         icon: Megaphone,
         color: "from-fuchsia-500 to-pink-500",
         title: "Digital Campaigns, Radio, Billboards & SightLive™ Analytics — All in One Platform",
@@ -310,7 +310,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "compliance": {
-        name: "Compliance Hub",
+        name: "Compliance Dome",
         icon: ShieldCheck,
         color: "from-slate-500 to-zinc-500",
         title: "Stay Compliant With Built-In Regulatory Frameworks",
@@ -377,7 +377,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "billing": {
-        name: "Billing Hub",
+        name: "Billing Dome",
         icon: Receipt,
         color: "from-teal-500 to-green-500",
         title: "Automate Revenue Collection & Financial Operations",
@@ -405,7 +405,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "finance": {
-        name: "Finance & FP&A Hub",
+        name: "Finance & FP&A Dome",
         icon: FileText,
         color: "from-emerald-500 to-cyan-500",
         title: "GAAP-Ready Finance With Scenario Planning",
@@ -433,7 +433,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "products": {
-        name: "Product Hub",
+        name: "Product Dome",
         icon: Package,
         color: "from-purple-500 to-indigo-500",
         title: "Manage Your Product Catalog With Ease",
@@ -455,7 +455,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "portal": {
-        name: "Portal Hub",
+        name: "Portal Dome",
         icon: Globe,
         color: "from-sky-500 to-blue-500",
         title: "White-Label Self-Service Portal For Your Customers",
@@ -477,7 +477,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "analytics": {
-        name: "Analytics Hub",
+        name: "Analytics Dome",
         icon: BarChart3,
         color: "from-indigo-500 to-cyan-500",
         title: "AI-Powered Intelligence Across Your Entire Business",
@@ -505,7 +505,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "inventory": {
-        name: "Inventory Hub",
+        name: "Inventory Dome",
         icon: Boxes,
         color: "from-amber-500 to-orange-500",
         title: "Master Your Supply Chain & Stock Management",
@@ -533,7 +533,7 @@ const moduleDetails: Record<string, ModuleDetail> = {
         ]
     },
     "iot": {
-        name: "IoT Hub",
+        name: "IoT Dome",
         icon: Radio,
         color: "from-green-500 to-teal-500",
         title: "Proactive Device Management & Fiber Signal Intelligence",
@@ -935,7 +935,7 @@ const solutionCaseStudies: Record<string, CaseStudy> = {
             { value: "38%", label: "Faster resolution" },
             { value: "25%", label: "Fewer outages" },
             { value: "99.95%", label: "Uptime" },
-            { value: "1 hub", label: "Command center" }
+            { value: "1 Dome", label: "Command center" }
         ],
         highlights: [
             "Real-time topology with health signals.",
@@ -1037,7 +1037,7 @@ const solutionCaseStudies: Record<string, CaseStudy> = {
         challenge:
             "Evidence lived in folders and approvals were manual and inconsistent.",
         approach:
-            "A governed compliance hub with automated checklists and audit trails.",
+            "A governed compliance Dome with automated checklists and audit trails.",
         image: "https://images.unsplash.com/photo-1563986768609-322da13575f3?q=80&w=2200&auto=format&fit=crop",
         stats: [
             { value: "100%", label: "Audit readiness" },
@@ -1091,7 +1091,7 @@ const solutionCaseStudies: Record<string, CaseStudy> = {
             },
             {
                 title: "Week 2 - Workflow build",
-                description: "Automated onboarding, reviews, and approvals in one hub."
+                description: "Automated onboarding, reviews, and approvals in one Dome."
             },
             {
                 title: "Week 3 - Insights and surveys",
@@ -1295,7 +1295,7 @@ const solutionCaseStudies: Record<string, CaseStudy> = {
             { value: "1 view", label: "Stock visibility" }
         ],
         highlights: [
-            "Multi-warehouse tracking in one hub.",
+            "Multi-warehouse tracking in one Dome.",
             "Auto-PO generation and approvals.",
             "Reservation controls for installs.",
             "Shipment ETA visibility."
@@ -1379,10 +1379,10 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                         </Link>
                         <div className="flex gap-4 items-center">
                             <ThemeToggleCompact />
-                            <Button variant="outline" size="sm">Get a demo</Button>
-                            <Link href="/auth">
+                            <Button asChild variant="outline" size="sm"><Link href="/demo">Get a demo</Link></Button>
+                            <Link href="/trial">
                                 <Button size="sm" className="bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
-                                    Get started free
+                                    Try it For Free
                                 </Button>
                             </Link>
                         </div>
@@ -1411,12 +1411,12 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                             {detail.description}
                         </p>
                         <div className="flex flex-col sm:flex-row gap-4">
-                            <Button size="lg" className={cn("bg-gradient-to-r text-white shadow-lg shadow-black/10", theme.gradient)}>
+                            <Button asChild size="lg" className={cn("bg-gradient-to-r text-white shadow-lg shadow-black/10", theme.gradient)}><Link href="/demo">
                                 Get a demo
-                            </Button>
-                            <Link href="/auth">
+                            </Link></Button>
+                            <Link href="/trial">
                                 <Button size="lg" variant="outline" className="border-black/10 text-slate-700">
-                                    Get started free
+                                    Try it For Free
                                 </Button>
                             </Link>
                         </div>
@@ -1634,7 +1634,7 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
                                         {detail.name} gives your team the same launch workflow and governance, tailored for this solution.
                                     </p>
                                     <div className="flex flex-col sm:flex-row gap-3">
-                                        <Link href="/auth">
+                                        <Link href="/demo">
                                             <Button className={cn("bg-gradient-to-r text-white", theme.gradient)}>
                                                 Get a demo
                                             </Button>
@@ -1656,14 +1656,14 @@ export default function SolutionPage({ params }: { params: Promise<{ slug: strin
             <section className="py-20 px-4 bg-gradient-to-r from-emerald-500 to-teal-500 text-white">
                 <div className="max-w-3xl mx-auto text-center">
                     <h2 className="text-3xl lg:text-4xl font-bold mb-6">Ready to grow your ISP?</h2>
-                    <p className="text-lg opacity-90 mb-10">Start your 14-day free trial today. No credit card required.</p>
+                    <p className="text-lg opacity-90 mb-10">Explore OmniDome’s free features. No credit card required.</p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Button size="lg" className="bg-white text-emerald-600 hover:bg-white/90 font-semibold">
+                        <Button asChild size="lg" className="bg-white text-emerald-600 hover:bg-white/90 font-semibold"><Link href="/demo">
                             Get a demo
-                        </Button>
-                        <Link href="/auth">
+                        </Link></Button>
+                        <Link href="/trial">
                             <Button size="lg" variant="outline" className="border-white text-white hover:bg-white/10">
-                                Get started free
+                                Try it For Free
                             </Button>
                         </Link>
                     </div>

@@ -109,13 +109,22 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
     if ntype in ("trigger", "end", "transform"):
         return {"ok": True, "data": cfg.get("set", {})}
 
+    if ntype == "notification":
+        from services.agent_orchestrator.billing_workflows import send_notice
+        resolved=resolve_deep(cfg,data)
+        if (data.get("input") or {}).get("verification") is True:
+            resolved={**resolved,"title":"[TEST] "+str(resolved.get("title","Workflow verification")),
+                      "body":"Verification only; no real balance or payment changed. "+str(resolved.get("body",""))}
+        return await send_notice(tenant_id,data["run_id"],node["id"],resolved)
+
     if ntype == "agent_invoke":
         agent_type = cfg.get("agent_type", "customer_facing")
         message = _resolve(cfg.get("message", ""), data) or (data.get("input") or {}).get("message", "")
         agent = Agent(
             agent_type=agent_type,
             tenant_id=uuid.UUID(tenant_id) if tenant_id else None,
-            context={"user_id": user_id, "workflow_id": data.get("workflow_id"), "run_id": data.get("run_id")},
+            context={"user_id": user_id, "workflow_id": data.get("workflow_id"), "run_id": data.get("run_id"),
+                     "draft_only": bool(cfg.get("draft_only", False))},
         )
         result = await agent.run(message)
         if result.get("unavailable"):
@@ -130,6 +139,7 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
                 "ok": True,
                 "awaiting_approval": True,
                 "approval_id": pending_appr.get("approval_id"),
+                "approval_ids": [tc["result"]["approval_id"] for tc in tool_calls if isinstance(tc.get("result"),dict) and tc["result"].get("requires_approval") and tc["result"].get("approval_id")],
                 "reference": pending_appr.get("reference"),
                 "content": result.get("content"),
                 "tool_calls": tool_calls,
@@ -166,103 +176,239 @@ async def _run_node(node: dict, data: dict, tenant_id: Optional[str], user_id: s
     return {"ok": False, "error": f"unknown node type: {ntype}"}
 
 
-async def run_workflow(
-    workflow_id: uuid.UUID,
-    tenant_id: str,
-    user_id: str,
-    input_data: Optional[dict] = None,
-    trigger: str = "manual",
-) -> dict:
-    """Execute a workflow end-to-end, persisting the run + steps."""
-    async with session_scope() as session:
-        wf = (
-            await session.execute(
-                select(Workflow).where(Workflow.id == workflow_id, Workflow.tenant_id == uuid.UUID(tenant_id))
-            )
-        ).scalar_one_or_none()
-        if not wf:
-            return {"error": "workflow not found"}
 
-        run = WorkflowRun(
-            workflow_id=wf.id, tenant_id=uuid.UUID(tenant_id), trigger=trigger,
-            status="running", input=input_data or {},
-        )
-        session.add(run)
-        await session.flush()
-        run_id = run.id
+def first_node(definition):
+    nodes={n["id"]:n for n in definition.get("nodes",[])}
+    incoming={e["to"] for e in definition.get("edges",[])}
+    return next((key for key,node in nodes.items() if node.get("type")=="trigger"),None) or next((key for key in nodes if key not in incoming),None)
 
-        definition = wf.definition or {}
-        nodes = {n["id"]: n for n in definition.get("nodes", [])}
-        edges = definition.get("edges", [])
-        data: dict = {"input": input_data or {}, "steps": {}, "workflow_id": str(wf.id), "run_id": str(run_id)}
 
-        incoming = {e["to"] for e in edges}
-        current = next((nid for nid, n in nodes.items() if n.get("type") == "trigger"), None) \
-            or next((nid for nid in nodes if nid not in incoming), None)
+def next_node(node, definition, output):
+    if node.get("type")=="end": return None
+    outgoing=[edge for edge in definition.get("edges",[]) if edge["from"]==node["id"]]
+    if node.get("type")=="condition":
+        wanted="true" if output.get("result") else "false"
+        return next((e["to"] for e in outgoing if str(e.get("condition","")).lower()==wanted),None) or next((e["to"] for e in outgoing if not e.get("condition")),None)
+    return outgoing[0]["to"] if outgoing else None
 
-        visited = 0
-        final_error: Optional[str] = None
-        while current and visited < MAX_NODES:
-            visited += 1
-            node = nodes.get(current)
-            if not node:
-                break
-            step = RunStep(
-                run_id=run_id, tenant_id=uuid.UUID(tenant_id), node_id=current,
-                node_type=node.get("type", "?"), status="running",
-                input={"config": node.get("config", {})},
-            )
-            session.add(step)
-            await session.flush()
-            try:
-                out = await _run_node(node, data, tenant_id, user_id)
-                data["steps"][current] = out
-                step.output = out
-                if out.get("awaiting_approval"):
-                    step.status = "awaiting_approval"
-                else:
-                    step.status = "succeeded" if out.get("ok", True) else "failed"
-                if not out.get("ok", True):
-                    final_error = out.get("error") or f"step {current} failed"
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("workflow node %s failed", current)
-                # Some exceptions carry no message (httpx.ReadTimeout is ''), and an empty error used to read as "no error",
-                # so a failed step ended the run as "succeeded". Always say what failed.
-                message = str(exc) or type(exc).__name__
-                step.status, step.error = "failed", message
-                final_error = f"{current}: {message}"
-            step.finished_at = datetime.now(timezone.utc)
-            await session.flush()
 
-            if step.status in ("failed", "awaiting_approval") or node.get("type") == "end":
-                break
+def approval_ids(output):
+    ids=output.get("approval_ids") or ([output["approval_id"]] if output.get("approval_id") else [])
+    return list(dict.fromkeys(str(uuid.UUID(str(ident))) for ident in ids))
 
-            outgoing = [e for e in edges if e["from"] == current]
-            if node.get("type") == "condition":
-                want = "true" if data["steps"][current].get("result") else "false"
-                current = next((e["to"] for e in outgoing if str(e.get("condition", "")).lower() == want), None) \
-                    or next((e["to"] for e in outgoing if not e.get("condition")), None)
-            else:
-                current = outgoing[0]["to"] if outgoing else None
 
-        waiting = next((s for s in data["steps"].values() if isinstance(s, dict) and s.get("awaiting_approval")), None)
-        if waiting:
-            run.status = "awaiting_approval"
-            run.error = f"awaiting approval #{waiting.get('reference')}"
-        else:
-            run.status = "failed" if final_error else "succeeded"
-            run.error = final_error
-        run.output = data["steps"]
-        run.finished_at = datetime.now(timezone.utc)
-        await session.flush()
-        # Spec M3: one memory entry per finished run, queued in this transaction
-        # (savepoint: a capture problem must never lose the run itself).
+def run_result(run):
+    return {"run_id":str(run.id),"status":run.status,"steps":run.output or {},"error":run.error}
+
+
+def approval_outcomes(approvals,expected_ids,now=None):
+    now=now or datetime.now(timezone.utc)
+    if {str(a.id) for a in approvals}!=set(expected_ids):
+        return "Workflow approval association is missing",False,{}
+    for approval in approvals:
+        expires_at=approval.expires_at
+        if expires_at and expires_at.tzinfo is None:
+            expires_at=expires_at.replace(tzinfo=timezone.utc)
+        if approval.status in {"rejected","expired"} or (approval.status=="pending" and expires_at and expires_at<=now):
+            return f"Approval {approval.id} was rejected or expired",False,{}
+        if approval.status=="approved" and approval.executed_at and (approval.execution_result or {}).get("success") is not True:
+            return f"Approved action failed: {(approval.execution_result or {}).get('error') or 'unknown failure'}",False,{}
+    if any(a.status!="approved" or not a.executed_at for a in approvals): return None,True,{}
+    return None,False,{str(a.id):a.execution_result for a in approvals}
+
+
+async def finish_run(session,run,checkpoint,status,error=None):
+    run.status=status
+    run.error=error
+    run.checkpoint=checkpoint
+    run.output=checkpoint["data"]["steps"]
+    run.finished_at=None if status in {"running","awaiting_approval"} else datetime.now(timezone.utc)
+    await session.flush()
+    if status in {"succeeded","failed"}:
         try:
             async with session.begin_nested():
-                await memory_capture.request_in(
-                    session, tenant_id,
-                    memory_capture.workflow_entry(wf.name, wf.id, run_id, run.status, trigger, data["steps"], final_error),
-                    key=f"workflow_run:{run_id}")
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("workflow run %s: memory capture not queued: %s", run_id, exc)
-        return {"run_id": str(run_id), "status": run.status, "steps": data["steps"], "error": final_error}
+                await memory_capture.request_in(session,run.tenant_id,
+                    memory_capture.workflow_entry(checkpoint["name"],run.workflow_id,run.id,status,run.trigger,run.output,error),
+                    key=f"workflow_run:{run.id}")
+        except Exception as exc:
+            logger.warning("Workflow %s memory capture failed: %s",run.id,type(exc).__name__)
+
+
+async def run_workflow(workflow_id,tenant_id,user_id,input_data=None,trigger="manual",expected_definition_hash=None):
+    """Freeze a definition, commit the run, then execute each step once."""
+    import copy
+    from services.agent_orchestrator.workflow_tools import definition_hash
+    async with session_scope() as session:
+        wf=(await session.execute(select(Workflow).where(Workflow.id==workflow_id,Workflow.tenant_id==uuid.UUID(str(tenant_id))))).scalar_one_or_none()
+        if not wf: return {"status":"failed","error":"workflow not found"}
+        if expected_definition_hash and (wf.status!="active" or definition_hash(wf)!=expected_definition_hash):
+            return {"status":"failed","error":"Workflow changed after approval; request approval for its current definition"}
+        definition=copy.deepcopy(wf.definition or {})
+        try:
+            current=first_node(definition)
+            if not current or len(definition.get("nodes",[]))>MAX_NODES: raise ValueError("Workflow must have a starting node and at most 50 nodes")
+            nodes={node["id"]:node for node in definition["nodes"]}
+            if len(nodes)!=len(definition["nodes"]): raise ValueError("Workflow node IDs must be unique")
+            if any(e["from"] not in nodes or e["to"] not in nodes for e in definition.get("edges",[])): raise ValueError("Workflow edge points to a missing node")
+        except (ValueError,TypeError,KeyError) as exc:
+            return {"status":"failed","error":str(exc) or "Invalid workflow definition"}
+        event_id=None
+        if trigger=="event":
+            try: event_id=uuid.UUID(str((input_data or {}).get("event",{}).get("id")))
+            except (TypeError,ValueError): return {"status":"failed","error":"An event run requires a valid event ID"}
+            existing=(await session.execute(select(WorkflowRun).where(WorkflowRun.workflow_id==wf.id,WorkflowRun.event_id==event_id))).scalar_one_or_none()
+            if existing: return {**run_result(existing),"duplicate":True}
+        run=WorkflowRun(workflow_id=wf.id,tenant_id=uuid.UUID(str(tenant_id)),trigger=trigger,status="running",input=input_data or {},event_id=event_id)
+        from sqlalchemy.exc import IntegrityError
+        try:
+            async with session.begin_nested():
+                session.add(run);await session.flush()
+        except IntegrityError:
+            if not event_id: raise
+            existing=(await session.execute(select(WorkflowRun).where(WorkflowRun.workflow_id==wf.id,WorkflowRun.event_id==event_id))).scalar_one_or_none()
+            if not existing: raise
+            return {**run_result(existing),"duplicate":True}
+        checkpoint={"definition":definition,"name":wf.name,"user_id":str(user_id),"next_node":current,"visited":0,
+            "waiting_node":None,"waiting_approvals":[],"in_flight":None,
+            "data":{"input":input_data or {},"steps":{},"workflow_id":str(wf.id),"run_id":str(run.id)}}
+        run.checkpoint=checkpoint
+        run_id=run.id
+    return await drive_run(run_id,tenant_id)
+
+
+async def drive_run(run_id,tenant_id):
+    """A committed in-flight claim is not replayed after ambiguous side effects."""
+    import copy
+    while True:
+        async with session_scope() as session:
+            run=(await session.execute(select(WorkflowRun).where(WorkflowRun.id==run_id,WorkflowRun.tenant_id==uuid.UUID(str(tenant_id))).with_for_update())).scalar_one_or_none()
+            if not run: return {"status":"failed","error":"run not found"}
+            if run.status!="running": return run_result(run)
+            checkpoint=copy.deepcopy(run.checkpoint or {})
+            if checkpoint.get("in_flight"): return run_result(run)
+            current=checkpoint.get("continuation_node") or checkpoint.get("next_node")
+            if not current:
+                await finish_run(session,run,checkpoint,"succeeded")
+                return run_result(run)
+            node=next((n for n in checkpoint["definition"]["nodes"] if n["id"]==current),None)
+            continuation=bool(checkpoint.get("continuation_node"))
+            if not node or (checkpoint["visited"]>=MAX_NODES and not continuation):
+                await finish_run(session,run,checkpoint,"failed","Workflow node missing or maximum step count exceeded")
+                return run_result(run)
+            if continuation:
+                step=(await session.execute(select(RunStep).where(RunStep.run_id==run_id,RunStep.node_id==current,RunStep.status=="awaiting_approval"))).scalar_one()
+            else:
+                step=RunStep(run_id=run_id,tenant_id=run.tenant_id,node_id=current,node_type=node.get("type","?"),status="running",input={"config":node.get("config",{})})
+                session.add(step);await session.flush()
+                checkpoint["visited"]+=1
+            checkpoint["in_flight"]=str(step.id)
+            run.checkpoint=checkpoint
+            step_id=step.id
+        # No workflow database transaction is held during the HTTP/agent call.
+        try:
+            if continuation:
+                cfg=node.get("config") or {}
+                agent=Agent(agent_type=cfg.get("agent_type","customer_facing"),tenant_id=uuid.UUID(str(tenant_id)),
+                    context={"user_id":checkpoint["user_id"],"workflow_id":checkpoint["data"]["workflow_id"],"run_id":str(run_id),"draft_only":True})
+                original=_resolve(cfg.get("message",""),checkpoint["data"]) or checkpoint["data"]["input"].get("message","")
+                import json
+                prompt=original+"\nThe following actions have already been approved and executed. Do not repeat them. Complete the requested response using these actual results:\n"+json.dumps(checkpoint["data"]["steps"][current]["approval_results"],default=str)
+                answer=await agent.run(prompt)
+                if answer.get("unavailable") or answer.get("stopped_by"): raise RuntimeError("Approved action completed, but agent continuation was unavailable")
+                out={**checkpoint["data"]["steps"][current],"ok":True,"awaiting_approval":False,"content":answer.get("content"),"continuation_tools":answer.get("tool_calls",[])}
+            else:
+                out=await _run_node(node,checkpoint["data"],str(tenant_id),checkpoint["user_id"])
+            error=None if out.get("ok",True) else out.get("error") or f"step {current} failed"
+        except Exception as exc:
+            error=f"{current}: {str(exc) or type(exc).__name__}"
+            out={"ok":False,"error":error}
+        async with session_scope() as session:
+            run=(await session.execute(select(WorkflowRun).where(WorkflowRun.id==run_id,WorkflowRun.tenant_id==uuid.UUID(str(tenant_id))).with_for_update())).scalar_one()
+            checkpoint=copy.deepcopy(run.checkpoint)
+            if checkpoint.get("in_flight")!=str(step_id): return run_result(run)
+            step=(await session.execute(select(RunStep).where(RunStep.id==step_id,RunStep.tenant_id==run.tenant_id))).scalar_one()
+            checkpoint["in_flight"]=None
+            checkpoint["continuation_node"]=None
+            checkpoint["data"]["steps"][current]=out
+            step.output=out;step.finished_at=datetime.now(timezone.utc);step.error=error
+            if error:
+                step.status="failed"
+                await finish_run(session,run,checkpoint,"failed",error)
+                return run_result(run)
+            if out.get("awaiting_approval"):
+                try: ids=approval_ids(out)
+                except (TypeError,ValueError): ids=[]
+                if not ids:
+                    step.status="failed"
+                    await finish_run(session,run,checkpoint,"failed",f"{current}: approval identity missing")
+                else:
+                    step.status="awaiting_approval"
+                    checkpoint["waiting_node"]=current;checkpoint["waiting_approvals"]=ids
+                    checkpoint["next_node"]=next_node(node,checkpoint["definition"],out)
+                    await finish_run(session,run,checkpoint,"awaiting_approval",f"Waiting for {len(ids)} approval(s)")
+                return run_result(run)
+            step.status="succeeded"
+            checkpoint["waiting_node"]=None;checkpoint["waiting_approvals"]=[]
+            checkpoint["next_node"]=next_node(node,checkpoint["definition"],out)
+            await finish_run(session,run,checkpoint,"running")
+
+
+async def resume_workflow(run_id,tenant_id):
+    """Claim a parked run only after every associated action has a final outcome."""
+    import copy
+    from services.agent_orchestrator.models import AgentApproval
+    async with session_scope() as session:
+        run=(await session.execute(select(WorkflowRun).where(WorkflowRun.id==run_id,WorkflowRun.tenant_id==uuid.UUID(str(tenant_id))).with_for_update())).scalar_one_or_none()
+        if not run: return {"status":"failed","error":"run not found"}
+        if run.status!="awaiting_approval": return run_result(run)
+        checkpoint=copy.deepcopy(run.checkpoint or {})
+        if not checkpoint.get("waiting_approvals"):
+            return {**run_result(run),"error":"This older run has no safe continuation checkpoint; review it before starting a new run"}
+        ids=[uuid.UUID(ident) for ident in checkpoint["waiting_approvals"]]
+        approvals=(await session.execute(select(AgentApproval).where(AgentApproval.id.in_(ids),AgentApproval.tenant_id==run.tenant_id,AgentApproval.run_id==run.id))).scalars().all()
+        error,pending,results=approval_outcomes(approvals,checkpoint["waiting_approvals"])
+        if pending: return run_result(run)
+        current=checkpoint["waiting_node"]
+        step=(await session.execute(select(RunStep).where(RunStep.run_id==run.id,RunStep.node_id==current,RunStep.status=="awaiting_approval"))).scalar_one_or_none()
+        if not step: error=error or "Waiting workflow step is missing"
+        if error:
+            if step: step.status="failed";step.error=error;step.finished_at=datetime.now(timezone.utc)
+            await finish_run(session,run,checkpoint,"failed",error)
+            return run_result(run)
+        output={**checkpoint["data"]["steps"][current],"approval_results":results,"awaiting_approval":False}
+        checkpoint["data"]["steps"][current]=output
+        checkpoint["continuation_node"]=current
+        checkpoint["waiting_approvals"]=[]
+        run.checkpoint=checkpoint;run.status="running";run.error=None;run.finished_at=None
+    return await drive_run(run_id,tenant_id)
+
+
+async def resume_workflow_for_approval(tenant_id,approval_id):
+    from services.agent_orchestrator.models import AgentApproval
+    async with session_scope() as session:
+        row=(await session.execute(select(AgentApproval).where(AgentApproval.id==uuid.UUID(str(approval_id)),AgentApproval.tenant_id==uuid.UUID(str(tenant_id))))).scalar_one_or_none()
+        run_id=row.run_id if row else None
+    if run_id: return await resume_workflow(run_id,tenant_id)
+    return None
+
+
+async def recover_waiting_runs():
+    """Recover a decision/execution committed before its workflow was parked."""
+    from sqlalchemy import or_,and_
+    from services.agent_orchestrator.models import AgentApproval
+    async with session_scope() as session:
+        runs=(await session.execute(select(WorkflowRun.id,WorkflowRun.tenant_id).join(AgentApproval,AgentApproval.run_id==WorkflowRun.id).where(
+            WorkflowRun.status=="awaiting_approval",WorkflowRun.checkpoint.is_not(None),
+            or_(AgentApproval.executed_at.is_not(None),AgentApproval.status.in_(["rejected","expired"]),and_(AgentApproval.status=="pending",AgentApproval.expires_at<=datetime.now(timezone.utc))))
+            .order_by(WorkflowRun.started_at).limit(100))).all()
+    for run_id,tenant_id in dict.fromkeys(runs):
+        try: await resume_workflow(run_id,tenant_id)
+        except Exception: logger.exception("Workflow approval recovery failed for %s",run_id)
+
+
+async def approval_recovery_loop():
+    import asyncio
+    while True:
+        try: await recover_waiting_runs()
+        except Exception: logger.exception("Workflow approval recovery scan failed")
+        await asyncio.sleep(15)

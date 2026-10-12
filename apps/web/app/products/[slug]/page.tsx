@@ -100,7 +100,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "communication": {
-        name: "Communication Hub",
+        name: "Communication Dome",
         icon: MessageSquare,
         tagline: "Unified Team Collaboration That Drives Productivity",
         description: "Team collaboration, internal messaging, and unified communications platform for seamless coordination.",
@@ -120,7 +120,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "sales": {
-        name: "Sales Hub",
+        name: "Sales Dome",
         icon: DollarSign,
         tagline: "Accelerate Revenue With AI-Driven Sales Intelligence",
         description: "Complete sales management with deal pipeline, revenue tracking, quote generation, and commission management.",
@@ -145,7 +145,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "crm": {
-        name: "CRM Hub",
+        name: "CRM Dome",
         icon: Users,
         tagline: "Build Lasting Customer Relationships At Scale",
         description: "Complete customer relationship management with contact tracking, journey analytics, and engagement scoring.",
@@ -165,7 +165,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "support": {
-        name: "Service Hub",
+        name: "Service Dome",
         icon: Headset,
         tagline: "Deliver World-Class Support That Customers Love",
         description: "Ticket management, SLA tracking, knowledge base, and customer satisfaction scoring.",
@@ -185,7 +185,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "retention": {
-        name: "Retention & Churn Hub",
+        name: "Retention & Churn Dome",
         icon: HeartHandshake,
         tagline: "Stop Customer Churn Before It Happens",
         description: "AI-powered churn prediction with 87% accuracy, risk scoring, retention campaigns, and CLV analysis.",
@@ -210,7 +210,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "network": {
-        name: "Network Ops Hub",
+        name: "Network Ops Dome",
         icon: Wifi,
         tagline: "Monitor & Manage Your Infrastructure In Real-Time",
         description: "Real-time network monitoring, outage alerts, capacity planning, and infrastructure management.",
@@ -230,7 +230,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "call-center": {
-        name: "Call Center Hub",
+        name: "Call Center Dome",
         icon: Phone,
         tagline: "Empower Agents With Intelligent Call Management",
         description: "Inbound/outbound call management, agent performance, call routing, and quality monitoring.",
@@ -250,7 +250,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "marketing": {
-        name: "Marketing Hub",
+        name: "Marketing Dome",
         icon: Megaphone,
         tagline: "Generate More Qualified Leads With AI-Powered Marketing",
         description: "Campaign management, email marketing, A/B testing, and conversion analytics.",
@@ -275,7 +275,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "compliance": {
-        name: "Compliance & Security Hub",
+        name: "Compliance & Security Dome",
         icon: ShieldCheck,
         tagline: "Stay Compliant With Built-In Regulatory Frameworks",
         description: "RICA verification, POPIA compliance, audit trails, and policy management.",
@@ -320,7 +320,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "billing": {
-        name: "Billing & Collection Hub",
+        name: "Billing & Collection Dome",
         icon: Receipt,
         tagline: "Automate Revenue Collection & Financial Operations",
         description: "Invoice management, payment processing, revenue cycle, and financial reporting.",
@@ -345,7 +345,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "finance": {
-        name: "Finance & FP&A Hub",
+        name: "Finance & FP&A Dome",
         icon: FileText,
         tagline: "GAAP-Ready Finance With Scenario Planning",
         description: "Revenue recognition, expense governance, journals, trial balance, bank recon, and GAAP financial statements with budgeting and reforecasting.",
@@ -370,7 +370,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "products": {
-        name: "Product Management Hub",
+        name: "Product Management Dome",
         icon: Package,
         tagline: "Manage Your Product Catalog & Pricing With Ease",
         description: "Product catalog, pricing management, bundling, and inventory tracking.",
@@ -390,7 +390,7 @@ const allModules: Record<string, ModuleData> = {
         ]
     },
     "portal": {
-        name: "Portal Management Hub",
+        name: "Portal Management Dome",
         icon: Globe,
         tagline: "White-Label Self-Service Portal For Your Customers",
         description: "Customer self-service portal, API management, and white-label configurations.",
@@ -1273,7 +1273,7 @@ const productCaseStudies: Record<string, CaseStudy> = {
     crm: {
         label: "CRM",
         title: "Customer context unified across teams",
-        summary: "Customer data, interactions, and lifecycle signals now live in one hub.",
+        summary: "Customer data, interactions, and lifecycle signals now live in one Dome.",
         challenge: "Teams lacked shared context, leading to duplicated outreach.",
         approach: "A 360 view with segmentation, notes, and shared timelines.",
         image: "https://images.unsplash.com/photo-1552664730-d307ca884978?q=80&w=2200&auto=format&fit=crop",
@@ -1363,7 +1363,7 @@ const productCaseStudies: Record<string, CaseStudy> = {
     network: {
         label: "Network",
         title: "Network operations centralized with live visibility",
-        summary: "Network teams moved monitoring, incidents, and capacity planning into one hub.",
+        summary: "Network teams moved monitoring, incidents, and capacity planning into one Dome.",
         challenge: "Alerts were noisy and response lacked ownership.",
         approach: "Unified dashboards with automated incident workflows.",
         image: "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?q=80&w=2200&auto=format&fit=crop",
@@ -1371,7 +1371,7 @@ const productCaseStudies: Record<string, CaseStudy> = {
             { value: "38%", label: "Faster resolution" },
             { value: "25%", label: "Fewer outages" },
             { value: "99.95%", label: "Uptime" },
-            { value: "1 hub", label: "Command center" }
+            { value: "1 Dome", label: "Command center" }
         ],
         highlights: [
             "Real-time topology visibility.",
@@ -1455,7 +1455,7 @@ const productCaseStudies: Record<string, CaseStudy> = {
         title: "Compliance workflows standardized across teams",
         summary: "Compliance leaders centralized policy, evidence, and approvals.",
         challenge: "Evidence lived in folders and approvals were manual.",
-        approach: "A governed compliance hub with audit trails.",
+        approach: "A governed compliance Dome with audit trails.",
         image: "https://images.unsplash.com/photo-1563986768609-322da13575f3?q=80&w=2200&auto=format&fit=crop",
         stats: [
             { value: "100%", label: "Audit readiness" },
@@ -1952,12 +1952,12 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         </div>
                         <div className="flex items-center gap-4">
                             <ThemeToggleCompact />
-                            <Link href="/auth">
+                            <Link href="/trial">
                                 <Button variant="outline" size="sm">Sign In</Button>
                             </Link>
                             <Link href="/auth">
                                 <Button size="sm" className={cn("bg-gradient-to-r text-white", accentGradient)}>
-                                    Get Started Free
+                                    Try it For Free
                                 </Button>
                             </Link>
                         </div>
@@ -1994,14 +1994,14 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         </p>
 
                         <div className="flex flex-col sm:flex-row gap-4">
-                            <Link href="/auth">
+                            <Link href="/demo">
                                 <Button size="lg" className={cn("bg-gradient-to-r text-white shadow-lg shadow-black/10", accentGradient)}>
                                     Get a demo
                                 </Button>
                             </Link>
-                            <Link href="/auth">
+                            <Link href="/trial">
                                 <Button size="lg" variant="outline" className="border-black/10 text-slate-700">
-                                    Get started free
+                                    Try it For Free
                                 </Button>
                             </Link>
                         </div>
@@ -2352,7 +2352,7 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                                     Bring the same workflow into {product.name} with governed execution, fast handoffs, and full visibility.
                                 </p>
                                 <div className="flex flex-col sm:flex-row gap-3">
-                                    <Link href="/auth">
+                                    <Link href="/demo">
                                         <Button className={cn("bg-gradient-to-r text-white", accentGradient)}>
                                             Get a demo
                                         </Button>
@@ -2375,18 +2375,18 @@ export default function ProductPage({ params }: { params: Promise<{ slug: string
                         Ready to get started with {product.name}?
                     </h2>
                     <p className="text-lg text-slate-600 mb-10">
-                        Start your 14-day free trial today. No credit card required.
+                        Explore OmniDome’s free features. No credit card required.
                     </p>
                     <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                        <Link href="/auth">
+                        <Link href="/trial">
                             <Button size="lg" className={cn("bg-gradient-to-r text-white text-lg px-10", accentGradient)}>
-                                Start Free Trial
+                                Try it For Free
                                 <ArrowRight className="ml-2 h-5 w-5" />
                             </Button>
                         </Link>
-                        <Button size="lg" variant="outline" className="text-lg px-10 border-black/10 text-slate-700">
+                        <Button asChild size="lg" variant="outline" className="text-lg px-10 border-black/10 text-slate-700"><Link href="/demo">
                             Schedule a Demo
-                        </Button>
+                        </Link></Button>
                     </div>
                 </div>
             </section>

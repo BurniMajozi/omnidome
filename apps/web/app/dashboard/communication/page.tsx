@@ -22,7 +22,7 @@ function CommunicationRedirect() {
 
   return (
     <div className="h-screen w-full flex items-center justify-center bg-background text-sm text-muted-foreground">
-      Redirecting to Communication Hub...
+      Redirecting to Communication Dome...
     </div>
   )
 }

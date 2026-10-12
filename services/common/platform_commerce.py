@@ -48,8 +48,11 @@ async def ensure_schema(conn):
     await conn.execute(text("INSERT INTO platform_invoice_supplier(singleton,profile,actor_id) VALUES(true,CAST(:p AS jsonb),NULL) ON CONFLICT(singleton) DO NOTHING"), {"p":json.dumps(catalog()["supplier"])})
     from services.common import platform_usage
     await platform_usage.ensure_schema(conn)
+    await conn.execute(text("""UPDATE platform_usage_entitlements e SET policy=e.policy || '{"permanent_free": true}'::jsonb
+      FROM tenants t WHERE e.tenant_id=t.id AND t.settings->'platform_pricing'->'active_quote'->>'tier'='FREE'
+      AND t.settings->'platform_pricing'->'active_quote'->>'amount_cents'='0' AND e.generation NOT LIKE 'policy:%'"""))
     for module in catalog()["modules"]:
-        await conn.execute(text("INSERT INTO modules(id,key,name,is_core) VALUES(:id,:key,:name,false) ON CONFLICT(key) DO NOTHING"),
+        await conn.execute(text("INSERT INTO modules(id,key,name,is_core) VALUES(:id,:key,:name,false) ON CONFLICT(key) DO UPDATE SET name=excluded.name"),
                            {"id": str(uuid.uuid4()), "key": module["id"], "name": module["name"]})
     # Owner and organisation admin may operate every module in their own tenant.
     # Entitlement guards still decide which of those modules the tenant has.
@@ -94,6 +97,8 @@ async def save_choice(db, tenant, selection, actor, *, enable=False):
     await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb),updated_at=now() WHERE id=:t"), {"s": json.dumps(settings), "t": str(tenant)})
     if enable:
         settings["platform_pricing"].update(active_quote=priced, billing_mode="platform_owner")
+        if settings.get("platform_trial",{}).get("status") in {"active","pending"}:
+            settings["platform_trial"]={**settings["platform_trial"],"status":"upgraded"}
         await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb) WHERE id=:t"), {"s":json.dumps(settings),"t":str(tenant)})
         await provision(db, tenant, priced, actor)
         from services.common.platform_usage import activate
@@ -106,9 +111,9 @@ async def occupied_seats(db, tenant):
       (SELECT count(*) FROM invites WHERE tenant_id=:t AND status='pending' AND expires_at>now())"""), {"t": str(tenant)})).scalar_one()
 
 
-async def provision(db, tenant, priced, actor):
+async def provision(db, tenant, priced, actor, *, retain_members=False):
     used = await occupied_seats(db, tenant)
-    if used > priced["seats"]: raise HTTPException(409, f"{used} seats are in use, including pending invitations")
+    if used > priced["seats"] and not retain_members: raise HTTPException(409, f"{used} seats are in use, including pending invitations")
     enabled = set(priced["entitlements"]) | set(priced.get("manual_panels", [])) | {"agents", "memory", "voicebox", "overview", "admin"}
     actor_exists = (await db.execute(text("SELECT 1 FROM users WHERE id=:u"), {"u": str(actor)})).first() if actor else None
     if "portal" in enabled: enabled |= {"lifecycle", "customer_journey", "journey_engine"}
@@ -173,11 +178,13 @@ async def capture_module_edits(db, tenant, actor):
       WHERE tm.tenant_id=:t AND tm.status IN ('ENABLED','TRIAL')"""), {"t": str(tenant)})).mappings().all()
     ids = {m["id"] for m in catalog()["modules"]}
     old = current["selection"]
-    chosen = {r["key"]: (r["config"] or {}).get("pricing_tier", old["modules"].get(r["key"], "starter")) for r in rows if r["key"] in ids}
+    chosen = {r["key"]: (r["config"] or {}).get("pricing_tier", old["modules"].get(r["key"], "free" if r["key"] in catalog()["free_modules"] else "starter")) for r in rows if r["key"] in ids}
     # A bundle stays intact only while all its included panels retain their tier.
     bundle = catalog()["bundles"].get(old.get("bundle"))
-    keep = bundle and all(chosen.get(m) == bundle["tier"] for m in bundle["modules"])
-    if not chosen: raise HTTPException(422, "Keep at least one priced panel, or choose the free Starter plan")
+    expected = {m: "free" for m in catalog()["free_modules"]} if bundle else {}
+    if bundle: expected.update({m: bundle["tier"] for m in bundle["modules"]})
+    keep = bundle and all(chosen.get(m) == tier for m, tier in expected.items())
+    if not chosen: raise HTTPException(422, "Keep at least one panel, or choose the Free plan")
     selection = Selection(bundle=old.get("bundle") if keep else None, modules=chosen, seats=old["seats"], period=old["period"])
     priced, revision = await save_choice(db, tenant, selection, actor)
     priced["manual_panels"] = sorted(r["key"] for r in rows if r["key"] not in ids)
@@ -240,10 +247,17 @@ async def paid(db, order, payment, *, force_review=False):
             "active_plan_code":order.get("plan_code"),
             "billing_mode":"payment", "period_start":start.isoformat(),"period_end":end.isoformat(),
             "credit_net_zar":(order["quote"].get("proration") or {}).get("credit_remaining", current.get("credit_net_zar","0"))}}
+        if settings.get("platform_trial",{}).get("status") in {"active","pending"}:
+            settings["platform_trial"]={**settings["platform_trial"],"status":"upgraded"}
         await db.execute(text("UPDATE tenants SET settings=CAST(:s AS jsonb),billing_status='active' WHERE id=:t"), {"s": json.dumps(settings), "t": str(order["tenant_id"])})
         if order["intent"] == "subscription" and order["quote"]["amount_cents"] > 0 and not order["quote"].get("proration"):
             await db.execute(text("""INSERT INTO platform_subscriptions(tenant_id,order_id,plan_code,status,quote,revision)
               VALUES(:t,:id,:plan,'active',CAST(:q AS jsonb),:rev) ON CONFLICT(order_id) DO UPDATE SET
                 order_id=excluded.order_id,plan_code=excluded.plan_code,status='active',quote=excluded.quote,revision=excluded.revision,updated_at=now()"""),
               {"t": str(order["tenant_id"]), "id": str(order["id"]), "plan": order.get("plan_code"), "q": json.dumps(order["quote"]), "rev": order["revision"]})
+    from services.common.platform_billing_events import emit
+    await emit(db,order["tenant_id"],"plan.activated" if matching else "payment.review",
+        {"order_id":str(order["id"]),"reference":order["reference"],"status":status,"intent":order["intent"],
+         "plan_name":order["quote"].get("name"),"seats":order["quote"].get("seats"),"total_zar":order["quote"]["total_zar"]},
+        "settled:"+str(order["id"]),("platform_order",order["id"]))
     return {"status": status, "duplicate": False}

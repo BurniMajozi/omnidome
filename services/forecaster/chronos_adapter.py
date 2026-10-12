@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
 from typing import Optional
 
@@ -56,7 +57,9 @@ class ChronosModel:
         self._torch = torch
         self.name = name
         cfg = (path / "config.json").read_bytes()
-        self.version = f"{getattr(chronos, '__version__', 'x')}+{hashlib.sha256(cfg).hexdigest()[:8]}"[:60]
+        try: package_version = version("chronos-forecasting")
+        except PackageNotFoundError: package_version = getattr(chronos, "__version__", "unknown")
+        self.version = f"{package_version}+{hashlib.sha256(cfg).hexdigest()[:8]}"[:60]
         torch.set_num_threads(max(1, int(os.getenv("FORECAST_THREADS", "2"))))
         if name == "chronos-2":
             from chronos import Chronos2Pipeline
@@ -67,15 +70,16 @@ class ChronosModel:
 
     def predict(self, y: np.ndarray, h: int, level: float) -> tuple:
         torch = self._torch
-        a = (1 - level) / 2
-        qs = [a, 0.5, 1 - a]
+        a = round((1 - level) / 2, 10)
+        qs = [a, 0.5, round(1 - a, 10)]
         ctx = torch.tensor(np.asarray(y, dtype=np.float32))
         with torch.no_grad():
             if self.name == "chronos-2":
                 out, _ = self._pipe.predict_quantiles([ctx.reshape(1, -1)], prediction_length=h, quantile_levels=qs)
                 q = out[0][0].cpu().numpy()                    # (h, 3)
             else:
-                out, _ = self._pipe.predict_quantiles(context=ctx, prediction_length=h, quantile_levels=qs)
+                # Positional input supports both the former `context` and current `inputs` APIs.
+                out, _ = self._pipe.predict_quantiles(ctx, prediction_length=h, quantile_levels=qs)
                 q = out[0].cpu().numpy()                       # (h, 3)
         return q[:, 1].astype(float), q[:, 0].astype(float), q[:, 2].astype(float)
 

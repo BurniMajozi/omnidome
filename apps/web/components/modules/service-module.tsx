@@ -146,7 +146,7 @@ export function ServiceModule() {
   const summary =
     escalations.value.state === "ready"
       ? `${fmtInt(total)} customer escalations on record${sample}: ${fmtInt(stats.open)} open, ${fmtInt(stats.inProgress)} in progress and ${fmtInt(stats.resolved)} resolved or closed. ` +
-        `${fmtInt(taskRows.length)} support tasks are tracked in the Communication hub. CSAT and SLA compliance are not connected.`
+        `${fmtInt(taskRows.length)} support tasks are tracked in the Communication Dome. CSAT and SLA compliance are not connected.`
       : "Ticket figures are unavailable because the Communication service could not be read. Nothing is estimated in its place."
 
   return (

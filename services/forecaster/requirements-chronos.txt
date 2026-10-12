@@ -2,4 +2,6 @@
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu
 #   pip install -r requirements-chronos.txt
 # Pin the exact version you validated; chronos-forecasting pulls transformers/accelerate.
-chronos-forecasting>=2.0.0,<3
+chronos-forecasting==2.3.2
+transformers==4.57.1
+huggingface-hub==0.36.0

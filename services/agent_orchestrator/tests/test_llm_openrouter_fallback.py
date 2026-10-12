@@ -64,6 +64,25 @@ def _collect(agen):
     return asyncio.run(run())
 
 
+def test_structured_designer_format_reaches_both_providers(monkeypatch):
+    _env(monkeypatch)
+    payloads = []
+    def handler(request):
+        payloads.append(json.loads(request.content))
+        if "/api/chat" in request.url.path:
+            return httpx.Response(200, json={"model": "local", "message": {"content": "{}"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, **{**kw, "transport": httpx.MockTransport(handler)}))
+    client = llm.LLMClient()
+    fmt = {"type": "json_object"}
+    assert asyncio.run(client._ollama_chat("local", [], response_format=fmt))["content"] == "{}"
+    assert payloads[0]["format"] == "json"
+    assert asyncio.run(client._openrouter_chat("qwen/a:free", [], response_format=fmt))["content"] == "{}"
+    assert payloads[-1]["response_format"] == fmt
+    assert payloads[-1]["max_tokens"] == 6144
+
+
 def test_stream_skips_rate_limited_and_error_chunk_models(monkeypatch):
     _env(monkeypatch)
     tried = _patch_client(monkeypatch, {

@@ -39,7 +39,7 @@ const sectionTitles: Record<string, string> = {
   retention: "Retention & Churn Analytics",
   network: "Network Operations",
   "call-center": "Call Center Operations",
-  marketing: "Marketing Hub",
+  marketing: "Marketing Dome",
   compliance: "Compliance & Security",
   talent: "Staff Dome",
   billing: "Billing & Collection",

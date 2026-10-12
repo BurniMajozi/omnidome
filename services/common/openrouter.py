@@ -41,6 +41,10 @@ def api_key() -> str:
 def model_chain(primary: Optional[str] = None) -> list[str]:
     """Models to try, in order, without duplicates. An explicit `primary`
     (e.g. a per-capability model) goes first, then the env chain."""
+    from services.common.llm_routing import route_chain
+    restricted = route_chain.get()
+    if restricted is not None:
+        return [model for model in restricted if "/" in model]
     candidates = [primary, os.getenv("OPENROUTER_MODEL")]
     candidates += os.getenv("OPENROUTER_FALLBACK_MODELS", "").split(",")
     chain: list[str] = []
@@ -123,6 +127,28 @@ async def chat_completion(
     if not api_key():
         logger.warning("[openrouter] no OPENROUTER_API_KEY configured")
         return None
+    from services.common.llm_routing import resolve, route_chain
+    from services.common.db import get_tenant_context
+    token = None
+    if route_chain.get() is None and get_tenant_context():
+        chain = await resolve()
+        if chain is not None: token = route_chain.set(chain)
+    try:
+        return await _complete(payload, primary, timeout, transport)
+    finally:
+        if token is not None: route_chain.reset(token)
+
+
+async def _complete(payload, primary, timeout, transport):
+    from services.common.llm_routing import route_chain
+    restricted = route_chain.get()
+    if restricted is not None and all("/" not in model or model.endswith(":free") for model in restricted):
+        # Server-side subagents and web plugins can incur charges even on a free parent model.
+        payload = {**payload, "tools": [tool for tool in payload.get("tools", []) if tool.get("type") == "function"]}
+        payload.pop("plugins", None)
+        if not payload["tools"]:
+            payload.pop("tools")
+            payload.pop("tool_choice", None)
     async with httpx.AsyncClient(timeout=timeout, transport=transport) as client:
         for model in available_models(primary):
             try:

@@ -1,0 +1,6 @@
+[Unit]
+Description=OmniDome bounded pending forecast worker
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /mnt/c/Users/Benedict/Desktop/OminiDome/omnidome/deploy/commercial/run-forecast-queue.sh
+TimeoutStartSec=900
