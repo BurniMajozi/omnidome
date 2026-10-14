@@ -73,6 +73,7 @@ export default function SupportPage() {
   const [tab, setTab] = useState<Tab>("chat");
   const [tickets, setTickets] = useState<SupportTicket[]>([]);
   const [newTicketBadge, setNewTicketBadge] = useState(false);
+  const [ticketsError, setTicketsError] = useState(false);
 
   // Load the customer's real tickets on mount. Starts empty (no mock data);
   // AI-created tickets are prepended by handleTicketCreated below.
@@ -89,8 +90,7 @@ export default function SupportPage() {
         });
       })
       .catch((err) => {
-        // Leave the list empty rather than showing fabricated tickets.
-        console.error("Failed to load support tickets:", err);
+        if (!cancelled) setTicketsError(true);
       });
     return () => {
       cancelled = true;
@@ -104,7 +104,7 @@ export default function SupportPage() {
         {
           id: ticket.ticketId,
           subject: ticket.subject,
-          status: (ticket.status as SupportTicket["status"]) || "open",
+          status: ticket.status?.toLowerCase() === "open" ? "open" : ["resolved", "closed"].includes(ticket.status?.toLowerCase()) ? "resolved" : "pending",
           priority: "medium",
           created_at: new Date().toISOString().split("T")[0],
           source: "ai",
@@ -165,10 +165,9 @@ export default function SupportPage() {
         <div className="flex-1 min-h-0">
           <AgentChat
             initialAgent="customer_facing"
-            theme="light"
             context={{
               customer_id: customer?.id ?? "",
-              account_number: (customer as Record<string, unknown>)?.accountNumber ?? "",
+              account_number: customer?.accountNumber ?? "",
               ui_context: "support_page",
             }}
             onTicketCreated={handleTicketCreated}
@@ -179,6 +178,7 @@ export default function SupportPage() {
       {/* Tickets tab */}
       {tab === "tickets" && (
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {ticketsError && <p role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Your ticket history could not load. You can still use the support chat. Reload this page to retry.</p>}
           {/* Contact options */}
           <div className="flex gap-3">
             {brandConfig.contact?.phone && (

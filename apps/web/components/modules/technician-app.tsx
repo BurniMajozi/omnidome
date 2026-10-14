@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useCallback } from "react"
+import HomeDomeWorkspace from "@/components/iot/home-dome-workspace"
 import {
   Wrench, MapPin, Phone, Clock, CheckCircle, AlertTriangle, Zap,
   Wifi, Thermometer, ArrowLeft, Play, Square, Package, Camera,
@@ -383,8 +384,10 @@ export function TechnicianApp() {
           <TabsTrigger value="quotes" className="flex-1 text-xs">Quotes</TabsTrigger>
           <TabsTrigger value="invoices" className="flex-1 text-xs">Invoices</TabsTrigger>
           <TabsTrigger value="stats" className="flex-1 text-xs">Stats</TabsTrigger>
+          <TabsTrigger value="homedome" className="flex-1 text-xs">HomeDome</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="homedome" className="mt-3"><HomeDomeWorkspace /></TabsContent>
         <TabsContent value="queue" className="mt-3 space-y-2">
           <div className="flex gap-1">
             {(["ALL", "OPEN", "IN_PROGRESS"] as const).map(f => (

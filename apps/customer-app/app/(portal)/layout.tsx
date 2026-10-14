@@ -2,7 +2,8 @@
 
 import { ReactNode, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuthStore } from "@/lib/stores/auth-store";
 import {
   LayoutDashboard, CreditCard, ShoppingBag, HeadphonesIcon,
   Settings, LogOut, Wifi, Bell, Menu, X, User,
@@ -13,6 +14,7 @@ import brandConfig from "@/config/brand.json";
 // "AI Assistant" is now embedded inside the Support page — no separate nav item needed.
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/home", label: "HomeDome", icon: Wifi },
   { href: "/billing", label: "Billing", icon: CreditCard },
   { href: "/store", label: "Store", icon: ShoppingBag },
   { href: "/support", label: "Support", icon: HeadphonesIcon },
@@ -22,6 +24,13 @@ const navItems = [
 
 export default function PortalLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
+  const logout = async () => {
+    await useAuthStore.getState().logout().catch(() => undefined);
+    document.cookie = "access_token=; path=/; max-age=0";
+    document.cookie = "refresh_token=; path=/; max-age=0";
+    router.push("/login");
+  };
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
@@ -66,7 +75,7 @@ export default function PortalLayout({ children }: { children: ReactNode }) {
             })}
           </div>
           <div className="p-3 border-t border-gray-200">
-            <button className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100 w-full">
+            <button onClick={() => void logout()} className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-500 hover:bg-gray-100 w-full">
               <LogOut size={18} />
               Sign out
             </button>

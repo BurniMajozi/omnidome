@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState, useCallback, useRef } from "react"
+import HomeDomeWorkspace from "@/components/iot/home-dome-workspace"
 import { StatCard } from "@/components/dashboard/stat-card"
 import {
   BarChart,
@@ -1364,6 +1365,7 @@ export function CallCenterModule() {
             <User className="h-3.5 w-3.5" />
             Customer 360
           </TabsTrigger>
+          <TabsTrigger value="homedome" className="text-xs">HomeDome</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -1413,6 +1415,7 @@ export function CallCenterModule() {
         <TabsContent value="customer360">
           <Customer360Tab />
         </TabsContent>
+        <TabsContent value="homedome"><HomeDomeWorkspace /></TabsContent>
       </Tabs>
       <TelephonyDock />
     </div>

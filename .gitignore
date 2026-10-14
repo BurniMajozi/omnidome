@@ -17,6 +17,11 @@ build.log
 # Node
 node_modules/
 .next/
+.next-reporting-build-link/
+.next-reporting-build-link
+*.tsbuildinfo
+apps/customer-app/next-env.d.ts
+.codex/
 out/
 
 # OS
@@ -36,3 +41,6 @@ Hermes-Obsidian/
 # debug/verification artifacts
 apps/web/scripts/*.png
 apps/web/scripts/*.wav
+# Generated PWA workers (rebuilt per app release).
+apps/*/public/sw.js
+apps/*/public/workbox-*.js

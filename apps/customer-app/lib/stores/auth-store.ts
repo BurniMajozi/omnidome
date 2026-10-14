@@ -13,17 +13,17 @@
  * code that calls api.* methods continues to work unchanged.
  */
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
-import { api, ApiError } from "./client";
-import type { CustomerProfile } from "./types";
+import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { api, ApiError } from "../api/client";
+import type { CustomerProfile, RegisterRequest } from "../api/types";
 
 // ── Platform-aware storage adapter ────────────────────────────────────────
 
-const getStorageAdapter = () => {
+const getStorageAdapter = (): StateStorage => {
   try {
-    const SecureStore = require("expo-secure-store");
     if (typeof window === "undefined") {
-      return {
+      const SecureStore = require("expo-secure-store");
+      if (typeof SecureStore.getItemAsync === "function") return {
         getItem: async (name: string) => (await SecureStore.getItemAsync(name)) ?? null,
         setItem: (name: string, value: string) => SecureStore.setItemAsync(name, value),
         removeItem: (name: string) => SecureStore.deleteItemAsync(name),
@@ -32,7 +32,11 @@ const getStorageAdapter = () => {
   } catch {
     // expo-secure-store not available — fall through to localStorage
   }
-  return undefined;
+  return {
+    getItem: name => typeof window !== "undefined" ? window.localStorage.getItem(name) : null,
+    setItem: (name, value) => { if (typeof window !== "undefined") window.localStorage.setItem(name, value); },
+    removeItem: name => { if (typeof window !== "undefined") window.localStorage.removeItem(name); },
+  };
 };
 
 // ── State shape ───────────────────────────────────────────────────────────
@@ -49,7 +53,7 @@ interface AuthState {
   refreshToken: string | null;
 
   login: (email: string, password: string) => Promise<void>;
-  register: (data: Record<string, unknown>) => Promise<void>;
+  register: (data: RegisterRequest) => Promise<void>;
   logout: () => Promise<void>;
   /** Called internally when the ApiClient silently refreshes the access token */
   setTokens: (access: string | null, refresh: string | null) => void;
@@ -89,7 +93,7 @@ export const useAuthStore = create<AuthState>()(
       register: async (data) => {
         set({ isLoading: true, error: null });
         try {
-          const result = await api.register(data as Parameters<typeof api.register>[0]);
+          const result = await api.register(data);
           api.setTokens(result.accessToken, result.refreshToken);
           set({
             customer: result.customer,
@@ -128,7 +132,7 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: "customer-auth",
-      storage: getStorageAdapter(),
+      storage: createJSONStorage<Pick<AuthState, "customer" | "isAuthenticated" | "accessToken" | "refreshToken">>(getStorageAdapter),
       partialize: (state) => ({
         customer: state.customer,
         isAuthenticated: state.isAuthenticated,

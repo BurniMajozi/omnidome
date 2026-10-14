@@ -30,7 +30,7 @@ export default function LoginPage() {
     try {
       const res = await technicianApi.login(email, password);
       // Persist token + profile in the auth store (also rehydrates the API client).
-      setTokens(res.accessToken, null);
+      setTokens(res.accessToken, res.refreshToken);
       setAuth(res.technician, res.accessToken);
       router.replace("/(tabs)");
     } catch (err: unknown) {

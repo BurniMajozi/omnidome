@@ -14,7 +14,19 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   'http://localhost:8000';
 
+import { createClient } from '@supabase/supabase-js';
+function customerAuth() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) throw new Error('Customer sign-in needs Supabase configuration');
+  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+}
+
 import type {
+  CustomerProfile, RegisterRequest, DashboardData, Invoice, Payment, DebitOrderSetup,
+  UsageData, SupportTicket, CreateTicketRequest, TicketComment, StoreProduct, ShoppingCart,
+  CheckoutRequest, CustomerAddress, RicaStatus, RicaSubmission, ReferralInfo, ReferralRecord,
+  AppNotification,
   ABTest, ABTestCreate, ABTestResults,
   Dashboard, DashboardCreate, DashboardTemplate,
   RealtimeMetrics,
@@ -39,6 +51,17 @@ class ApiClient {
   private accessToken: string | null = null;
   private refreshToken: string | null = null;
   private tenantId: string | null = null;
+
+  async homeDomeRequest(path: string, init: RequestInit = {}): Promise<Response> {
+    if (!path.startsWith('/api/iot/homes')) throw new Error('Invalid HomeDome path');
+    const send = () => fetch(path.replace('/api/iot/homes', '/api/home-dome'), { ...init, cache: 'no-store', signal: AbortSignal.timeout(60000),
+      headers: { 'Content-Type': 'application/json', ...init.headers,
+        ...(this.accessToken ? { Authorization: `Bearer ${this.accessToken}` } : {}),
+        ...(this.tenantId ? { 'X-Tenant-ID': this.tenantId } : {}) } });
+    const response = await send();
+    if (response.status === 401 && this.refreshToken && await this.refreshAccessToken()) return send();
+    return response;
+  }
 
   setTokens(access: string, refresh: string) {
     this.accessToken = access;
@@ -93,15 +116,13 @@ class ApiClient {
 
   private async refreshAccessToken(): Promise<boolean> {
     try {
-      const res = await fetch(`${API_BASE}/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refreshToken: this.refreshToken }),
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
-      this.accessToken = data.accessToken;
-      this.refreshToken = data.refreshToken || this.refreshToken;
+      if (!this.refreshToken) return false;
+      const { data, error } = await customerAuth().auth.refreshSession({ refresh_token: this.refreshToken });
+      if (error || !data.session) return false;
+      this.accessToken = data.session.access_token;
+      this.refreshToken = data.session.refresh_token;
+      const { useAuthStore } = await import('../stores/auth-store');
+      useAuthStore.getState().setTokens(this.accessToken, this.refreshToken);
       return true;
     } catch {
       return false;
@@ -109,11 +130,24 @@ class ApiClient {
   }
 
   // Auth
+  async requestPasswordReset(email: string) {
+    const address = email.trim().toLowerCase();
+    if (address.endsWith('.local')) throw new Error('Local test addresses cannot receive reset emails. Ask your Platform Owner to open a password reset for this test account.');
+    const platformUrl = process.env.NEXT_PUBLIC_PLATFORM_WEB_URL || 'http://localhost:3000';
+    const { error } = await customerAuth().auth.resetPasswordForEmail(address, { redirectTo: new URL('/auth/reset', platformUrl).toString() });
+    if (error) throw new ApiError(error.message, 400);
+  }
+
   async login(email: string, password: string) {
-    return this.request<{ accessToken: string; refreshToken: string; expiresIn?: number; customer: CustomerProfile }>('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
+    const { data, error } = await customerAuth().auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+    if (error || !data.session) throw new ApiError(error?.code === 'invalid_credentials'
+      ? 'The email or password is incorrect. Use your OmniDome customer login; Home Assistant has a separate account.'
+      : error?.message || 'Sign-in failed', 401);
+    const profile = await fetch('/api/home-dome/profile', { cache: 'no-store', headers: { Authorization: `Bearer ${data.session.access_token}` } });
+    const customer = await profile.json();
+    if (!profile.ok) throw new ApiError(customer.detail || 'Your ISP must link your customer login', profile.status);
+    return { accessToken: data.session.access_token, refreshToken: data.session.refresh_token,
+      expiresIn: data.session.expires_in, customer: customer as CustomerProfile };
   }
 
   async register(data: RegisterRequest) {
@@ -124,13 +158,14 @@ class ApiClient {
   }
 
   async logout() {
-    return this.request('/auth/logout', { method: 'POST' });
+    if (this.accessToken && this.refreshToken) {
+      const auth = customerAuth().auth;
+      await auth.setSession({ access_token: this.accessToken, refresh_token: this.refreshToken });
+      await auth.signOut({ scope: 'local' });
+    }
   }
 
   // Dashboard
-  async getDashboard() {
-    return this.request<DashboardData>('/portal/dashboard');
-  }
 
   // Billing
   async getInvoices(params?: { page?: number; status?: string }) {
@@ -324,7 +359,10 @@ class ApiClient {
     return this.request<Dashboard[]>(`/api/analytics/dashboards`);
   }
 
-  async getDashboard(id: string) {
+  getDashboard(): Promise<DashboardData>;
+  getDashboard(id: string): Promise<Dashboard & { widget_data: any[] }>;
+  async getDashboard(id?: string) {
+    if (!id) return this.request<DashboardData>('/portal/dashboard');
     return this.request<Dashboard & { widget_data: any[] }>(`/api/analytics/dashboards/${id}`);
   }
 

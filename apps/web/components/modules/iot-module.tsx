@@ -2,6 +2,7 @@
 
 import React from "react"
 import { ModuleLayout } from "./module-layout"
+import HomeDomeWorkspace from "@/components/iot/home-dome-workspace"
 import {
     BarChart,
     Bar,
@@ -219,6 +220,7 @@ export function IoTModule() {
             }))}
             tableColumns={tableColumns}
         >
+            <HomeDomeWorkspace />
             <div className="grid gap-6 lg:grid-cols-2">
                 {/* Device status */}
                 <div className="surface-card p-6">

@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { technicianApi } from "@/lib/api/client";
 import type { TechDevice } from "@/lib/api/types";
+import HomeDomeWorkspace from "@/components/home-dome-workspace";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -552,6 +553,7 @@ export default function SiteIoTPage() {
       </div>
 
       <div className="px-4 py-4 space-y-6 pb-24">
+        <HomeDomeWorkspace />
         {loading ? (
           <p className="text-xs text-slate-400 text-center py-8">Loading site devices...</p>
         ) : error ? (

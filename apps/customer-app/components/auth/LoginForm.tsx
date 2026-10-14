@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Wifi, Eye, EyeOff, Loader2 } from "lucide-react";
-import { ApiClient } from "@/lib/api/client";
+import { useAuthStore } from "@/lib/stores/auth-store";
+import { api } from "@/lib/api/client";
 import brandConfig from "@/config/brand.json";
 
 export default function LoginForm() {
@@ -14,16 +15,29 @@ export default function LoginForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+
+  const handlePasswordReset = async () => {
+    setError(""); setNotice("");
+    if (!email.trim()) { setError("Enter your invited email address first."); return; }
+    setLoading(true);
+    try {
+      await api.requestPasswordReset(email);
+      setNotice("If this address has an account, check its inbox for password reset instructions. Then return here to sign in.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Password reset failed"); }
+    finally { setLoading(false); }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setNotice("");
     setLoading(true);
     try {
-      const api = new ApiClient();
-      const res = await api.login(email, password);
+      await useAuthStore.getState().login(email, password);
+      const res = useAuthStore.getState();
       // ApiClient.login() returns camelCase tokens (accessToken/refreshToken)
-      const accessMaxAge = res.expiresIn ?? 3600;
+      const accessMaxAge = 3600;
       document.cookie = `access_token=${res.accessToken}; path=/; max-age=${accessMaxAge}`;
       document.cookie = `refresh_token=${res.refreshToken}; path=/; max-age=2592000`;
       router.push("/dashboard");
@@ -49,10 +63,11 @@ export default function LoginForm() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-600">{error}</div>
         )}
+        {notice && <p role="status" className="rounded-lg bg-blue-50 p-3 text-sm text-blue-700">{notice}</p>}
 
         <div>
           <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1.5">Email</label>
-          <input id="email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
+          <input id="email" type="email" required autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)}
             className="w-full px-3 py-2.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             placeholder="you@example.com" />
         </div>
@@ -60,7 +75,7 @@ export default function LoginForm() {
         <div>
           <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1.5">Password</label>
           <div className="relative">
-            <input id="password" type={showPassword ? "text" : "password"} required value={password}
+            <input id="password" type={showPassword ? "text" : "password"} required autoComplete="current-password" value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2.5 pr-10 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="••••••••" />
@@ -77,10 +92,8 @@ export default function LoginForm() {
           {loading ? "Signing in..." : "Sign in"}
         </button>
 
-        <p className="text-center text-sm text-gray-500">
-          Don&apos;t have an account?{" "}
-          <Link href="/register" className="text-blue-600 font-medium hover:underline">Register</Link>
-        </p>
+        <button type="button" disabled={loading} onClick={() => void handlePasswordReset()} className="w-full text-center text-sm font-medium text-blue-600 hover:underline">Forgot password?</button>
+        <p className="text-center text-sm text-gray-500">Your ISP provides your customer account. Your Home Assistant account is separate.</p>
       </form>
     </div>
   );

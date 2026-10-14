@@ -146,8 +146,9 @@ def ha_http_error(exc: BaseException):
 class HARestClient:
     """Home Assistant REST API client."""
 
-    def __init__(self, ha_url: str, token: str):
+    def __init__(self, ha_url: str, token: str, *, managed_gateway: bool = False):
         self.ha_url = ha_url.rstrip("/")
+        self._managed_gateway = managed_gateway
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -159,12 +160,17 @@ class HARestClient:
         if self._client is None or self._client.is_closed:
             if not self._validated:
                 # Re-check on every client (DNS may have changed since the URL was saved).
-                await asyncio.to_thread(validate_ha_url, self.ha_url)
+                if self._managed_gateway:
+                    from services.iot.managed_gateway import check_target
+                    check_target(self.ha_url)
+                else:
+                    await asyncio.to_thread(validate_ha_url, self.ha_url)
                 self._validated = True
             self._client = httpx.AsyncClient(
                 headers=self.headers,
                 timeout=httpx.Timeout(15.0, connect=5.0),
                 follow_redirects=False,  # a redirect could point at an internal address
+                trust_env=False,  # never send a customer's bearer token through an environment proxy
             )
         return self._client
 
@@ -255,11 +261,14 @@ class HARestClient:
     async def get_camera_image(self, entity_id: str) -> bytes:
         """Get a camera snapshot image."""
         client = await self._get_client()
-        resp = await client.get(
-            f"{self.ha_url}/api/camera_proxy/{entity_id}",
-        )
-        resp.raise_for_status()
-        return resp.content
+        async with client.stream("GET", f"{self.ha_url}/api/camera_proxy/{entity_id}", headers={"Accept-Encoding": "identity"}) as resp:
+            resp.raise_for_status()
+            content = bytearray()
+            async for chunk in resp.aiter_bytes(chunk_size=65536):
+                content.extend(chunk)
+                if len(content) > 10 * 1024 * 1024:
+                    raise ValueError("Camera image exceeds the allowed size")
+            return bytes(content)
 
     async def get_camera_stream(self, entity_id: str) -> str:
         """Get camera stream URL."""
@@ -288,9 +297,10 @@ class HARestClient:
 class HAWebSocketClient:
     """Home Assistant WebSocket client for real-time events."""
 
-    def __init__(self, ha_url: str, token: str):
+    def __init__(self, ha_url: str, token: str, *, managed_gateway: bool = False):
         # Convert http(s) URL to ws(s)
         self._ha_url = ha_url
+        self._managed_gateway = managed_gateway
         self.ws_url = ha_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         self.token = token
         self._ws = None
@@ -300,7 +310,11 @@ class HAWebSocketClient:
 
     async def connect(self):
         """Connect to HA WebSocket API."""
-        await asyncio.to_thread(validate_ha_url, self._ha_url)
+        if self._managed_gateway:
+            from services.iot.managed_gateway import check_target
+            check_target(self._ha_url)
+        else:
+            await asyncio.to_thread(validate_ha_url, self._ha_url)
         try:
             import websockets
             self._ws = await websockets.connect(
@@ -339,6 +353,21 @@ class HAWebSocketClient:
             msg["event_type"] = event_type
         await self._ws.send(json.dumps(msg))
         return self._message_id
+
+    async def request(self, command_type: str, **fields):
+        """Request/reply for a dedicated registry connection, before event listening."""
+        if not self._ws:
+            raise RuntimeError("WebSocket not connected")
+        self._message_id += 1
+        identity = self._message_id
+        await self._ws.send(json.dumps({**fields, "id": identity, "type": command_type}))
+        while True:
+            message = json.loads(await asyncio.wait_for(self._ws.recv(), timeout=5))
+            if message.get("id") != identity or message.get("type") != "result":
+                continue
+            if not message.get("success"):
+                raise RuntimeError("Home Assistant registry request denied")
+            return message.get("result")
 
     async def listen(self):
         """Listen for incoming events and dispatch to listeners."""

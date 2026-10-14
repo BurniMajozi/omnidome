@@ -29,6 +29,138 @@ class Base(DeclarativeBase):
     pass
 
 
+class IoTHome(Base):
+    """Residential boundary, separate from the ISP's existing shared IoT inventory."""
+    __tablename__ = "iot_homes"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    ha_url: Mapped[Optional[str]] = mapped_column(String(512))
+    managed_gateway_key: Mapped[Optional[str]] = mapped_column(String(32))
+    ha_token_encrypted: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="disconnected")
+    last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(String(64))
+    components: Mapped[list] = mapped_column(JSONB, default=list)
+    energy_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class IoTHomeStatistic(Base):
+    """Selected hourly Recorder statistics, never private event payloads."""
+    __tablename__ = "iot_home_statistics"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    entity_id: Mapped[str] = mapped_column(String(255))
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    values: Mapped[dict] = mapped_column(JSONB, default=dict)
+    unit: Mapped[Optional[str]] = mapped_column(String(32))
+    __table_args__ = (Index("ix_iot_home_statistic_hour", "home_id", "entity_id", "start_at", unique=True),)
+
+
+class IoTReportingRequest(Base):
+    """Commercial interest only: never activates an entitlement or charges a card."""
+    __tablename__ = "iot_reporting_requests"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), unique=True)
+    requested_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    status: Mapped[str] = mapped_column(String(32), default="requested")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
+
+
+class CustomerPortalAccount(Base):
+    """Verified login-to-customer association independent of home automation."""
+    __tablename__ = "customer_portal_accounts"
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    customer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=func.now())
+
+
+class IoTGatewayBinding(Base):
+    """A physical gateway is assigned to exactly one residential boundary."""
+    __tablename__ = "iot_gateway_bindings"
+    gateway_key: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True))
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"))
+
+
+class IoTHomeEntity(Base):
+    __tablename__ = "iot_home_entities"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    entity_id: Mapped[str] = mapped_column(String(255))
+    name: Mapped[str] = mapped_column(String(255))
+    domain: Mapped[str] = mapped_column(String(64))
+    room: Mapped[Optional[str]] = mapped_column(String(128))
+    state: Mapped[str] = mapped_column(String(512))
+    attributes: Mapped[dict] = mapped_column(JSONB, default=dict)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (Index("ix_iot_home_entity", "home_id", "entity_id", unique=True),)
+
+
+class IoTHomeRoom(Base):
+    """Household room layout, including empty rooms and imported gateway areas."""
+    __tablename__ = "iot_home_rooms"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128))
+    kind: Mapped[str] = mapped_column(String(32), default="other")
+    ha_area_id: Mapped[Optional[str]] = mapped_column(String(128))
+    __table_args__ = (Index("ix_iot_home_room_area", "home_id", "ha_area_id", unique=True),)
+
+
+class IoTHomeRoomAssignment(Base):
+    __tablename__ = "iot_home_room_assignments"
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_home_entities.id"), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    room_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_home_rooms.id"), index=True)
+
+
+class IoTHomeReading(Base):
+    __tablename__ = "iot_home_readings"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    entity_id: Mapped[str] = mapped_column(String(255))
+    state: Mapped[str] = mapped_column(String(512))
+    unit: Mapped[Optional[str]] = mapped_column(String(32))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class IoTHomeSupport(Base):
+    __tablename__ = "iot_home_support"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    staff_user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    reference: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(500))
+    scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class IoTHomeAudit(Base):
+    __tablename__ = "iot_home_audit"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), index=True)
+    home_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("iot_homes.id"), index=True)
+    actor_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))
+    action: Mapped[str] = mapped_column(String(64))
+    details: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 # ---------------------------------------------------------------------------
 # Enums
 # ---------------------------------------------------------------------------

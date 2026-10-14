@@ -5,6 +5,7 @@ const withPWA = require("@ducanh2912/next-pwa").default({
   skipWaiting: true,
   disable: process.env.NODE_ENV === "development",
   runtimeCaching: [
+    { urlPattern: /\/api\/(?:home-dome|orchestrator)(?:\/|\?|$)/, handler: "NetworkOnly", method: "GET" },
     {
       urlPattern: /^https:\/\/fonts\.(?:gstatic)\.com\/.*/i,
       handler: "CacheFirst",
@@ -66,6 +67,13 @@ const withPWA = require("@ducanh2912/next-pwa").default({
 });
 
 const nextConfig = {
+  transpilePackages: ["@omnidome/agent-chat"],
+  webpack: (config) => {
+    config.resolve.symlinks = false;
+    // Native shells use SecureStore; the Next web build uses the browser adapter.
+    config.resolve.alias = { ...config.resolve.alias, "expo-secure-store": false };
+    return config;
+  },
   output: "standalone",
   images: {
     remotePatterns: [
@@ -79,6 +87,7 @@ const nextConfig = {
     NEXT_PUBLIC_API_BASE_URL: process.env.API_BASE_URL || "http://localhost:8000",
     NEXT_PUBLIC_SUPABASE_URL: process.env.SUPABASE_URL || "",
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || "",
+    NEXT_PUBLIC_PLATFORM_WEB_URL: process.env.PLATFORM_WEB_URL || "http://localhost:3000",
   },
 };
 

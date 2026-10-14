@@ -98,7 +98,7 @@ async def require(auth: AuthContext, tier: str) -> None:
 
 def require_tier(tier: str) -> Callable:
     """FastAPI dependency: `ctx: AuthContext = Depends(require_tier("admin"))`."""
-    if tier not in TIERS:
+    if tier not in TIERS and tier != "viewer":
         raise ValueError(f"unknown tier {tier!r}")
 
     async def dependency(auth: AuthContext = Depends(get_auth_context)) -> AuthContext:

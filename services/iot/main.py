@@ -6,6 +6,7 @@ Port: 8006
 """
 
 import logging
+import asyncio
 import os
 from contextlib import asynccontextmanager
 
@@ -26,6 +27,12 @@ from services.iot.routes.sensors import router as sensors_router
 from services.iot.routes.scenes import router as scenes_router
 from services.iot.routes.alerts import router as alerts_router
 from services.iot.routes.integrations import router as integrations_router
+from services.iot.routes.homes import router as homes_router
+from services.iot.routes.homes import account_router
+from services.iot.routes.home_features import router as home_features_router
+from services.iot.routes.home_rooms import router as home_rooms_router
+from services.iot.routes.home_reports import router as home_reports_router
+from services.iot.routes.ha_reference import router as ha_reference_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,8 +63,29 @@ async def lifespan(app: FastAPI):
     # the db container crashes the worker (exit 3) and it stays down. Matches the
     # rest of the stack's startup handling.
     await run_with_db_retry(init_tables, logger=logger)
+    from services.common.event_bus import ensure_schema
+    from services.iot.database import get_session
+    async with get_session() as session:
+        await ensure_schema(session)
     logger.info("IoT service started — tables initialized")
-    yield
+    task = None
+    if os.getenv("HOME_DOME_POLL_ENABLED", "false").lower() == "true":
+        from services.iot.home_worker import poll_homes
+        task = asyncio.create_task(poll_homes())
+    reference_task = None
+    if os.getenv("HA_REFERENCE_REFRESH_ENABLED", "true").lower() == "true":
+        from services.iot.ha_reference_worker import refresh_loop
+        reference_task = asyncio.create_task(refresh_loop())
+    try:
+        yield
+    finally:
+        for running in (task, reference_task):
+            if running:
+                running.cancel()
+                try:
+                    await running
+                except asyncio.CancelledError:
+                    pass
     logger.info("IoT service shutting down")
 
 
@@ -68,6 +96,12 @@ app.router.lifespan_context = lifespan
 # ---------------------------------------------------------------------------
 
 app.include_router(integrations_router, prefix="/api/iot/integrations", tags=["iot-integrations"])
+app.include_router(account_router, prefix="/api/iot/homes", tags=["customer-accounts"])
+app.include_router(homes_router, prefix="/api/iot/homes", tags=["customer-homes"])
+app.include_router(home_features_router, prefix="/api/iot/homes", tags=["private-home-features"])
+app.include_router(home_rooms_router, prefix="/api/iot/homes", tags=["home-room-layout"])
+app.include_router(home_reports_router, prefix="/api/iot/homes", tags=["home-reporting"])
+app.include_router(ha_reference_router, prefix="/api/iot/reference", tags=["ha-reference"])
 app.include_router(devices_router, prefix="/api/iot/devices", tags=["iot-devices"])
 app.include_router(rooms_router, prefix="/api/iot/rooms", tags=["iot-rooms"])
 app.include_router(cameras_router, prefix="/api/iot/cameras", tags=["iot-cameras"])

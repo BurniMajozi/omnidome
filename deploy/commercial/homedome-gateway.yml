@@ -1,0 +1,34 @@
+name: omnidome-home-gateway
+
+services:
+  home-assistant:
+    image: ghcr.io/home-assistant/home-assistant:2026.10.1
+    container_name: omnidome-home-gateway
+    restart: unless-stopped
+    environment:
+      TZ: Africa/Johannesburg
+    volumes:
+      - home-assistant-config:/config
+    ports:
+      # Keep onboarding and the gateway off the public/ngrok interface.
+      - '127.0.0.1:8123:8123'
+    networks:
+      - home-gateway
+    mem_limit: 1536m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+volumes:
+  home-assistant-config:
+    name: omnidome-home-assistant-config
+
+networks:
+  home-gateway:
+    name: omnidome-home-gateway
+    driver: bridge

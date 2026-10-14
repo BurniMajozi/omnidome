@@ -16,5 +16,5 @@ export {
   type AgentInvokeRequest,
   type AgentInvokeResponse,
   type ConversationRead,
-  type AgentMessage,
+  type ChatMessage as AgentMessage,
 } from "@omnidome/agent-chat";

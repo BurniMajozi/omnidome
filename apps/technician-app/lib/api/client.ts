@@ -46,15 +46,41 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const technicianApi = {
+  homeDomeRequest: async (path: string, init?: RequestInit) => {
+    if (!path.startsWith('/api/iot/homes')) throw new Error('Invalid HomeDome path');
+    const send = () => {
+      const token = useAuthStore.getState().accessToken;
+      return fetch(path.replace('/api/iot/homes', '/api/home-dome'), { ...init, cache: 'no-store', signal: AbortSignal.timeout(60000),
+        headers: { 'Content-Type': 'application/json', ...init?.headers, ...(token ? { Authorization: `Bearer ${token}` } : {}) } });
+    };
+    const response = await send();
+    const refresh = useAuthStore.getState().refreshToken;
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL, key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (response.status === 401 && refresh && url && key) {
+      const refreshed = await fetch(url.replace(/\/$/, '') + '/auth/v1/token?grant_type=refresh_token', {
+        method: 'POST', headers: { apikey: key, 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: refresh }) });
+      const data = await refreshed.json();
+      if (refreshed.ok && data.access_token) { useAuthStore.getState().setTokens(data.access_token, data.refresh_token); return send(); }
+    }
+    return response;
+  },
   // Auth
-  login: (email: string, password: string) =>
-    fetchJSON<{ accessToken: string; technician: TechnicianProfile }>(
-      '/auth/technician/login',
-      {
-        method: 'POST',
-        body: JSON.stringify({ email, password }),
-      }
-    ),
+  login: async (email: string, password: string) => {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (!url || !key) throw new Error('Technician sign-in needs Supabase configuration');
+    const response = await fetch(url.replace(/\/$/, '') + '/auth/v1/token?grant_type=password', {
+      method: 'POST', headers: { apikey: key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.access_token) throw new Error(data.error_description || data.msg || 'Sign-in failed');
+    const profile = await fetch('/api/home-dome/staff-profile', { cache: 'no-store', headers: { Authorization: `Bearer ${data.access_token}` } });
+    const technician = await profile.json();
+    if (!profile.ok) throw new Error(technician.detail || 'Your account needs an IoT support role');
+    return { accessToken: data.access_token as string, refreshToken: data.refresh_token as string,
+      technician: technician as TechnicianProfile };
+  },
 
   // Job queue
   getMyJobs: (params?: { status?: string; priority?: string }) => {

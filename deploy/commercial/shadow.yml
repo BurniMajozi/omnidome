@@ -1,4 +1,19 @@
 services:
+  iot:
+    networks:
+      - default
+      - home-gateway
+    environment:
+      HOME_DOME_LOCAL_GATEWAY_ENABLED: 'true'
+      HOME_DOME_POLL_ENABLED: 'true'
+      DB_POOL_SIZE: '1'
+      DB_MAX_OVERFLOW: '1'
+  portal-builder:
+    # One worker prevents slow cold starts from accumulating multiprocessing children.
+    command: sh -c "uvicorn services.portal_builder.main:app --host 0.0.0.0 --port 8026 --workers 1 --no-access-log"
+    environment:
+      DB_POOL_SIZE: '1'
+      DB_MAX_OVERFLOW: '1'
   tenant_memory:
     environment:
       KNOWLEDGE_DB_URL: ${KNOWLEDGE_DB_URL:-}
@@ -20,3 +35,7 @@ services:
     environment:
       PLATFORM_USAGE_ENABLED: 'true'
       AUTUMN_SYNC_ENABLED: 'false'
+networks:
+  home-gateway:
+    external: true
+    name: omnidome-home-gateway
