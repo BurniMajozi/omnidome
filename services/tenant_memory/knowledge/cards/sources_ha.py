@@ -36,7 +36,7 @@ async def fetch_ha_reference(session, tenant, wm, limit):
 
 
 async def ids_ha_reference(session, tenant):
-    return {"ha_reference": [r["doc_key"] for r in await _library(session)]}
+    return {"ha_reference": {r["doc_key"] for r in await _library(session)}}
 
 
 S.SOURCES["ha_reference"] = S.Source("ha_reference", "iot", ("ha_reference",), fetch_ha_reference, ids_ha_reference, snapshot=True)

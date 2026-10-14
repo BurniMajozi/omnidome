@@ -165,7 +165,7 @@ class Indexer:
             present = await src.ids(sess, tenant)
         n = 0
         for stype, ids in present.items():
-            for sid in sorted(await self.store.live_source_ids(tenant, stype) - ids):
+            for sid in sorted(await self.store.live_source_ids(tenant, stype) - set(ids)):
                 n += await self.store.tombstone_source(tenant, stype, sid)
                 await self.store.delete_edges_by_origin(tenant, f"{stype}:{sid}")
         return n
