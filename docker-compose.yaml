@@ -474,6 +474,8 @@ services:
     env_file:
       - .env
     command: ["python", "-m", "services.tenant_memory.knowledge.worker"]
+    healthcheck:
+      disable: true  # background worker, serves no HTTP (the image healthcheck probes :8025)
     environment:
       - AUTH_MODE=${AUTH_MODE:-signed}
       - DATABASE_URL=${DATABASE_URL}
