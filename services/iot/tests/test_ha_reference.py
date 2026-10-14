@@ -59,3 +59,11 @@ def test_topic_tags_may_be_objects():
     topic = {"id": 3, "title": "t", "tags": [{"id": 1, "name": "zha"}, "matter"],
              "post_stream": {"posts": [{"post_number": 1, "cooked": "<p>q</p>"}]}}
     assert "Tags: zha, matter" in R._topic_doc(topic)["body"]
+
+
+def test_homedome_guides_answer_the_imou_question():
+    guides = {g["doc_key"]: g for g in R.homedome_guides()}
+    imou = guides["homedome:imou-cameras"]["body"]
+    assert "App ID" in imou and "Home Assistant" in imou and "no separate Imou API" in imou
+    assert "Imou (Cameras)" in guides["homedome:integration-catalogue"]["body"]
+    assert all(g["kind"] == "homedome_guide" and g["body"] for g in guides.values())

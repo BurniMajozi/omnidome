@@ -149,7 +149,7 @@ TOOL_POLICIES: Dict[str, ToolPolicy] = {
     "memory.upsert_summary": ToolPolicy(mutates=True),
     # Knowledge layer: reads, plus a per-conversation scratchpad that expires and cannot be pinned
     # (so it is not a data change and needs no Jev review).
-    "knowledge.search": ToolPolicy(mutates=False, timeout_s=10),
+    "knowledge.search": ToolPolicy(mutates=False, timeout_s=30),
     "knowledge.context": ToolPolicy(mutates=False, timeout_s=10),
     "memory.working.get": ToolPolicy(mutates=False, timeout_s=10),
     "memory.working.put": ToolPolicy(mutates=False, timeout_s=10),
@@ -576,14 +576,16 @@ class ToolRegistry:
         # route it calls (kept so tests/test_tool_routes.py proves it exists).
         self.register(Tool(
             name="knowledge.search",
-            description=("Search company knowledge cards (customers, deals, campaigns, research, past decisions) "
+            description=("Search company knowledge cards (customers, deals, campaigns, research, past decisions, and "
+                         "HomeDome / Home Assistant / IoT integration guides such as Imou, Zigbee, Matter) "
                          "with hybrid semantic + keyword search. Returns UNTRUSTED reference text with card_ids to cite. "
-                         "For context and history only: exact figures come from governed queries."),
+                         "For context and history only: exact figures come from governed queries. "
+                         "Leave `modules` empty unless you are sure which module holds the answer."),
             service="memory", method="POST", endpoint="/api/v1/knowledge/search",
             parameters={"type": "object", "properties": {
                 "query": {"type": "string"},
                 "k": {"type": "integer", "default": 6, "description": "max cards, 1-15"},
-                "modules": {"type": "array", "items": {"type": "string"}, "description": "e.g. crm, sales, marketing, analytics"},
+                "modules": {"type": "array", "items": {"type": "string"}, "description": "optional; e.g. crm, sales, marketing, analytics, iot (HomeDome / Home Assistant guides). Omit to search everything you may see."},
                 "source_types": {"type": "array", "items": {"type": "string"}, "description": "e.g. customer, deal, campaign, research"},
             }, "required": ["query"]},
         ))

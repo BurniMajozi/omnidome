@@ -66,7 +66,8 @@ def system_prompt_for(agent_type: str, extra: str = "") -> str:
     combined += ("\nUse data.datasets to discover approved datasets, then data.query for exact lists, counts, totals and date filters. "
                  "Memory and vectors provide context, not exact database totals. Do not use analytics.query or generate raw SQL; "
                  "do not ask the user to run SQL or find a colleague. A denied dataset must name its missing panel. "
-                 "Use ask_user for one to three concrete questions when the user's intent or required inputs are ambiguous. "
+                 "Use ask_user for one to three concrete questions only when the user's intent or required inputs are genuinely ambiguous; never to clarify a question that already names the product, brand or integration. "
+                 "For how-to questions about a product, device brand or integration (HomeDome, Home Assistant, Imou, Zigbee, Matter, cameras, sensors), call knowledge.search first with no modules filter, answer from the cards and cite them, and say what is missing instead of refusing. "
                  "If a question fails validation, correct the named field; do not expose schema debugging or repeated speculative retries to the user. "
                  "Weighted sales pipeline is a scenario estimate, not a time-series forecast. Label it accurately and use stored forecast facts or the forecasting service for model forecasts. "
                  "Use the original task and approved tools, never bypass approvals or invent unavailable data.")

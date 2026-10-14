@@ -44,7 +44,7 @@ OFF_BACKOFF_S = 60.0
 # Modules whose cards are safe to show a customer-facing agent. Everything else (CRM customers, tickets,
 # billing, HR, internal analytics, memory entries) can carry other people's data.
 CUSTOMER_SAFE_MODULES = tuple(
-    m.strip() for m in os.getenv("KNOWLEDGE_CUSTOMER_MODULES", "marketing").split(",") if m.strip())
+    m.strip() for m in os.getenv("KNOWLEDGE_CUSTOMER_MODULES", "marketing,iot").split(",") if m.strip())
 
 KNOWLEDGE_TOOL_NAMES = frozenset({
     "knowledge.search", "knowledge.context", "memory.working.get", "memory.working.put", "metrics.facts"})

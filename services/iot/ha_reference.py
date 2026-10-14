@@ -232,6 +232,60 @@ async def category_topic_ids(slug: str, client: httpx.AsyncClient, pages: int = 
     return ids
 
 
+# ── HomeDome's own guides (offline, always refreshed with the library) ─────────────────────────────────────
+
+CONNECT_HOME = """HomeDome is OmniDome's smart-home service. Home Assistant is the device engine behind it: devices, rooms and integrations are paired in Home Assistant, and HomeDome reads and controls them through an authenticated, private connection.
+
+Steps to connect a home:
+1. The customer's Home Assistant gateway is set up and its owner creates their own administrator account (no default password).
+2. The ISP (Platform Owner) creates the home for the customer's verified login and assigns the prepared gateway to that one home.
+3. The customer opens the customer app, HomeDome, Connect your home. In Home Assistant they open their profile and create a long-lived access token, then enter it in HomeDome's Connection screen. HomeDome encrypts the token. Never share it in chat or screenshots.
+4. Devices are added in Home Assistant under Settings, Devices and services. HomeDome then synchronises supported devices, rooms and integration status.
+5. Energy: choose real cumulative meters in HomeDome, Energy. Missing readings stay unavailable.
+6. Support: staff request access with a reference and reason; the customer approves diagnostics and optionally control or camera access for 5 to 60 minutes and can revoke it at any time.
+
+A loaded integration is not proof that a device is paired. Media, location and to-do features need a connected gateway. Security-critical controls stay in Home Assistant."""
+
+IMOU = """How Imou connects to HomeDome: Imou devices are connected to Home Assistant, and HomeDome reads them from Home Assistant. There is no separate Imou API connection inside HomeDome.
+
+Steps:
+1. Make sure the cameras and sensors are linked to the customer's own Imou account (discovery alone does not grant ownership).
+2. Create an Imou Open Platform developer account and note the App ID and App secret. Choose the same region as the Imou account.
+3. In Home Assistant open Settings, Devices and services, Add integration, Imou, and enter the App ID, App secret and region; select the devices to add. Imou is a built-in Home Assistant integration in recent versions; an official-team HACS integration also exists with optional alarm callbacks.
+4. Back in HomeDome, synchronise: cameras, sensors and switches appear in their rooms.
+
+Limits: Imou cloud API calls and video use the customer's Open Platform quota; some alarm-picture decryption needs native libraries documented for Linux x86-64 only. HomeDome currently shows consent-controlled snapshots, not a live-stream relay, and does not imply free cloud recording. For compatible cameras a local ONVIF connection (device credentials and local network access) is an alternative that works without Imou cloud. Keep each household's Imou account separate; one ISP-wide credential must not expose every home's cameras."""
+
+CATALOGUE_INTRO = """HomeDome shows setup cards for these Home Assistant integrations. Each needs the item listed; Home Assistant must have it loaded, and actual hardware needs the companion services (Matter Server, MQTT broker, Zigbee or Z-Wave radio) installed separately.
+"""
+
+
+def homedome_guides() -> list[dict]:
+    """How OmniDome's HomeDome uses Home Assistant, written from our gateway and design notes. These answer
+    "how do I connect X to HomeDome"; the Home Assistant docs fetched above only explain X on its own."""
+    from services.iot.integration_catalog import INTEGRATIONS
+    catalogue = "\n".join(f"- {name} ({category}): {requirement}" for _, name, category, requirement in INTEGRATIONS)
+    base = {"kind": "homedome_guide", "integration_id": None, "license": "OmniDome documentation", "extra": {"source": "homedome"}}
+    return [
+        {**base, "doc_key": "homedome:connect-home", "title": "HomeDome: how a home is connected to the platform",
+         "url": "omnidome://docs/homedome-gateway-setup", "body": CONNECT_HOME},
+        {**base, "doc_key": "homedome:imou-cameras", "title": "HomeDome: connecting Imou cameras and sensors",
+         "url": "https://www.home-assistant.io/integrations/imou/", "integration_id": "imou", "body": IMOU},
+        {**base, "doc_key": "homedome:integration-catalogue", "title": "HomeDome: supported integration setup cards",
+         "url": "omnidome://docs/homedome-gateway-setup", "body": CATALOGUE_INTRO + catalogue},
+    ]
+
+
+async def seed_guides(session) -> int:
+    """Upsert HomeDome's own guides; returns how many changed."""
+    await ensure_table(session)
+    changed = 0
+    for doc in homedome_guides():
+        if await upsert(session, doc) != "unchanged":
+            changed += 1
+    return changed
+
+
 # ── Store ─────────────────────────────────────────────────────────────────────
 
 async def upsert(session, doc: dict) -> str:
@@ -257,6 +311,7 @@ async def refresh(session, integrations: Optional[list[str]] = None, queries: Op
     """Fetch and store the requested documents. Each failure is counted, never raised, so one bad page cannot stop a refresh."""
     stats = {"new": 0, "updated": 0, "unchanged": 0, "failed": 0, "missing": []}
     await ensure_table(session)
+    await seed_guides(session)
     async with _client() as client:
         for domain in integrations or []:
             try:
