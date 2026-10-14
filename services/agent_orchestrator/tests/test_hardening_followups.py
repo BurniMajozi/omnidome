@@ -372,4 +372,4 @@ def test_job_roles_not_given_to_calls_for_other_user_or_tenant():
 
 def test_job_creation_stores_creator_roles():
     from services.agent_orchestrator.routes import jobs as job_routes
-    assert inspect.getsource(job_routes).count('"actor_roles": list(ctx.roles)') == 2
+    assert inspect.getsource(job_routes).count('"actor_roles": list(ctx.roles)') == 3  # one per path that creates an AgentJob

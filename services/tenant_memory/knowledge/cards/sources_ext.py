@@ -38,6 +38,10 @@ async def table_exists(session, table: str) -> bool:
     return bool(rows and rows[0].get("ok"))
 
 
+class SourceUnavailable(RuntimeError):
+    """The source's table is not in this database (its service is not deployed): skip it, do not reconcile."""
+
+
 def keyset_source(name: str, module: str, stype: str, *, probe: str, frm: str, select: str, ts: str, build: Build,
                   tenant_kind: str = "uuid", naive_ts: bool = False, where: str = "", live: str = "",
                   enrich: Optional[Callable[..., Awaitable[dict]]] = None, idx: str = "t.id::text") -> Source:
@@ -67,7 +71,7 @@ def keyset_source(name: str, module: str, stype: str, *, probe: str, frm: str, s
 
     async def ids(session, tenant: str) -> dict:
         if not await table_exists(session, probe):
-            raise RuntimeError(f"table {probe} does not exist; refusing to reconcile {name}")
+            raise SourceUnavailable(f"table {probe} does not exist; refusing to reconcile {name}")
         rows = await S._rows(session, f"SELECT {idx} AS id FROM {frm} WHERE {tcond}{extra}{live_sql}", {"tenant_id": tenant})
         return {stype: {r["id"] for r in rows}}
 

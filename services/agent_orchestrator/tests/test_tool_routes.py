@@ -34,8 +34,8 @@ def _prefix(call: ast.Call) -> str:
 
 def service_routes(service_dir: Path) -> set:
     """(METHOD, path) pairs from @app/@router decorators, with APIRouter(prefix=)
-    and include_router(prefix=) applied."""
-    decorated, router_prefix, include_prefix = [], {}, {}
+    and include_router(prefix=) applied, through nested routers (router.include_router(child))."""
+    decorated, router_prefix, includes = [], {}, []
     for f in service_dir.rglob("*.py"):
         if "tests" in f.parts:
             continue
@@ -58,15 +58,25 @@ def service_routes(service_dir: Path) -> set:
                             router_prefix[(str(f), target.id)] = _prefix(node.value)
             elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                   and node.func.attr == "include_router" and node.args):
-                include_prefix.setdefault(ast.unparse(node.args[0]), set()).add(_prefix(node))
+                includes.append((f.stem, str(f), ast.unparse(node.func.value), ast.unparse(node.args[0]), _prefix(node)))
+
+    def full_prefixes(module, fpath, var, seen=()):
+        """Every URL prefix a router ends up under: its own prefix, then each include's prefix and its parent's."""
+        own = router_prefix.get((fpath, var), "")
+        found = set()
+        for inc_module, inc_path, parent, child, prefix in includes:
+            if (module in child or child == var) and (inc_module, parent) not in seen:
+                parent_prefixes = {""} if parent == "app" else full_prefixes(inc_module, inc_path, parent, seen + ((inc_module, parent),))
+                found |= {pp + prefix for pp in parent_prefixes}
+        return {fp + own for fp in found} or {own}
+
     routes = set()
     for module, var, method, path, fpath in decorated:
         if var == "app":
             routes.add((method, path))
             continue
-        prefixes = {p for expr, ps in include_prefix.items() if module in expr or expr == var for p in ps} or {""}
-        for p in prefixes:
-            routes.add((method, p + router_prefix.get((fpath, var), "") + path))
+        for p in full_prefixes(module, fpath, var):
+            routes.add((method, p + path))
     return routes
 
 

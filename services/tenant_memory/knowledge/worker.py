@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from services.common.db import run_with_db_retry, session_scope
 from services.tenant_memory.knowledge import consolidation
+from services.tenant_memory.knowledge.cards.sources_ext import SourceUnavailable
 from services.tenant_memory.knowledge.config import get_settings
 from services.tenant_memory.knowledge.embeddings import OllamaEmbedder
 from services.tenant_memory.knowledge.indexer import EmbeddingBlocked, Indexer
@@ -60,6 +61,9 @@ async def sweep(indexer: Indexer, store: KnowledgeStore, tenants: list[str]) -> 
                 res = await indexer.run_source(tenant, name, full=full)
             except EmbeddingBlocked:
                 return                                   # embedding service is down: stop the whole sweep, retry later
+            except SourceUnavailable as exc:
+                logger.info("source %s skipped for tenant %s: %s", name, tenant, exc)
+                continue
             except Exception as exc:  # noqa: BLE001 - one broken source must not starve the others
                 logger.exception("source %s failed for tenant %s", name, tenant)
                 await store.record_failure(tenant, name, "-", f"{type(exc).__name__}: {exc}")
