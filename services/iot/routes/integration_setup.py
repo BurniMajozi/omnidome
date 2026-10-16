@@ -14,6 +14,7 @@ from services.common.auth import AuthContext, get_auth_context
 from services.iot.database import get_session
 from services.iot.ha_client import HAWebSocketClient, ha_http_error, token_for_integration
 from services.iot.households import home_for, audit, client_for, sync_home
+from services.iot.home_events import emit
 from services.iot.managed_gateway import target_for
 from services.iot.models import IoTHomeEntity
 from services.iot.routes.homes import enabled, entity_for
@@ -94,6 +95,53 @@ def check_domain(domain):
         raise HTTPException(404, "Guided setup is not available for this integration")
 
 
+class GatewayLogin(BaseModel):
+    username: str | None = Field(default=None, max_length=255)
+    password: str | None = Field(default=None, max_length=1024)
+
+
+@router.get("/{home_id}/gateway")
+async def gateway_status(home_id: uuid.UUID, ctx: AuthContext = Depends(get_auth_context)):
+    """What the Connection tab should offer: activate now, ask for the administrator login once, or nothing."""
+    from services.iot import gateway_activation as gw
+    async with get_session() as session:
+        home = await home_for(session, ctx, home_id, owner_only=True)
+        if not home.managed_gateway_key:
+            return {"managed": False, "state": "own"}
+        if home.ha_token_encrypted:
+            return {"managed": True, "state": "active"}
+    return {"managed": True, "state": await gw.gateway_state()}
+
+
+@router.post("/{home_id}/gateway/activate")
+async def activate_gateway(home_id: uuid.UUID, body: GatewayLogin, ctx: AuthContext = Depends(get_auth_context)):
+    from services.iot import gateway_activation as gw
+    from services.iot.ha_client import encrypt_token
+    async with get_session() as session:
+        home = await home_for(session, ctx, home_id, owner_only=True)
+        if not home.managed_gateway_key or target_for(home) is None:
+            raise HTTPException(409, "No prepared gateway is assigned to this home")
+        name = home.name
+    try:
+        token = await gw.activate(name, body.username, body.password)
+    except gw.NeedsCredentials as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except gw.BadCredentials as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except gw.GatewayUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except Exception as exc:
+        raise ha_http_error(exc) from exc
+    async with get_session() as session:
+        home = await home_for(session, ctx, home_id, owner_only=True)
+        from services.iot.managed_gateway import PUBLIC_URL
+        home.ha_url, home.ha_token_encrypted = PUBLIC_URL, encrypt_token(token)
+        audit(session, home, ctx.user_id, "gateway_activated", mode="login" if body.username else "onboarding")
+        await emit(session, home, "iot.gateway.activated", f"gateway:{home.id}")
+        result = await sync_home(session, home, ctx.user_id)
+    return {"ok": True, "message": "Your home is connected", **(result if isinstance(result, dict) else {})}
+
+
 @router.post("/{home_id}/integrations/{domain}/setup")
 async def start_setup(home_id: uuid.UUID, domain: str, ctx: AuthContext = Depends(get_auth_context)):
     check_domain(domain)
@@ -127,6 +175,7 @@ async def continue_setup(home_id: uuid.UUID, flow_id: str, body: FlowInput, ctx:
         async with get_session() as session:
             home = await home_for(session, ctx, home_id, owner_only=True)
             audit(session, home, ctx.user_id, "integration_setup_completed", title=step["title"])
+            await emit(session, home, "iot.integration.connected", "integration:" + flow_id)
             # Devices appear once HA's first cloud refresh finishes; the panel offers a re-sync too.
             await asyncio.sleep(3)
             await sync_home(session, home, ctx.user_id)

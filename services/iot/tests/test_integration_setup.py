@@ -82,3 +82,26 @@ def test_ptz_requires_a_camera_movement_button(store, monkeypatch):
                 await api.move_camera(home, entity, api.Ptz(direction=direction), owner)
             assert error.value.status_code == 422
     asyncio.run(check())
+
+
+def test_activation_never_needs_home_assistant_ui_and_stores_no_password(monkeypatch):
+    from services.iot import gateway_activation as gw
+    monkeypatch.setattr(gw, "gateway_state", AsyncMock(return_value="needs_credentials"))
+    with pytest.raises(gw.NeedsCredentials):
+        asyncio.run(gw.activate("Home"))
+    monkeypatch.setattr(gw, "gateway_state", AsyncMock(return_value="unavailable"))
+    with pytest.raises(gw.GatewayUnavailable):
+        asyncio.run(gw.activate("Home"))
+
+
+def test_customers_are_never_given_a_home_assistant_address(store):
+    scope, (owner, *_), (home, _) = store
+    from services.iot.households import public_home
+    from services.iot.models import IoTHome
+
+    async def check():
+        async with scope() as session:
+            row = await session.get(IoTHome, home)
+            row.managed_gateway_key, row.ha_url = "local", "http://localhost:8123"
+            assert public_home(row, owner)["dashboard_url"] is None
+    asyncio.run(check())

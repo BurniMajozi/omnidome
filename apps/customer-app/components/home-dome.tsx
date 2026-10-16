@@ -4,6 +4,7 @@ import HomeReports, { ReportingRequests } from "./home-reports";
 import themeStyles from "./home-dome-theme.module.css";
 import HomeFeatures from "./home-features";
 import IntegrationGallery from "./integration-gallery";
+import GatewayActivation from "./gateway-activation";
 import IntegrationSetup, { IntegrationDevices, type SetupTarget } from "./integration-setup";
 import EnergyDashboard from "./energy-dashboard";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -126,7 +127,7 @@ export default function HomeDome({ request, customers = [], users = [], theme = 
       <label>Customer login<select required className={input} value={newHome.owner_user_id} onChange={e => setNewHome({ ...newHome, owner_user_id: e.target.value })}><option value="">Select verified user</option>{users.map(row => <option key={row.id} value={row.id}>{row.label}</option>)}</select></label>
       <p className="text-sm text-gray-600 md:col-span-3">This user will own the home and approve support access. Confirm the customer identity before saving.</p><button className={button} disabled={busy}>Create home</button>
     </form>}
-    {loading ? <p role="status">Loading HomeDome…</p> : homes.length === 0 ? <div className={card}><Home className="mb-3 h-10 w-10 text-cyan-600" /><h3 className="font-semibold">Your home starts here</h3><p className="mt-2 text-sm text-gray-600">Your ISP needs to assign your property to your verified login. You can then connect Home Assistant, add devices and choose who may help.</p></div> : <>
+    {loading ? <p role="status">Loading HomeDome…</p> : homes.length === 0 ? <div className={card}><Home className="mb-3 h-10 w-10 text-cyan-600" /><h3 className="font-semibold">Your home starts here</h3><p className="mt-2 text-sm text-gray-600">Your ISP needs to assign your property to your verified login. You can then activate your home, add devices and choose who may help.</p></div> : <>
       <select aria-label="Choose home" className={input + " max-w-md"} value={selected} onChange={e => setSelected(e.target.value)}>{homes.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}</select>
       {caps.can_assign_gateway && !home?.managed_gateway && <button className={button} disabled={busy} onClick={() => { if (window.confirm("Assign the pilot gateway to this customer home? It cannot be shared with another home.")) void act(`/${selected}/gateway`, "POST"); }}>Use prepared gateway for this home</button>}
       <div className="flex flex-wrap items-center gap-3 text-sm"><span className="rounded-full bg-gray-200 px-3 py-1">{home?.status}</span><span className="text-gray-600">Last sync: {pretty(home?.last_sync_at || null)}</span>
@@ -144,13 +145,12 @@ export default function HomeDome({ request, customers = [], users = [], theme = 
         {!grants.length && <p className={card}>No support sessions for this home.</p>}
         {grants.map(row => <GrantCard key={row.id} row={row} owner={Boolean(home?.is_owner)} busy={busy} act={(method, data) => act(`/${selected}/support/${row.id}${method === "POST" ? "/approve" : ""}`, method, data)} />)}
       </div>}
-      {tab === "Connection" && home?.is_owner && <form className={card + " max-w-xl space-y-3"} onSubmit={e => { e.preventDefault(); const payload = { ...connection, ha_url: home.managed_gateway ? "http://localhost:8123" : connection.ha_url }; setConnection({ ...connection, ha_token: "" }); void act(`/${selected}/connection`, "POST", payload); }}>
+      {tab === "Connection" && home?.is_owner && (home.managed_gateway ? <GatewayActivation key={selected} homeId={selected} call={call} onChanged={async () => { await refresh(); await details(); }} onDisconnect={() => { if (confirm("Disconnect the gateway and revoke all support access?")) void act(`/${selected}/connection`, "DELETE"); }} /> : <details open={home.status !== "connected"} className="max-w-xl"><summary className="mb-3 cursor-pointer font-semibold">Connect your own Home Assistant (advanced)</summary><form className={card + " max-w-xl space-y-3"} onSubmit={e => { e.preventDefault(); const payload = { ...connection, ha_url: home.managed_gateway ? "http://localhost:8123" : connection.ha_url }; setConnection({ ...connection, ha_token: "" }); void act(`/${selected}/connection`, "POST", payload); }}>
         <h3 className="font-semibold">Connect Home Assistant</h3><p className="text-sm text-gray-600">Use your Home Assistant address and a dedicated access token. Tokens are encrypted on the server and are never returned to this app. Your ISP must configure a permitted secure connection to your home.</p>
-        {home.managed_gateway && <p className="text-sm">Your gateway address is preconfigured below. Complete gateway onboarding separately, then enter its owner access token here.</p>}
-        <label className="block">Home Assistant URL<input className={input} required type="url" autoComplete="off" placeholder="https://your-home.example.com" readOnly={home.managed_gateway} value={home.managed_gateway ? "http://localhost:8123" : connection.ha_url} onChange={e => setConnection({ ...connection, ha_url: e.target.value })} /></label>
+                <label className="block">Home Assistant URL<input className={input} required type="url" autoComplete="off" placeholder="https://your-home.example.com" readOnly={home.managed_gateway} value={home.managed_gateway ? "http://localhost:8123" : connection.ha_url} onChange={e => setConnection({ ...connection, ha_url: e.target.value })} /></label>
         <label className="block">Access token<input className={input} required type="password" autoComplete="new-password" value={connection.ha_token} onChange={e => setConnection({ ...connection, ha_token: e.target.value })} /></label>
         <button className={button} disabled={busy}>Connect and sync</button><button type="button" className={button + " ml-2"} disabled={busy} onClick={() => { if (confirm("Disconnect Home Assistant and revoke all support access?")) void act(`/${selected}/connection`, "DELETE"); }}>Disconnect</button>
-      </form>}
+      </form></details>)}
       {tab === "Activity" && <div className={card}><h3 className="mb-3 font-semibold">Access and activity trail</h3>{audit.map((row, index) => <p key={index} className="border-b py-2 text-sm">{row.action.replaceAll("_", " ")} <span className="text-gray-500">· {pretty(row.created_at)}</span></p>)}</div>}
     </>}
   </section>;

@@ -234,27 +234,25 @@ async def category_topic_ids(slug: str, client: httpx.AsyncClient, pages: int = 
 
 # ── HomeDome's own guides (offline, always refreshed with the library) ─────────────────────────────────────
 
-CONNECT_HOME = """HomeDome is OmniDome's smart-home service. Home Assistant is the device engine behind it: devices, rooms and integrations are paired in Home Assistant, and HomeDome reads and controls them through an authenticated, private connection.
+CONNECT_HOME = """HomeDome is OmniDome's smart-home service. Home Assistant is the device engine behind it, running inside the platform: customers never open Home Assistant, sign in to it or handle its tokens. Every journey happens in the OmniDome customer app (or the platform's HomeDome workspace) and HomeDome drives Home Assistant's backend for them.
 
 Steps to connect a home:
-1. The customer's Home Assistant gateway is set up and its owner creates their own administrator account (no default password).
-2. The ISP (Platform Owner) creates the home for the customer's verified login and assigns the prepared gateway to that one home.
-3. The customer opens the customer app, HomeDome, Connect your home. In Home Assistant they open their profile and create a long-lived access token, then enter it in HomeDome's Connection screen. HomeDome encrypts the token. Never share it in chat or screenshots.
-4. Devices are added in Home Assistant under Settings, Devices and services. HomeDome then synchronises supported devices, rooms and integration status.
-5. Energy: choose real cumulative meters in HomeDome, Energy. Missing readings stay unavailable.
-6. Support: staff request access with a reference and reason; the customer approves diagnostics and optionally control or camera access for 5 to 60 minutes and can revoke it at any time.
+1. The ISP (Platform Owner) creates the home for the customer's verified login and assigns the prepared gateway to that one home.
+2. The customer opens HomeDome, Connection, and presses Activate your home. HomeDome completes the gateway's first-time setup itself (South Africa timezone, rand, metric units) and keeps only an encrypted access key. A gateway that was already set up outside HomeDome asks the administrator login once to link it; the password is used for that single request and not stored.
+3. Integrations tab: Set up in HomeDome opens a guided journey that fills in Home Assistant's own setup form (Imou, ONVIF). Devices, rooms and statuses then synchronise automatically.
+4. Energy: choose real cumulative meters in HomeDome, Energy. Missing readings stay unavailable.
+5. Support: staff request access with a reference and reason; the customer approves diagnostics and optionally control or camera access for 5 to 60 minutes and can revoke it at any time.
 
-A loaded integration is not proof that a device is paired. Media, location and to-do features need a connected gateway. Security-critical controls stay in Home Assistant."""
+A loaded integration is not proof that a device is paired. Media, location and to-do features need a connected gateway. Security-critical controls stay in Home Assistant, which only the operator opens."""
 
-IMOU = """How Imou connects to HomeDome: Imou devices are connected to Home Assistant, and HomeDome reads them from Home Assistant. There is no separate Imou API connection inside HomeDome.
+IMOU = """How Imou connects to HomeDome: the customer uses the Imou journey inside HomeDome (Integrations tab, Imou, Set up in HomeDome). HomeDome submits the details to the home's own Home Assistant Imou integration; there is no separate Imou API connection and the customer never visits Home Assistant.
 
 Steps:
-1. Make sure the cameras and sensors are linked to the customer's own Imou account (discovery alone does not grant ownership).
-2. Create an Imou Open Platform developer account and note the App ID and App secret. Choose the same region as the Imou account.
-3. In Home Assistant open Settings, Devices and services, Add integration, Imou, and enter the App ID, App secret and region; select the devices to add. Imou is a built-in Home Assistant integration in recent versions; an official-team HACS integration also exists with optional alarm callbacks.
-4. Back in HomeDome, synchronise: cameras, sensors and switches appear in their rooms.
+1. Prepare: the customer creates or signs in to an Imou Open Platform account (open.imoulife.com), opens the Control board, and copies the App ID and App secret from App Information. The cameras must be added to that account in the Imou app.
+2. Account details: the journey asks for App ID, App secret and Server region (Singapore/Asia-Pacific sg, Europe eu, North America na, China cn; choose the region the account was registered in). Wrong values give an invalid App ID or App secret message.
+3. Your devices: each camera channel appears as Live view SD and HD with a snapshot button; PTZ cameras get up, down, left and right buttons (needs the customer's camera permission); night vision mode, volume, battery, storage used and online status appear where the device reports them. Imou refreshes the device list about every two minutes, so new cameras can take a moment.
 
-Limits: Imou cloud API calls and video use the customer's Open Platform quota; some alarm-picture decryption needs native libraries documented for Linux x86-64 only. HomeDome currently shows consent-controlled snapshots, not a live-stream relay, and does not imply free cloud recording. For compatible cameras a local ONVIF connection (device credentials and local network access) is an alternative that works without Imou cloud. Keep each household's Imou account separate; one ISP-wide credential must not expose every home's cameras."""
+Limits: each Open Platform App ID includes 30,000 free API requests a month and usage above that is billed by Imou; commands travel through Imou's servers. HomeDome shows consent-controlled snapshots, not a live-stream relay, and does not imply free cloud recording. A local ONVIF connection (also guided) works without the Imou cloud. Keep each household's Imou account separate; one ISP-wide credential must not expose every home's cameras."""
 
 CATALOGUE_INTRO = """HomeDome shows setup cards for these Home Assistant integrations. Each needs the item listed; Home Assistant must have it loaded, and actual hardware needs the companion services (Matter Server, MQTT broker, Zigbee or Z-Wave radio) installed separately.
 """

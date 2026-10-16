@@ -1,7 +1,7 @@
 """Minimal connectivity facts and addressed support notifications; no camera/sensor data."""
 from services.common.event_bus import publish, notify
 
-EVENTS = {"iot.home.offline", "iot.home.recovered", "iot.support.requested"}
+EVENTS = {"iot.home.offline", "iot.home.recovered", "iot.support.requested", "iot.gateway.activated", "iot.integration.connected"}
 
 
 async def emit(session, home, event_type, key):

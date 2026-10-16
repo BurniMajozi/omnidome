@@ -93,7 +93,7 @@ export default function LoginForm() {
         </button>
 
         <button type="button" disabled={loading} onClick={() => void handlePasswordReset()} className="w-full text-center text-sm font-medium text-blue-600 hover:underline">Forgot password?</button>
-        <p className="text-center text-sm text-gray-500">Your ISP provides your customer account. Your Home Assistant account is separate.</p>
+        <p className="text-center text-sm text-gray-500">Your ISP provides your customer account. HomeDome is part of it, so there is nothing else to sign in to.</p>
       </form>
     </div>
   );

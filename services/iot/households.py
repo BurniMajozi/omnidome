@@ -95,7 +95,7 @@ def public_home(home, ctx):
     return {"id": str(home.id), "customer_id": str(home.customer_id), "name": home.name,
         "is_owner": home.owner_user_id == ctx.user_id, "status": home.status,
         "last_sync_at": home.last_sync_at, "last_error": home.last_error,
-        "dashboard_url": home.ha_url if home.owner_user_id == ctx.user_id else None,
+        "dashboard_url": None if home.managed_gateway_key else home.ha_url if home.owner_user_id == ctx.user_id else None,
         "managed_gateway": bool(home.managed_gateway_key)}
 
 

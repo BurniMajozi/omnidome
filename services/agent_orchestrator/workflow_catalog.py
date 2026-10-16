@@ -2,6 +2,7 @@
 EVENT_LABELS = {
  "iot.home.offline":"HomeDome: home connection offline", "iot.home.recovered":"HomeDome: home connection recovered",
  "iot.support.requested":"HomeDome: support access requested",
+ "iot.gateway.activated":"HomeDome: home gateway activated", "iot.integration.connected":"HomeDome: integration connected",
  "portal.cart.abandoned":"Portal: basket abandoned", "portal.quote.requested":"Portal: quote requested", "portal.registration.inactive":"Portal: registration inactive",
  "sales.lead.created":"Sales: lead created", "sales.lead.stage_changed":"Sales: lead stage changed", "sales.lead.assigned":"Sales: lead assigned",
  "sales.lead.escalated":"Sales: lead escalated", "sales.lead.email_requested":"Sales: lead email requested", "sales.lead.outbound_requested":"Sales: outbound requested",

@@ -90,7 +90,7 @@ async def capabilities(ctx: AuthContext = Depends(get_auth_context)):
     provision = await has_tier(ctx, "admin")
     return {"can_provision": provision, "can_request_support": await staff_access(ctx),
         "can_assign_gateway": enabled() and ctx.is_platform_admin,
-        "gateway_onboarding_url": PUBLIC_URL if enabled() and ctx.is_platform_admin else None}
+        "gateway_onboarding_url": None}  # customers and staff never open Home Assistant; HomeDome activates it
 
 
 @account_router.post("/accounts")
