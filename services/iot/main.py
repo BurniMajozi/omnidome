@@ -31,6 +31,7 @@ from services.iot.routes.homes import router as homes_router
 from services.iot.routes.homes import account_router
 from services.iot.routes.home_features import router as home_features_router
 from services.iot.routes.home_rooms import router as home_rooms_router
+from services.iot.routes.integration_setup import router as integration_setup_router
 from services.iot.routes.home_reports import router as home_reports_router
 from services.iot.routes.ha_reference import router as ha_reference_router
 
@@ -100,6 +101,7 @@ app.include_router(account_router, prefix="/api/iot/homes", tags=["customer-acco
 app.include_router(homes_router, prefix="/api/iot/homes", tags=["customer-homes"])
 app.include_router(home_features_router, prefix="/api/iot/homes", tags=["private-home-features"])
 app.include_router(home_rooms_router, prefix="/api/iot/homes", tags=["home-room-layout"])
+app.include_router(integration_setup_router, prefix="/api/iot/homes", tags=["home-integration-setup"])
 app.include_router(home_reports_router, prefix="/api/iot/homes", tags=["home-reporting"])
 app.include_router(ha_reference_router, prefix="/api/iot/reference", tags=["ha-reference"])
 app.include_router(devices_router, prefix="/api/iot/devices", tags=["iot-devices"])

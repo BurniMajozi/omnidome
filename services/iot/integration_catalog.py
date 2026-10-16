@@ -24,10 +24,13 @@ INTEGRATIONS = [
 ]
 
 
+GUIDED_SETUP = {"imou", "onvif"}  # keep in sync with routes/integration_setup.GUIDED
+
+
 def catalogue(components):
     installed = {item.split(".")[0] for item in components or []}
     return [{"id": domain, "name": name, "category": category, "requirement": requirement,
-        "status": "loaded" if domain in installed else "setup_required",
+        "status": "loaded" if domain in installed else "setup_required", "guided": domain in GUIDED_SETUP,
         "logo_url": f"https://brands.home-assistant.io/_/{domain}/icon.png",
         "docs_url": f"https://www.home-assistant.io/integrations/{domain}/"}
         for domain, name, category, requirement in INTEGRATIONS]

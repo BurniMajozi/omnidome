@@ -279,6 +279,14 @@ class HARestClient:
         resp.raise_for_status()
         return str(resp.url)
 
+    async def config_flow(self, method: str, flow_id: Optional[str] = None, body: Optional[Dict] = None) -> Dict[str, Any]:
+        """Drive HA's config-entry flow (the same forms as Settings > Devices & services > Add integration)."""
+        client = await self._get_client()
+        url = f"{self.ha_url}/api/config/config_entries/flow" + (f"/{flow_id}" if flow_id else "")
+        resp = await client.request(method, url, json=body)
+        resp.raise_for_status()
+        return resp.json() if resp.content else {}
+
     async def fire_event(self, event_type: str, event_data: Optional[Dict] = None) -> None:
         """Fire a custom HA event."""
         client = await self._get_client()

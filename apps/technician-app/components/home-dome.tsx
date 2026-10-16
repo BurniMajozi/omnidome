@@ -4,6 +4,7 @@ import HomeReports, { ReportingRequests } from "./home-reports";
 import themeStyles from "./home-dome-theme.module.css";
 import HomeFeatures from "./home-features";
 import IntegrationGallery from "./integration-gallery";
+import IntegrationSetup, { IntegrationDevices, type SetupTarget } from "./integration-setup";
 import EnergyDashboard from "./energy-dashboard";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Home, Lightbulb, Camera, Activity, Plug, ShieldCheck, Zap, RefreshCw, ExternalLink } from "lucide-react";
@@ -12,7 +13,7 @@ type Requester = (path: string, init?: RequestInit) => Promise<Response>;
 type HomeRow = { id: string; name: string; customer_id: string; is_owner: boolean; status: string; last_sync_at: string | null; last_error: string | null; dashboard_url: string | null; managed_gateway: boolean };
 type Device = { id: string; name: string; domain: string; room: string | null; state: string; attributes: Record<string, string | number>; observed_at: string };
 type Grant = { id: string; staff_name: string; reason: string; reference: string; scopes: string[]; status: string; expires_at: string };
-type Integration = { id: string; name: string; category: string; status: string; requirement: string; docs_url: string };
+type Integration = { id: string; name: string; category: string; status: string; requirement: string; docs_url: string; guided?: boolean };
 type Energy = { totals: Record<string, { value: number | null; unit: string; reason: string | null }>; power: Record<string, { time: string; kw: number }[]>; grid_cost_zar: number | null; note: string; flows?: Record<string, boolean> };
 type Choice = { id: string; label: string };
 const root = "/api/iot/homes";
@@ -108,6 +109,7 @@ export default function HomeDome({ request, customers = [], users = [], theme = 
   const [reason, setReason] = useState("");
   const [reference, setReference] = useState("");
   const [requested, setRequested] = useState(["diagnostics"]);
+  const [setup, setSetup] = useState<SetupTarget | null>(null);
 
   return <section className={themeStyles.surface + " " + (theme === "dark" ? themeStyles.dark : "") + " space-y-5 rounded-2xl p-4 md:p-6"}>
     <header className="flex flex-wrap items-center justify-between gap-3">
@@ -136,7 +138,7 @@ export default function HomeDome({ request, customers = [], users = [], theme = 
       {tab === "Home" && (canRead ? <RoomHome key={selected} homeId={selected} devices={devices} rooms={rooms} owner={Boolean(home?.is_owner)} connected={home?.status === "connected"} control={allowed("control")} camera={allowed("camera")} busy={busy} call={call} changed={details} openMedia={() => setTab("Media")} cameraPreview={row => <CameraPreview request={request} path={root + `/${selected}/devices/${row.id}/snapshot`} allowed={allowed("camera")} />} /> : <p className={card}>Device diagnostics require the customer's approval. Open Support to request access.</p>)}
       {home?.is_owner && ["Media", "Map", "To-do"].includes(tab) && <HomeFeatures key={selected + tab} kind={tab as "Media" | "Map" | "To-do"} homeId={selected} call={call} />}
       {tab === "Energy" && (canRead ? <EnergyView key={selected} homeId={selected} owner={Boolean(home?.is_owner)} devices={devices} call={call} /> : <p className={card}>Customer-approved diagnostics access is required.</p>)}
-      {tab === "Integrations" && (canRead ? <IntegrationGallery key={selected} rows={integrations} /> : <p className={card}>Customer-approved diagnostics access is required.</p>)}
+      {tab === "Integrations" && (canRead ? <>{setup && home?.is_owner && home.status === "connected" && <IntegrationSetup key={selected + setup.id} homeId={selected} target={setup} call={call} request={request} onClose={() => setSetup(null)} onDone={details} />}{setup && home?.is_owner && home.status !== "connected" && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">Connect your home gateway first (Connection tab). HomeDome sets up devices through your Home Assistant.</p>}{!setup && integrations.filter(row => row.guided && row.status === "loaded").map(row => <details key={row.id} className={card + " mb-4"}><summary className="cursor-pointer font-semibold">{row.name} devices</summary><div className="mt-3"><IntegrationDevices homeId={selected} domain={row.id} call={call} request={request} /></div></details>)}<IntegrationGallery key={selected} rows={integrations} onSetup={home?.is_owner ? row => setSetup({ id: row.id, name: row.name }) : undefined} /></> : <p className={card}>Customer-approved diagnostics access is required.</p>)}
       {tab === "Support" && <div className="space-y-3"><div className={card}><ShieldCheck className="mb-2 text-cyan-600" /><h3 className="font-semibold">You're in control</h3><p className="mt-2 text-sm text-gray-600">Support requests expire after 24 hours. Approved access lasts up to one hour and can be revoked at any time. Camera access is separate from device control.</p></div>
         {!home?.is_owner && caps.can_request_support && <form className={card + " space-y-3"} onSubmit={e => { e.preventDefault(); void act(`/${selected}/support`, "POST", { reason, reference, scopes: requested }); }}><label className="block">Ticket or job reference<input required className={input} value={reference} onChange={e => setReference(e.target.value)} /></label><label className="block">What do you need to help with?<textarea required minLength={5} className={input} value={reason} onChange={e => setReason(e.target.value)} /></label><ScopeChoices value={requested} change={setRequested} /><button disabled={busy || !requested.length} className={button}>Request customer approval</button></form>}
         {!grants.length && <p className={card}>No support sessions for this home.</p>}
